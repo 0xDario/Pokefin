@@ -1,0 +1,3 @@
+supabase
+beautifulsoup4
+selenium
