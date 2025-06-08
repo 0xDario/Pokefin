@@ -12,7 +12,7 @@ const supabase = createClient(
 const Skeleton = () => <div className="animate-pulse bg-slate-300 rounded h-36 w-full" />;
 
 const PRODUCT_PRIORITY = ["booster_box", "etb", "booster_bundle"];
-const USD_TO_CAD = 1.37; // TODO:need to update this dynamically in the future 
+const USD_TO_CAD = 1.37; // TODO:need to update this dynamically in the future !
 
 function get1DReturn(history: { usd_price: number; recorded_at: string }[] | undefined) {
   if (!history || history.length < 2) return null;
