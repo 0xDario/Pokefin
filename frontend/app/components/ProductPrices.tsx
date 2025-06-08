@@ -13,6 +13,7 @@ const Skeleton = () => <div className="animate-pulse bg-slate-300 rounded h-36 w
 const PRODUCT_PRIORITY = ["booster_box", "etb", "booster_bundle"];
 const USD_TO_CAD = 1.37;
 
+// 1D % return calculation
 function get1DReturn(history: { usd_price: number; recorded_at: string }[] | undefined) {
   if (!history || history.length < 2) return null;
   const [latest, ...rest] = history;
@@ -23,6 +24,72 @@ function get1DReturn(history: { usd_price: number; recorded_at: string }[] | und
   const change = latest.usd_price - oneDayAgo.usd_price;
   const percent = (change / oneDayAgo.usd_price) * 100;
   return { change, percent };
+}
+
+// 1H % return calculation (NEW)
+function get1HReturn(history: { usd_price: number; recorded_at: string }[] | undefined) {
+  if (!history || history.length < 2) return null;
+  const [latest, ...rest] = history;
+  const oneHourAgo = rest.find(h =>
+    (new Date(latest.recorded_at).getTime() - new Date(h.recorded_at).getTime()) >= 1000 * 60 * 60
+  );
+  if (!oneHourAgo) return null;
+  const change = latest.usd_price - oneHourAgo.usd_price;
+  const percent = (change / oneHourAgo.usd_price) * 100;
+  return { change, percent };
+}
+
+// UI helpers
+function render1DReturn(productId: number, priceHistory: Record<number, any[]>) {
+  const history = priceHistory[productId] || [];
+  const ret = get1DReturn(history);
+  if (!ret || typeof ret.percent !== "number") {
+    return (
+      <span className="font-semibold text-sm block mb-1 text-slate-500">
+        1D: —
+      </span>
+    );
+  }
+  return (
+    <span
+      className={`font-semibold text-sm block mb-1 ${
+        ret.percent > 0
+          ? "text-green-600"
+          : ret.percent < 0
+          ? "text-red-600"
+          : "text-slate-500"
+      }`}
+    >
+      1D: {ret.percent > 0 ? "+" : ""}
+      {ret.percent.toFixed(2)}%
+    </span>
+  );
+}
+
+function render1HReturn(productId: number, priceHistory: Record<number, any[]>) {
+  const history = priceHistory[productId] || [];
+  const ret = get1HReturn(history);
+  if (!ret || typeof ret.percent !== "number") {
+    return (
+      <span className="font-semibold text-sm block mb-1 text-slate-500">
+        1H: —
+      </span>
+    );
+  }
+  return (
+    <span
+      className={`font-semibold text-sm block mb-1 ${
+        ret.percent > 0
+          ? "text-green-600"
+          : ret.percent < 0
+          ? "text-red-600"
+          : "text-slate-500"
+      }`}
+    >
+      1H: {ret.percent > 0 ? "+" : ""}
+      {ret.percent.toFixed(2)}%
+    </span>
+  );
 }
 
 export default function ProductPrices() {
@@ -122,32 +189,6 @@ export default function ProductPrices() {
     return sortDirection === "asc" ? valA - valB : valB - valA;
   });
 
-  function render1DReturn(productId: number) {
-    const history = priceHistory[productId] || [];
-    const ret = get1DReturn(history);
-    if (!ret || typeof ret.percent !== "number") {
-      return (
-        <span className="font-semibold text-sm block mb-1 text-slate-500">
-          1D: —
-        </span>
-      );
-    }
-    return (
-      <span
-        className={`font-semibold text-sm block mb-1 ${
-          ret.percent > 0
-            ? "text-green-600"
-            : ret.percent < 0
-            ? "text-red-600"
-            : "text-slate-500"
-        }`}
-      >
-        1D: {ret.percent > 0 ? "+" : ""}
-        {ret.percent.toFixed(2)}%
-      </span>
-    );
-  }
-
   return (
     <div className="p-6 bg-slate-100 min-h-screen font-sans space-y-10">
       <div className="flex flex-wrap items-center gap-4 mb-6">
@@ -246,8 +287,9 @@ export default function ProductPrices() {
                           <p className="text-3xl font-extrabold text-green-600 tracking-tight mb-1">
                             ${product.usd_price?.toFixed(2) || "N/A"} USD
                           </p>
-                          {/* 1D Return */}
-                          {render1DReturn(product.id)}
+                          {/* 1D and 1H Return */}
+                          {render1DReturn(product.id, priceHistory)}
+                          {render1HReturn(product.id, priceHistory)}
                           <p className="text-md font-medium text-indigo-700 mb-3">
                             ~${(product.usd_price * USD_TO_CAD).toFixed(2)} CAD
                           </p>
@@ -301,8 +343,9 @@ export default function ProductPrices() {
               <p className="text-2xl font-extrabold text-green-600 tracking-tight mb-1">
                 ${product.usd_price?.toFixed(2) || "N/A"} USD
               </p>
-              {/* 1D Return */}
-              {render1DReturn(product.id)}
+              {/* 1D and 1H Return */}
+              {render1DReturn(product.id, priceHistory)}
+              {render1HReturn(product.id, priceHistory)}
               <p className="text-md font-medium text-indigo-700 mb-2">
                 ~${(product.usd_price * USD_TO_CAD).toFixed(2)} CAD
               </p>
