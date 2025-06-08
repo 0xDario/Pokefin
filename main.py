@@ -161,15 +161,15 @@ def get_price_from_url(driver, url):
 
 # === Main Logic ===
 def update_prices():
-    # Calculate timestamp 2 hours ago in UTC
-    two_hours_ago = datetime.now(timezone.utc).isoformat() - timedelta(hours=2)
+    # Calculate timestamp 1 hours ago in UTC
+    one_hour_ago = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+    # Use directly, DO NOT call .isoformat() again
+    response = supabase.table("products").select("*").lt("last_updated", one_hour_ago).execute()
 
-    # Fetch products not updated in last 2 hours
-    response = supabase.table("products").select("*").lt("last_updated", two_hours_ago.isoformat()).execute()
     products_to_update = response.data
 
     if not products_to_update:
-        print("🚫 No products requiring updates (within 2 hours window).")
+        print("🚫 No products requiring updates (within 1 hour window).")
         return
 
     driver = create_driver()
