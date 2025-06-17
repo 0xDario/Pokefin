@@ -14,7 +14,12 @@ const Skeleton = () => <div className="animate-pulse bg-slate-300 rounded h-36 w
 const PRODUCT_PRIORITY = ["booster_box", "etb", "booster_bundle"];
 const USD_TO_CAD = 1.37;
 
-function get1DReturn(history) {
+type PriceHistoryEntry = {
+  usd_price: number;
+  recorded_at: string;
+};
+
+function get1DReturn(history: PriceHistoryEntry[] | undefined) {
   if (!history || history.length < 2) return null;
   const latest = history[0];
   const latestDate = new Date(latest.recorded_at).toISOString().split("T")[0];
@@ -31,8 +36,7 @@ function get1DReturn(history) {
   return { change, percent };
 }
 
-
-function get30DReturn(history) {
+function get30DReturn(history: PriceHistoryEntry[] | undefined) {
   if (!history || history.length < 2) return null;
   const [latest, ...rest] = history;
   const thirtyDaysAgo = rest.find(h =>
