@@ -99,6 +99,7 @@ export default function ProductPrices() {
   const [sortBy, setSortBy] = useState<"price" | "release_date" | "set_name">("price");
   const [searchTerm, setSearchTerm] = useState<string>("");
   const [priceHistory, setPriceHistory] = useState<Record<number, PriceHistoryEntry[]>>({});
+  const [chartTimeframe, setChartTimeframe] = useState<"7D" | "30D" | "90D">("30D");
 
   useEffect(() => {
     async function fetchProducts() {
@@ -118,24 +119,70 @@ export default function ProductPrices() {
 
   useEffect(() => {
     if (products.length === 0) return;
-    async function fetchHistory() {
-      const productIds = products.map(p => p.id);
-      const { data, error } = await supabase
-        .from("product_price_history")
-        .select("product_id, usd_price, recorded_at")
-        .in("product_id", productIds)
-        .order("recorded_at", { ascending: false });
+    
+    async function fetchHistoryBatch() {
+      console.log(`[ProductPrices] Fetching history for ${products.length} products...`);
+      
+      // Calculate cutoff date for 90 days ago
+      const ninetyDaysAgo = new Date();
+      ninetyDaysAgo.setDate(ninetyDaysAgo.getDate() - 90);
+      
+      const historyByProduct: Record<number, PriceHistoryEntry[]> = {};
+      
+      // Process products in smaller batches to avoid hitting limits
+      const batchSize = 5;
+      for (let i = 0; i < products.length; i += batchSize) {
+        const batch = products.slice(i, i + batchSize);
+        const batchIds = batch.map(p => p.id);
+        
+        console.log(`[ProductPrices] Fetching batch ${Math.floor(i/batchSize) + 1}/${Math.ceil(products.length/batchSize)} (products ${batchIds.join(', ')})`);
+        
+        try {
+          const { data, error } = await supabase
+            .from("product_price_history")
+            .select("product_id, usd_price, recorded_at")
+            .in("product_id", batchIds)
+            .gte("recorded_at", ninetyDaysAgo.toISOString())
+            .order("recorded_at", { ascending: false })
+            .limit(1000); // This should be enough for 5 products * ~120 records each
 
-      if (!error && data) {
-        const historyByProduct: Record<number, PriceHistoryEntry[]> = {};
-        for (const h of data as (PriceHistoryEntry & { product_id: number })[]) {
-          if (!historyByProduct[h.product_id]) historyByProduct[h.product_id] = [];
-          historyByProduct[h.product_id].push(h);
+          if (error) {
+            console.error(`[ProductPrices] Error fetching batch:`, error);
+            continue;
+          }
+
+          if (data) {
+            // Group by product ID
+            for (const record of data as (PriceHistoryEntry & { product_id: number })[]) {
+              if (!historyByProduct[record.product_id]) {
+                historyByProduct[record.product_id] = [];
+              }
+              historyByProduct[record.product_id].push(record);
+            }
+          }
+          
+          // Small delay between batches to be nice to the API
+          await new Promise(resolve => setTimeout(resolve, 100));
+          
+        } catch (err) {
+          console.error(`[ProductPrices] Error in batch ${i}:`, err);
         }
-        setPriceHistory(historyByProduct);
       }
+      
+      // Log results
+      Object.entries(historyByProduct).forEach(([productId, history]) => {
+        if (history.length > 0) {
+          const earliest = history[history.length - 1]?.recorded_at;
+          const latest = history[0]?.recorded_at;
+          console.log(`[ProductPrices] Product ${productId}: ${history.length} records from ${earliest} to ${latest}`);
+        }
+      });
+      
+      console.log(`[ProductPrices] Total history records fetched: ${Object.values(historyByProduct).reduce((sum, arr) => sum + arr.length, 0)}`);
+      setPriceHistory(historyByProduct);
     }
-    fetchHistory();
+    
+    fetchHistoryBatch();
   }, [products]);
 
   const toggleSort = (type) => {
@@ -197,6 +244,24 @@ export default function ProductPrices() {
           onChange={(e) => setSearchTerm(e.target.value)}
           className="px-3 py-1 rounded border text-sm text-slate-700 bg-white"
         />
+
+        {/* Timeframe buttons */}
+        <div className="flex items-center gap-2 ml-4">
+          <p className="font-semibold text-slate-800">Chart timeframe:</p>
+          {(["7D", "30D", "90D"] as const).map((timeframe) => (
+            <button
+              key={timeframe}
+              onClick={() => setChartTimeframe(timeframe)}
+              className={`px-3 py-1 rounded border text-sm font-medium transition-all ${
+                chartTimeframe === timeframe 
+                  ? "bg-green-600 text-white" 
+                  : "bg-white text-slate-700 hover:bg-gray-50"
+              }`}
+            >
+              {timeframe}
+            </button>
+          ))}
+        </div>
 
         <p className="font-semibold text-slate-800">Sort by product type:</p>
         {PRODUCT_PRIORITY.map((type) => (
@@ -270,15 +335,16 @@ export default function ProductPrices() {
                         className="rounded-xl border border-slate-300 bg-white p-5 shadow hover:shadow-lg transition-shadow"
                       >
                         <div>
-                          <p className="text-sm text-slate-600 mb-1">
-                            <span className="font-medium text-slate-700">Type:</span> {product.product_types?.label || product.product_types?.name}
-                          </p>
+                          <h3 className="font-semibold text-slate-800 text-lg mb-2">
+                            {product.product_types?.label || product.product_types?.name}
+                          </h3>
                           <p className="text-sm text-slate-600 mb-1">
                             <span className="font-medium text-slate-700">Generation:</span> {product.sets?.generations?.name || "Unknown"}
                           </p>
                           <p className="text-sm text-slate-600 mb-2">
                             <span className="font-medium text-slate-700">Release Date:</span>{" "}
-                            {product.sets?.release_date ? new Date(product.sets.release_date + "T00:00:00Z").toLocaleDateString() : "Unknown"}
+                            {product.sets?.release_date ? 
+                              new Date(product.sets.release_date + "T00:00:00Z").toLocaleDateString() : "Unknown"}
                           </p>
                           <p className="text-3xl font-extrabold text-green-600 tracking-tight mb-1">
                             ${product.usd_price?.toFixed(2) || "N/A"} USD
@@ -290,7 +356,7 @@ export default function ProductPrices() {
                           </p>
                           {priceHistory[product.id]?.length > 1 && (
                             <div className="mt-2">
-                              <PriceChart data={priceHistory[product.id]} />
+                              <PriceChart data={priceHistory[product.id]} range={chartTimeframe} />
                             </div>
                           )}
                           <a
@@ -334,7 +400,8 @@ export default function ProductPrices() {
               </p>
               <p className="text-sm text-slate-600 mb-2">
                 <span className="font-medium text-slate-700">Release Date:</span>{" "}
-                {product.sets?.release_date ? new Date(product.sets.release_date + "T00:00:00Z").toLocaleDateString() : "Unknown"}
+                {product.sets?.release_date ? 
+                  new Date(product.sets.release_date + "T00:00:00Z").toLocaleDateString() : "Unknown"}
               </p>
               <p className="text-2xl font-extrabold text-green-600 tracking-tight mb-1">
                 ${product.usd_price?.toFixed(2) || "N/A"} USD
@@ -344,6 +411,11 @@ export default function ProductPrices() {
               <p className="text-md font-medium text-indigo-700 mb-2">
                 ~${(product.usd_price * USD_TO_CAD).toFixed(2)} CAD
               </p>
+              {priceHistory[product.id]?.length > 1 && (
+                <div className="mt-2">
+                  <PriceChart data={priceHistory[product.id]} range={chartTimeframe} />
+                </div>
+              )}
               <a
                 href={product.url}
                 target="_blank"
