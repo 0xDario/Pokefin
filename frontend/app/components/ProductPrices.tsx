@@ -44,14 +44,11 @@ function get1DReturn(history: PriceHistoryEntry[] | undefined) {
   if (!history || history.length < 2) return null;
   const latest = history[0];
   const latestDate = new Date(latest.recorded_at).toISOString().split("T")[0];
-
   const prevDayEntry = history.find(h => {
     const hDate = new Date(h.recorded_at).toISOString().split("T")[0];
     return hDate < latestDate;
   });
-
   if (!prevDayEntry) return null;
-
   const change = latest.usd_price - prevDayEntry.usd_price;
   const percent = (change / prevDayEntry.usd_price) * 100;
   return { change, percent };
@@ -109,7 +106,7 @@ export default function ProductPrices() {
       const { data, error } = await supabase
         .from("products")
         .select(`id, usd_price, last_updated, url,
-                 sets ( id, name, code, release_date, generation_id, generations ( name ) ),
+                 sets ( id, name, code, release_date, generation_id, generations!inner ( name ) ),
                  product_types ( name, label )`)
         .order("last_updated", { ascending: false });
 
