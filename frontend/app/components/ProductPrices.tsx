@@ -48,7 +48,7 @@ function get30DReturn(history: PriceHistoryEntry[] | undefined) {
   return { change, percent };
 }
 
-function render1DReturn(productId, priceHistory) {
+function render1DReturn(productId: number, priceHistory: Record<number, PriceHistoryEntry[]>) {
   const history = priceHistory[productId] || [];
   const ret = get1DReturn(history);
   if (!ret || typeof ret.percent !== "number") {
@@ -61,7 +61,7 @@ function render1DReturn(productId, priceHistory) {
   );
 }
 
-function render30DReturn(productId, priceHistory) {
+function render30DReturn(productId: number, priceHistory: Record<number, PriceHistoryEntry[]>) {
   const history = priceHistory[productId] || [];
   const ret = get30DReturn(history);
   if (!ret || typeof ret.percent !== "number") return null;
@@ -71,6 +71,7 @@ function render30DReturn(productId, priceHistory) {
     </span>
   );
 }
+
 
 export default function ProductPrices() {
   const [products, setProducts] = useState([]);
