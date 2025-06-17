@@ -185,7 +185,7 @@ export default function ProductPrices() {
     fetchHistoryBatch();
   }, [products]);
 
-  const toggleSort = (type) => {
+  const toggleSort = (type: string) => {
     if (sortProductType === type) {
       setSortDirection(sortDirection === "asc" ? "desc" : "asc");
     } else {
@@ -194,7 +194,7 @@ export default function ProductPrices() {
     }
   };
 
-  const toggleSortBy = (key) => {
+  const toggleSortBy = (key: string) => {
     if (sortBy === key) {
       setSortDirection(sortDirection === "asc" ? "desc" : "asc");
     } else {
@@ -203,22 +203,22 @@ export default function ProductPrices() {
     }
   };
 
-  const filteredProducts = products.filter((p) => {
+  const filteredProducts = products.filter((p: any) => {
     const search = searchTerm.toLowerCase().replace(/\betb\b/g, "elite trainer box");
     const target = `${p.sets?.name ?? ""} ${p.sets?.code ?? ""} ${p.product_types?.label ?? ""}`.toLowerCase();
     return target.includes(search);
   });
 
-  const groupedProducts = filteredProducts.reduce((acc, item) => {
+  const groupedProducts = filteredProducts.reduce((acc: any, item: any) => {
     const key = `${item.sets?.name}||${item.sets?.code}`;
     if (!acc[key]) acc[key] = [];
     acc[key].push(item);
     return acc;
   }, {});
 
-  const sortedFlatProducts = [...filteredProducts].filter(p =>
+  const sortedFlatProducts = [...filteredProducts].filter((p: any) =>
     sortProductType ? p.product_types?.name === sortProductType : true
-  ).sort((a, b) => {
+  ).sort((a: any, b: any) => {
     if (sortBy === "release_date") {
       const dateA = new Date(a.sets?.release_date + "T00:00:00Z").getTime();
       const dateB = new Date(b.sets?.release_date + "T00:00:00Z").getTime();
@@ -310,14 +310,14 @@ export default function ProductPrices() {
 
       {!loading && viewMode === "grouped" &&
         Object.entries(groupedProducts)
-          .sort(([, a], [, b]) => {
+          .sort(([, a]: any, [, b]: any) => {
             const dateA = new Date(a[0].sets?.release_date + "T00:00:00Z").getTime();
             const dateB = new Date(b[0].sets?.release_date + "T00:00:00Z").getTime();
             return dateB - dateA;
           })
           .map(([groupKey, items]) => {
             const [setName, setCode] = groupKey.split("||");
-            const sortedItems = [...items].sort((a, b) =>
+            const sortedItems = [...items].sort((a: any, b: any) =>
               PRODUCT_PRIORITY.indexOf(a.product_types?.name) - PRODUCT_PRIORITY.indexOf(b.product_types?.name)
             );
 
@@ -327,8 +327,8 @@ export default function ProductPrices() {
                   {setName} {setCode && <span className="text-slate-500 text-base">({setCode})</span>}
                 </h2>
                 <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-6">
-                  {PRODUCT_PRIORITY.map((type) => {
-                    const product = sortedItems.find(p => p.product_types?.name === type);
+                  {PRODUCT_PRIORITY.map((type: string) => {
+                    const product = sortedItems.find((p: any) => p.product_types?.name === type);
                     return product ? (
                       <div
                         key={product.id}
@@ -384,7 +384,7 @@ export default function ProductPrices() {
 
       {!loading && viewMode === "flat" && (
         <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-6">
-          {sortedFlatProducts.map(product => (
+          {sortedFlatProducts.map((product: any) => (
             <div
               key={product.id}
               className="rounded-xl border border-slate-300 bg-white p-5 shadow hover:shadow-lg transition-shadow"
