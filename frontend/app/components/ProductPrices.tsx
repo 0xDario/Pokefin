@@ -72,9 +72,13 @@ function render1DReturn(productId: number, priceHistory: Record<number, PriceHis
   if (!ret || typeof ret.percent !== "number") {
     return <span className="font-semibold text-sm block mb-1 text-slate-500">1D: —</span>;
   }
+  
+  const changeSign = ret.change > 0 ? "+" : "";
+  const percentSign = ret.percent > 0 ? "+" : "";
+  
   return (
     <span className={`font-semibold text-sm block mb-1 ${ret.percent > 0 ? "text-green-600" : ret.percent < 0 ? "text-red-600" : "text-slate-500"}`}>
-      1D: {ret.percent > 0 ? "+" : ""}{ret.percent.toFixed(2)}%
+      1D: {changeSign}${ret.change.toFixed(2)} ({percentSign}{ret.percent.toFixed(2)}%)
     </span>
   );
 }
@@ -83,9 +87,13 @@ function render30DReturn(productId: number, priceHistory: Record<number, PriceHi
   const history = priceHistory[productId] || [];
   const ret = get30DReturn(history);
   if (!ret || typeof ret.percent !== "number") return null;
+  
+  const changeSign = ret.change > 0 ? "+" : "";
+  const percentSign = ret.percent > 0 ? "+" : "";
+  
   return (
     <span className={`font-semibold text-sm block mb-1 ${ret.percent > 0 ? "text-green-600" : ret.percent < 0 ? "text-red-600" : "text-slate-500"}`}>
-      30D: {ret.percent > 0 ? "+" : ""}{ret.percent.toFixed(2)}%
+      30D: {changeSign}${ret.change.toFixed(2)} ({percentSign}{ret.percent.toFixed(2)}%)
     </span>
   );
 }
