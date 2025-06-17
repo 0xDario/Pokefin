@@ -111,7 +111,7 @@ export default function ProductPrices() {
                  product_types ( name, label )`)
         .order("last_updated", { ascending: false });
 
-      if (!error && data) setProducts(data as Product[]);
+      if (!error && data) setProducts(data as any);
       setLoading(false);
     }
     fetchProducts();
