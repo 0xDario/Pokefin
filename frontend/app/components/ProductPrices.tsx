@@ -194,7 +194,7 @@ export default function ProductPrices() {
     }
   };
 
-  const toggleSortBy = (key: string) => {
+  const toggleSortBy = (key: "price" | "release_date" | "set_name") => {
     if (sortBy === key) {
       setSortDirection(sortDirection === "asc" ? "desc" : "asc");
     } else {
