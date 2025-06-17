@@ -209,7 +209,7 @@ export default function ProductPrices() {
     return target.includes(search);
   });
 
-  const groupedProducts = filteredProducts.reduce((acc: any, item: any) => {
+  const groupedProducts: Record<string, Product[]> = filteredProducts.reduce((acc: Record<string, Product[]>, item: Product) => {
     const key = `${item.sets?.name}||${item.sets?.code}`;
     if (!acc[key]) acc[key] = [];
     acc[key].push(item);
@@ -310,14 +310,14 @@ export default function ProductPrices() {
 
       {!loading && viewMode === "grouped" &&
         Object.entries(groupedProducts)
-          .sort(([, a]: any, [, b]: any) => {
+          .sort(([, a]: [string, Product[]], [, b]: [string, Product[]]) => {
             const dateA = new Date(a[0].sets?.release_date + "T00:00:00Z").getTime();
             const dateB = new Date(b[0].sets?.release_date + "T00:00:00Z").getTime();
             return dateB - dateA;
           })
-          .map(([groupKey, items]) => {
+          .map(([groupKey, items]: [string, Product[]]) => {
             const [setName, setCode] = groupKey.split("||");
-            const sortedItems = [...items].sort((a: any, b: any) =>
+            const sortedItems = [...items].sort((a: Product, b: Product) =>
               PRODUCT_PRIORITY.indexOf(a.product_types?.name) - PRODUCT_PRIORITY.indexOf(b.product_types?.name)
             );
 
@@ -328,7 +328,7 @@ export default function ProductPrices() {
                 </h2>
                 <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-6">
                   {PRODUCT_PRIORITY.map((type: string) => {
-                    const product = sortedItems.find((p: any) => p.product_types?.name === type);
+                    const product = sortedItems.find((p: Product) => p.product_types?.name === type);
                     return product ? (
                       <div
                         key={product.id}
