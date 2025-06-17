@@ -2,7 +2,7 @@
 
 import React, { useEffect, useState } from "react";
 import { createClient } from "@supabase/supabase-js";
-import PriceChart from "./PriceChart"; // adjust path if needed
+import PriceChart from "./PriceChart";
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -17,6 +17,27 @@ const USD_TO_CAD = 1.37;
 type PriceHistoryEntry = {
   usd_price: number;
   recorded_at: string;
+};
+
+type Product = {
+  id: number;
+  usd_price: number;
+  last_updated: string;
+  url: string;
+  sets: {
+    id: number;
+    name: string;
+    code: string;
+    release_date: string;
+    generation_id: number;
+    generations: {
+      name: string;
+    };
+  };
+  product_types: {
+    name: string;
+    label: string;
+  };
 };
 
 function get1DReturn(history: PriceHistoryEntry[] | undefined) {
@@ -40,7 +61,7 @@ function get30DReturn(history: PriceHistoryEntry[] | undefined) {
   if (!history || history.length < 2) return null;
   const [latest, ...rest] = history;
   const thirtyDaysAgo = rest.find(h =>
-    (new Date(latest.recorded_at).getTime() - new Date(h.recorded_at).getTime()) >= 1000 * 60 * 60 * 24 * 30
+    new Date(latest.recorded_at).getTime() - new Date(h.recorded_at).getTime() >= 1000 * 60 * 60 * 24 * 30
   );
   if (!thirtyDaysAgo) return null;
   const change = latest.usd_price - thirtyDaysAgo.usd_price;
@@ -72,16 +93,15 @@ function render30DReturn(productId: number, priceHistory: Record<number, PriceHi
   );
 }
 
-
 export default function ProductPrices() {
-  const [products, setProducts] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [sortDirection, setSortDirection] = useState("desc");
-  const [sortProductType, setSortProductType] = useState(null);
-  const [viewMode, setViewMode] = useState("grouped");
-  const [sortBy, setSortBy] = useState("price");
-  const [searchTerm, setSearchTerm] = useState("");
-  const [priceHistory, setPriceHistory] = useState({});
+  const [products, setProducts] = useState<Product[]>([]);
+  const [loading, setLoading] = useState<boolean>(true);
+  const [sortDirection, setSortDirection] = useState<"asc" | "desc">("desc");
+  const [sortProductType, setSortProductType] = useState<string | null>(null);
+  const [viewMode, setViewMode] = useState<"grouped" | "flat">("grouped");
+  const [sortBy, setSortBy] = useState<"price" | "release_date" | "set_name">("price");
+  const [searchTerm, setSearchTerm] = useState<string>("");
+  const [priceHistory, setPriceHistory] = useState<Record<number, PriceHistoryEntry[]>>({});
 
   useEffect(() => {
     async function fetchProducts() {
@@ -93,7 +113,7 @@ export default function ProductPrices() {
                  product_types ( name, label )`)
         .order("last_updated", { ascending: false });
 
-      if (!error && data) setProducts(data);
+      if (!error && data) setProducts(data as Product[]);
       setLoading(false);
     }
     fetchProducts();
@@ -110,8 +130,8 @@ export default function ProductPrices() {
         .order("recorded_at", { ascending: false });
 
       if (!error && data) {
-        const historyByProduct = {};
-        for (const h of data) {
+        const historyByProduct: Record<number, PriceHistoryEntry[]> = {};
+        for (const h of data as (PriceHistoryEntry & { product_id: number })[]) {
           if (!historyByProduct[h.product_id]) historyByProduct[h.product_id] = [];
           historyByProduct[h.product_id].push(h);
         }
