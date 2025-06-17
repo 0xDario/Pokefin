@@ -65,6 +65,22 @@ export default function PriceChart({
     return result;
   }, [range, groupedDaily]);
 
+  // Custom tooltip component with better styling
+  const CustomTooltip = ({ active, payload, label }: any) => {
+    if (active && payload && payload.length) {
+      return (
+        <div className="bg-slate-800 text-white px-3 py-2 rounded-lg shadow-lg border border-slate-600">
+          <p className="text-sm font-medium">{label}</p>
+          <p className="text-sm">
+            <span className="text-green-400">Price: </span>
+            ${payload[0].value.toFixed(2)}
+          </p>
+        </div>
+      );
+    }
+    return null;
+  };
+
   return (
     <div className="w-full">
       <ResponsiveContainer width="100%" height={140}>
@@ -77,7 +93,7 @@ export default function PriceChart({
           </defs>
           <XAxis dataKey="date" hide />
           <YAxis domain={["dataMin", "dataMax"]} hide />
-          <Tooltip formatter={(value: number) => `$${value.toFixed(2)}`} />
+          <Tooltip content={<CustomTooltip />} />
           <Area
             type="monotone"
             dataKey="price"
