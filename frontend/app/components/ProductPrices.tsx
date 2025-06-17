@@ -2,6 +2,7 @@
 
 import React, { useEffect, useState } from "react";
 import { createClient } from "@supabase/supabase-js";
+import PriceChart from "./PriceChart"; // adjust path if needed
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -13,94 +14,69 @@ const Skeleton = () => <div className="animate-pulse bg-slate-300 rounded h-36 w
 const PRODUCT_PRIORITY = ["booster_box", "etb", "booster_bundle"];
 const USD_TO_CAD = 1.37;
 
-// 1D % return calculation
-function get1DReturn(history: { usd_price: number; recorded_at: string }[] | undefined) {
+function get1DReturn(history) {
   if (!history || history.length < 2) return null;
-  const [latest, ...rest] = history;
-  const oneDayAgo = rest.find(h =>
-    (new Date(latest.recorded_at).getTime() - new Date(h.recorded_at).getTime()) >= 1000 * 60 * 60 * 24
-  );
-  if (!oneDayAgo) return null;
-  const change = latest.usd_price - oneDayAgo.usd_price;
-  const percent = (change / oneDayAgo.usd_price) * 100;
+  const latest = history[0];
+  const latestDate = new Date(latest.recorded_at).toISOString().split("T")[0];
+
+  const prevDayEntry = history.find(h => {
+    const hDate = new Date(h.recorded_at).toISOString().split("T")[0];
+    return hDate < latestDate;
+  });
+
+  if (!prevDayEntry) return null;
+
+  const change = latest.usd_price - prevDayEntry.usd_price;
+  const percent = (change / prevDayEntry.usd_price) * 100;
   return { change, percent };
 }
 
-// 1H % return calculation (NEW)
-function get1HReturn(history: { usd_price: number; recorded_at: string }[] | undefined) {
+
+function get30DReturn(history) {
   if (!history || history.length < 2) return null;
   const [latest, ...rest] = history;
-  const oneHourAgo = rest.find(h =>
-    (new Date(latest.recorded_at).getTime() - new Date(h.recorded_at).getTime()) >= 1000 * 60 * 60
+  const thirtyDaysAgo = rest.find(h =>
+    (new Date(latest.recorded_at).getTime() - new Date(h.recorded_at).getTime()) >= 1000 * 60 * 60 * 24 * 30
   );
-  if (!oneHourAgo) return null;
-  const change = latest.usd_price - oneHourAgo.usd_price;
-  const percent = (change / oneHourAgo.usd_price) * 100;
+  if (!thirtyDaysAgo) return null;
+  const change = latest.usd_price - thirtyDaysAgo.usd_price;
+  const percent = (change / thirtyDaysAgo.usd_price) * 100;
   return { change, percent };
 }
 
-// UI helpers
-function render1DReturn(productId: number, priceHistory: Record<number, any[]>) {
+function render1DReturn(productId, priceHistory) {
   const history = priceHistory[productId] || [];
   const ret = get1DReturn(history);
   if (!ret || typeof ret.percent !== "number") {
-    return (
-      <span className="font-semibold text-sm block mb-1 text-slate-500">
-        1D: —
-      </span>
-    );
+    return <span className="font-semibold text-sm block mb-1 text-slate-500">1D: —</span>;
   }
   return (
-    <span
-      className={`font-semibold text-sm block mb-1 ${
-        ret.percent > 0
-          ? "text-green-600"
-          : ret.percent < 0
-          ? "text-red-600"
-          : "text-slate-500"
-      }`}
-    >
-      1D: {ret.percent > 0 ? "+" : ""}
-      {ret.percent.toFixed(2)}%
+    <span className={`font-semibold text-sm block mb-1 ${ret.percent > 0 ? "text-green-600" : ret.percent < 0 ? "text-red-600" : "text-slate-500"}`}>
+      1D: {ret.percent > 0 ? "+" : ""}{ret.percent.toFixed(2)}%
     </span>
   );
 }
 
-function render1HReturn(productId: number, priceHistory: Record<number, any[]>) {
+function render30DReturn(productId, priceHistory) {
   const history = priceHistory[productId] || [];
-  const ret = get1HReturn(history);
-  if (!ret || typeof ret.percent !== "number") {
-    return (
-      <span className="font-semibold text-sm block mb-1 text-slate-500">
-        1H: —
-      </span>
-    );
-  }
+  const ret = get30DReturn(history);
+  if (!ret || typeof ret.percent !== "number") return null;
   return (
-    <span
-      className={`font-semibold text-sm block mb-1 ${
-        ret.percent > 0
-          ? "text-green-600"
-          : ret.percent < 0
-          ? "text-red-600"
-          : "text-slate-500"
-      }`}
-    >
-      1H: {ret.percent > 0 ? "+" : ""}
-      {ret.percent.toFixed(2)}%
+    <span className={`font-semibold text-sm block mb-1 ${ret.percent > 0 ? "text-green-600" : ret.percent < 0 ? "text-red-600" : "text-slate-500"}`}>
+      30D: {ret.percent > 0 ? "+" : ""}{ret.percent.toFixed(2)}%
     </span>
   );
 }
 
 export default function ProductPrices() {
-  const [products, setProducts] = useState<any[]>([]);
+  const [products, setProducts] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [sortDirection, setSortDirection] = useState<"asc" | "desc">("desc");
-  const [sortProductType, setSortProductType] = useState<string | null>(null);
-  const [viewMode, setViewMode] = useState<"grouped" | "flat">("grouped");
-  const [sortBy, setSortBy] = useState<"price" | "release_date" | "set_name">("price");
+  const [sortDirection, setSortDirection] = useState("desc");
+  const [sortProductType, setSortProductType] = useState(null);
+  const [viewMode, setViewMode] = useState("grouped");
+  const [sortBy, setSortBy] = useState("price");
   const [searchTerm, setSearchTerm] = useState("");
-  const [priceHistory, setPriceHistory] = useState<Record<number, any[]>>({});
+  const [priceHistory, setPriceHistory] = useState({});
 
   useEffect(() => {
     async function fetchProducts() {
@@ -129,7 +105,7 @@ export default function ProductPrices() {
         .order("recorded_at", { ascending: false });
 
       if (!error && data) {
-        const historyByProduct: Record<number, any[]> = {};
+        const historyByProduct = {};
         for (const h of data) {
           if (!historyByProduct[h.product_id]) historyByProduct[h.product_id] = [];
           historyByProduct[h.product_id].push(h);
@@ -140,7 +116,7 @@ export default function ProductPrices() {
     fetchHistory();
   }, [products]);
 
-  const toggleSort = (type: string) => {
+  const toggleSort = (type) => {
     if (sortProductType === type) {
       setSortDirection(sortDirection === "asc" ? "desc" : "asc");
     } else {
@@ -149,7 +125,7 @@ export default function ProductPrices() {
     }
   };
 
-  const toggleSortBy = (key: "release_date" | "set_name") => {
+  const toggleSortBy = (key) => {
     if (sortBy === key) {
       setSortDirection(sortDirection === "asc" ? "desc" : "asc");
     } else {
@@ -160,11 +136,11 @@ export default function ProductPrices() {
 
   const filteredProducts = products.filter((p) => {
     const search = searchTerm.toLowerCase().replace(/\betb\b/g, "elite trainer box");
-    const searchTarget = `${p.sets?.name ?? ""} ${p.sets?.code ?? ""} ${p.product_types?.label ?? ""}`.toLowerCase();
-    return searchTarget.includes(search);
+    const target = `${p.sets?.name ?? ""} ${p.sets?.code ?? ""} ${p.product_types?.label ?? ""}`.toLowerCase();
+    return target.includes(search);
   });
 
-  const groupedProducts = filteredProducts.reduce((acc: Record<string, any[]>, item) => {
+  const groupedProducts = filteredProducts.reduce((acc, item) => {
     const key = `${item.sets?.name}||${item.sets?.code}`;
     if (!acc[key]) acc[key] = [];
     acc[key].push(item);
@@ -253,7 +229,7 @@ export default function ProductPrices() {
             return dateB - dateA;
           })
           .map(([groupKey, items]) => {
-            const [setName, setCode] = groupKey.includes("||") ? groupKey.split("||") : [groupKey, null];
+            const [setName, setCode] = groupKey.split("||");
             const sortedItems = [...items].sort((a, b) =>
               PRODUCT_PRIORITY.indexOf(a.product_types?.name) - PRODUCT_PRIORITY.indexOf(b.product_types?.name)
             );
@@ -280,19 +256,21 @@ export default function ProductPrices() {
                           </p>
                           <p className="text-sm text-slate-600 mb-2">
                             <span className="font-medium text-slate-700">Release Date:</span>{" "}
-                            {product.sets?.release_date
-                              ? new Date(product.sets.release_date + "T00:00:00Z").toLocaleDateString()
-                              : "Unknown"}
+                            {product.sets?.release_date ? new Date(product.sets.release_date + "T00:00:00Z").toLocaleDateString() : "Unknown"}
                           </p>
                           <p className="text-3xl font-extrabold text-green-600 tracking-tight mb-1">
                             ${product.usd_price?.toFixed(2) || "N/A"} USD
                           </p>
-                          {/* 1D and 1H Return */}
                           {render1DReturn(product.id, priceHistory)}
-                          {render1HReturn(product.id, priceHistory)}
+                          {render30DReturn(product.id, priceHistory)}
                           <p className="text-md font-medium text-indigo-700 mb-3">
                             ~${(product.usd_price * USD_TO_CAD).toFixed(2)} CAD
                           </p>
+                          {priceHistory[product.id]?.length > 1 && (
+                            <div className="mt-2">
+                              <PriceChart data={priceHistory[product.id]} />
+                            </div>
+                          )}
                           <a
                             href={product.url}
                             target="_blank"
@@ -309,9 +287,7 @@ export default function ProductPrices() {
                           </p>
                         </div>
                       </div>
-                    ) : (
-                      <div key={type} className="h-0" />
-                    );
+                    ) : <div key={type} className="h-0" />;
                   })}
                 </div>
               </div>
@@ -336,16 +312,13 @@ export default function ProductPrices() {
               </p>
               <p className="text-sm text-slate-600 mb-2">
                 <span className="font-medium text-slate-700">Release Date:</span>{" "}
-                {product.sets?.release_date
-                  ? new Date(product.sets.release_date + "T00:00:00Z").toLocaleDateString()
-                  : "Unknown"}
+                {product.sets?.release_date ? new Date(product.sets.release_date + "T00:00:00Z").toLocaleDateString() : "Unknown"}
               </p>
               <p className="text-2xl font-extrabold text-green-600 tracking-tight mb-1">
                 ${product.usd_price?.toFixed(2) || "N/A"} USD
               </p>
-              {/* 1D and 1H Return */}
               {render1DReturn(product.id, priceHistory)}
-              {render1HReturn(product.id, priceHistory)}
+              {render30DReturn(product.id, priceHistory)}
               <p className="text-md font-medium text-indigo-700 mb-2">
                 ~${(product.usd_price * USD_TO_CAD).toFixed(2)} CAD
               </p>
