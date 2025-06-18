@@ -14,6 +14,9 @@ const Skeleton = () => <div className="animate-pulse bg-slate-300 rounded h-36 w
 const PRODUCT_PRIORITY = ["booster_box", "etb", "booster_bundle"];
 const USD_TO_CAD = 1.37;
 
+
+
+
 type PriceHistoryEntry = {
   usd_price: number;
   recorded_at: string;
@@ -108,6 +111,13 @@ export default function ProductPrices() {
   const [searchTerm, setSearchTerm] = useState<string>("");
   const [priceHistory, setPriceHistory] = useState<Record<number, PriceHistoryEntry[]>>({});
   const [chartTimeframe, setChartTimeframe] = useState<"7D" | "30D" | "90D">("30D");
+  const [sortStates, setSortStates] = useState<{
+    [key in "release_date" | "set_name" | "price"]?: "asc" | "desc" | null;
+  }>({
+    release_date: null,
+    set_name: null,
+    price: "desc", // default sort
+  });
 
   useEffect(() => {
     async function fetchProducts() {
@@ -202,13 +212,15 @@ export default function ProductPrices() {
     }
   };
 
-  const toggleSortBy = (key: "price" | "release_date" | "set_name") => {
-    if (sortBy === key) {
-      setSortDirection(sortDirection === "asc" ? "desc" : "asc");
-    } else {
-      setSortBy(key);
-      setSortDirection("asc");
-    }
+  const toggleSortBy = (key: "release_date" | "set_name" | "price") => {
+    setSortStates((prev) => {
+      const current = prev[key];
+      let next: "asc" | "desc" | null = null;
+      if (current === null) next = "asc";
+      else if (current === "asc") next = "desc";
+      else next = null;
+      return { ...prev, [key]: next };
+    });
   };
 
   const filteredProducts = products.filter((p: any) => {
@@ -224,27 +236,35 @@ export default function ProductPrices() {
     return acc;
   }, {});
 
-  const sortedFlatProducts = [...filteredProducts].filter((p: any) =>
-    sortProductType ? p.product_types?.name === sortProductType : true
-  ).sort((a: any, b: any) => {
-    if (sortBy === "release_date") {
-      const dateA = new Date(a.sets?.release_date + "T00:00:00Z").getTime();
-      const dateB = new Date(b.sets?.release_date + "T00:00:00Z").getTime();
-      return sortDirection === "asc" ? dateA - dateB : dateB - dateA;
-    }
-    if (sortBy === "set_name") {
-      return sortDirection === "asc"
-        ? a.sets?.name.localeCompare(b.sets?.name)
-        : b.sets?.name.localeCompare(a.sets?.name);
-    }
-    const valA = a.usd_price ?? 0;
-    const valB = b.usd_price ?? 0;
-    return sortDirection === "asc" ? valA - valB : valB - valA;
-  });
+  const sortedFlatProducts = [...filteredProducts]
+    .filter((p: any) => (sortProductType ? p.product_types?.name === sortProductType : true))
+    .sort((a: any, b: any) => {
+      const sortKeys: ("release_date" | "set_name" | "price")[] = ["release_date", "set_name", "price"];
+      for (const key of sortKeys) {
+        const dir = sortStates[key];
+        if (!dir) continue;
+        let valA, valB;
+        if (key === "release_date") {
+          valA = new Date(a.sets?.release_date ?? 0).getTime();
+          valB = new Date(b.sets?.release_date ?? 0).getTime();
+        } else if (key === "set_name") {
+          valA = a.sets?.name ?? "";
+          valB = b.sets?.name ?? "";
+        } else if (key === "price") {
+          valA = a.usd_price ?? 0;
+          valB = b.usd_price ?? 0;
+        }
+        if (valA < valB) return dir === "asc" ? -1 : 1;
+        if (valA > valB) return dir === "asc" ? 1 : -1;
+      }
+      return 0;
+    });
 
   return (
     <div className="p-6 bg-slate-100 min-h-screen font-sans space-y-10">
+      {/* Controls */}
       <div className="flex flex-wrap items-center gap-4 mb-6">
+        {/* Search */}
         <input
           type="text"
           placeholder="Search by name..."
@@ -253,9 +273,9 @@ export default function ProductPrices() {
           className="px-3 py-1 rounded border text-sm text-slate-700 bg-white"
         />
 
-        {/* Timeframe buttons */}
-        <div className="flex items-center gap-2 ml-4">
-          <p className="font-semibold text-slate-800">Chart timeframe:</p>
+        {/* Chart timeframe */}
+        <div className="flex items-center gap-2">
+          <span className="font-semibold text-slate-800">Chart timeframe:</span>
           {(["7D", "30D", "90D"] as const).map((timeframe) => (
             <button
               key={timeframe}
@@ -271,41 +291,7 @@ export default function ProductPrices() {
           ))}
         </div>
 
-        <p className="font-semibold text-slate-800">Sort by product type:</p>
-        {PRODUCT_PRIORITY.map((type) => (
-          <button
-            key={type}
-            onClick={() => toggleSort(type)}
-            className={`px-4 py-1 rounded border text-sm font-medium transition-all ${
-              sortProductType === type ? "bg-blue-600 text-white" : "bg-white text-slate-700"
-            }`}
-          >
-            {type.toUpperCase()} {sortProductType === type ? (sortDirection === "asc" ? "↑" : "↓") : ""}
-          </button>
-        ))}
-
-        {viewMode === "flat" && (
-          <>
-            <p className="ml-6 font-semibold text-slate-800">Sort sets by:</p>
-            <button
-              onClick={() => toggleSortBy("release_date")}
-              className={`px-4 py-1 rounded border text-sm font-medium ${
-                sortBy === "release_date" ? "bg-blue-600 text-white" : "bg-white text-slate-700"
-              }`}
-            >
-              Release Date {sortBy === "release_date" && (sortDirection === "asc" ? "↑" : "↓")}
-            </button>
-            <button
-              onClick={() => toggleSortBy("set_name")}
-              className={`px-4 py-1 rounded border text-sm font-medium ${
-                sortBy === "set_name" ? "bg-blue-600 text-white" : "bg-white text-slate-700"
-              }`}
-            >
-              Set Name {sortBy === "set_name" && (sortDirection === "asc" ? "↑" : "↓")}
-            </button>
-          </>
-        )}
-
+        {/* Toggle View */}
         <button
           onClick={() => setViewMode(viewMode === "grouped" ? "flat" : "grouped")}
           className="ml-auto px-4 py-1 rounded bg-slate-800 text-white text-sm font-medium"
@@ -314,7 +300,46 @@ export default function ProductPrices() {
         </button>
       </div>
 
-      {loading && Array.from({ length: 6 }).map((_, i) => <Skeleton key={i} />)}
+      {/* Flat view only: Product type and set sorting */}
+      {viewMode === "flat" && (
+        <div className="flex flex-wrap items-center gap-4 mb-6">
+          {/* Product type filter/sort */}
+          <span className="font-semibold text-slate-800">Filter by product type:</span>
+          {PRODUCT_PRIORITY.map((type) => (
+            <button
+              key={type}
+              onClick={() => setSortProductType(sortProductType === type ? null : type)}
+              className={`px-4 py-1 rounded border text-sm font-medium transition-all ${
+                sortProductType === type ? "bg-blue-600 text-white" : "bg-white text-slate-700"
+              }`}
+            >
+              {type.toUpperCase()}
+            </button>
+          ))}
+
+          {/* Set sorting */}
+          <span className="font-semibold text-slate-800 ml-6">Sort sets by:</span>
+          {(["release_date", "set_name", "price"] as const).map((key) => (
+            <button
+              key={key}
+              onClick={() => toggleSortBy(key)}
+              className={`px-4 py-1 rounded border text-sm font-medium ${
+                sortStates[key] ? "bg-blue-600 text-white" : "bg-white text-slate-700"
+              }`}
+            >
+              {key === "release_date" && "Release Date"}
+              {key === "set_name" && "Set Name"}
+              {key === "price" && "Price"}
+              {sortStates[key] === "asc" && " ↑"}
+              {sortStates[key] === "desc" && " ↓"}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {loading && Array.from({ length: 6 }).map((_, i) => <Skeleton key={i} />)
+
+      }
 
       {!loading && viewMode === "grouped" &&
         Object.entries(groupedProducts)
