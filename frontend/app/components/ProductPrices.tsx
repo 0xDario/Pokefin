@@ -14,9 +14,6 @@ const Skeleton = () => <div className="animate-pulse bg-slate-300 rounded h-36 w
 const PRODUCT_PRIORITY = ["booster_box", "etb", "booster_bundle"];
 const USD_TO_CAD = 1.37;
 
-
-
-
 type PriceHistoryEntry = {
   usd_price: number;
   recorded_at: string;
@@ -104,10 +101,8 @@ function render30DReturn(productId: number, priceHistory: Record<number, PriceHi
 export default function ProductPrices() {
   const [products, setProducts] = useState<Product[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
-  const [sortDirection, setSortDirection] = useState<"asc" | "desc">("desc");
   const [sortProductType, setSortProductType] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<"grouped" | "flat">("grouped");
-  const [sortBy, setSortBy] = useState<"price" | "release_date" | "set_name">("price");
   const [searchTerm, setSearchTerm] = useState<string>("");
   const [priceHistory, setPriceHistory] = useState<Record<number, PriceHistoryEntry[]>>({});
   const [chartTimeframe, setChartTimeframe] = useState<"7D" | "30D" | "90D">("30D");
@@ -202,15 +197,6 @@ export default function ProductPrices() {
     
     fetchHistoryBatch();
   }, [products]);
-
-  const toggleSort = (type: string) => {
-    if (sortProductType === type) {
-      setSortDirection(sortDirection === "asc" ? "desc" : "asc");
-    } else {
-      setSortProductType(type);
-      setSortDirection("desc");
-    }
-  };
 
   const toggleSortBy = (key: "release_date" | "set_name" | "price") => {
     setSortStates((prev) => {
