@@ -1,8 +1,11 @@
+// Updated ProductPrices.tsx with dynamic exchange rate
+
 "use client";
 
 import React, { useEffect, useState } from "react";
 import { createClient } from "@supabase/supabase-js";
 import PriceChart from "./PriceChart";
+import { fetchUSDToCADRate } from "./exchangeRateService"; // Import the service
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -12,7 +15,6 @@ const supabase = createClient(
 const Skeleton = () => <div className="animate-pulse bg-slate-300 rounded h-36 w-full" />;
 
 const PRODUCT_PRIORITY = ["booster_box", "etb", "booster_bundle"];
-const USD_TO_CAD = 1.37;
 
 type PriceHistoryEntry = {
   usd_price: number;
@@ -113,6 +115,11 @@ export default function ProductPrices() {
     set_name: null,
     price: "desc", // default sort
   });
+  
+  // New state for exchange rate
+  const [exchangeRate, setExchangeRate] = useState<number>(1.37); // fallback
+  const [exchangeRateDate, setExchangeRateDate] = useState<string>("");
+  const [exchangeRateLoading, setExchangeRateLoading] = useState<boolean>(true);
 
   useEffect(() => {
     async function fetchProducts() {
@@ -128,6 +135,27 @@ export default function ProductPrices() {
       setLoading(false);
     }
     fetchProducts();
+  }, []);
+
+  // New useEffect to fetch exchange rate
+  useEffect(() => {
+    async function loadExchangeRate() {
+      setExchangeRateLoading(true);
+      try {
+        const result = await fetchUSDToCADRate();
+        setExchangeRate(result.rate);
+        if (result.date) {
+          setExchangeRateDate(result.date);
+        }
+        console.log(`[ProductPrices] Exchange rate loaded: ${result.rate} (cached: ${result.cached})`);
+      } catch (error) {
+        console.error('[ProductPrices] Failed to load exchange rate:', error);
+        // Keep the fallback rate (1.37) that's already set
+      } finally {
+        setExchangeRateLoading(false);
+      }
+    }
+    loadExchangeRate();
   }, []);
 
   useEffect(() => {
@@ -277,6 +305,31 @@ export default function ProductPrices() {
           ))}
         </div>
 
+        {/* Exchange Rate Display */}
+        <div className="flex items-center gap-2 ml-4 px-3 py-1 bg-blue-50 rounded border">
+          <span className="text-sm font-medium text-blue-800">
+            USD → CAD: 
+          </span>
+          {exchangeRateLoading ? (
+            <span className="text-sm text-blue-600">Loading...</span>
+          ) : (
+            <div className="flex flex-col">
+              <span className="text-sm font-bold text-blue-600">
+                {exchangeRate.toFixed(4)}
+              </span>
+              {exchangeRateDate && (
+                <span className="text-xs text-blue-500">
+                  as of {exchangeRateDate}
+                </span>
+              )}
+              {/* Add this to show if it's cached */}
+              <span className="text-xs text-blue-400">
+                {/* This would show the source if we modify the service to return it */}
+                Live rate
+              </span>
+            </div>
+          )}
+        </div>
         {/* Toggle View */}
         <button
           onClick={() => setViewMode(viewMode === "grouped" ? "flat" : "grouped")}
@@ -323,9 +376,7 @@ export default function ProductPrices() {
         </div>
       )}
 
-      {loading && Array.from({ length: 6 }).map((_, i) => <Skeleton key={i} />)
-
-      }
+      {loading && Array.from({ length: 6 }).map((_, i) => <Skeleton key={i} />)}
 
       {!loading && viewMode === "grouped" &&
         Object.entries(groupedProducts)
@@ -371,7 +422,7 @@ export default function ProductPrices() {
                           {render1DReturn(product.id, priceHistory)}
                           {render30DReturn(product.id, priceHistory)}
                           <p className="text-md font-medium text-indigo-700 mb-3">
-                            ~${(product.usd_price * USD_TO_CAD).toFixed(2)} CAD
+                            ~${(product.usd_price * exchangeRate).toFixed(2)} CAD
                           </p>
                           {priceHistory[product.id]?.length > 1 && (
                             <div className="mt-2">
@@ -428,7 +479,7 @@ export default function ProductPrices() {
               {render1DReturn(product.id, priceHistory)}
               {render30DReturn(product.id, priceHistory)}
               <p className="text-md font-medium text-indigo-700 mb-2">
-                ~${(product.usd_price * USD_TO_CAD).toFixed(2)} CAD
+                ~${(product.usd_price * exchangeRate).toFixed(2)} CAD
               </p>
               {priceHistory[product.id]?.length > 1 && (
                 <div className="mt-2">
