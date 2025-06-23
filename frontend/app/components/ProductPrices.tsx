@@ -5,7 +5,7 @@
 import React, { useEffect, useState } from "react";
 import { createClient } from "@supabase/supabase-js";
 import PriceChart from "./PriceChart";
-import { fetchUSDToCADRate } from "./exchangeRateService"; // Import the service
+import { fetchUSDToCADRate } from "./ExchangeRateService";
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,

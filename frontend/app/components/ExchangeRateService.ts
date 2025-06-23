@@ -7,7 +7,6 @@ interface ExchangeRateCache {
 }
 
 const CACHE_DURATION = 1000 * 60 * 60; // 1 hour cache
-const FALLBACK_RATE = 1.3728; // Updated to current rate from Bank of Canada
 let exchangeRateCache: ExchangeRateCache | null = null;
 
 export async function fetchUSDToCADRate(): Promise<{ rate: number; date?: string; cached: boolean }> {
@@ -110,9 +109,12 @@ export async function fetchUSDToCADRate(): Promise<{ rate: number; date?: string
         console.log(`[Exchange Rate] ✅ Success from ${source.name}: ${result.rate} (${result.date})`);
         return { rate: result.rate, date: result.date, cached: false };
       }
-      
     } catch (error) {
-      console.warn(`[Exchange Rate] ❌ ${source.name} failed:`, error.message);
+      if (error && typeof error === "object" && "message" in error) {
+        console.warn(`[Exchange Rate] ❌ ${source.name} failed:`, (error as { message: string }).message);
+      } else {
+        console.warn(`[Exchange Rate] ❌ ${source.name} failed:`, error);
+      }
     }
   }
 
