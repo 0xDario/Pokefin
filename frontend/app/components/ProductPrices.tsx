@@ -1,8 +1,8 @@
-// Updated ProductPrices.tsx with dynamic exchange rate
+// Updated ProductPrices.tsx with dynamic exchange rate and generation filter
 
 "use client";
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useMemo } from "react";
 import { createClient } from "@supabase/supabase-js";
 import PriceChart from "./PriceChart";
 import { fetchUSDToCADRate } from "./ExchangeRateService";
@@ -14,7 +14,14 @@ const supabase = createClient(
 
 const Skeleton = () => <div className="animate-pulse bg-slate-300 rounded h-36 w-full" />;
 
-const PRODUCT_PRIORITY = ["booster_box", "etb", "booster_bundle"];
+const PRODUCT_PRIORITY = ["booster_box", "pokemon_center_etb", "etb", "booster_bundle"];
+
+const PRODUCT_TYPE_DISPLAY_NAMES = {
+  "booster_box": "Booster Box",
+  "etb": "Elite Trainer Box", 
+  "pokemon_center_etb": "Pokemon Center Exclusive ETB",
+  "booster_bundle": "Booster Bundle"
+};
 
 type PriceHistoryEntry = {
   usd_price: number;
@@ -116,10 +123,55 @@ export default function ProductPrices() {
     price: "desc", // default sort
   });
   
+  // New state for generation filter
+  const [selectedGeneration, setSelectedGeneration] = useState<string>("all");
+  
   // New state for exchange rate
   const [exchangeRate, setExchangeRate] = useState<number>(1.37); // fallback
   const [exchangeRateDate, setExchangeRateDate] = useState<string>("");
   const [exchangeRateLoading, setExchangeRateLoading] = useState<boolean>(true);
+
+  // Extract unique generations from products
+  const availableGenerations = useMemo(() => {
+    // Define generation order (from newest to oldest)
+    const generationOrder = [
+      "Scarlet & Violet",
+      "Sword & Shield",
+      "Sun & Moon",
+      "XY",
+      "Black & White",
+      "HeartGold & SoulSilver",
+      "Platinum",
+      "Diamond & Pearl",
+      "EX",
+      "E-Card",
+      "Neo",
+      "Base"
+    ];
+
+    const generations = new Set<string>();
+    products.forEach(product => {
+      if (product.sets?.generations?.name) {
+        generations.add(product.sets.generations.name);
+      }
+    });
+    
+    // Sort by predefined order, with any unknown generations at the end
+    return Array.from(generations).sort((a, b) => {
+      const indexA = generationOrder.indexOf(a);
+      const indexB = generationOrder.indexOf(b);
+      
+      // If both are in the order list, sort by their position
+      if (indexA !== -1 && indexB !== -1) {
+        return indexA - indexB;
+      }
+      // If only one is in the list, it comes first
+      if (indexA !== -1) return -1;
+      if (indexB !== -1) return 1;
+      // If neither is in the list, sort alphabetically
+      return a.localeCompare(b);
+    });
+  }, [products]);
 
   useEffect(() => {
     async function fetchProducts() {
@@ -238,9 +290,15 @@ export default function ProductPrices() {
   };
 
   const filteredProducts = products.filter((p: any) => {
+    // Search filter
     const search = searchTerm.toLowerCase().replace(/\betb\b/g, "elite trainer box");
     const target = `${p.sets?.name ?? ""} ${p.sets?.code ?? ""} ${p.product_types?.label ?? ""}`.toLowerCase();
-    return target.includes(search);
+    const matchesSearch = target.includes(search);
+    
+    // Generation filter
+    const matchesGeneration = selectedGeneration === "all" || p.sets?.generations?.name === selectedGeneration;
+    
+    return matchesSearch && matchesGeneration;
   });
 
   const groupedProducts: Record<string, Product[]> = filteredProducts.reduce((acc: Record<string, Product[]>, item: Product) => {
@@ -278,6 +336,34 @@ export default function ProductPrices() {
     <div className="p-6 bg-slate-100 min-h-screen font-sans space-y-10">
       {/* Controls */}
       <div className="flex flex-wrap items-center gap-4 mb-6">
+        {/* Generation Filter */}
+        <div className="flex items-center gap-2">
+          <span className="font-semibold text-slate-800">Generation:</span>
+          <button
+            onClick={() => setSelectedGeneration("all")}
+            className={`px-3 py-1 rounded border text-sm font-medium transition-all ${
+              selectedGeneration === "all" 
+                ? "bg-purple-600 text-white" 
+                : "bg-white text-slate-700 hover:bg-gray-50"
+            }`}
+          >
+            All
+          </button>
+          {availableGenerations.map((generation) => (
+            <button
+              key={generation}
+              onClick={() => setSelectedGeneration(generation)}
+              className={`px-3 py-1 rounded border text-sm font-medium transition-all ${
+                selectedGeneration === generation 
+                  ? "bg-purple-600 text-white" 
+                  : "bg-white text-slate-700 hover:bg-gray-50"
+              }`}
+            >
+              {generation}
+            </button>
+          ))}
+        </div>
+
         {/* Search */}
         <input
           type="text"
