@@ -1,17 +1,13 @@
 import time
 import requests
-import os
 from datetime import datetime, timedelta, timezone
 from supabase import create_client
 from secretsFile import SUPABASE_URL, SUPABASE_KEY
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
 import warnings
 from urllib3.exceptions import NotOpenSSLWarning
-from urllib.parse import urlparse
 import uuid
 
 # === Silence SSL warning from urllib3 ===
@@ -38,7 +34,7 @@ def download_and_upload_image(image_url, product_id):
     """
     try:
         # Generate unique filename
-        file_extension = image_url.split('.')[-1].split('?')[0].lower()  # Remove query params
+        file_extension = image_url.split('.')[-1].split('?')[0].lower()
         if file_extension not in ['jpg', 'jpeg', 'png', 'webp']:
             file_extension = 'jpg'
         
@@ -59,33 +55,63 @@ def download_and_upload_image(image_url, product_id):
         response.raise_for_status()
         
         # Check if response contains image data
-        if len(response.content) < 1000:  # Less than 1KB is likely not a real image
+        if len(response.content) < 1000:
             print(f"⚠️ Image too small, likely not valid: {len(response.content)} bytes")
             return None
         
-        # Upload to Supabase Storage
-        upload_response = supabase.storage.from_("product-images").upload(
-            filename, 
-            response.content,
-            {
-                "content-type": f"image/{file_extension}",
-                "cache-control": "3600"
-            }
-        )
-        
-        if upload_response.data:
-            # Get public URL
-            public_url_response = supabase.storage.from_("product-images").get_public_url(filename)
-            public_url = public_url_response.data.get('publicUrl') if public_url_response.data else None
+        # Upload to Supabase Storage with updated API handling
+        try:
+            upload_response = supabase.storage.from_("product-images").upload(
+                filename, 
+                response.content,
+                {
+                    "content-type": f"image/{file_extension}",
+                    "cache-control": "3600"
+                }
+            )
             
-            if public_url:
-                print(f"✅ Image uploaded: {filename} → {public_url}")
-                return public_url
+            # Handle different response formats
+            upload_success = False
+            if hasattr(upload_response, 'data') and upload_response.data:
+                upload_success = True
+            elif hasattr(upload_response, 'path') or (hasattr(upload_response, '__dict__') and 'path' in upload_response.__dict__):
+                upload_success = True
+            elif isinstance(upload_response, dict) and ('path' in upload_response or 'Key' in upload_response):
+                upload_success = True
+            
+            if upload_success:
+                # Get public URL
+                try:
+                    public_url_response = supabase.storage.from_("product-images").get_public_url(filename)
+                    
+                    # Handle different public URL response formats
+                    public_url = None
+                    if hasattr(public_url_response, 'data') and public_url_response.data:
+                        public_url = public_url_response.data.get('publicUrl')
+                    elif hasattr(public_url_response, 'publicUrl'):
+                        public_url = public_url_response.publicUrl
+                    elif isinstance(public_url_response, dict):
+                        public_url = public_url_response.get('publicUrl')
+                    elif isinstance(public_url_response, str):
+                        public_url = public_url_response
+                    
+                    if public_url:
+                        print(f"✅ Image uploaded: {public_url}")
+                        return public_url
+                    else:
+                        print(f"❌ Failed to get public URL for {filename}")
+                        print(f"   Public URL response: {public_url_response}")
+                        return None
+                        
+                except Exception as url_error:
+                    print(f"❌ Error getting public URL: {url_error}")
+                    return None
             else:
-                print(f"❌ Failed to get public URL for {filename}")
+                print(f"❌ Upload failed: {upload_response}")
                 return None
-        else:
-            print(f"❌ Upload failed: {upload_response}")
+                
+        except Exception as upload_error:
+            print(f"❌ Upload error: {upload_error}")
             return None
             
     except Exception as e:
@@ -104,7 +130,7 @@ def get_price_and_image_from_url(driver, url):
         
         result = {'price': None, 'image_url': None}
         
-        # === PRICE EXTRACTION (your existing logic) ===
+        # === PRICE EXTRACTION ===
         rows = driver.find_elements(By.CSS_SELECTOR, "div[class*='price-points__upper'] tr")
         label_to_price = {}
         for row in rows:
@@ -132,72 +158,72 @@ def get_price_and_image_from_url(driver, url):
                 pass
         
         # === IMAGE EXTRACTION ===
-        # Try multiple selectors for product images
         image_selectors = [
-            # TCGPlayer specific selectors
-            "img[data-testid='product-image']",
-            "img[class*='product-image']",
-            "img[class*='hero-image']", 
-            "img[class*='listing-item-image']",
-            "img[alt*='product']",
-            "img[alt*='card']",
-            ".product-details img",
-            ".listing-item-image img",
-            # More generic selectors
-            "img[src*='product']",
-            "img[src*='card']",
-            "img[src*='tcgplayer']",
-            # Very broad fallbacks
-            ".container img",
-            "main img",
-            "article img"
+            "section[data-testid='imgProductDetailsMain'] img",
+            "img[data-testid*='product-image']",
+            ".image-set__grid img",
+            ".image-set__main img",
+            ".swiper img",
+            ".swiper-slide img",
+            ".lazy-image__wrapper img",
+            "img[src*='tcgplayer-cdn.tcgplayer.com/product']",
         ]
         
         for selector in image_selectors:
             try:
                 img_elements = driver.find_elements(By.CSS_SELECTOR, selector)
+                
                 for img in img_elements:
                     src = img.get_attribute('src')
                     if not src or not src.startswith('http'):
                         continue
                     
-                    # Skip obvious non-product images
-                    if any(skip in src.lower() for skip in ['logo', 'icon', 'avatar', 'banner', 'header', 'footer']):
+                    # Skip non-product images
+                    skip_keywords = ['logo', 'icon', 'avatar', 'banner', 'header', 'footer', 'nav', 'gift-card']
+                    if any(skip in src.lower() for skip in skip_keywords):
                         continue
                     
-                    # Validate it's likely a product image
-                    if any(keyword in src.lower() for keyword in ['product', 'card', 'item', 'listing', 'image']):
-                        # Check image dimensions to avoid tiny images
-                        try:
-                            width = img.get_attribute('width') or img.get_attribute('naturalWidth')
-                            height = img.get_attribute('height') or img.get_attribute('naturalHeight')
+                    # For TCGPlayer CDN images, prefer higher resolution
+                    if 'tcgplayer-cdn.tcgplayer.com/product' in src:
+                        # Try to get the highest resolution from srcset
+                        srcset = img.get_attribute('srcset')
+                        if srcset:
+                            # Parse srcset to get highest resolution
+                            srcset_entries = srcset.split(',')
+                            best_src = src
+                            best_width = 0
                             
-                            if width and height:
-                                w, h = int(width), int(height)
-                                if w >= 100 and h >= 100:  # At least 100x100
-                                    result['image_url'] = src
-                                    print(f"🖼️ Found product image: {src} ({w}x{h})")
-                                    break
-                            else:
-                                # If no dimensions, assume it might be good
-                                result['image_url'] = src
-                                print(f"🖼️ Found product image: {src}")
+                            for entry in srcset_entries:
+                                entry = entry.strip()
+                                if ' ' in entry:
+                                    url_part, width_part = entry.rsplit(' ', 1)
+                                    try:
+                                        width = int(width_part.replace('w', ''))
+                                        if width > best_width:
+                                            best_width = width
+                                            best_src = url_part
+                                    except ValueError:
+                                        continue
+                            
+                            if best_width > 0:
+                                result['image_url'] = best_src
                                 break
-                        except (ValueError, TypeError):
-                            # If dimension parsing fails, still try the image
-                            result['image_url'] = src
-                            print(f"🖼️ Found product image: {src}")
-                            break
+                        
+                        # Fallback to original src if no srcset
+                        result['image_url'] = src
+                        break
+                    
+                    # For non-CDN images, check if they look like product images
+                    if any(keyword in src.lower() for keyword in ['product', 'card', 'item']):
+                        result['image_url'] = src
+                        break
                 
+                # If we found an image, stop trying other selectors
                 if result['image_url']:
                     break
                     
             except Exception as e:
-                print(f"⚠️ Error with selector {selector}: {e}")
                 continue
-        
-        if not result['image_url']:
-            print(f"⚠️ No product image found on page: {url}")
         
         return result
 
@@ -205,20 +231,31 @@ def get_price_and_image_from_url(driver, url):
         print(f"⚠️ Exception while scraping {url}: {e}")
         return {'price': None, 'image_url': None}
 
-# === Main Logic (Updated) ===
+# === Helper function to parse timestamps safely ===
+def parse_timestamp(timestamp_str):
+    """Parse timestamp string and return timezone-aware datetime object"""
+    if not timestamp_str:
+        return None
+    
+    try:
+        if timestamp_str.endswith('Z'):
+            return datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
+        elif '+' in timestamp_str or timestamp_str.endswith('+00:00'):
+            return datetime.fromisoformat(timestamp_str)
+        else:
+            return datetime.fromisoformat(timestamp_str).replace(tzinfo=timezone.utc)
+    except (ValueError, TypeError):
+        return None
+
+# === Main Logic ===
 def update_prices():
-    # Calculate timestamp 1 hour ago in UTC
-    one_hour_ago = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+    # Calculate timestamps in UTC
+    one_hour_ago = datetime.now(timezone.utc) - timedelta(hours=1)
+    twenty_four_hours_ago = datetime.now(timezone.utc) - timedelta(hours=24)
     
     # Get products that need updates (price OR image)
-    # Check for products where:
-    # 1. Price hasn't been updated in 1 hour, OR
-    # 2. Image is missing (image_url is null), OR  
-    # 3. Image hasn't been updated in 24 hours
-    twenty_four_hours_ago = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
-    
     response = supabase.table("products").select("*").or_(
-        f"last_updated.lt.{one_hour_ago},image_url.is.null,last_image_update.is.null,last_image_update.lt.{twenty_four_hours_ago}"
+        f"last_updated.lt.{one_hour_ago.isoformat()},image_url.is.null,last_image_update.is.null,last_image_update.lt.{twenty_four_hours_ago.isoformat()}"
     ).execute()
 
     products_to_update = response.data
@@ -240,7 +277,6 @@ def update_prices():
         last_image_update = product.get("last_image_update")
 
         print(f"\n🔍 Scraping product ID {product_id}...")
-        print(f"   URL: {url}")
         
         # Get both price and image
         scraped_data = get_price_and_image_from_url(driver, url)
@@ -249,24 +285,12 @@ def update_prices():
         
         update_data = {}
         
-        # Handle price update (if price was found and it's time to update)
-        needs_price_update = True  # Default to needing update
+        # Handle price update
+        needs_price_update = True
         if last_updated:
-            try:
-                # Parse the last_updated timestamp properly
-                if last_updated.endswith('Z'):
-                    last_updated_dt = datetime.fromisoformat(last_updated.replace('Z', '+00:00'))
-                elif '+' in last_updated or last_updated.endswith('+00:00'):
-                    last_updated_dt = datetime.fromisoformat(last_updated)
-                else:
-                    # Assume UTC if no timezone info
-                    last_updated_dt = datetime.fromisoformat(last_updated).replace(tzinfo=timezone.utc)
-                
-                # Check if it's been more than 1 hour
-                needs_price_update = last_updated_dt < datetime.now(timezone.utc) - timedelta(hours=1)
-            except (ValueError, TypeError) as e:
-                print(f"   ⚠️ Error parsing last_updated '{last_updated}': {e}")
-                needs_price_update = True  # Default to updating if we can't parse
+            last_updated_dt = parse_timestamp(last_updated)
+            if last_updated_dt:
+                needs_price_update = last_updated_dt < one_hour_ago
         
         if price is not None and needs_price_update:
             update_data["usd_price"] = price
@@ -283,23 +307,11 @@ def update_prices():
                 print(f"   ⚠️ Price history insert failed: {e}")
 
         # Handle image update
-        needs_image_update = True  # Default to needing update
+        needs_image_update = True
         if current_image_url and last_image_update:
-            try:
-                # Parse the last_image_update timestamp properly
-                if last_image_update.endswith('Z'):
-                    last_image_update_dt = datetime.fromisoformat(last_image_update.replace('Z', '+00:00'))
-                elif '+' in last_image_update or last_image_update.endswith('+00:00'):
-                    last_image_update_dt = datetime.fromisoformat(last_image_update)
-                else:
-                    # Assume UTC if no timezone info
-                    last_image_update_dt = datetime.fromisoformat(last_image_update).replace(tzinfo=timezone.utc)
-                
-                # Check if it's been more than 24 hours
-                needs_image_update = last_image_update_dt < datetime.now(timezone.utc) - timedelta(hours=24)
-            except (ValueError, TypeError) as e:
-                print(f"   ⚠️ Error parsing last_image_update '{last_image_update}': {e}")
-                needs_image_update = True  # Default to updating if we can't parse
+            last_image_update_dt = parse_timestamp(last_image_update)
+            if last_image_update_dt:
+                needs_image_update = last_image_update_dt < twenty_four_hours_ago
         
         if tcg_image_url and needs_image_update:
             if tcg_image_url != current_image_url:
@@ -340,51 +352,6 @@ def update_prices():
     driver.quit()
     print(f"\n🎉 Done! {updated_count} products updated out of {len(products_to_update)} checked.")
 
-# === Setup Functions (run these once) ===
-def setup_storage_bucket():
-    """
-    Create the storage bucket for product images (run this once)
-    """
-    try:
-        # Create bucket
-        bucket = supabase.storage.create_bucket("product-images", {
-            "public": True,
-            "file_size_limit": 5242880,  # 5MB
-            "allowed_mime_types": ["image/jpeg", "image/png", "image/webp", "image/jpg"]
-        })
-        print("✅ Storage bucket 'product-images' created")
-        return True
-    except Exception as e:
-        print(f"⚠️ Storage bucket creation: {e}")
-        print("   (This is normal if bucket already exists)")
-        return False
-
-def add_image_columns():
-    """
-    Add image columns to products table (run this once)
-    """
-    try:
-        # Note: This would need to be run manually in Supabase SQL editor
-        sql_commands = [
-            "ALTER TABLE products ADD COLUMN IF NOT EXISTS image_url TEXT;",
-            "ALTER TABLE products ADD COLUMN IF NOT EXISTS last_image_update TIMESTAMP WITH TIME ZONE;"
-        ]
-        print("📝 Run these SQL commands in your Supabase SQL editor:")
-        for cmd in sql_commands:
-            print(f"   {cmd}")
-        return True
-    except Exception as e:
-        print(f"❌ Error showing SQL commands: {e}")
-        return False
-
 # === Run Script ===
 if __name__ == "__main__":
-    import sys
-    
-    if len(sys.argv) > 1 and sys.argv[1] == "--setup":
-        print("🚀 Running setup...")
-        setup_storage_bucket()
-        add_image_columns()
-        print("\n✅ Setup complete! Now run without --setup to start scraping.")
-    else:
-        update_prices()
+    update_prices()
