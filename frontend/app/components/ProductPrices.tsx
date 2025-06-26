@@ -1,4 +1,4 @@
-// Updated ProductPrices.tsx with better image sizing and price positioning
+// Updated ProductPrices.tsx with dropdown for generations filter
 
 "use client";
 
@@ -335,34 +335,23 @@ export default function ProductPrices() {
 
   return (
     <div className="p-6 bg-slate-100 min-h-screen font-sans space-y-10">
-      {/* Controls (existing code) */}
+      {/* Controls - UPDATED WITH DROPDOWN */}
       <div className="flex flex-wrap items-center gap-4 mb-6">
-        {/* Generation Filter */}
+        {/* Generation Filter - CONVERTED TO DROPDOWN */}
         <div className="flex items-center gap-2">
           <span className="font-semibold text-slate-800">Generation:</span>
-          <button
-            onClick={() => setSelectedGeneration("all")}
-            className={`px-3 py-1 rounded border text-sm font-medium transition-all ${
-              selectedGeneration === "all" 
-                ? "bg-purple-600 text-white" 
-                : "bg-white text-slate-700 hover:bg-gray-50"
-            }`}
+          <select
+            value={selectedGeneration}
+            onChange={(e) => setSelectedGeneration(e.target.value)}
+            className="px-3 py-1 rounded border text-sm font-medium bg-white text-slate-700 hover:bg-gray-50 transition-all focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-purple-500"
           >
-            All
-          </button>
-          {availableGenerations.map((generation) => (
-            <button
-              key={generation}
-              onClick={() => setSelectedGeneration(generation)}
-              className={`px-3 py-1 rounded border text-sm font-medium transition-all ${
-                selectedGeneration === generation 
-                  ? "bg-purple-600 text-white" 
-                  : "bg-white text-slate-700 hover:bg-gray-50"
-              }`}
-            >
-              {generation}
-            </button>
-          ))}
+            <option value="all">All Generations</option>
+            {availableGenerations.map((generation) => (
+              <option key={generation} value={generation}>
+                {generation}
+              </option>
+            ))}
+          </select>
         </div>
 
         {/* Search */}
