@@ -542,7 +542,9 @@ export default function ProductPrices() {
                       );
                     } else {
                       // Placeholder for missing product
-                      const displayName = PRODUCT_TYPE_DISPLAY_NAMES[type] || type.charAt(0).toUpperCase() + type.slice(1).replace('_', ' ');
+                      const displayName =
+                        PRODUCT_TYPE_DISPLAY_NAMES[type as keyof typeof PRODUCT_TYPE_DISPLAY_NAMES] ||
+                        type.charAt(0).toUpperCase() + type.slice(1).replace('_', ' ');
                       return (
                         <div
                           key={`${groupKey}-${type}-placeholder`}
