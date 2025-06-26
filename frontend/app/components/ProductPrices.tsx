@@ -16,12 +16,12 @@ const Skeleton = () => <div className="animate-pulse bg-slate-300 rounded h-36 w
 
 const PRODUCT_PRIORITY = ["booster_box", "pokemon_center_etb", "etb", "booster_bundle"];
 
-const PRODUCT_TYPE_DISPLAY_NAMES = {
-  "booster_box": "Booster Box",
-  "etb": "Elite Trainer Box", 
-  "pokemon_center_etb": "Pokemon Center Exclusive ETB",
-  "booster_bundle": "Booster Bundle"
-};
+// const PRODUCT_TYPE_DISPLAY_NAMES = {
+//   "booster_box": "Booster Box",
+//   "etb": "Elite Trainer Box", 
+//   "pokemon_center_etb": "Pokemon Center Exclusive ETB",
+//   "booster_bundle": "Booster Bundle"
+// };
 
 type PriceHistoryEntry = {
   usd_price: number;
@@ -464,6 +464,7 @@ export default function ProductPrices() {
 
       {loading && Array.from({ length: 6 }).map((_, i) => <Skeleton key={i} />)}
 
+      {/* OPTION 1: DYNAMIC GRID - Replace the grouped products section with this */}
       {!loading && viewMode === "grouped" &&
         Object.entries(groupedProducts)
           .sort(([, a]: [string, Product[]], [, b]: [string, Product[]]) => {
@@ -481,58 +482,59 @@ export default function ProductPrices() {
               <div key={groupKey}>
                 <h2 className="text-2xl font-bold text-slate-800 mb-4 border-b border-slate-300 pb-1">
                   {setName} {setCode && <span className="text-slate-500 text-base">({setCode})</span>}
+                  <span className="text-sm font-normal text-slate-500 ml-2">
+                    ({sortedItems.length} product{sortedItems.length !== 1 ? 's' : ''})
+                  </span>
                 </h2>
-                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-6">
-                  {PRODUCT_PRIORITY.map((type: string) => {
-                    const product = sortedItems.find((p: Product) => p.product_types?.name === type);
-                    return product ? (
-                      <div
-                        key={product.id}
-                        className="rounded-xl border border-slate-300 bg-white p-5 shadow hover:shadow-lg transition-shadow"
-                      >
-                        <div>
-                          <h3 className="font-semibold text-slate-800 text-lg mb-2">
-                            {product.product_types?.label || product.product_types?.name}
-                          </h3>
-                          <p className="text-sm text-slate-600 mb-1">
-                            <span className="font-medium text-slate-700">Generation:</span> {product.sets?.generations?.name || "Unknown"}
-                          </p>
-                          <p className="text-sm text-slate-600 mb-2">
-                            <span className="font-medium text-slate-700">Release Date:</span>{" "}
-                            {product.sets?.release_date ? 
-                              new Date(product.sets.release_date + "T00:00:00Z").toLocaleDateString() : "Unknown"}
-                          </p>
-                          <p className="text-3xl font-extrabold text-green-600 tracking-tight mb-1">
-                            ${product.usd_price?.toFixed(2) || "N/A"} USD
-                          </p>
-                          {render1DReturn(product.id, priceHistory)}
-                          {render30DReturn(product.id, priceHistory)}
-                          <p className="text-md font-medium text-indigo-700 mb-3">
-                            ~${(product.usd_price * exchangeRate).toFixed(2)} CAD
-                          </p>
-                          {priceHistory[product.id]?.length > 1 && (
-                            <div className="mt-2">
-                              <PriceChart data={priceHistory[product.id]} range={chartTimeframe} />
-                            </div>
-                          )}
-                          <a
-                            href={product.url}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="inline-block text-sm font-medium text-blue-600 hover:underline"
-                          >
-                            View on TCGPlayer
-                          </a>
-                          <p className="text-xs text-slate-400 mt-2">
-                            Updated: {new Date(product.last_updated + 'Z').toLocaleString(undefined, {
-                              timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-                              timeZoneName: 'short'
-                            })}
-                          </p>
-                        </div>
+                {/* Dynamic grid that only shows existing products */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+                  {sortedItems.map((product) => (
+                    <div
+                      key={product.id}
+                      className="rounded-xl border border-slate-300 bg-white p-5 shadow hover:shadow-lg transition-shadow"
+                    >
+                      <div>
+                        <h3 className="font-semibold text-slate-800 text-lg mb-2">
+                          {product.product_types?.label || product.product_types?.name}
+                        </h3>
+                        <p className="text-sm text-slate-600 mb-1">
+                          <span className="font-medium text-slate-700">Generation:</span> {product.sets?.generations?.name || "Unknown"}
+                        </p>
+                        <p className="text-sm text-slate-600 mb-2">
+                          <span className="font-medium text-slate-700">Release Date:</span>{" "}
+                          {product.sets?.release_date ? 
+                            new Date(product.sets.release_date + "T00:00:00Z").toLocaleDateString() : "Unknown"}
+                        </p>
+                        <p className="text-3xl font-extrabold text-green-600 tracking-tight mb-1">
+                          ${product.usd_price?.toFixed(2) || "N/A"} USD
+                        </p>
+                        {render1DReturn(product.id, priceHistory)}
+                        {render30DReturn(product.id, priceHistory)}
+                        <p className="text-md font-medium text-indigo-700 mb-3">
+                          ~${(product.usd_price * exchangeRate).toFixed(2)} CAD
+                        </p>
+                        {priceHistory[product.id]?.length > 1 && (
+                          <div className="mt-2">
+                            <PriceChart data={priceHistory[product.id]} range={chartTimeframe} />
+                          </div>
+                        )}
+                        <a
+                          href={product.url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-block text-sm font-medium text-blue-600 hover:underline"
+                        >
+                          View on TCGPlayer
+                        </a>
+                        <p className="text-xs text-slate-400 mt-2">
+                          Updated: {new Date(product.last_updated + 'Z').toLocaleString(undefined, {
+                            timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+                            timeZoneName: 'short'
+                          })}
+                        </p>
                       </div>
-                    ) : <div key={type} className="h-0" />;
-                  })}
+                    </div>
+                  ))}
                 </div>
               </div>
             );
