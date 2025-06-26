@@ -1,3 +1,5 @@
 supabase
 beautifulsoup4
 selenium
+requests
+urllib3

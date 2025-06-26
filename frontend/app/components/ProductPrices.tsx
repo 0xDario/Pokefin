@@ -1,4 +1,4 @@
-// Updated ProductPrices.tsx with dynamic exchange rate and generation filter
+// Updated ProductPrices.tsx with image display
 
 "use client";
 
@@ -11,6 +11,54 @@ const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.NEXT_PUBLIC_SUPABASE_KEY!
 );
+
+// Add Image component with fallback
+const ProductImage = ({ imageUrl, productName, className = "" }: { 
+  imageUrl?: string | null; 
+  productName: string; 
+  className?: string;
+}) => {
+  const [imageError, setImageError] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
+
+  const handleImageLoad = () => {
+    setIsLoading(false);
+  };
+
+  const handleImageError = () => {
+    setImageError(true);
+    setIsLoading(false);
+  };
+
+  if (!imageUrl || imageError) {
+    return (
+      <div className={`bg-slate-200 border-2 border-dashed border-slate-300 flex items-center justify-center ${className}`}>
+        <div className="text-center text-slate-500 p-4">
+          <div className="text-2xl mb-2">🃏</div>
+          <div className="text-xs font-medium">No Image</div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className={`relative overflow-hidden ${className}`}>
+      {isLoading && (
+        <div className="absolute inset-0 bg-slate-200 animate-pulse flex items-center justify-center">
+          <div className="text-slate-400">Loading...</div>
+        </div>
+      )}
+      <img
+        src={imageUrl}
+        alt={productName}
+        className={`w-full h-full object-cover transition-opacity ${isLoading ? 'opacity-0' : 'opacity-100'}`}
+        onLoad={handleImageLoad}
+        onError={handleImageError}
+        loading="lazy"
+      />
+    </div>
+  );
+};
 
 const Skeleton = () => <div className="animate-pulse bg-slate-300 rounded h-36 w-full" />;
 
@@ -33,6 +81,7 @@ type Product = {
   usd_price: number;
   last_updated: string;
   url: string;
+  image_url?: string | null;  // Add image_url field
   sets: {
     id: number;
     name: string;
@@ -178,7 +227,7 @@ export default function ProductPrices() {
       setLoading(true);
       const { data, error } = await supabase
         .from("products")
-        .select(`id, usd_price, last_updated, url,
+        .select(`id, usd_price, last_updated, url, image_url,
                  sets ( id, name, code, release_date, generation_id, generations!inner ( name ) ),
                  product_types ( name, label )`)
         .order("last_updated", { ascending: false });
@@ -189,7 +238,7 @@ export default function ProductPrices() {
     fetchProducts();
   }, []);
 
-  // New useEffect to fetch exchange rate
+  // Exchange rate loading (existing code)
   useEffect(() => {
     async function loadExchangeRate() {
       setExchangeRateLoading(true);
@@ -202,7 +251,6 @@ export default function ProductPrices() {
         console.log(`[ProductPrices] Exchange rate loaded: ${result.rate} (cached: ${result.cached})`);
       } catch (error) {
         console.error('[ProductPrices] Failed to load exchange rate:', error);
-        // Keep the fallback rate (1.37) that's already set
       } finally {
         setExchangeRateLoading(false);
       }
@@ -210,25 +258,22 @@ export default function ProductPrices() {
     loadExchangeRate();
   }, []);
 
+  // Price history loading (existing code)
   useEffect(() => {
     if (products.length === 0) return;
     
     async function fetchHistoryBatch() {
       console.log(`[ProductPrices] Fetching history for ${products.length} products...`);
       
-      // Calculate cutoff date for 90 days ago
       const ninetyDaysAgo = new Date();
       ninetyDaysAgo.setDate(ninetyDaysAgo.getDate() - 90);
       
       const historyByProduct: Record<number, PriceHistoryEntry[]> = {};
       
-      // Process products in smaller batches to avoid hitting limits
       const batchSize = 5;
       for (let i = 0; i < products.length; i += batchSize) {
         const batch = products.slice(i, i + batchSize);
         const batchIds = batch.map(p => p.id);
-        
-        console.log(`[ProductPrices] Fetching batch ${Math.floor(i/batchSize) + 1}/${Math.ceil(products.length/batchSize)} (products ${batchIds.join(', ')})`);
         
         try {
           const { data, error } = await supabase
@@ -237,7 +282,7 @@ export default function ProductPrices() {
             .in("product_id", batchIds)
             .gte("recorded_at", ninetyDaysAgo.toISOString())
             .order("recorded_at", { ascending: false })
-            .limit(1000); // This should be enough for 5 products * ~120 records each
+            .limit(1000);
 
           if (error) {
             console.error(`[ProductPrices] Error fetching batch:`, error);
@@ -245,7 +290,6 @@ export default function ProductPrices() {
           }
 
           if (data) {
-            // Group by product ID
             for (const record of data as (PriceHistoryEntry & { product_id: number })[]) {
               if (!historyByProduct[record.product_id]) {
                 historyByProduct[record.product_id] = [];
@@ -254,7 +298,6 @@ export default function ProductPrices() {
             }
           }
           
-          // Small delay between batches to be nice to the API
           await new Promise(resolve => setTimeout(resolve, 100));
           
         } catch (err) {
@@ -262,16 +305,6 @@ export default function ProductPrices() {
         }
       }
       
-      // Log results
-      Object.entries(historyByProduct).forEach(([productId, history]) => {
-        if (history.length > 0) {
-          const earliest = history[history.length - 1]?.recorded_at;
-          const latest = history[0]?.recorded_at;
-          console.log(`[ProductPrices] Product ${productId}: ${history.length} records from ${earliest} to ${latest}`);
-        }
-      });
-      
-      console.log(`[ProductPrices] Total history records fetched: ${Object.values(historyByProduct).reduce((sum, arr) => sum + arr.length, 0)}`);
       setPriceHistory(historyByProduct);
     }
     
@@ -290,12 +323,10 @@ export default function ProductPrices() {
   };
 
   const filteredProducts = products.filter((p: any) => {
-    // Search filter
     const search = searchTerm.toLowerCase().replace(/\betb\b/g, "elite trainer box");
     const target = `${p.sets?.name ?? ""} ${p.sets?.code ?? ""} ${p.product_types?.label ?? ""}`.toLowerCase();
     const matchesSearch = target.includes(search);
     
-    // Generation filter
     const matchesGeneration = selectedGeneration === "all" || p.sets?.generations?.name === selectedGeneration;
     
     return matchesSearch && matchesGeneration;
@@ -334,7 +365,7 @@ export default function ProductPrices() {
 
   return (
     <div className="p-6 bg-slate-100 min-h-screen font-sans space-y-10">
-      {/* Controls */}
+      {/* Controls (existing code) */}
       <div className="flex flex-wrap items-center gap-4 mb-6">
         {/* Generation Filter */}
         <div className="flex items-center gap-2">
@@ -408,14 +439,13 @@ export default function ProductPrices() {
                   as of {exchangeRateDate}
                 </span>
               )}
-              {/* Add this to show if it's cached */}
               <span className="text-xs text-blue-400">
-                {/* This would show the source if we modify the service to return it */}
                 Live rate
               </span>
             </div>
           )}
         </div>
+
         {/* Toggle View */}
         <button
           onClick={() => setViewMode(viewMode === "grouped" ? "flat" : "grouped")}
@@ -464,7 +494,7 @@ export default function ProductPrices() {
 
       {loading && Array.from({ length: 6 }).map((_, i) => <Skeleton key={i} />)}
 
-{/* OPTION 2: PLACEHOLDER GRID - Replace the grouped products section with this */}
+      {/* GROUPED VIEW with Images */}
       {!loading && viewMode === "grouped" &&
         Object.entries(groupedProducts)
           .sort(([, a]: [string, Product[]], [, b]: [string, Product[]]) => {
@@ -492,13 +522,27 @@ export default function ProductPrices() {
                     const product = sortedItems.find((p: Product) => p.product_types?.name === type);
                     
                     if (product) {
-                      // Existing product card
+                      // Existing product card with image
                       return (
                         <div
                           key={product.id}
-                          className="rounded-xl border border-slate-300 bg-white p-5 shadow hover:shadow-lg transition-shadow"
+                          className="rounded-xl border border-slate-300 bg-white shadow hover:shadow-lg transition-shadow overflow-hidden"
                         >
-                          <div>
+                          {/* Product Image */}
+                          <div className="relative">
+                            <ProductImage
+                              imageUrl={product.image_url}
+                              productName={`${product.sets?.name} ${product.product_types?.label}`}
+                              className="w-full h-48 rounded-t-xl"
+                            />
+                            {/* Price overlay on image */}
+                            <div className="absolute top-2 right-2 bg-green-600 text-white px-2 py-1 rounded-md text-sm font-bold shadow-lg">
+                              ${product.usd_price?.toFixed(2) || "N/A"}
+                            </div>
+                          </div>
+                          
+                          {/* Product Details */}
+                          <div className="p-5">
                             <h3 className="font-semibold text-slate-800 text-lg mb-2">
                               {product.product_types?.label || product.product_types?.name}
                             </h3>
@@ -509,9 +553,6 @@ export default function ProductPrices() {
                               <span className="font-medium text-slate-700">Release Date:</span>{" "}
                               {product.sets?.release_date ? 
                                 new Date(product.sets.release_date + "T00:00:00Z").toLocaleDateString() : "Unknown"}
-                            </p>
-                            <p className="text-3xl font-extrabold text-green-600 tracking-tight mb-1">
-                              ${product.usd_price?.toFixed(2) || "N/A"} USD
                             </p>
                             {render1DReturn(product.id, priceHistory)}
                             {render30DReturn(product.id, priceHistory)}
@@ -548,7 +589,7 @@ export default function ProductPrices() {
                       return (
                         <div
                           key={`${groupKey}-${type}-placeholder`}
-                          className="rounded-xl border-2 border-dashed border-slate-200 bg-slate-50 p-5 flex items-center justify-center min-h-[250px]"
+                          className="rounded-xl border-2 border-dashed border-slate-200 bg-slate-50 p-5 flex items-center justify-center min-h-[350px]"
                         >
                           <div className="text-center text-slate-400">
                             <div className="text-4xl mb-3">📦</div>
@@ -568,54 +609,68 @@ export default function ProductPrices() {
             );
           })}
 
+      {/* FLAT VIEW with Images */}
       {!loading && viewMode === "flat" && (
         <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-6">
           {sortedFlatProducts.map((product: any) => (
             <div
               key={product.id}
-              className="rounded-xl border border-slate-300 bg-white p-5 shadow hover:shadow-lg transition-shadow"
+              className="rounded-xl border border-slate-300 bg-white shadow hover:shadow-lg transition-shadow overflow-hidden"
             >
-              <h2 className="font-semibold text-slate-800 text-lg mb-2">
-                {product.sets?.name} ({product.sets?.code})
-              </h2>
-              <p className="text-sm text-slate-600 mb-1">
-                <span className="font-medium text-slate-700">Type:</span> {product.product_types?.label || product.product_types?.name}
-              </p>
-              <p className="text-sm text-slate-600 mb-1">
-                <span className="font-medium text-slate-700">Generation:</span> {product.sets?.generations?.name || "Unknown"}
-              </p>
-              <p className="text-sm text-slate-600 mb-2">
-                <span className="font-medium text-slate-700">Release Date:</span>{" "}
-                {product.sets?.release_date ? 
-                  new Date(product.sets.release_date + "T00:00:00Z").toLocaleDateString() : "Unknown"}
-              </p>
-              <p className="text-2xl font-extrabold text-green-600 tracking-tight mb-1">
-                ${product.usd_price?.toFixed(2) || "N/A"} USD
-              </p>
-              {render1DReturn(product.id, priceHistory)}
-              {render30DReturn(product.id, priceHistory)}
-              <p className="text-md font-medium text-indigo-700 mb-2">
-                ~${(product.usd_price * exchangeRate).toFixed(2)} CAD
-              </p>
-              {priceHistory[product.id]?.length > 1 && (
-                <div className="mt-2">
-                  <PriceChart data={priceHistory[product.id]} range={chartTimeframe} />
+              {/* Product Image */}
+              <div className="relative">
+                <ProductImage
+                  imageUrl={product.image_url}
+                  productName={`${product.sets?.name} ${product.product_types?.label}`}
+                  className="w-full h-48 rounded-t-xl"
+                />
+                {/* Price overlay on image */}
+                <div className="absolute top-2 right-2 bg-green-600 text-white px-2 py-1 rounded-md text-sm font-bold shadow-lg">
+                  ${product.usd_price?.toFixed(2) || "N/A"}
                 </div>
-              )}
-              <a
-                href={product.url}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="inline-block text-sm font-medium text-blue-600 hover:underline"
-              >
-                View on TCGPlayer
-              </a>
-              <p className="text-xs text-slate-400 mt-2">
-                Updated: {new Date(product.last_updated + 'Z').toLocaleString(undefined, {
-                  timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-                  timeZoneName: 'short'
-                })}
-              </p>
+              </div>
+              
+              {/* Product Details */}
+              <div className="p-5">
+                <h2 className="font-semibold text-slate-800 text-lg mb-2">
+                  {product.sets?.name} ({product.sets?.code})
+                </h2>
+                <p className="text-sm text-slate-600 mb-1">
+                  <span className="font-medium text-slate-700">Type:</span> {product.product_types?.label || product.product_types?.name}
+                </p>
+                <p className="text-sm text-slate-600 mb-1">
+                  <span className="font-medium text-slate-700">Generation:</span> {product.sets?.generations?.name || "Unknown"}
+                </p>
+                <p className="text-sm text-slate-600 mb-2">
+                  <span className="font-medium text-slate-700">Release Date:</span>{" "}
+                  {product.sets?.release_date ? 
+                    new Date(product.sets.release_date + "T00:00:00Z").toLocaleDateString() : "Unknown"}
+                </p>
+                {render1DReturn(product.id, priceHistory)}
+                {render30DReturn(product.id, priceHistory)}
+                <p className="text-md font-medium text-indigo-700 mb-2">
+                  ~${(product.usd_price * exchangeRate).toFixed(2)} CAD
+                </p>
+                {priceHistory[product.id]?.length > 1 && (
+                  <div className="mt-2">
+                    <PriceChart data={priceHistory[product.id]} range={chartTimeframe} />
+                  </div>
+                )}
+                <a
+                  href={product.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-block text-sm font-medium text-blue-600 hover:underline"
+                >
+                  View on TCGPlayer
+                </a>
+                <p className="text-xs text-slate-400 mt-2">
+                  Updated: {new Date(product.last_updated + 'Z').toLocaleString(undefined, {
+                    timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+                    timeZoneName: 'short'
+                  })}
+                </p>
+              </div>
             </div>
           ))}
         </div>
