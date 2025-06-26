@@ -1,4 +1,4 @@
-// Updated ProductPrices.tsx with image display
+// Updated ProductPrices.tsx with better image sizing and price positioning
 
 "use client";
 
@@ -12,7 +12,7 @@ const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_KEY!
 );
 
-// Add Image component with fallback
+// Add Image component with fallback and BETTER SIZING
 const ProductImage = ({ imageUrl, productName, className = "" }: { 
   imageUrl?: string | null; 
   productName: string; 
@@ -42,20 +42,22 @@ const ProductImage = ({ imageUrl, productName, className = "" }: {
   }
 
   return (
-    <div className={`relative overflow-hidden ${className}`}>
+    <div className={`relative overflow-hidden bg-white ${className}`}>
       {isLoading && (
         <div className="absolute inset-0 bg-slate-200 animate-pulse flex items-center justify-center">
           <div className="text-slate-400">Loading...</div>
         </div>
       )}
-      <img
-        src={imageUrl}
-        alt={productName}
-        className={`w-full h-full object-cover transition-opacity ${isLoading ? 'opacity-0' : 'opacity-100'}`}
-        onLoad={handleImageLoad}
-        onError={handleImageError}
-        loading="lazy"
-      />
+      <div className="w-full h-full flex items-center justify-center p-4">
+        <img
+          src={imageUrl}
+          alt={productName}
+          className={`max-w-full max-h-full object-contain transition-opacity ${isLoading ? 'opacity-0' : 'opacity-100'}`}
+          onLoad={handleImageLoad}
+          onError={handleImageError}
+          loading="lazy"
+        />
+      </div>
     </div>
   );
 };
@@ -494,7 +496,7 @@ export default function ProductPrices() {
 
       {loading && Array.from({ length: 6 }).map((_, i) => <Skeleton key={i} />)}
 
-      {/* GROUPED VIEW with Images */}
+      {/* GROUPED VIEW with FIXED LAYOUT */}
       {!loading && viewMode === "grouped" &&
         Object.entries(groupedProducts)
           .sort(([, a]: [string, Product[]], [, b]: [string, Product[]]) => {
@@ -522,62 +524,123 @@ export default function ProductPrices() {
                     const product = sortedItems.find((p: Product) => p.product_types?.name === type);
                     
                     if (product) {
-                      // Existing product card with image
+                      // FIXED product card with better image sizing and price positioning
                       return (
                         <div
                           key={product.id}
                           className="rounded-xl border border-slate-300 bg-white shadow hover:shadow-lg transition-shadow overflow-hidden"
                         >
-                          {/* Product Image */}
+                          {/* Product Image with BETTER SIZING */}
                           <div className="relative">
                             <ProductImage
                               imageUrl={product.image_url}
                               productName={`${product.sets?.name} ${product.product_types?.label}`}
-                              className="w-full h-48 rounded-t-xl"
+                              className="w-full h-40 rounded-t-xl"
                             />
-                            {/* Price overlay on image */}
-                            <div className="absolute top-2 right-2 bg-green-600 text-white px-2 py-1 rounded-md text-sm font-bold shadow-lg">
-                              ${product.usd_price?.toFixed(2) || "N/A"}
-                            </div>
                           </div>
                           
-                          {/* Product Details */}
-                          <div className="p-5">
-                            <h3 className="font-semibold text-slate-800 text-lg mb-2">
-                              {product.product_types?.label || product.product_types?.name}
-                            </h3>
-                            <p className="text-sm text-slate-600 mb-1">
-                              <span className="font-medium text-slate-700">Generation:</span> {product.sets?.generations?.name || "Unknown"}
-                            </p>
-                            <p className="text-sm text-slate-600 mb-2">
-                              <span className="font-medium text-slate-700">Release Date:</span>{" "}
-                              {product.sets?.release_date ? 
-                                new Date(product.sets.release_date + "T00:00:00Z").toLocaleDateString() : "Unknown"}
-                            </p>
-                            {render1DReturn(product.id, priceHistory)}
-                            {render30DReturn(product.id, priceHistory)}
-                            <p className="text-md font-medium text-indigo-700 mb-3">
-                              ~${(product.usd_price * exchangeRate).toFixed(2)} CAD
-                            </p>
+                          {/* FinViz-style Layout: Info above chart */}
+                          <div className="p-4">
+                            {/* Top Header Row - FinViz Style */}
+                            <div className="flex justify-between items-start mb-2">
+                              {/* Left: Product Info */}
+                              <div>
+                                <h3 className="font-bold text-slate-800 text-lg leading-tight">
+                                  {product.product_types?.label || product.product_types?.name}
+                                </h3>
+                                <div className="text-xs text-slate-500 mt-1">
+                                  {product.sets?.generations?.name} • Released {product.sets?.release_date ? 
+                                    new Date(product.sets.release_date + "T00:00:00Z").toLocaleDateString(undefined, {
+                                      month: 'short',
+                                      day: 'numeric',
+                                      year: 'numeric'
+                                    }) : "Unknown"}
+                                </div>
+                              </div>
+                              
+                              {/* Right: Price & Change */}
+                              <div className="text-right">
+                                <div className="text-2xl font-bold text-slate-800">
+                                  ${product.usd_price?.toFixed(2) || "N/A"}
+                                </div>
+                                <div className="text-sm text-indigo-600">
+                                  ${(product.usd_price * exchangeRate).toFixed(2)} CAD
+                                </div>
+                              </div>
+                            </div>
+                            
+                            {/* Performance Metrics Row - Above Chart */}
+                            <div className="flex justify-between items-center mb-3 text-xs">
+                              {/* Left: Time periods */}
+                              <div className="flex gap-4">
+                                <div>
+                                  {(() => {
+                                    const history = priceHistory[product.id] || [];
+                                    const ret = get1DReturn(history);
+                                    if (!ret || typeof ret.percent !== "number") {
+                                      return <span className="text-slate-400">1D: —</span>;
+                                    }
+                                    const percentSign = ret.percent > 0 ? "+" : "";
+                                    return (
+                                      <span>
+                                        <span className="text-slate-600">1D:</span>
+                                        <span className={`font-bold ml-1 ${ret.percent > 0 ? "text-green-600" : ret.percent < 0 ? "text-red-600" : "text-slate-500"}`}>
+                                          {percentSign}{ret.percent.toFixed(2)}%
+                                        </span>
+                                      </span>
+                                    );
+                                  })()}
+                                </div>
+                                
+                                <div>
+                                  {(() => {
+                                    const history = priceHistory[product.id] || [];
+                                    const ret = get30DReturn(history);
+                                    if (!ret || typeof ret.percent !== "number") {
+                                      return <span className="text-slate-400">30D: —</span>;
+                                    }
+                                    const percentSign = ret.percent > 0 ? "+" : "";
+                                    return (
+                                      <span>
+                                        <span className="text-slate-600">30D:</span>
+                                        <span className={`font-bold ml-1 ${ret.percent > 0 ? "text-green-600" : ret.percent < 0 ? "text-red-600" : "text-slate-500"}`}>
+                                          {percentSign}{ret.percent.toFixed(2)}%
+                                        </span>
+                                      </span>
+                                    );
+                                  })()}
+                                </div>
+                              </div>
+                              
+                              {/* Right: Last updated */}
+                              <div className="text-slate-400">
+                                Updated: {new Date(product.last_updated + 'Z').toLocaleString(undefined, {
+                                  month: 'numeric',
+                                  day: 'numeric',
+                                  hour: '2-digit',
+                                  minute: '2-digit'
+                                })}
+                              </div>
+                            </div>
+                            
+                            {/* PRICE CHART - FinViz style with dark background */}
                             {priceHistory[product.id]?.length > 1 && (
-                              <div className="mt-2">
+                              <div className="bg-slate-900 rounded-lg p-3 mb-3">
                                 <PriceChart data={priceHistory[product.id]} range={chartTimeframe} />
                               </div>
                             )}
-                            <a
-                              href={product.url}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="inline-block text-sm font-medium text-blue-600 hover:underline"
-                            >
-                              View on TCGPlayer
-                            </a>
-                            <p className="text-xs text-slate-400 mt-2">
-                              Updated: {new Date(product.last_updated + 'Z').toLocaleString(undefined, {
-                                timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-                                timeZoneName: 'short'
-                              })}
-                            </p>
+                            
+                            {/* Bottom Action */}
+                            <div className="text-center">
+                              <a
+                                href={product.url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="inline-block text-sm font-medium text-blue-600 hover:text-blue-800 transition-colors"
+                              >
+                                View on TCGPlayer →
+                              </a>
+                            </div>
                           </div>
                         </div>
                       );
@@ -589,7 +652,7 @@ export default function ProductPrices() {
                       return (
                         <div
                           key={`${groupKey}-${type}-placeholder`}
-                          className="rounded-xl border-2 border-dashed border-slate-200 bg-slate-50 p-5 flex items-center justify-center min-h-[350px]"
+                          className="rounded-xl border-2 border-dashed border-slate-200 bg-slate-50 p-5 flex items-center justify-center min-h-[400px]"
                         >
                           <div className="text-center text-slate-400">
                             <div className="text-4xl mb-3">📦</div>
@@ -609,7 +672,7 @@ export default function ProductPrices() {
             );
           })}
 
-      {/* FLAT VIEW with Images */}
+      {/* FLAT VIEW with FIXED LAYOUT */}
       {!loading && viewMode === "flat" && (
         <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-6">
           {sortedFlatProducts.map((product: any) => (
@@ -617,59 +680,112 @@ export default function ProductPrices() {
               key={product.id}
               className="rounded-xl border border-slate-300 bg-white shadow hover:shadow-lg transition-shadow overflow-hidden"
             >
-              {/* Product Image */}
+              {/* Product Image with BETTER SIZING */}
               <div className="relative">
                 <ProductImage
                   imageUrl={product.image_url}
                   productName={`${product.sets?.name} ${product.product_types?.label}`}
-                  className="w-full h-48 rounded-t-xl"
+                  className="w-full h-40 rounded-t-xl"
                 />
-                {/* Price overlay on image */}
-                <div className="absolute top-2 right-2 bg-green-600 text-white px-2 py-1 rounded-md text-sm font-bold shadow-lg">
-                  ${product.usd_price?.toFixed(2) || "N/A"}
-                </div>
               </div>
               
-              {/* Product Details */}
-              <div className="p-5">
-                <h2 className="font-semibold text-slate-800 text-lg mb-2">
-                  {product.sets?.name} ({product.sets?.code})
-                </h2>
-                <p className="text-sm text-slate-600 mb-1">
-                  <span className="font-medium text-slate-700">Type:</span> {product.product_types?.label || product.product_types?.name}
-                </p>
-                <p className="text-sm text-slate-600 mb-1">
-                  <span className="font-medium text-slate-700">Generation:</span> {product.sets?.generations?.name || "Unknown"}
-                </p>
-                <p className="text-sm text-slate-600 mb-2">
-                  <span className="font-medium text-slate-700">Release Date:</span>{" "}
-                  {product.sets?.release_date ? 
-                    new Date(product.sets.release_date + "T00:00:00Z").toLocaleDateString() : "Unknown"}
-                </p>
-                {render1DReturn(product.id, priceHistory)}
-                {render30DReturn(product.id, priceHistory)}
-                <p className="text-md font-medium text-indigo-700 mb-2">
-                  ~${(product.usd_price * exchangeRate).toFixed(2)} CAD
-                </p>
+              {/* FinViz-style Layout: Info above chart */}
+              <div className="p-4">
+                {/* Top Header Row - FinViz Style */}
+                <div className="flex justify-between items-start mb-2">
+                  {/* Left: Product Info */}
+                  <div>
+                    <h2 className="font-bold text-slate-800 text-lg leading-tight">
+                      {product.sets?.name} ({product.sets?.code})
+                    </h2>
+                    <div className="text-xs text-slate-500 mt-1">
+                      {product.product_types?.label} • {product.sets?.generations?.name}
+                    </div>
+                  </div>
+                  
+                  {/* Right: Price & Change */}
+                  <div className="text-right">
+                    <div className="text-2xl font-bold text-slate-800">
+                      ${product.usd_price?.toFixed(2) || "N/A"}
+                    </div>
+                    <div className="text-sm text-indigo-600">
+                      ${(product.usd_price * exchangeRate).toFixed(2)} CAD
+                    </div>
+                  </div>
+                </div>
+                
+                {/* Performance Metrics Row - Above Chart */}
+                <div className="flex justify-between items-center mb-3 text-xs">
+                  {/* Left: Time periods */}
+                  <div className="flex gap-4">
+                    <div>
+                      {(() => {
+                        const history = priceHistory[product.id] || [];
+                        const ret = get1DReturn(history);
+                        if (!ret || typeof ret.percent !== "number") {
+                          return <span className="text-slate-400">1D: —</span>;
+                        }
+                        const percentSign = ret.percent > 0 ? "+" : "";
+                        return (
+                          <span>
+                            <span className="text-slate-600">1D:</span>
+                            <span className={`font-bold ml-1 ${ret.percent > 0 ? "text-green-600" : ret.percent < 0 ? "text-red-600" : "text-slate-500"}`}>
+                              {percentSign}{ret.percent.toFixed(2)}%
+                            </span>
+                          </span>
+                        );
+                      })()}
+                    </div>
+                    
+                    <div>
+                      {(() => {
+                        const history = priceHistory[product.id] || [];
+                        const ret = get30DReturn(history);
+                        if (!ret || typeof ret.percent !== "number") {
+                          return <span className="text-slate-400">30D: —</span>;
+                        }
+                        const percentSign = ret.percent > 0 ? "+" : "";
+                        return (
+                          <span>
+                            <span className="text-slate-600">30D:</span>
+                            <span className={`font-bold ml-1 ${ret.percent > 0 ? "text-green-600" : ret.percent < 0 ? "text-red-600" : "text-slate-500"}`}>
+                              {percentSign}{ret.percent.toFixed(2)}%
+                            </span>
+                          </span>
+                        );
+                      })()}
+                    </div>
+                  </div>
+                  
+                  {/* Right: Release date */}
+                  <div className="text-slate-400">
+                    Released: {product.sets?.release_date ? 
+                      new Date(product.sets.release_date + "T00:00:00Z").toLocaleDateString(undefined, {
+                        month: 'short',
+                        day: 'numeric',
+                        year: 'numeric'
+                      }) : "Unknown"}
+                  </div>
+                </div>
+                
+                {/* PRICE CHART - FinViz style with dark background */}
                 {priceHistory[product.id]?.length > 1 && (
-                  <div className="mt-2">
+                  <div className="bg-slate-900 rounded-lg p-3 mb-3">
                     <PriceChart data={priceHistory[product.id]} range={chartTimeframe} />
                   </div>
                 )}
-                <a
-                  href={product.url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="inline-block text-sm font-medium text-blue-600 hover:underline"
-                >
-                  View on TCGPlayer
-                </a>
-                <p className="text-xs text-slate-400 mt-2">
-                  Updated: {new Date(product.last_updated + 'Z').toLocaleString(undefined, {
-                    timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-                    timeZoneName: 'short'
-                  })}
-                </p>
+                
+                {/* Bottom Action */}
+                <div className="text-center">
+                  <a
+                    href={product.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-block text-sm font-medium text-blue-600 hover:text-blue-800 transition-colors"
+                  >
+                    View on TCGPlayer →
+                  </a>
+                </div>
               </div>
             </div>
           ))}
