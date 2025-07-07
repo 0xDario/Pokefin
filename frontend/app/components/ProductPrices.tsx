@@ -1,4 +1,4 @@
-// Updated ProductPrices.tsx with dropdown for generations filter
+// Updated ProductPrices.tsx with expansion type display
 
 "use client";
 
@@ -62,6 +62,26 @@ const ProductImage = ({ imageUrl, productName, className = "" }: {
   );
 };
 
+// Expansion type badge component
+const ExpansionTypeBadge = ({ type }: { type?: string }) => {
+  if (!type) return null;
+  
+  const badgeColors = {
+    'Main Series': 'bg-blue-100 text-blue-800 border-blue-200',
+    'Special Expansion': 'bg-purple-100 text-purple-800 border-purple-200',
+    'Subset': 'bg-amber-100 text-amber-800 border-amber-200',
+    'Starter Set': 'bg-green-100 text-green-800 border-green-200'
+  };
+  
+  const color = badgeColors[type as keyof typeof badgeColors] || 'bg-gray-100 text-gray-800 border-gray-200';
+  
+  return (
+    <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border ${color}`}>
+      {type}
+    </span>
+  );
+};
+
 const Skeleton = () => <div className="animate-pulse bg-slate-300 rounded h-36 w-full" />;
 
 const PRODUCT_PRIORITY = ["booster_box", "pokemon_center_etb", "etb", "booster_bundle"];
@@ -83,13 +103,14 @@ type Product = {
   usd_price: number;
   last_updated: string;
   url: string;
-  image_url?: string | null;  // Add image_url field
+  image_url?: string | null;
   sets: {
     id: number;
     name: string;
     code: string;
     release_date: string;
     generation_id: number;
+    expansion_type?: string;  // New field
     generations: {
       name: string;
     };
@@ -100,6 +121,7 @@ type Product = {
   };
 };
 
+// Helper functions for returns calculations
 function get1DReturn(history: PriceHistoryEntry[] | undefined) {
   if (!history || history.length < 2) return null;
   const latest = history[0];
@@ -126,6 +148,28 @@ function get30DReturn(history: PriceHistoryEntry[] | undefined) {
   return { change, percent };
 }
 
+function render1DReturn(productId: number, priceHistory: Record<number, PriceHistoryEntry[]>) {
+  const history = priceHistory[productId] || [];
+  const ret = get1DReturn(history);
+  if (!ret || typeof ret.percent !== "number") return null;
+  return (
+    <span className={`font-semibold text-sm block mb-1 ${ret.percent > 0 ? "text-green-600" : ret.percent < 0 ? "text-red-600" : "text-slate-500"}`}>
+      1D: {ret.percent > 0 ? "+" : ""}{ret.percent.toFixed(2)}%
+    </span>
+  );
+}
+
+function render30DReturn(productId: number, priceHistory: Record<number, PriceHistoryEntry[]>) {
+  const history = priceHistory[productId] || [];
+  const ret = get30DReturn(history);
+  if (!ret || typeof ret.percent !== "number") return null;
+  return (
+    <span className={`font-semibold text-sm block mb-1 ${ret.percent > 0 ? "text-green-600" : ret.percent < 0 ? "text-red-600" : "text-slate-500"}`}>
+      30D: {ret.percent > 0 ? "+" : ""}{ret.percent.toFixed(2)}%
+    </span>
+  );
+}
+
 export default function ProductPrices() {
   const [products, setProducts] = useState<Product[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
@@ -146,16 +190,15 @@ export default function ProductPrices() {
   const [selectedGeneration, setSelectedGeneration] = useState<string>("all");
   
   // New state for exchange rate
-  const [exchangeRate, setExchangeRate] = useState<number>(1.37); // fallback
+  const [exchangeRate, setExchangeRate] = useState<number>(1.3676); // fallback
   const [exchangeRateDate, setExchangeRateDate] = useState<string>("");
   const [exchangeRateLoading, setExchangeRateLoading] = useState<boolean>(true);
 
   // Extract unique generations from products
   const availableGenerations = useMemo(() => {
-    // Define generation order (from newest to oldest)
     const generationOrder = [
       "Scarlet & Violet",
-      "Sword & Shield",
+      "Sword & Shield", 
       "Sun & Moon",
       "XY",
       "Black & White",
@@ -175,19 +218,15 @@ export default function ProductPrices() {
       }
     });
     
-    // Sort by predefined order, with any unknown generations at the end
     return Array.from(generations).sort((a, b) => {
       const indexA = generationOrder.indexOf(a);
       const indexB = generationOrder.indexOf(b);
       
-      // If both are in the order list, sort by their position
       if (indexA !== -1 && indexB !== -1) {
         return indexA - indexB;
       }
-      // If only one is in the list, it comes first
       if (indexA !== -1) return -1;
       if (indexB !== -1) return 1;
-      // If neither is in the list, sort alphabetically
       return a.localeCompare(b);
     });
   }, [products]);
@@ -198,7 +237,7 @@ export default function ProductPrices() {
       const { data, error } = await supabase
         .from("products")
         .select(`id, usd_price, last_updated, url, image_url,
-                 sets ( id, name, code, release_date, generation_id, generations!inner ( name ) ),
+                 sets ( id, name, code, release_date, generation_id, expansion_type, generations!inner ( name ) ),
                  product_types ( name, label )`)
         .order("last_updated", { ascending: false });
 
@@ -208,7 +247,7 @@ export default function ProductPrices() {
     fetchProducts();
   }, []);
 
-  // Exchange rate loading (existing code)
+  // Exchange rate loading
   useEffect(() => {
     async function loadExchangeRate() {
       setExchangeRateLoading(true);
@@ -228,7 +267,7 @@ export default function ProductPrices() {
     loadExchangeRate();
   }, []);
 
-  // Price history loading (existing code)
+  // Price history loading
   useEffect(() => {
     if (products.length === 0) return;
     
@@ -335,9 +374,9 @@ export default function ProductPrices() {
 
   return (
     <div className="p-6 bg-slate-100 min-h-screen font-sans space-y-10">
-      {/* Controls - UPDATED WITH DROPDOWN */}
+      {/* Controls */}
       <div className="flex flex-wrap items-center gap-4 mb-6">
-        {/* Generation Filter - CONVERTED TO DROPDOWN */}
+        {/* Generation Filter */}
         <div className="flex items-center gap-2">
           <span className="font-semibold text-slate-800">Generation:</span>
           <select
@@ -438,14 +477,15 @@ export default function ProductPrices() {
               key={key}
               onClick={() => toggleSortBy(key)}
               className={`px-4 py-1 rounded border text-sm font-medium ${
-                sortStates[key] ? "bg-blue-600 text-white" : "bg-white text-slate-700"
+                sortStates[key] 
+                  ? sortStates[key] === "asc" 
+                    ? "bg-green-600 text-white" 
+                    : "bg-orange-600 text-white"
+                  : "bg-white text-slate-700"
               }`}
             >
-              {key === "release_date" && "Release Date"}
-              {key === "set_name" && "Set Name"}
-              {key === "price" && "Price"}
-              {sortStates[key] === "asc" && " ↑"}
-              {sortStates[key] === "desc" && " ↓"}
+              {key === "release_date" ? "Release Date" : key === "set_name" ? "Set Name" : "Price"}
+              {sortStates[key] && (sortStates[key] === "asc" ? " ↑" : " ↓")}
             </button>
           ))}
         </div>
@@ -453,41 +493,44 @@ export default function ProductPrices() {
 
       {loading && Array.from({ length: 6 }).map((_, i) => <Skeleton key={i} />)}
 
-      {/* GROUPED VIEW with FIXED LAYOUT */}
+      {/* GROUPED VIEW */}
       {!loading && viewMode === "grouped" &&
         Object.entries(groupedProducts)
-          .sort(([, a]: [string, Product[]], [, b]: [string, Product[]]) => {
+          .sort(([, a], [, b]) => {
             const dateA = new Date(a[0].sets?.release_date + "T00:00:00Z").getTime();
             const dateB = new Date(b[0].sets?.release_date + "T00:00:00Z").getTime();
             return dateB - dateA;
           })
-          .map(([groupKey, items]: [string, Product[]]) => {
+          .map(([groupKey, items]) => {
             const [setName, setCode] = groupKey.split("||");
-            const sortedItems = [...items].sort((a: Product, b: Product) =>
+            const sortedItems = [...items].sort((a, b) =>
               PRODUCT_PRIORITY.indexOf(a.product_types?.name) - PRODUCT_PRIORITY.indexOf(b.product_types?.name)
             );
 
             return (
               <div key={groupKey}>
-                <h2 className="text-2xl font-bold text-slate-800 mb-4 border-b border-slate-300 pb-1">
-                  {setName} {setCode && <span className="text-slate-500 text-base">({setCode})</span>}
-                  <span className="text-sm font-normal text-slate-500 ml-2">
+                <div className="flex items-baseline gap-3 mb-4 border-b border-slate-300 pb-1">
+                  <h2 className="text-2xl font-bold text-slate-800">
+                    {setName} {setCode && <span className="text-slate-500 text-base">({setCode})</span>}
+                  </h2>
+                  <ExpansionTypeBadge type={items[0]?.sets?.expansion_type} />
+                  <span className="text-sm font-normal text-slate-500 ml-auto">
                     ({sortedItems.length}/{PRODUCT_PRIORITY.length} products available)
                   </span>
-                </h2>
+                </div>
+                
                 {/* Fixed 4-column grid with placeholders for missing products */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
                   {PRODUCT_PRIORITY.map((type: string) => {
                     const product = sortedItems.find((p: Product) => p.product_types?.name === type);
                     
                     if (product) {
-                      // FIXED product card with better image sizing and price positioning
                       return (
                         <div
                           key={product.id}
                           className="rounded-xl border border-slate-300 bg-white shadow hover:shadow-lg transition-shadow overflow-hidden"
                         >
-                          {/* Product Image with BETTER SIZING */}
+                          {/* Product Image */}
                           <div className="relative">
                             <ProductImage
                               imageUrl={product.image_url}
@@ -496,47 +539,34 @@ export default function ProductPrices() {
                             />
                           </div>
                           
-                          {/* FinViz-style Layout: Info above chart */}
+                          {/* Product Info */}
                           <div className="p-4">
-                            {/* Top Header Row - FinViz Style */}
+                            {/* Top Header Row */}
                             <div className="flex justify-between items-start mb-2">
                               {/* Left: Product Info */}
                               <div>
                                 <h3 className="font-bold text-slate-800 text-lg leading-tight">
                                   {product.product_types?.label || product.product_types?.name}
                                 </h3>
-                                <div className="text-xs text-slate-500 mt-1">
-                                  {product.sets?.generations?.name} • Released {product.sets?.release_date ? 
-                                    new Date(product.sets.release_date + "T00:00:00Z").toLocaleDateString(undefined, {
-                                      month: 'short',
-                                      day: 'numeric',
-                                      year: 'numeric'
-                                    }) : "Unknown"}
+                                <div className="text-xs text-slate-500 mt-1 space-y-0.5">
+                                  <div>{product.sets?.generations?.name}</div>
+                                  <ExpansionTypeBadge type={product.sets?.expansion_type} />
                                 </div>
                               </div>
                               
-                              {/* Right: Price & Change */}
+                              {/* Right: Prices */}
                               <div className="text-right">
-                                <div className="text-2xl font-bold text-slate-800">
+                                <p className="text-xl font-bold text-green-600">
                                   ${product.usd_price?.toFixed(2) || "N/A"}
-                                </div>
-                                <div className="text-sm text-indigo-600">
-                                  ${(product.usd_price * exchangeRate).toFixed(2)} CAD
-                                </div>
-                              </div>
-                            </div>
-                            
-                            {/* Performance Metrics Row - Above Chart */}
-                            <div className="flex justify-between items-center mb-3 text-xs">
-                              {/* Left: Time periods */}
-                              <div className="flex gap-4">
-                                <div>
+                                </p>
+                                <p className="text-xs font-medium text-indigo-600">
+                                  ~${(product.usd_price * exchangeRate).toFixed(2)} CAD
+                                </p>
+                                {/* Returns info */}
+                                <div className="mt-1 text-xs">
                                   {(() => {
-                                    const history = priceHistory[product.id] || [];
-                                    const ret = get1DReturn(history);
-                                    if (!ret || typeof ret.percent !== "number") {
-                                      return <span className="text-slate-400">1D: —</span>;
-                                    }
+                                    const ret = get1DReturn(priceHistory[product.id]);
+                                    if (!ret || typeof ret.percent !== "number") return null;
                                     const percentSign = ret.percent > 0 ? "+" : "";
                                     return (
                                       <span>
@@ -547,15 +577,10 @@ export default function ProductPrices() {
                                       </span>
                                     );
                                   })()}
-                                </div>
-                                
-                                <div>
+                                  {" "}
                                   {(() => {
-                                    const history = priceHistory[product.id] || [];
-                                    const ret = get30DReturn(history);
-                                    if (!ret || typeof ret.percent !== "number") {
-                                      return <span className="text-slate-400">30D: —</span>;
-                                    }
+                                    const ret = get30DReturn(priceHistory[product.id]);
+                                    if (!ret || typeof ret.percent !== "number") return null;
                                     const percentSign = ret.percent > 0 ? "+" : "";
                                     return (
                                       <span>
@@ -568,19 +593,19 @@ export default function ProductPrices() {
                                   })()}
                                 </div>
                               </div>
-                              
-                              {/* Right: Last updated */}
-                              <div className="text-slate-400">
-                                Updated: {new Date(product.last_updated + 'Z').toLocaleString(undefined, {
-                                  month: 'numeric',
-                                  day: 'numeric',
-                                  hour: '2-digit',
-                                  minute: '2-digit'
-                                })}
-                              </div>
                             </div>
                             
-                            {/* PRICE CHART - FinViz style with dark background */}
+                            {/* Right: Release date */}
+                            <div className="text-slate-400 text-xs mb-2">
+                              Released: {product.sets?.release_date ? 
+                                new Date(product.sets.release_date + "T00:00:00Z").toLocaleDateString(undefined, {
+                                  month: 'short',
+                                  day: 'numeric',
+                                  year: 'numeric'
+                                }) : "Unknown"}
+                            </div>
+                            
+                            {/* PRICE CHART */}
                             {priceHistory[product.id]?.length > 1 && (
                               <div className="bg-slate-900 rounded-lg p-3 mb-3">
                                 <PriceChart data={priceHistory[product.id]} range={chartTimeframe} />
@@ -629,7 +654,7 @@ export default function ProductPrices() {
             );
           })}
 
-      {/* FLAT VIEW with FIXED LAYOUT */}
+      {/* FLAT VIEW */}
       {!loading && viewMode === "flat" && (
         <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-6">
           {sortedFlatProducts.map((product: any) => (
@@ -637,7 +662,7 @@ export default function ProductPrices() {
               key={product.id}
               className="rounded-xl border border-slate-300 bg-white shadow hover:shadow-lg transition-shadow overflow-hidden"
             >
-              {/* Product Image with BETTER SIZING */}
+              {/* Product Image */}
               <div className="relative">
                 <ProductImage
                   imageUrl={product.image_url}
@@ -646,103 +671,54 @@ export default function ProductPrices() {
                 />
               </div>
               
-              {/* FinViz-style Layout: Info above chart */}
-              <div className="p-4">
-                {/* Top Header Row - FinViz Style */}
-                <div className="flex justify-between items-start mb-2">
-                  {/* Left: Product Info */}
-                  <div>
-                    <h2 className="font-bold text-slate-800 text-lg leading-tight">
-                      {product.sets?.name} ({product.sets?.code})
-                    </h2>
-                    <div className="text-xs text-slate-500 mt-1">
-                      {product.product_types?.label} • {product.sets?.generations?.name}
-                    </div>
+              {/* Product Info */}
+              <div className="p-5">
+                <h2 className="font-semibold text-slate-800 text-lg mb-2">
+                  {product.sets?.name} ({product.sets?.code})
+                </h2>
+                <div className="space-y-1 mb-3">
+                  <p className="text-sm text-slate-600">
+                    <span className="font-medium text-slate-700">Type:</span> {product.product_types?.label || product.product_types?.name}
+                  </p>
+                  <p className="text-sm text-slate-600">
+                    <span className="font-medium text-slate-700">Generation:</span> {product.sets?.generations?.name || "Unknown"}
+                  </p>
+                  <div className="text-sm text-slate-600">
+                    <span className="font-medium text-slate-700">Expansion:</span> <ExpansionTypeBadge type={product.sets?.expansion_type} />
                   </div>
-                  
-                  {/* Right: Price & Change */}
-                  <div className="text-right">
-                    <div className="text-2xl font-bold text-slate-800">
-                      ${product.usd_price?.toFixed(2) || "N/A"}
-                    </div>
-                    <div className="text-sm text-indigo-600">
-                      ${(product.usd_price * exchangeRate).toFixed(2)} CAD
-                    </div>
-                  </div>
+                  <p className="text-sm text-slate-600">
+                    <span className="font-medium text-slate-700">Release Date:</span>{" "}
+                    {product.sets?.release_date ? 
+                      new Date(product.sets.release_date + "T00:00:00Z").toLocaleDateString() : "Unknown"}
+                  </p>
                 </div>
-                
-                {/* Performance Metrics Row - Above Chart */}
-                <div className="flex justify-between items-center mb-3 text-xs">
-                  {/* Left: Time periods */}
-                  <div className="flex gap-4">
-                    <div>
-                      {(() => {
-                        const history = priceHistory[product.id] || [];
-                        const ret = get1DReturn(history);
-                        if (!ret || typeof ret.percent !== "number") {
-                          return <span className="text-slate-400">1D: —</span>;
-                        }
-                        const percentSign = ret.percent > 0 ? "+" : "";
-                        return (
-                          <span>
-                            <span className="text-slate-600">1D:</span>
-                            <span className={`font-bold ml-1 ${ret.percent > 0 ? "text-green-600" : ret.percent < 0 ? "text-red-600" : "text-slate-500"}`}>
-                              {percentSign}{ret.percent.toFixed(2)}%
-                            </span>
-                          </span>
-                        );
-                      })()}
-                    </div>
-                    
-                    <div>
-                      {(() => {
-                        const history = priceHistory[product.id] || [];
-                        const ret = get30DReturn(history);
-                        if (!ret || typeof ret.percent !== "number") {
-                          return <span className="text-slate-400">30D: —</span>;
-                        }
-                        const percentSign = ret.percent > 0 ? "+" : "";
-                        return (
-                          <span>
-                            <span className="text-slate-600">30D:</span>
-                            <span className={`font-bold ml-1 ${ret.percent > 0 ? "text-green-600" : ret.percent < 0 ? "text-red-600" : "text-slate-500"}`}>
-                              {percentSign}{ret.percent.toFixed(2)}%
-                            </span>
-                          </span>
-                        );
-                      })()}
-                    </div>
-                  </div>
-                  
-                  {/* Right: Release date */}
-                  <div className="text-slate-400">
-                    Released: {product.sets?.release_date ? 
-                      new Date(product.sets.release_date + "T00:00:00Z").toLocaleDateString(undefined, {
-                        month: 'short',
-                        day: 'numeric',
-                        year: 'numeric'
-                      }) : "Unknown"}
-                  </div>
-                </div>
-                
-                {/* PRICE CHART - FinViz style with dark background */}
+                <p className="text-3xl font-extrabold text-green-600 tracking-tight mb-1">
+                  ${product.usd_price?.toFixed(2) || "N/A"} USD
+                </p>
+                {render1DReturn(product.id, priceHistory)}
+                {render30DReturn(product.id, priceHistory)}
+                <p className="text-md font-medium text-indigo-700 mb-3">
+                  ~${(product.usd_price * exchangeRate).toFixed(2)} CAD
+                </p>
                 {priceHistory[product.id]?.length > 1 && (
-                  <div className="bg-slate-900 rounded-lg p-3 mb-3">
+                  <div className="mt-2">
                     <PriceChart data={priceHistory[product.id]} range={chartTimeframe} />
                   </div>
                 )}
-                
-                {/* Bottom Action */}
-                <div className="text-center">
-                  <a
-                    href={product.url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="inline-block text-sm font-medium text-blue-600 hover:text-blue-800 transition-colors"
-                  >
-                    View on TCGPlayer →
-                  </a>
-                </div>
+                <a
+                  href={product.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-block text-sm font-medium text-blue-600 hover:underline"
+                >
+                  View on TCGPlayer
+                </a>
+                <p className="text-xs text-slate-400 mt-2">
+                  Updated: {new Date(product.last_updated + 'Z').toLocaleString(undefined, {
+                    timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+                    timeZoneName: 'short'
+                  })}
+                </p>
               </div>
             </div>
           ))}
