@@ -1,4 +1,4 @@
-// Updated ProductPrices.tsx with expansion type display
+// Updated ProductPrices.tsx with variant support
 
 "use client";
 
@@ -82,6 +82,29 @@ const ExpansionTypeBadge = ({ type }: { type?: string }) => {
   );
 };
 
+// Variant badge component
+const VariantBadge = ({ variant }: { variant?: string | null }) => {
+  if (!variant) return null;
+  
+  return (
+    <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-indigo-100 text-indigo-800 border border-indigo-200">
+      {variant}
+    </span>
+  );
+};
+
+// Pokemon Center badge component - SPECIAL BADGE!
+const PokemonCenterBadge = ({ productType }: { productType?: string }) => {
+  if (productType !== 'pokemon_center_etb') return null;
+  
+  return (
+    <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-bold bg-gradient-to-r from-red-500 to-red-600 text-white shadow-sm animate-pulse">
+      <span className="mr-1">🏪</span>
+      Pokémon Center Exclusive
+    </span>
+  );
+};
+
 const Skeleton = () => <div className="animate-pulse bg-slate-300 rounded h-36 w-full" />;
 
 const PRODUCT_PRIORITY = ["booster_box", "pokemon_center_etb", "etb", "booster_bundle"];
@@ -104,13 +127,14 @@ type Product = {
   last_updated: string;
   url: string;
   image_url?: string | null;
+  variant?: string | null;
   sets: {
     id: number;
     name: string;
     code: string;
     release_date: string;
     generation_id: number;
-    expansion_type?: string;  // New field
+    expansion_type?: string;
     generations: {
       name: string;
     };
@@ -236,7 +260,7 @@ export default function ProductPrices() {
       setLoading(true);
       const { data, error } = await supabase
         .from("products")
-        .select(`id, usd_price, last_updated, url, image_url,
+        .select(`id, usd_price, last_updated, url, image_url, variant,
                  sets ( id, name, code, release_date, generation_id, expansion_type, generations!inner ( name ) ),
                  product_types ( name, label )`)
         .order("last_updated", { ascending: false });
@@ -257,7 +281,7 @@ export default function ProductPrices() {
         if (result.date) {
           setExchangeRateDate(result.date);
         }
-        console.log(`[ProductPrices] Exchange rate loaded: ${result.rate} (cached: ${result.cached})`);
+        console.log(`[ProductPrices] Exchange rate loaded: ${result.rate} (date: ${result.date})`);
       } catch (error) {
         console.error('[ProductPrices] Failed to load exchange rate:', error);
       } finally {
@@ -333,7 +357,7 @@ export default function ProductPrices() {
 
   const filteredProducts = products.filter((p: any) => {
     const search = searchTerm.toLowerCase().replace(/\betb\b/g, "elite trainer box");
-    const target = `${p.sets?.name ?? ""} ${p.sets?.code ?? ""} ${p.product_types?.label ?? ""}`.toLowerCase();
+    const target = `${p.sets?.name ?? ""} ${p.sets?.code ?? ""} ${p.product_types?.label ?? ""} ${p.variant ?? ""}`.toLowerCase();
     const matchesSearch = target.includes(search);
     
     const matchesGeneration = selectedGeneration === "all" || p.sets?.generations?.name === selectedGeneration;
@@ -396,7 +420,7 @@ export default function ProductPrices() {
         {/* Search */}
         <input
           type="text"
-          placeholder="Search by name..."
+          placeholder="Search by name or variant..."
           value={searchTerm}
           onChange={(e) => setSearchTerm(e.target.value)}
           className="px-3 py-1 rounded border text-sm text-slate-700 bg-white"
@@ -503,9 +527,20 @@ export default function ProductPrices() {
           })
           .map(([groupKey, items]) => {
             const [setName, setCode] = groupKey.split("||");
-            const sortedItems = [...items].sort((a, b) =>
-              PRODUCT_PRIORITY.indexOf(a.product_types?.name) - PRODUCT_PRIORITY.indexOf(b.product_types?.name)
-            );
+            
+            // Group by product type
+            const productsByType: Record<string, Product[]> = {};
+            items.forEach(item => {
+              const typeKey = item.product_types?.name || 'unknown';
+              if (!productsByType[typeKey]) {
+                productsByType[typeKey] = [];
+              }
+              productsByType[typeKey].push(item);
+            });
+
+            // Count total unique products (including variants)
+            const totalProducts = items.length;
+            const uniqueProductTypes = Object.keys(productsByType).length;
 
             return (
               <div key={groupKey}>
@@ -515,16 +550,153 @@ export default function ProductPrices() {
                   </h2>
                   <ExpansionTypeBadge type={items[0]?.sets?.expansion_type} />
                   <span className="text-sm font-normal text-slate-500 ml-auto">
-                    ({sortedItems.length}/{PRODUCT_PRIORITY.length} products available)
+                    ({totalProducts} products, {uniqueProductTypes} types)
                   </span>
                 </div>
                 
-                {/* Fixed 4-column grid with placeholders for missing products */}
+                {/* Dynamic grid based on products */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
                   {PRODUCT_PRIORITY.map((type: string) => {
-                    const product = sortedItems.find((p: Product) => p.product_types?.name === type);
+                    const productsOfType = productsByType[type] || [];
                     
-                    if (product) {
+                    if (productsOfType.length === 0) {
+                      // Placeholder for missing product type
+                      const displayName = PRODUCT_TYPE_DISPLAY_NAMES[type as keyof typeof PRODUCT_TYPE_DISPLAY_NAMES] ||
+                        type.charAt(0).toUpperCase() + type.slice(1).replace('_', ' ');
+                      return (
+                        <div
+                          key={`${groupKey}-${type}-placeholder`}
+                          className="rounded-xl border-2 border-dashed border-slate-200 bg-slate-50 p-5 flex items-center justify-center min-h-[400px]"
+                        >
+                          <div className="text-center text-slate-400">
+                            <div className="text-4xl mb-3">📦</div>
+                            <p className="text-sm font-medium mb-1">
+                              {displayName}
+                            </p>
+                            <p className="text-xs text-slate-500">
+                              Not Available
+                            </p>
+                          </div>
+                        </div>
+                      );
+                    }
+                    
+                    // Check if there are actual variants (different variant values or null vs non-null)
+                    const hasMultipleVariants = productsOfType.length > 1 && (
+                      new Set(productsOfType.map(p => p.variant || 'default')).size > 1
+                    );
+                    
+                    if (hasMultipleVariants) {
+                      // Render all variants of this product type
+                      return productsOfType.map((product) => (
+                      <div
+                        key={product.id}
+                        className="rounded-xl border border-slate-300 bg-white shadow hover:shadow-lg transition-shadow overflow-hidden"
+                      >
+                        {/* Product Image */}
+                        <div className="relative">
+                          <ProductImage
+                            imageUrl={product.image_url}
+                            productName={`${product.sets?.name} ${product.product_types?.label} ${product.variant || ''}`}
+                            className="w-full h-40 rounded-t-xl"
+                          />
+                        </div>
+                        
+                        {/* Product Info */}
+                        <div className="p-4">
+                          {/* Top Header Row */}
+                          <div className="flex justify-between items-start mb-2">
+                            {/* Left: Product Info */}
+                            <div className="flex-1">
+                              <h3 className="font-bold text-slate-800 text-lg leading-tight">
+                                {product.product_types?.label || product.product_types?.name}
+                              </h3>
+                              {product.variant && (
+                                <div className="mt-1">
+                                  <VariantBadge variant={product.variant} />
+                                </div>
+                              )}
+                              <div className="text-xs text-slate-500 mt-1 space-y-0.5">
+                                <div>{product.sets?.generations?.name}</div>
+                                <ExpansionTypeBadge type={product.sets?.expansion_type} />
+                              </div>
+                            </div>
+                            
+                            {/* Right: Prices */}
+                            <div className="text-right ml-2">
+                              <p className="text-xl font-bold text-green-600">
+                                ${product.usd_price?.toFixed(2) || "N/A"}
+                              </p>
+                              <p className="text-xs font-medium text-indigo-600">
+                                ~${(product.usd_price * exchangeRate).toFixed(2)} CAD
+                              </p>
+                              {/* Returns info */}
+                              <div className="mt-1 text-xs">
+                                {(() => {
+                                  const ret = get1DReturn(priceHistory[product.id]);
+                                  if (!ret || typeof ret.percent !== "number") return null;
+                                  const percentSign = ret.percent > 0 ? "+" : "";
+                                  return (
+                                    <span>
+                                      <span className="text-slate-600">1D:</span>
+                                      <span className={`font-bold ml-1 ${ret.percent > 0 ? "text-green-600" : ret.percent < 0 ? "text-red-600" : "text-slate-500"}`}>
+                                        {percentSign}{ret.percent.toFixed(2)}%
+                                      </span>
+                                    </span>
+                                  );
+                                })()}
+                                {" "}
+                                {(() => {
+                                  const ret = get30DReturn(priceHistory[product.id]);
+                                  if (!ret || typeof ret.percent !== "number") return null;
+                                  const percentSign = ret.percent > 0 ? "+" : "";
+                                  return (
+                                    <span>
+                                      <span className="text-slate-600">30D:</span>
+                                      <span className={`font-bold ml-1 ${ret.percent > 0 ? "text-green-600" : ret.percent < 0 ? "text-red-600" : "text-slate-500"}`}>
+                                        {percentSign}{ret.percent.toFixed(2)}%
+                                      </span>
+                                    </span>
+                                  );
+                                })()}
+                              </div>
+                            </div>
+                          </div>
+                          
+                          {/* Release date */}
+                          <div className="text-slate-400 text-xs mb-2">
+                            Released: {product.sets?.release_date ? 
+                              new Date(product.sets.release_date + "T00:00:00Z").toLocaleDateString(undefined, {
+                                month: 'short',
+                                day: 'numeric',
+                                year: 'numeric'
+                              }) : "Unknown"}
+                          </div>
+                          
+                          {/* PRICE CHART */}
+                          {priceHistory[product.id]?.length > 1 && (
+                            <div className="bg-slate-900 rounded-lg p-3 mb-3">
+                              <PriceChart data={priceHistory[product.id]} range={chartTimeframe} />
+                            </div>
+                          )}
+                          
+                          {/* Bottom Action */}
+                          <div className="text-center">
+                            <a
+                              href={product.url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="inline-block text-sm font-medium text-blue-600 hover:text-blue-800 transition-colors"
+                            >
+                              View on TCGPlayer →
+                            </a>
+                          </div>
+                        </div>
+                      </div>
+                    ));
+                    } else {
+                      // Only one product of this type (no variants), render it once
+                      const product = productsOfType[0];
                       return (
                         <div
                           key={product.id}
@@ -534,9 +706,15 @@ export default function ProductPrices() {
                           <div className="relative">
                             <ProductImage
                               imageUrl={product.image_url}
-                              productName={`${product.sets?.name} ${product.product_types?.label}`}
+                              productName={`${product.sets?.name} ${product.product_types?.label} ${product.variant || ''}`}
                               className="w-full h-40 rounded-t-xl"
                             />
+                            {/* Pokemon Center Badge Overlay */}
+                            {product.product_types?.name === 'pokemon_center_etb' && (
+                              <div className="absolute top-2 right-2">
+                                <PokemonCenterBadge productType={product.product_types.name} />
+                              </div>
+                            )}
                           </div>
                           
                           {/* Product Info */}
@@ -544,10 +722,15 @@ export default function ProductPrices() {
                             {/* Top Header Row */}
                             <div className="flex justify-between items-start mb-2">
                               {/* Left: Product Info */}
-                              <div>
+                              <div className="flex-1">
                                 <h3 className="font-bold text-slate-800 text-lg leading-tight">
                                   {product.product_types?.label || product.product_types?.name}
                                 </h3>
+                                {product.variant && (
+                                  <div className="mt-1">
+                                    <VariantBadge variant={product.variant} />
+                                  </div>
+                                )}
                                 <div className="text-xs text-slate-500 mt-1 space-y-0.5">
                                   <div>{product.sets?.generations?.name}</div>
                                   <ExpansionTypeBadge type={product.sets?.expansion_type} />
@@ -555,7 +738,7 @@ export default function ProductPrices() {
                               </div>
                               
                               {/* Right: Prices */}
-                              <div className="text-right">
+                              <div className="text-right ml-2">
                                 <p className="text-xl font-bold text-green-600">
                                   ${product.usd_price?.toFixed(2) || "N/A"}
                                 </p>
@@ -595,7 +778,7 @@ export default function ProductPrices() {
                               </div>
                             </div>
                             
-                            {/* Right: Release date */}
+                            {/* Release date */}
                             <div className="text-slate-400 text-xs mb-2">
                               Released: {product.sets?.release_date ? 
                                 new Date(product.sets.release_date + "T00:00:00Z").toLocaleDateString(undefined, {
@@ -626,27 +809,6 @@ export default function ProductPrices() {
                           </div>
                         </div>
                       );
-                    } else {
-                      // Placeholder for missing product
-                      const displayName =
-                        PRODUCT_TYPE_DISPLAY_NAMES[type as keyof typeof PRODUCT_TYPE_DISPLAY_NAMES] ||
-                        type.charAt(0).toUpperCase() + type.slice(1).replace('_', ' ');
-                      return (
-                        <div
-                          key={`${groupKey}-${type}-placeholder`}
-                          className="rounded-xl border-2 border-dashed border-slate-200 bg-slate-50 p-5 flex items-center justify-center min-h-[400px]"
-                        >
-                          <div className="text-center text-slate-400">
-                            <div className="text-4xl mb-3">📦</div>
-                            <p className="text-sm font-medium mb-1">
-                              {displayName}
-                            </p>
-                            <p className="text-xs text-slate-500">
-                              Not Available
-                            </p>
-                          </div>
-                        </div>
-                      );
                     }
                   })}
                 </div>
@@ -666,9 +828,15 @@ export default function ProductPrices() {
               <div className="relative">
                 <ProductImage
                   imageUrl={product.image_url}
-                  productName={`${product.sets?.name} ${product.product_types?.label}`}
+                  productName={`${product.sets?.name} ${product.product_types?.label} ${product.variant || ''}`}
                   className="w-full h-40 rounded-t-xl"
                 />
+                {/* Pokemon Center Badge Overlay for Flat View */}
+                {product.product_types?.name === 'pokemon_center_etb' && (
+                  <div className="absolute top-2 right-2">
+                    <PokemonCenterBadge productType={product.product_types.name} />
+                  </div>
+                )}
               </div>
               
               {/* Product Info */}
@@ -680,6 +848,11 @@ export default function ProductPrices() {
                   <p className="text-sm text-slate-600">
                     <span className="font-medium text-slate-700">Type:</span> {product.product_types?.label || product.product_types?.name}
                   </p>
+                  {product.variant && (
+                    <p className="text-sm text-slate-600">
+                      <span className="font-medium text-slate-700">Variant:</span> <VariantBadge variant={product.variant} />
+                    </p>
+                  )}
                   <p className="text-sm text-slate-600">
                     <span className="font-medium text-slate-700">Generation:</span> {product.sets?.generations?.name || "Unknown"}
                   </p>

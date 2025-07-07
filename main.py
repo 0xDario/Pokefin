@@ -248,13 +248,74 @@ def parse_timestamp(timestamp_str):
         return None
 
 # === Main Logic ===
+def fetch_and_store_exchange_rate():
+    """
+    Fetch the latest USD→CAD exchange rate from Bank of Canada
+    and store it in Supabase (exchange_rates table).
+    """
+    try:
+        print("🌐 Fetching USD→CAD exchange rate from Bank of Canada...")
+        boc_url = "https://www.bankofcanada.ca/rates/exchange/daily-exchange-rates/"
+        response = requests.get(boc_url, timeout=10)
+        response.raise_for_status()
+
+        from bs4 import BeautifulSoup
+        soup = BeautifulSoup(response.text, "html.parser")
+
+        # Find the daily rates table
+        table = soup.find("table", id="table_daily_1")
+        if not table:
+            raise ValueError("Could not find daily exchange rates table")
+
+        # Extract column headers (dates)
+        header_cells = table.find("thead").find_all("th")
+        dates = [cell.get_text(strip=True) for cell in header_cells[1:]]  # skip "Currency" header
+
+        # Find US Dollar row
+        usd_row = table.find("th", string="US dollar").parent
+        if not usd_row:
+            raise ValueError("Could not find US Dollar row")
+
+        # Find all rate cells for USD
+        cells = usd_row.find_all("td")
+
+        # Start from the right-most cell (newest date)
+        rate = None
+        rate_date = None
+        for idx in reversed(range(len(cells))):
+            cell_text = cells[idx].get_text(strip=True)
+            if cell_text.lower() != "bank holiday" and cell_text != "":
+                rate = float(cell_text)
+                rate_date_str = dates[idx]
+                rate_date = datetime.strptime(rate_date_str, "%Y‑%m‑%d")
+                break
+
+        if rate is None or rate_date is None:
+            raise ValueError("Could not find a valid USD→CAD rate")
+
+        print(f"✅ USD→CAD Rate: {rate} (as of {rate_date.date()})")
+
+        # Insert into Supabase
+        try:
+            result = supabase.table("exchange_rates").insert({
+                "usd_to_cad": rate,
+                "recorded_at": rate_date.isoformat()
+            }).execute()
+            print("📥 Exchange rate stored in Supabase successfully.")
+        except Exception as e:
+            print(f"⚠️ Supabase insert failed: {e}")
+
+    except Exception as e:
+        print(f"❌ Failed to fetch or store exchange rate: {e}")
+
+
 def update_prices():
     # Calculate timestamps in UTC
     one_hour_ago = datetime.now(timezone.utc) - timedelta(hours=1)
     twenty_four_hours_ago = datetime.now(timezone.utc) - timedelta(hours=24)
     
-    # Get products that need updates (price OR image)
-    response = supabase.table("products").select("*").or_(
+    # Get products that need updates (price OR image) - include variant in query
+    response = supabase.table("products").select("id, url, image_url, last_updated, last_image_update, variant, set_id, product_type_id").or_(
         f"last_updated.lt.{one_hour_ago.isoformat()},image_url.is.null,last_image_update.is.null,last_image_update.lt.{twenty_four_hours_ago.isoformat()}"
     ).execute()
 
@@ -266,6 +327,20 @@ def update_prices():
 
     print(f"📦 Found {len(products_to_update)} products to update")
     
+    # Group products by type for logging
+    products_by_type = {}
+    for product in products_to_update:
+        key = f"Set:{product['set_id']}-Type:{product['product_type_id']}"
+        if product.get('variant'):
+            key += f"-Variant:{product['variant']}"
+        if key not in products_by_type:
+            products_by_type[key] = 0
+        products_by_type[key] += 1
+    
+    print("\n📊 Products to update by type:")
+    for key, count in products_by_type.items():
+        print(f"   - {key}: {count} products")
+    
     driver = create_driver()
     updated_count = 0
 
@@ -275,8 +350,10 @@ def update_prices():
         current_image_url = product.get("image_url")
         last_updated = product.get("last_updated")
         last_image_update = product.get("last_image_update")
+        variant = product.get("variant")
 
-        print(f"\n🔍 Scraping product ID {product_id}...")
+        variant_info = f" (Variant: {variant})" if variant else ""
+        print(f"\n🔍 Scraping product ID {product_id}{variant_info}...")
         
         # Get both price and image
         scraped_data = get_price_and_image_from_url(driver, url)
@@ -341,11 +418,11 @@ def update_prices():
             try:
                 supabase.table("products").update(update_data).eq("id", product_id).execute()
                 updated_count += 1
-                print(f"   ✅ Database updated for product {product_id}")
+                print(f"   ✅ Database updated for product {product_id}{variant_info}")
             except Exception as e:
                 print(f"   ❌ Database update failed for product {product_id}: {e}")
         else:
-            print(f"   ℹ️ No updates needed for product {product_id}")
+            print(f"   ℹ️ No updates needed for product {product_id}{variant_info}")
 
         time.sleep(1)  # polite delay between requests
 
@@ -354,4 +431,5 @@ def update_prices():
 
 # === Run Script ===
 if __name__ == "__main__":
+    fetch_and_store_exchange_rate()
     update_prices()
