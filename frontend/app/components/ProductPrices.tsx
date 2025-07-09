@@ -538,10 +538,6 @@ export default function ProductPrices() {
               productsByType[typeKey].push(item);
             });
 
-            // Count total unique products (including variants)
-            const totalProducts = items.length;
-            const uniqueProductTypes = Object.keys(productsByType).length;
-
             return (
               <div key={groupKey}>
                 <div className="flex items-baseline gap-3 mb-4 border-b border-slate-300 pb-1">
@@ -549,8 +545,8 @@ export default function ProductPrices() {
                     {setName} {setCode && <span className="text-slate-500 text-base">({setCode})</span>}
                   </h2>
                   <ExpansionTypeBadge type={items[0]?.sets?.expansion_type} />
-                  <span className="text-sm font-normal text-slate-500 ml-auto">
-                    ({totalProducts} products, {uniqueProductTypes} types)
+                  <span className="text-sm text-slate-500 ml-auto">
+                    ({items.length} products)
                   </span>
                 </div>
                 
@@ -618,7 +614,6 @@ export default function ProductPrices() {
                               )}
                               <div className="text-xs text-slate-500 mt-1 space-y-0.5">
                                 <div>{product.sets?.generations?.name}</div>
-                                <ExpansionTypeBadge type={product.sets?.expansion_type} />
                               </div>
                             </div>
                             
@@ -733,7 +728,6 @@ export default function ProductPrices() {
                                 )}
                                 <div className="text-xs text-slate-500 mt-1 space-y-0.5">
                                   <div>{product.sets?.generations?.name}</div>
-                                  <ExpansionTypeBadge type={product.sets?.expansion_type} />
                                 </div>
                               </div>
                               
