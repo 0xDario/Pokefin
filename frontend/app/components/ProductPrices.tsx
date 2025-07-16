@@ -800,6 +800,12 @@ export default function ProductPrices() {
                                 View on TCGPlayer →
                               </a>
                             </div>
+                            <p className="text-xs text-slate-400 mt-2">
+                            Updated: {new Date(product.last_updated + 'Z').toLocaleString(undefined, {
+                              timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+                              timeZoneName: 'short'
+                            })}
+                          </p>
                           </div>
                         </div>
                       );
