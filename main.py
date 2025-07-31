@@ -18,29 +18,12 @@ supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 # === Selenium Driver Setup ===
 def create_driver():
-    import tempfile
-    import os
-    import time
-    
     options = Options()
-    options.add_argument("--headless")
+    options.add_argument("--headless=new")
     options.add_argument("--disable-gpu")
     options.add_argument("--no-sandbox")
     options.add_argument("--window-size=1920,1080")
     options.add_argument("--disable-dev-shm-usage")
-    options.add_argument("--no-first-run")
-    options.add_argument("--no-default-browser-check")
-    options.add_argument("--disable-extensions")
-    options.add_argument("--disable-plugins")
-    options.add_argument("--incognito")
-    
-    # Add unique user data directory to prevent conflicts
-    user_data_dir = os.path.join(tempfile.gettempdir(), f"chrome_scraper_{int(time.time())}_{os.getpid()}")
-    options.add_argument(f"--user-data-dir={user_data_dir}")
-    
-    # Additional option to help with cleanup
-    options.add_argument("--disable-background-timer-throttling")
-
     return webdriver.Chrome(options=options)
 
 # === Image Download and Upload Logic ===
