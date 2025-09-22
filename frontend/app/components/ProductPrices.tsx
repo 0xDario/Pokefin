@@ -1,5 +1,3 @@
-// Updated ProductPrices.tsx with variant support
-
 "use client";
 
 import React, { useEffect, useState, useMemo } from "react";
@@ -12,7 +10,10 @@ const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_KEY!
 );
 
-// Add Image component with fallback and BETTER SIZING
+// Define currency type
+type Currency = "USD" | "CAD";
+
+// Add Image component with fallback
 const ProductImage = ({ imageUrl, productName, className = "" }: { 
   imageUrl?: string | null; 
   productName: string; 
@@ -83,37 +84,23 @@ const ExpansionTypeBadge = ({ type }: { type?: string }) => {
 };
 
 // Variant badge component
-const VariantBadge = ({ variant }: { variant?: string | null }) => {
+const VariantBadge = ({ variant }: { variant?: string }) => {
   if (!variant) return null;
   
+  // Special styling for Pokemon Center exclusives
+  if (variant.toLowerCase().includes('pokemon center')) {
+    return (
+      <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-bold bg-gradient-to-r from-purple-500 to-pink-500 text-white shadow-sm">
+        ⭐ {variant}
+      </span>
+    );
+  }
+  
   return (
-    <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-indigo-100 text-indigo-800 border border-indigo-200">
+    <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-slate-100 text-slate-700 border border-slate-300">
       {variant}
     </span>
   );
-};
-
-// Pokemon Center badge component - SPECIAL BADGE!
-const PokemonCenterBadge = ({ productType }: { productType?: string }) => {
-  if (productType !== 'pokemon_center_etb') return null;
-  
-  return (
-    <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-bold bg-gradient-to-r from-red-500 to-red-600 text-white shadow-sm animate-pulse">
-      <span className="mr-1">🏪</span>
-      Pokémon Center Exclusive
-    </span>
-  );
-};
-
-const Skeleton = () => <div className="animate-pulse bg-slate-300 rounded h-36 w-full" />;
-
-const PRODUCT_PRIORITY = ["booster_box", "pokemon_center_etb", "etb", "booster_bundle"];
-
-const PRODUCT_TYPE_DISPLAY_NAMES = {
-  "booster_box": "Booster Box",
-  "etb": "Elite Trainer Box", 
-  "pokemon_center_etb": "Pokemon Center Exclusive ETB",
-  "booster_bundle": "Booster Bundle"
 };
 
 type PriceHistoryEntry = {
@@ -121,143 +108,40 @@ type PriceHistoryEntry = {
   recorded_at: string;
 };
 
-type Product = {
-  id: number;
-  usd_price: number;
-  last_updated: string;
-  url: string;
-  image_url?: string | null;
-  variant?: string | null;
-  sets: {
-    id: number;
-    name: string;
-    code: string;
-    release_date: string;
-    generation_id: number;
-    expansion_type?: string;
-    generations: {
-      name: string;
-    };
-  };
-  product_types: {
-    name: string;
-    label: string;
-  };
-};
-
-// Helper functions for returns calculations
-function get1DReturn(history: PriceHistoryEntry[] | undefined) {
-  if (!history || history.length < 2) return null;
-  const latest = history[0];
-  const latestDate = new Date(latest.recorded_at).toISOString().split("T")[0];
-  const prevDayEntry = history.find(h => {
-    const hDate = new Date(h.recorded_at).toISOString().split("T")[0];
-    return hDate < latestDate;
-  });
-  if (!prevDayEntry) return null;
-  const change = latest.usd_price - prevDayEntry.usd_price;
-  const percent = (change / prevDayEntry.usd_price) * 100;
-  return { change, percent };
-}
-
-function get30DReturn(history: PriceHistoryEntry[] | undefined) {
-  if (!history || history.length < 2) return null;
-  const [latest, ...rest] = history;
-  const thirtyDaysAgo = rest.find(h =>
-    new Date(latest.recorded_at).getTime() - new Date(h.recorded_at).getTime() >= 1000 * 60 * 60 * 24 * 30
-  );
-  if (!thirtyDaysAgo) return null;
-  const change = latest.usd_price - thirtyDaysAgo.usd_price;
-  const percent = (change / thirtyDaysAgo.usd_price) * 100;
-  return { change, percent };
-}
-
-function render1DReturn(productId: number, priceHistory: Record<number, PriceHistoryEntry[]>) {
-  const history = priceHistory[productId] || [];
-  const ret = get1DReturn(history);
-  if (!ret || typeof ret.percent !== "number") return null;
-  return (
-    <span className={`font-semibold text-sm block mb-1 ${ret.percent > 0 ? "text-green-600" : ret.percent < 0 ? "text-red-600" : "text-slate-500"}`}>
-      1D: {ret.percent > 0 ? "+" : ""}{ret.percent.toFixed(2)}%
-    </span>
-  );
-}
-
-function render30DReturn(productId: number, priceHistory: Record<number, PriceHistoryEntry[]>) {
-  const history = priceHistory[productId] || [];
-  const ret = get30DReturn(history);
-  if (!ret || typeof ret.percent !== "number") return null;
-  return (
-    <span className={`font-semibold text-sm block mb-1 ${ret.percent > 0 ? "text-green-600" : ret.percent < 0 ? "text-red-600" : "text-slate-500"}`}>
-      30D: {ret.percent > 0 ? "+" : ""}{ret.percent.toFixed(2)}%
-    </span>
-  );
-}
-
 export default function ProductPrices() {
-  const [products, setProducts] = useState<Product[]>([]);
-  const [loading, setLoading] = useState<boolean>(true);
-  const [sortProductType, setSortProductType] = useState<string | null>(null);
-  const [viewMode, setViewMode] = useState<"grouped" | "flat">("grouped");
-  const [searchTerm, setSearchTerm] = useState<string>("");
-  const [priceHistory, setPriceHistory] = useState<Record<number, PriceHistoryEntry[]>>({});
+  const [products, setProducts] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [selectedGeneration, setSelectedGeneration] = useState("all");
+  const [selectedProductType, setSelectedProductType] = useState("all");
+  const [searchTerm, setSearchTerm] = useState("");
+  const [sortKey, setSortKey] = useState<"price" | "release_date" | "set_name">("release_date");
+  const [sortDirection, setSortDirection] = useState<"asc" | "desc">("desc");
+  const [viewMode, setViewMode] = useState<"flat" | "grouped">("grouped");
   const [chartTimeframe, setChartTimeframe] = useState<"7D" | "30D" | "90D">("30D");
-  const [sortStates, setSortStates] = useState<{
-    [key in "release_date" | "set_name" | "price"]?: "asc" | "desc" | null;
-  }>({
-    release_date: null,
-    set_name: null,
-    price: "desc", // default sort
-  });
+  const [priceHistory, setPriceHistory] = useState<Record<number, PriceHistoryEntry[]>>({});
   
-  // New state for generation filter
-  const [selectedGeneration, setSelectedGeneration] = useState<string>("all");
-  
-  // New state for exchange rate
-  const [exchangeRate, setExchangeRate] = useState<number>(1.3676); // fallback
-  const [exchangeRateDate, setExchangeRateDate] = useState<string>("");
-  const [exchangeRateLoading, setExchangeRateLoading] = useState<boolean>(true);
+  // Currency state
+  const [selectedCurrency, setSelectedCurrency] = useState<Currency>("CAD");
+  const [exchangeRate, setExchangeRate] = useState(1.36);
+  const [exchangeRateLoading, setExchangeRateLoading] = useState(false);
+  const [exchangeRateDate, setExchangeRateDate] = useState<string | null>(null);
 
-  // Extract unique generations from products
-  const availableGenerations = useMemo(() => {
-    const generationOrder = [
-      "Scarlet & Violet",
-      "Sword & Shield", 
-      "Sun & Moon",
-      "XY",
-      "Black & White",
-      "HeartGold & SoulSilver",
-      "Platinum",
-      "Diamond & Pearl",
-      "EX",
-      "E-Card",
-      "Neo",
-      "Base"
-    ];
+  // Helper function to convert prices based on selected currency
+  const convertPrice = (usdPrice: number | null | undefined): number => {
+    if (!usdPrice) return 0;
+    return selectedCurrency === "CAD" ? usdPrice * exchangeRate : usdPrice;
+  };
 
-    const generations = new Set<string>();
-    products.forEach(product => {
-      if (product.sets?.generations?.name) {
-        generations.add(product.sets.generations.name);
-      }
-    });
-    
-    return Array.from(generations).sort((a, b) => {
-      const indexA = generationOrder.indexOf(a);
-      const indexB = generationOrder.indexOf(b);
-      
-      if (indexA !== -1 && indexB !== -1) {
-        return indexA - indexB;
-      }
-      if (indexA !== -1) return -1;
-      if (indexB !== -1) return 1;
-      return a.localeCompare(b);
-    });
-  }, [products]);
+  // Helper function to format price with currency symbol
+  const formatPrice = (usdPrice: number | null | undefined): string => {
+    const price = convertPrice(usdPrice);
+    const symbol = selectedCurrency === "CAD" ? "C$" : "$";
+    return `${symbol}${price.toFixed(2)}`;
+  };
 
+  // Load products
   useEffect(() => {
     async function fetchProducts() {
-      setLoading(true);
       const { data, error } = await supabase
         .from("products")
         .select(`id, usd_price, last_updated, url, image_url, variant,
@@ -314,27 +198,21 @@ export default function ProductPrices() {
             .select("product_id, usd_price, recorded_at")
             .in("product_id", batchIds)
             .gte("recorded_at", ninetyDaysAgo.toISOString())
-            .order("recorded_at", { ascending: false })
-            .limit(1000);
-
-          if (error) {
-            console.error(`[ProductPrices] Error fetching batch:`, error);
-            continue;
-          }
-
-          if (data) {
-            for (const record of data as (PriceHistoryEntry & { product_id: number })[]) {
-              if (!historyByProduct[record.product_id]) {
-                historyByProduct[record.product_id] = [];
+            .order("recorded_at", { ascending: false });
+          
+          if (data && !error) {
+            for (const entry of data) {
+              if (!historyByProduct[entry.product_id]) {
+                historyByProduct[entry.product_id] = [];
               }
-              historyByProduct[record.product_id].push(record);
+              historyByProduct[entry.product_id].push({
+                usd_price: entry.usd_price,
+                recorded_at: entry.recorded_at,
+              });
             }
           }
-          
-          await new Promise(resolve => setTimeout(resolve, 100));
-          
         } catch (err) {
-          console.error(`[ProductPrices] Error in batch ${i}:`, err);
+          console.error(`[ProductPrices] Error fetching history for batch:`, err);
         }
       }
       
@@ -344,42 +222,102 @@ export default function ProductPrices() {
     fetchHistoryBatch();
   }, [products]);
 
-  const toggleSortBy = (key: "release_date" | "set_name" | "price") => {
-    setSortStates((prev) => {
-      const current = prev[key];
-      let next: "asc" | "desc" | null = null;
-      if (current === null) next = "asc";
-      else if (current === "asc") next = "desc";
-      else next = null;
-      return { ...prev, [key]: next };
+  // Return calculations with currency conversion
+  const get1DReturn = (history: PriceHistoryEntry[] | undefined) => {
+    if (!history || history.length < 2) return null;
+    
+    const currentPrice = convertPrice(history[0].usd_price);
+    const oneDayAgo = new Date();
+    oneDayAgo.setDate(oneDayAgo.getDate() - 1);
+    
+    const pastEntry = history.find(entry => {
+      const entryDate = new Date(entry.recorded_at);
+      return entryDate <= oneDayAgo;
     });
+    
+    if (!pastEntry) return null;
+    
+    const pastPrice = convertPrice(pastEntry.usd_price);
+    const percentChange = ((currentPrice - pastPrice) / pastPrice) * 100;
+    
+    return {
+      percent: percentChange,
+      dollarChange: currentPrice - pastPrice,
+    };
   };
 
-  const filteredProducts = products.filter((p: any) => {
-    const search = searchTerm.toLowerCase().replace(/\betb\b/g, "elite trainer box");
-    const target = `${p.sets?.name ?? ""} ${p.sets?.code ?? ""} ${p.product_types?.label ?? ""} ${p.variant ?? ""}`.toLowerCase();
-    const matchesSearch = target.includes(search);
+  const get30DReturn = (history: PriceHistoryEntry[] | undefined) => {
+    if (!history || history.length < 2) return null;
     
-    const matchesGeneration = selectedGeneration === "all" || p.sets?.generations?.name === selectedGeneration;
+    const currentPrice = convertPrice(history[0].usd_price);
+    const thirtyDaysAgo = new Date();
+    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
     
-    return matchesSearch && matchesGeneration;
-  });
+    const pastEntry = history.find(entry => {
+      const entryDate = new Date(entry.recorded_at);
+      return entryDate <= thirtyDaysAgo;
+    });
+    
+    if (!pastEntry) return null;
+    
+    const pastPrice = convertPrice(pastEntry.usd_price);
+    const percentChange = ((currentPrice - pastPrice) / pastPrice) * 100;
+    
+    return {
+      percent: percentChange,
+      dollarChange: currentPrice - pastPrice,
+    };
+  };
 
-  const groupedProducts: Record<string, Product[]> = filteredProducts.reduce((acc: Record<string, Product[]>, item: Product) => {
-    const key = `${item.sets?.name}||${item.sets?.code}`;
-    if (!acc[key]) acc[key] = [];
-    acc[key].push(item);
-    return acc;
-  }, {});
+  const render1DReturn = (productId: number, history: Record<number, PriceHistoryEntry[]>) => {
+    const ret = get1DReturn(history[productId]);
+    if (!ret || typeof ret.percent !== "number") return null;
+    
+    const percentSign = ret.percent > 0 ? "+" : "";
+    const colorClass = ret.percent > 0 ? "text-green-600" : ret.percent < 0 ? "text-red-600" : "text-slate-500";
+    
+    return (
+      <p className="text-sm text-slate-600 mt-1">
+        1D: <span className={`font-bold ${colorClass}`}>{percentSign}{ret.percent.toFixed(2)}%</span>
+      </p>
+    );
+  };
 
-  const sortedFlatProducts = [...filteredProducts]
-    .filter((p: any) => (sortProductType ? p.product_types?.name === sortProductType : true))
-    .sort((a: any, b: any) => {
-      const sortKeys: ("release_date" | "set_name" | "price")[] = ["release_date", "set_name", "price"];
-      for (const key of sortKeys) {
-        const dir = sortStates[key];
-        if (!dir) continue;
-        let valA, valB;
+  const render30DReturn = (productId: number, history: Record<number, PriceHistoryEntry[]>) => {
+    const ret = get30DReturn(history[productId]);
+    if (!ret || typeof ret.percent !== "number") return null;
+    
+    const percentSign = ret.percent > 0 ? "+" : "";
+    const colorClass = ret.percent > 0 ? "text-green-600" : ret.percent < 0 ? "text-red-600" : "text-slate-500";
+    
+    return (
+      <p className="text-sm text-slate-600">
+        30D: <span className={`font-bold ${colorClass}`}>{percentSign}{ret.percent.toFixed(2)}%</span>
+      </p>
+    );
+  };
+
+  const availableGenerations = [...new Set(products.map(p => p.sets?.generations?.name).filter(Boolean))].sort();
+  const availableProductTypes = [...new Set(products.map(p => p.product_types?.label || p.product_types?.name).filter(Boolean))].sort();
+
+  const filteredProducts = useMemo(() => 
+    products.filter(product => {
+      const matchesGeneration = selectedGeneration === "all" || product.sets?.generations?.name === selectedGeneration;
+      const productTypeLabel = product.product_types?.label || product.product_types?.name || "";
+      const matchesProductType = selectedProductType === "all" || productTypeLabel === selectedProductType;
+      
+      const searchLower = searchTerm.toLowerCase();
+      const matchesSearch = !searchTerm ||
+        product.sets?.name?.toLowerCase().includes(searchLower) ||
+        product.sets?.code?.toLowerCase().includes(searchLower) ||
+        product.product_types?.name?.toLowerCase().includes(searchLower) ||
+        product.variant?.toLowerCase().includes(searchLower);
+      
+      return matchesGeneration && matchesProductType && matchesSearch;
+    })
+    .sort((a, b) => {
+      for (const [key, dir] of [[sortKey, sortDirection]] as const) {
+        let valA: any, valB: any;
         if (key === "release_date") {
           valA = new Date(a.sets?.release_date ?? 0).getTime();
           valB = new Date(b.sets?.release_date ?? 0).getTime();
@@ -394,7 +332,23 @@ export default function ProductPrices() {
         if (valA > valB) return dir === "asc" ? 1 : -1;
       }
       return 0;
+    }), [products, selectedGeneration, selectedProductType, searchTerm, sortKey, sortDirection]);
+
+  const groupedProducts = useMemo(() => {
+    const groups = new Map<string, any[]>();
+    for (const product of filteredProducts) {
+      const setName = product.sets?.name || "Unknown Set";
+      if (!groups.has(setName)) {
+        groups.set(setName, []);
+      }
+      groups.get(setName)!.push(product);
+    }
+    return Array.from(groups.entries()).sort((a, b) => {
+      const dateA = a[1][0]?.sets?.release_date || "";
+      const dateB = b[1][0]?.sets?.release_date || "";
+      return dateB.localeCompare(dateA);
     });
+  }, [filteredProducts]);
 
   return (
     <div className="p-6 bg-slate-100 min-h-screen font-sans space-y-10">
@@ -428,7 +382,7 @@ export default function ProductPrices() {
 
         {/* Chart timeframe */}
         <div className="flex items-center gap-2">
-          <span className="font-semibold text-slate-800">Chart timeframe:</span>
+          <span className="font-semibold text-slate-800">Chart:</span>
           {(["7D", "30D", "90D"] as const).map((timeframe) => (
             <button
               key={timeframe}
@@ -444,438 +398,118 @@ export default function ProductPrices() {
           ))}
         </div>
 
-        {/* Exchange Rate Display */}
-        <div className="flex items-center gap-2 ml-4 px-3 py-1 bg-blue-50 rounded border">
-          <span className="text-sm font-medium text-blue-800">
-            USD → CAD: 
-          </span>
-          {exchangeRateLoading ? (
-            <span className="text-sm text-blue-600">Loading...</span>
-          ) : (
-            <div className="flex flex-col">
-              <span className="text-sm font-bold text-blue-600">
+        {/* Exchange Rate Display with Currency Dropdown */}
+        <div className="flex items-center gap-2 ml-auto">
+          <div className="flex items-center gap-2 px-3 py-1 bg-blue-50 rounded border">
+            <span className="text-sm font-medium text-blue-800">
+              USD → CAD: 
+            </span>
+            {exchangeRateLoading ? (
+              <span className="text-sm text-blue-600">Loading...</span>
+            ) : (
+              <span className="text-sm font-bold text-blue-900">
                 {exchangeRate.toFixed(4)}
               </span>
-              {exchangeRateDate && (
-                <span className="text-xs text-blue-500">
-                  as of {exchangeRateDate}
-                </span>
-              )}
-              <span className="text-xs text-blue-400">
-                Live rate
-              </span>
-            </div>
-          )}
-        </div>
+            )}
+          </div>
 
-        {/* Toggle View */}
-        <button
-          onClick={() => setViewMode(viewMode === "grouped" ? "flat" : "grouped")}
-          className="ml-auto px-4 py-1 rounded bg-slate-800 text-white text-sm font-medium"
-        >
-          Toggle View ({viewMode})
-        </button>
+          {/* Currency Selector Dropdown */}
+          <select
+            value={selectedCurrency}
+            onChange={(e) => setSelectedCurrency(e.target.value as Currency)}
+            className="px-3 py-1 rounded border text-sm font-medium bg-white text-slate-700 hover:bg-gray-50 transition-all focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+          >
+            <option value="USD">🇺🇸 USD</option>
+            <option value="CAD">🇨🇦 CAD</option>
+          </select>
+        </div>
       </div>
 
-      {/* Flat view only: Product type and set sorting */}
-      {viewMode === "flat" && (
-        <div className="flex flex-wrap items-center gap-4 mb-6">
-          {/* Product type filter/sort */}
-          <span className="font-semibold text-slate-800">Filter by product type:</span>
-          {PRODUCT_PRIORITY.map((type) => (
-            <button
-              key={type}
-              onClick={() => setSortProductType(sortProductType === type ? null : type)}
-              className={`px-4 py-1 rounded border text-sm font-medium transition-all ${
-                sortProductType === type ? "bg-blue-600 text-white" : "bg-white text-slate-700"
-              }`}
-            >
-              {type.toUpperCase()}
-            </button>
-          ))}
-
-          {/* Set sorting */}
-          <span className="font-semibold text-slate-800 ml-6">Sort sets by:</span>
-          {(["release_date", "set_name", "price"] as const).map((key) => (
-            <button
-              key={key}
-              onClick={() => toggleSortBy(key)}
-              className={`px-4 py-1 rounded border text-sm font-medium ${
-                sortStates[key] 
-                  ? sortStates[key] === "asc" 
-                    ? "bg-green-600 text-white" 
-                    : "bg-orange-600 text-white"
-                  : "bg-white text-slate-700"
-              }`}
-            >
-              {key === "release_date" ? "Release Date" : key === "set_name" ? "Set Name" : "Price"}
-              {sortStates[key] && (sortStates[key] === "asc" ? " ↑" : " ↓")}
-            </button>
-          ))}
-        </div>
-      )}
-
-      {loading && Array.from({ length: 6 }).map((_, i) => <Skeleton key={i} />)}
-
-      {/* GROUPED VIEW */}
-      {!loading && viewMode === "grouped" &&
-        Object.entries(groupedProducts)
-          .sort(([, a], [, b]) => {
-            const dateA = new Date(a[0].sets?.release_date + "T00:00:00Z").getTime();
-            const dateB = new Date(b[0].sets?.release_date + "T00:00:00Z").getTime();
-            return dateB - dateA;
-          })
-          .map(([groupKey, items]) => {
-            const [setName, setCode] = groupKey.split("||");
-            
-            // Group by product type
-            const productsByType: Record<string, Product[]> = {};
-            items.forEach(item => {
-              const typeKey = item.product_types?.name || 'unknown';
-              if (!productsByType[typeKey]) {
-                productsByType[typeKey] = [];
+      {/* Sorting and View Controls */}
+      <div className="flex gap-2 items-center">
+        <span className="font-semibold text-slate-800">Sort by:</span>
+        {(["release_date", "price", "set_name"] as const).map(key => (
+          <button
+            key={key}
+            onClick={() => {
+              if (sortKey === key) {
+                setSortDirection(sortDirection === "asc" ? "desc" : "asc");
+              } else {
+                setSortKey(key);
+                setSortDirection(key === "price" ? "desc" : "desc");
               }
-              productsByType[typeKey].push(item);
-            });
+            }}
+            className={`px-3 py-1 rounded border text-sm font-medium transition-all ${
+              sortKey === key 
+                ? "bg-purple-600 text-white" 
+                : "bg-white text-slate-700 hover:bg-gray-50"
+            }`}
+          >
+            {key === "release_date" ? "Release Date" : key === "price" ? "Price" : "Set Name"}
+            {sortKey === key && (
+              <span className="ml-1">{sortDirection === "asc" ? "↑" : "↓"}</span>
+            )}
+          </button>
+        ))}
 
-            return (
-              <div key={groupKey}>
-                <div className="flex items-baseline gap-3 mb-4 border-b border-slate-300 pb-1">
-                  <h2 className="text-2xl font-bold text-slate-800">
-                    {setName} {setCode && <span className="text-slate-500 text-base">({setCode})</span>}
-                  </h2>
-                  <ExpansionTypeBadge type={items[0]?.sets?.expansion_type} />
-                  <span className="text-sm text-slate-500 ml-auto">
-                    ({items.length} products)
-                  </span>
-                </div>
-                
-                {/* Dynamic grid based on products */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
-                  {PRODUCT_PRIORITY.map((type: string) => {
-                    const productsOfType = productsByType[type] || [];
-                    
-                    if (productsOfType.length === 0) {
-                      // Placeholder for missing product type
-                      const displayName = PRODUCT_TYPE_DISPLAY_NAMES[type as keyof typeof PRODUCT_TYPE_DISPLAY_NAMES] ||
-                        type.charAt(0).toUpperCase() + type.slice(1).replace('_', ' ');
-                      return (
-                        <div
-                          key={`${groupKey}-${type}-placeholder`}
-                          className="rounded-xl border-2 border-dashed border-slate-200 bg-slate-50 p-5 flex items-center justify-center min-h-[400px]"
-                        >
-                          <div className="text-center text-slate-400">
-                            <div className="text-4xl mb-3">📦</div>
-                            <p className="text-sm font-medium mb-1">
-                              {displayName}
-                            </p>
-                            <p className="text-xs text-slate-500">
-                              Not Available
-                            </p>
-                          </div>
-                        </div>
-                      );
-                    }
-                    
-                    // Check if there are actual variants (different variant values or null vs non-null)
-                    const hasMultipleVariants = productsOfType.length > 1 && (
-                      new Set(productsOfType.map(p => p.variant || 'default')).size > 1
-                    );
-                    
-                    if (hasMultipleVariants) {
-                      // Render all variants of this product type
-                      return productsOfType.map((product) => (
-                      <div
-                        key={product.id}
-                        className="rounded-xl border border-slate-300 bg-white shadow hover:shadow-lg transition-shadow overflow-hidden"
-                      >
-                        {/* Product Image */}
-                        <div className="relative">
-                          <ProductImage
-                            imageUrl={product.image_url}
-                            productName={`${product.sets?.name} ${product.product_types?.label} ${product.variant || ''}`}
-                            className="w-full h-40 rounded-t-xl"
-                          />
-                        </div>
-                        
-                        {/* Product Info */}
-                        <div className="p-4">
-                          {/* Top Header Row */}
-                          <div className="flex justify-between items-start mb-2">
-                            {/* Left: Product Info */}
-                            <div className="flex-1">
-                              <h3 className="font-bold text-slate-800 text-lg leading-tight">
-                                {product.product_types?.label || product.product_types?.name}
-                              </h3>
-                              {product.variant && (
-                                <div className="mt-1">
-                                  <VariantBadge variant={product.variant} />
-                                </div>
-                              )}
-                              <div className="text-xs text-slate-500 mt-1 space-y-0.5">
-                                <div>{product.sets?.generations?.name}</div>
-                              </div>
-                            </div>
-                            
-                            {/* Right: Prices */}
-                            <div className="text-right ml-2">
-                              <p className="text-xl font-bold text-green-600">
-                                ${product.usd_price?.toFixed(2) || "N/A"}
-                              </p>
-                              <p className="text-xs font-medium text-indigo-600">
-                                ~${(product.usd_price * exchangeRate).toFixed(2)} CAD
-                              </p>
-                              {/* Returns info */}
-                              <div className="mt-1 text-xs">
-                                {(() => {
-                                  const ret = get1DReturn(priceHistory[product.id]);
-                                  if (!ret || typeof ret.percent !== "number") return null;
-                                  const percentSign = ret.percent > 0 ? "+" : "";
-                                  return (
-                                    <span>
-                                      <span className="text-slate-600">1D:</span>
-                                      <span className={`font-bold ml-1 ${ret.percent > 0 ? "text-green-600" : ret.percent < 0 ? "text-red-600" : "text-slate-500"}`}>
-                                        {percentSign}{ret.percent.toFixed(2)}%
-                                      </span>
-                                    </span>
-                                  );
-                                })()}
-                                {" "}
-                                {(() => {
-                                  const ret = get30DReturn(priceHistory[product.id]);
-                                  if (!ret || typeof ret.percent !== "number") return null;
-                                  const percentSign = ret.percent > 0 ? "+" : "";
-                                  return (
-                                    <span>
-                                      <span className="text-slate-600">30D:</span>
-                                      <span className={`font-bold ml-1 ${ret.percent > 0 ? "text-green-600" : ret.percent < 0 ? "text-red-600" : "text-slate-500"}`}>
-                                        {percentSign}{ret.percent.toFixed(2)}%
-                                      </span>
-                                    </span>
-                                  );
-                                })()}
-                              </div>
-                            </div>
-                          </div>
-                          
-                          {/* Release date */}
-                          <div className="text-slate-400 text-xs mb-2">
-                            Released: {product.sets?.release_date ? 
-                              new Date(product.sets.release_date + "T00:00:00Z").toLocaleDateString(undefined, {
-                                month: 'short',
-                                day: 'numeric',
-                                year: 'numeric'
-                              }) : "Unknown"}
-                          </div>
-                          
-                          {/* PRICE CHART */}
-                          {priceHistory[product.id]?.length > 1 && (
-                            <div className="bg-slate-900 rounded-lg p-3 mb-3">
-                              <PriceChart data={priceHistory[product.id]} range={chartTimeframe} />
-                            </div>
-                          )}
-                          
-                          {/* Bottom Action */}
-                          <div className="text-center">
-                            <a
-                              href={product.url}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="inline-block text-sm font-medium text-blue-600 hover:text-blue-800 transition-colors"
-                            >
-                              View on TCGPlayer →
-                            </a>
-                          </div>
-                        </div>
-                      </div>
-                    ));
-                    } else {
-                      // Only one product of this type (no variants), render it once
-                      const product = productsOfType[0];
-                      return (
-                        <div
-                          key={product.id}
-                          className="rounded-xl border border-slate-300 bg-white shadow hover:shadow-lg transition-shadow overflow-hidden"
-                        >
-                          {/* Product Image */}
-                          <div className="relative">
-                            <ProductImage
-                              imageUrl={product.image_url}
-                              productName={`${product.sets?.name} ${product.product_types?.label} ${product.variant || ''}`}
-                              className="w-full h-40 rounded-t-xl"
-                            />
-                            {/* Pokemon Center Badge Overlay */}
-                            {product.product_types?.name === 'pokemon_center_etb' && (
-                              <div className="absolute top-2 right-2">
-                                <PokemonCenterBadge productType={product.product_types.name} />
-                              </div>
-                            )}
-                          </div>
-                          
-                          {/* Product Info */}
-                          <div className="p-4">
-                            {/* Top Header Row */}
-                            <div className="flex justify-between items-start mb-2">
-                              {/* Left: Product Info */}
-                              <div className="flex-1">
-                                <h3 className="font-bold text-slate-800 text-lg leading-tight">
-                                  {product.product_types?.label || product.product_types?.name}
-                                </h3>
-                                {product.variant && (
-                                  <div className="mt-1">
-                                    <VariantBadge variant={product.variant} />
-                                  </div>
-                                )}
-                                <div className="text-xs text-slate-500 mt-1 space-y-0.5">
-                                  <div>{product.sets?.generations?.name}</div>
-                                </div>
-                              </div>
-                              
-                              {/* Right: Prices */}
-                              <div className="text-right ml-2">
-                                <p className="text-xl font-bold text-green-600">
-                                  ${product.usd_price?.toFixed(2) || "N/A"}
-                                </p>
-                                <p className="text-xs font-medium text-indigo-600">
-                                  ~${(product.usd_price * exchangeRate).toFixed(2)} CAD
-                                </p>
-                                {/* Returns info */}
-                                <div className="mt-1 text-xs">
-                                  {(() => {
-                                    const ret = get1DReturn(priceHistory[product.id]);
-                                    if (!ret || typeof ret.percent !== "number") return null;
-                                    const percentSign = ret.percent > 0 ? "+" : "";
-                                    return (
-                                      <span>
-                                        <span className="text-slate-600">1D:</span>
-                                        <span className={`font-bold ml-1 ${ret.percent > 0 ? "text-green-600" : ret.percent < 0 ? "text-red-600" : "text-slate-500"}`}>
-                                          {percentSign}{ret.percent.toFixed(2)}%
-                                        </span>
-                                      </span>
-                                    );
-                                  })()}
-                                  {" "}
-                                  {(() => {
-                                    const ret = get30DReturn(priceHistory[product.id]);
-                                    if (!ret || typeof ret.percent !== "number") return null;
-                                    const percentSign = ret.percent > 0 ? "+" : "";
-                                    return (
-                                      <span>
-                                        <span className="text-slate-600">30D:</span>
-                                        <span className={`font-bold ml-1 ${ret.percent > 0 ? "text-green-600" : ret.percent < 0 ? "text-red-600" : "text-slate-500"}`}>
-                                          {percentSign}{ret.percent.toFixed(2)}%
-                                        </span>
-                                      </span>
-                                    );
-                                  })()}
-                                </div>
-                              </div>
-                            </div>
-                            
-                            {/* Release date */}
-                            <div className="text-slate-400 text-xs mb-2">
-                              Released: {product.sets?.release_date ? 
-                                new Date(product.sets.release_date + "T00:00:00Z").toLocaleDateString(undefined, {
-                                  month: 'short',
-                                  day: 'numeric',
-                                  year: 'numeric'
-                                }) : "Unknown"}
-                            </div>
-                            
-                            {/* PRICE CHART */}
-                            {priceHistory[product.id]?.length > 1 && (
-                              <div className="bg-slate-900 rounded-lg p-3 mb-3">
-                                <PriceChart data={priceHistory[product.id]} range={chartTimeframe} />
-                              </div>
-                            )}
-                            
-                            {/* Bottom Action */}
-                            <div className="text-center">
-                              <a
-                                href={product.url}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="inline-block text-sm font-medium text-blue-600 hover:text-blue-800 transition-colors"
-                              >
-                                View on TCGPlayer →
-                              </a>
-                            </div>
-                            <p className="text-xs text-slate-400 mt-2">
-                            Updated: {new Date(product.last_updated + 'Z').toLocaleString(undefined, {
-                              timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-                              timeZoneName: 'short'
-                            })}
-                          </p>
-                          </div>
-                        </div>
-                      );
-                    }
-                  })}
-                </div>
-              </div>
-            );
-          })}
+        <div className="ml-auto flex items-center gap-2">
+          <span className="font-semibold text-slate-800">View:</span>
+          <button
+            onClick={() => setViewMode(viewMode === "flat" ? "grouped" : "flat")}
+            className="px-3 py-1 rounded border text-sm font-medium bg-white text-slate-700 hover:bg-gray-50 transition-all"
+          >
+            {viewMode === "flat" ? "📋 Flat" : "📁 Grouped"}
+          </button>
+        </div>
+      </div>
 
-      {/* FLAT VIEW */}
+      {/* Results count */}
+      <div className="text-sm text-slate-600">
+        Found {filteredProducts.length} products
+      </div>
+
+      {loading && <div>Loading products...</div>}
+
+      {/* Product Display - Flat View */}
       {!loading && viewMode === "flat" && (
-        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-6">
-          {sortedFlatProducts.map((product: any) => (
-            <div
-              key={product.id}
-              className="rounded-xl border border-slate-300 bg-white shadow hover:shadow-lg transition-shadow overflow-hidden"
-            >
-              {/* Product Image */}
-              <div className="relative">
-                <ProductImage
-                  imageUrl={product.image_url}
-                  productName={`${product.sets?.name} ${product.product_types?.label} ${product.variant || ''}`}
-                  className="w-full h-40 rounded-t-xl"
-                />
-                {/* Pokemon Center Badge Overlay for Flat View */}
-                {product.product_types?.name === 'pokemon_center_etb' && (
-                  <div className="absolute top-2 right-2">
-                    <PokemonCenterBadge productType={product.product_types.name} />
-                  </div>
-                )}
-              </div>
-              
-              {/* Product Info */}
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+          {filteredProducts.map((product) => (
+            <div key={product.id} className="bg-white rounded-xl shadow-md overflow-hidden hover:shadow-lg transition-shadow">
+              <ProductImage
+                imageUrl={product.image_url}
+                productName={`${product.sets?.name} ${product.product_types?.label || product.product_types?.name}`}
+                className="w-full h-48"
+              />
               <div className="p-5">
-                <h2 className="font-semibold text-slate-800 text-lg mb-2">
-                  {product.sets?.name} ({product.sets?.code})
-                </h2>
-                <div className="space-y-1 mb-3">
-                  <p className="text-sm text-slate-600">
-                    <span className="font-medium text-slate-700">Type:</span> {product.product_types?.label || product.product_types?.name}
-                  </p>
-                  {product.variant && (
-                    <p className="text-sm text-slate-600">
-                      <span className="font-medium text-slate-700">Variant:</span> <VariantBadge variant={product.variant} />
-                    </p>
-                  )}
-                  <p className="text-sm text-slate-600">
-                    <span className="font-medium text-slate-700">Generation:</span> {product.sets?.generations?.name || "Unknown"}
-                  </p>
-                  <div className="text-sm text-slate-600">
-                    <span className="font-medium text-slate-700">Expansion:</span> <ExpansionTypeBadge type={product.sets?.expansion_type} />
-                  </div>
-                  <p className="text-sm text-slate-600">
-                    <span className="font-medium text-slate-700">Release Date:</span>{" "}
-                    {product.sets?.release_date ? 
+                <div className="mb-3">
+                  <h2 className="text-xl font-bold text-slate-900 tracking-tight">
+                    {product.sets?.name}
+                  </h2>
+                  <ExpansionTypeBadge type={product.sets?.expansion_type} />
+                  <h3 className="text-md font-medium text-slate-700 mt-2 leading-tight">
+                    {product.product_types?.label || product.product_types?.name}
+                  </h3>
+                  {product.variant && <VariantBadge variant={product.variant} />}
+                  <p className="text-xs text-slate-500 mt-1 space-y-0.5">
+                    <span className="block">{product.sets?.generations?.name}</span>
+                    <span className="block">Set: {product.sets?.code}</span>
+                    Release: {product.sets?.release_date ? 
                       new Date(product.sets.release_date + "T00:00:00Z").toLocaleDateString() : "Unknown"}
                   </p>
                 </div>
                 <p className="text-3xl font-extrabold text-green-600 tracking-tight mb-1">
-                  ${product.usd_price?.toFixed(2) || "N/A"} USD
+                  {formatPrice(product.usd_price)}
                 </p>
                 {render1DReturn(product.id, priceHistory)}
                 {render30DReturn(product.id, priceHistory)}
-                <p className="text-md font-medium text-indigo-700 mb-3">
-                  ~${(product.usd_price * exchangeRate).toFixed(2)} CAD
-                </p>
                 {priceHistory[product.id]?.length > 1 && (
                   <div className="mt-2">
-                    <PriceChart data={priceHistory[product.id]} range={chartTimeframe} />
+                    <PriceChart 
+                      data={priceHistory[product.id]} 
+                      range={chartTimeframe} 
+                      currency={selectedCurrency}
+                      exchangeRate={exchangeRate}
+                    />
                   </div>
                 )}
                 <a
@@ -897,6 +531,119 @@ export default function ProductPrices() {
           ))}
         </div>
       )}
+
+      {/* Product Display - Grouped View */}
+      {!loading && viewMode === "grouped" && groupedProducts.map(([setName, setProducts]) => (
+        <div key={setName} className="mb-8">
+          <div className="flex items-center gap-3 mb-4">
+            <h2 className="text-2xl font-bold text-slate-900">{setName}</h2>
+            <span className="text-sm text-slate-600">
+              ({setProducts[0]?.sets?.code}) - {setProducts[0]?.sets?.generations?.name}
+            </span>
+            {setProducts[0]?.sets?.expansion_type && (
+              <ExpansionTypeBadge type={setProducts[0].sets.expansion_type} />
+            )}
+            <span className="text-sm text-slate-500 ml-auto">
+              Release: {setProducts[0]?.sets?.release_date ? 
+                new Date(setProducts[0].sets.release_date + "T00:00:00Z").toLocaleDateString() : "Unknown"}
+            </span>
+          </div>
+          
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {setProducts.map((product) => (
+              <div key={product.id} className="bg-white rounded-lg shadow hover:shadow-md transition-shadow">
+                <div className="flex">
+                  {/* Left: Image */}
+                  <ProductImage
+                    imageUrl={product.image_url}
+                    productName={`${product.sets?.name} ${product.product_types?.label || product.product_types?.name}`}
+                    className="w-32 h-32 flex-shrink-0"
+                  />
+                  
+                  {/* Right: Details */}
+                  <div className="flex-1 p-3">
+                    <div className="flex justify-between items-start gap-2">
+                      {/* Left: Product Info */}
+                      <div className="flex-1">
+                        <h3 className="text-sm font-semibold text-slate-800 leading-tight">
+                          {product.product_types?.label || product.product_types?.name}
+                        </h3>
+                        {product.variant && (
+                          <div className="mt-1">
+                            <VariantBadge variant={product.variant} />
+                          </div>
+                        )}
+                        <div className="text-xs text-slate-500 mt-1 space-y-0.5">
+                          <div>{product.sets?.generations?.name}</div>
+                        </div>
+                      </div>
+                      
+                      {/* Right: Prices */}
+                      <div className="text-right ml-2">
+                        <p className="text-xl font-bold text-green-600">
+                          {formatPrice(product.usd_price)}
+                        </p>
+                        {/* Returns info */}
+                        <div className="mt-1 text-xs">
+                          {(() => {
+                            const ret = get1DReturn(priceHistory[product.id]);
+                            if (!ret || typeof ret.percent !== "number") return null;
+                            const percentSign = ret.percent > 0 ? "+" : "";
+                            return (
+                              <span>
+                                <span className="text-slate-600">1D:</span>
+                                <span className={`font-bold ml-1 ${ret.percent > 0 ? "text-green-600" : ret.percent < 0 ? "text-red-600" : "text-slate-500"}`}>
+                                  {percentSign}{ret.percent.toFixed(2)}%
+                                </span>
+                              </span>
+                            );
+                          })()}
+                          {" "}
+                          {(() => {
+                            const ret = get30DReturn(priceHistory[product.id]);
+                            if (!ret || typeof ret.percent !== "number") return null;
+                            const percentSign = ret.percent > 0 ? "+" : "";
+                            return (
+                              <span>
+                                <span className="text-slate-600">30D:</span>
+                                <span className={`font-bold ml-1 ${ret.percent > 0 ? "text-green-600" : ret.percent < 0 ? "text-red-600" : "text-slate-500"}`}>
+                                  {percentSign}{ret.percent.toFixed(2)}%
+                                </span>
+                              </span>
+                            );
+                          })()}
+                        </div>
+                      </div>
+                    </div>
+                    
+                    {/* Price Chart */}
+                    {priceHistory[product.id]?.length > 1 && (
+                      <div className="mt-2">
+                        <PriceChart 
+                          data={priceHistory[product.id]} 
+                          range={chartTimeframe}
+                          currency={selectedCurrency}
+                          exchangeRate={exchangeRate}
+                        />
+                      </div>
+                    )}
+                    
+                    {/* TCGPlayer Link */}
+                    <a
+                      href={product.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-xs text-blue-600 hover:underline mt-2 inline-block"
+                    >
+                      View on TCGPlayer →
+                    </a>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      ))}
     </div>
   );
 }
