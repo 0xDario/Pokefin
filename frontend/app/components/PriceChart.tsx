@@ -15,12 +15,18 @@ type PriceHistoryEntry = {
   recorded_at: string;
 };
 
+type Currency = "USD" | "CAD";
+
 export default function PriceChart({
   data,
   range,
+  currency = "USD",
+  exchangeRate = 1.36,
 }: {
   data: PriceHistoryEntry[];
   range: "7D" | "30D" | "90D";
+  currency?: Currency;
+  exchangeRate?: number;
 }) {
   const groupedDaily = useMemo(() => {
     console.log(`[PriceChart] Raw data received (${data.length} entries):`, data.slice(0, 5));
@@ -45,14 +51,14 @@ export default function PriceChart({
           month: "short",
           day: "numeric",
         }),
-        price: entry.usd_price,
+        price: currency === "CAD" ? entry.usd_price * exchangeRate : entry.usd_price,
         timestamp: date,
       }))
       .sort((a, b) => a.timestamp.localeCompare(b.timestamp)); // Sort by date ascending
       
     console.log(`[PriceChart] Processed data for chart:`, result);
     return result;
-  }, [data]);
+  }, [data, currency, exchangeRate]);
 
   const slicedData = useMemo(() => {
     let result;
@@ -65,6 +71,9 @@ export default function PriceChart({
     return result;
   }, [range, groupedDaily]);
 
+  // Get the currency symbol
+  const currencySymbol = currency === "CAD" ? "C$" : "$";
+
   // Custom tooltip component with better styling
   const CustomTooltip = ({ active, payload, label }: any) => {
     if (active && payload && payload.length) {
@@ -73,7 +82,7 @@ export default function PriceChart({
           <p className="text-sm font-medium">{label}</p>
           <p className="text-sm">
             <span className="text-green-400">Price: </span>
-            ${payload[0].value.toFixed(2)}
+            {currencySymbol}{payload[0].value.toFixed(2)} {currency}
           </p>
         </div>
       );
