@@ -112,7 +112,7 @@ export default function ProductPrices() {
   const [products, setProducts] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedGeneration, setSelectedGeneration] = useState("all");
-  const [selectedProductType, setSelectedProductType] = useState("all");
+  const [selectedProductType] = useState("all");
   const [searchTerm, setSearchTerm] = useState("");
   const [sortKey, setSortKey] = useState<"price" | "release_date" | "set_name">("release_date");
   const [sortDirection, setSortDirection] = useState<"asc" | "desc">("desc");
@@ -124,8 +124,7 @@ export default function ProductPrices() {
   const [selectedCurrency, setSelectedCurrency] = useState<Currency>("CAD");
   const [exchangeRate, setExchangeRate] = useState(1.36);
   const [exchangeRateLoading, setExchangeRateLoading] = useState(false);
-  const [exchangeRateDate, setExchangeRateDate] = useState<string | null>(null);
-
+    
   // Helper function to convert prices based on selected currency
   const convertPrice = (usdPrice: number | null | undefined): number => {
     if (!usdPrice) return 0;
@@ -162,9 +161,6 @@ export default function ProductPrices() {
       try {
         const result = await fetchUSDToCADRate();
         setExchangeRate(result.rate);
-        if (result.date) {
-          setExchangeRateDate(result.date);
-        }
         console.log(`[ProductPrices] Exchange rate loaded: ${result.rate} (date: ${result.date})`);
       } catch (error) {
         console.error('[ProductPrices] Failed to load exchange rate:', error);
@@ -298,7 +294,6 @@ export default function ProductPrices() {
   };
 
   const availableGenerations = [...new Set(products.map(p => p.sets?.generations?.name).filter(Boolean))].sort();
-  const availableProductTypes = [...new Set(products.map(p => p.product_types?.label || p.product_types?.name).filter(Boolean))].sort();
 
   const filteredProducts = useMemo(() => 
     products.filter(product => {
