@@ -329,8 +329,8 @@ def fetch_and_store_exchange_rate():
 
 def update_prices():
     # Calculate timestamps in UTC
-    # Update prices every 6 hours (4 times per day)
-    price_update_interval_hours = 6
+    # Update prices once per day (run at UTC midnight)
+    price_update_interval_hours = 24
     price_interval_ago = datetime.now(timezone.utc) - timedelta(hours=price_update_interval_hours)
     twenty_four_hours_ago = datetime.now(timezone.utc) - timedelta(hours=24)
     
@@ -451,5 +451,31 @@ def update_prices():
 
 # === Run Script ===
 if __name__ == "__main__":
-    fetch_and_store_exchange_rate()
-    update_prices()
+    def seconds_until_next_utc_midnight():
+        now = datetime.now(timezone.utc)
+        next_midnight = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+        return (next_midnight - now).total_seconds()
+
+    print("⏱️ Scheduled to run once daily at UTC midnight.")
+    try:
+        while True:
+            wait_secs = seconds_until_next_utc_midnight()
+            hrs = wait_secs / 3600.0
+            print(f"   Next run in {hrs:.2f} hours ({int(wait_secs)} seconds).")
+            time.sleep(wait_secs)
+
+            print(f"\n🕛 Running daily jobs at UTC {datetime.now(timezone.utc).isoformat()} ...")
+            try:
+                fetch_and_store_exchange_rate()
+            except Exception as e:
+                print(f"⚠️ fetch_and_store_exchange_rate failed: {e}")
+
+            try:
+                update_prices()
+            except Exception as e:
+                print(f"⚠️ update_prices failed: {e}")
+
+            # Small sleep to avoid immediate-loop edge cases
+            time.sleep(1)
+    except KeyboardInterrupt:
+        print("✋ Exiting scheduled runner.")
