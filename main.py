@@ -329,12 +329,14 @@ def fetch_and_store_exchange_rate():
 
 def update_prices():
     # Calculate timestamps in UTC
-    one_hour_ago = datetime.now(timezone.utc) - timedelta(hours=1)
+    # Update prices every 6 hours (4 times per day)
+    price_update_interval_hours = 6
+    price_interval_ago = datetime.now(timezone.utc) - timedelta(hours=price_update_interval_hours)
     twenty_four_hours_ago = datetime.now(timezone.utc) - timedelta(hours=24)
     
     # Get products that need updates (price OR image) - include variant in query
     response = supabase.table("products").select("id, url, image_url, last_updated, last_image_update, variant, set_id, product_type_id").or_(
-        f"last_updated.lt.{one_hour_ago.isoformat()},image_url.is.null,last_image_update.is.null,last_image_update.lt.{twenty_four_hours_ago.isoformat()}"
+        f"last_updated.lt.{price_interval_ago.isoformat()},image_url.is.null,last_image_update.is.null,last_image_update.lt.{twenty_four_hours_ago.isoformat()}"
     ).execute()
 
     products_to_update = response.data
@@ -385,7 +387,7 @@ def update_prices():
         if last_updated:
             last_updated_dt = parse_timestamp(last_updated)
             if last_updated_dt:
-                needs_price_update = last_updated_dt < one_hour_ago
+                needs_price_update = last_updated_dt < price_interval_ago
         
         if price is not None and needs_price_update:
             update_data["usd_price"] = price
