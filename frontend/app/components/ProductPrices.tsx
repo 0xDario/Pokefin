@@ -114,7 +114,7 @@ export default function ProductPrices() {
   const [selectedGeneration, setSelectedGeneration] = useState("all");
   const [selectedProductType] = useState("all");
   const [searchTerm, setSearchTerm] = useState("");
-  const [sortKey, setSortKey] = useState<"price" | "release_date" | "set_name">("release_date");
+  const [sortKey, setSortKey] = useState<"price" | "release_date">("release_date");
   const [sortDirection, setSortDirection] = useState<"asc" | "desc">("desc");
   const [viewMode, setViewMode] = useState<"flat" | "grouped">("grouped");
   const [chartTimeframe, setChartTimeframe] = useState<"7D" | "30D" | "90D">("30D");
@@ -295,37 +295,82 @@ export default function ProductPrices() {
 
   const availableGenerations = [...new Set(products.map(p => p.sets?.generations?.name).filter(Boolean))].sort();
 
-  const filteredProducts = useMemo(() => 
+  // Helper function to determine product sort order within a set
+  const getProductSortOrder = (product: any): number => {
+    const productTypeName = (product.product_types?.name || "").toLowerCase();
+    const productTypeLabel = (product.product_types?.label || "").toLowerCase();
+    const variant = (product.variant || "").toLowerCase();
+
+    // Booster Box
+    if (productTypeName.includes("booster_box") || productTypeLabel.includes("booster box")) {
+      return 1;
+    }
+
+    // ETB (Elite Trainer Box)
+    if (productTypeName.includes("elite_trainer_box") || productTypeLabel.includes("elite trainer box")) {
+      // Pokemon Center ETB comes first (order 2)
+      if (variant.includes("pokemon center")) {
+        return 2;
+      }
+      // Standard ETB comes second (order 3)
+      return 3;
+    }
+
+    // Booster Bundle
+    if (productTypeName.includes("booster_bundle") || productTypeLabel.includes("booster bundle")) {
+      return 4;
+    }
+
+    // Booster Pack (includes both regular and sleeved)
+    if (productTypeName.includes("booster_pack") || productTypeLabel.includes("booster pack")) {
+      return 5;
+    }
+
+    // Sleeved Booster Pack
+    if (productTypeName.includes("sleeved_booster") || productTypeLabel.includes("sleeved booster")) {
+      return 6;
+    }
+
+    // Any other product type goes to the end
+    return 999;
+  };
+
+  const filteredProducts = useMemo(() =>
     products.filter(product => {
       const matchesGeneration = selectedGeneration === "all" || product.sets?.generations?.name === selectedGeneration;
       const productTypeLabel = product.product_types?.label || product.product_types?.name || "";
       const matchesProductType = selectedProductType === "all" || productTypeLabel === selectedProductType;
-      
+
       const searchLower = searchTerm.toLowerCase();
       const matchesSearch = !searchTerm ||
         product.sets?.name?.toLowerCase().includes(searchLower) ||
         product.sets?.code?.toLowerCase().includes(searchLower) ||
         product.product_types?.name?.toLowerCase().includes(searchLower) ||
         product.variant?.toLowerCase().includes(searchLower);
-      
+
       return matchesGeneration && matchesProductType && matchesSearch;
     })
     .sort((a, b) => {
-      for (const [key, dir] of [[sortKey, sortDirection]] as const) {
-        let valA: any, valB: any;
-        if (key === "release_date") {
-          valA = new Date(a.sets?.release_date ?? 0).getTime();
-          valB = new Date(b.sets?.release_date ?? 0).getTime();
-        } else if (key === "set_name") {
-          valA = a.sets?.name ?? "";
-          valB = b.sets?.name ?? "";
-        } else if (key === "price") {
-          valA = a.usd_price ?? 0;
-          valB = b.usd_price ?? 0;
+      // Primary sort by the selected sort key
+      if (sortKey === "release_date") {
+        const dateA = new Date(a.sets?.release_date ?? 0).getTime();
+        const dateB = new Date(b.sets?.release_date ?? 0).getTime();
+
+        // Sort by release date
+        if (dateA !== dateB) {
+          return sortDirection === "asc" ? dateA - dateB : dateB - dateA;
         }
-        if (valA < valB) return dir === "asc" ? -1 : 1;
-        if (valA > valB) return dir === "asc" ? 1 : -1;
+
+        // If same release date, use product type order as secondary sort
+        const orderA = getProductSortOrder(a);
+        const orderB = getProductSortOrder(b);
+        return orderA - orderB;
+      } else if (sortKey === "price") {
+        const priceA = a.usd_price ?? 0;
+        const priceB = b.usd_price ?? 0;
+        return sortDirection === "asc" ? priceA - priceB : priceB - priceA;
       }
+
       return 0;
     }), [products, selectedGeneration, selectedProductType, searchTerm, sortKey, sortDirection]);
 
@@ -338,6 +383,16 @@ export default function ProductPrices() {
       }
       groups.get(setName)!.push(product);
     }
+
+    // Sort products within each group by the custom order
+    for (const [, products] of groups.entries()) {
+      products.sort((a, b) => {
+        const orderA = getProductSortOrder(a);
+        const orderB = getProductSortOrder(b);
+        return orderA - orderB;
+      });
+    }
+
     return Array.from(groups.entries()).sort((a, b) => {
       const dateA = a[1][0]?.sets?.release_date || "";
       const dateB = b[1][0]?.sets?.release_date || "";
@@ -423,7 +478,7 @@ export default function ProductPrices() {
       {/* Sorting and View Controls */}
       <div className="flex gap-2 items-center">
         <span className="font-semibold text-slate-800">Sort by:</span>
-        {(["release_date", "price", "set_name"] as const).map(key => (
+        {(["release_date", "price"] as const).map(key => (
           <button
             key={key}
             onClick={() => {
@@ -435,12 +490,12 @@ export default function ProductPrices() {
               }
             }}
             className={`px-3 py-1 rounded border text-sm font-medium transition-all ${
-              sortKey === key 
-                ? "bg-purple-600 text-white" 
+              sortKey === key
+                ? "bg-purple-600 text-white"
                 : "bg-white text-slate-700 hover:bg-gray-50"
             }`}
           >
-            {key === "release_date" ? "Release Date" : key === "price" ? "Price" : "Set Name"}
+            {key === "release_date" ? "Release Date" : "Price"}
             {sortKey === key && (
               <span className="ml-1">{sortDirection === "asc" ? "↑" : "↓"}</span>
             )}
