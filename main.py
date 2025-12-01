@@ -20,12 +20,29 @@ supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 def create_driver():
     import tempfile
     import os
+    import platform
     import time
     from selenium.webdriver.chrome.service import Service
     from webdriver_manager.chrome import ChromeDriverManager
 
     options = Options()
-    options.binary_location = "/usr/bin/google-chrome"  # ← Add this line
+    
+    # Set Chrome binary location based on OS
+    system = platform.system()
+    if system == "Linux":
+        options.binary_location = "/usr/bin/google-chrome"
+    elif system == "Darwin":  # macOS
+        # Common Chrome locations on macOS
+        mac_chrome_paths = [
+            "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+            "/Applications/Chromium.app/Contents/MacOS/Chromium",
+        ]
+        for path in mac_chrome_paths:
+            if os.path.exists(path):
+                options.binary_location = path
+                break
+    # Windows: webdriver-manager usually handles it automatically
+    
     options.add_argument("--headless")
     options.add_argument("--disable-gpu")
     options.add_argument("--no-sandbox")
