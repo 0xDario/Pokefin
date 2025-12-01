@@ -451,31 +451,63 @@ def update_prices():
 
 # === Run Script ===
 if __name__ == "__main__":
-    def seconds_until_next_utc_midnight():
-        now = datetime.now(timezone.utc)
-        next_midnight = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
-        return (next_midnight - now).total_seconds()
+    import argparse
+    
+    parser = argparse.ArgumentParser(description="TCGPlayer Price Scraper")
+    parser.add_argument(
+        "--run-now", 
+        action="store_true", 
+        help="Run immediately and exit (for local testing)"
+    )
+    args = parser.parse_args()
+    
+    if args.run_now:
+        # Run immediately for local testing
+        print("🚀 Running immediately (--run-now flag detected)...")
+        print(f"🕒 Current UTC time: {datetime.now(timezone.utc).isoformat()}")
+        
+        try:
+            fetch_and_store_exchange_rate()
+        except Exception as e:
+            print(f"⚠️ fetch_and_store_exchange_rate failed: {e}")
 
-    print("⏱️ Scheduled to run once daily at UTC midnight.")
-    try:
-        while True:
-            wait_secs = seconds_until_next_utc_midnight()
-            hrs = wait_secs / 3600.0
-            print(f"   Next run in {hrs:.2f} hours ({int(wait_secs)} seconds).")
-            time.sleep(wait_secs)
+        try:
+            update_prices()
+        except Exception as e:
+            print(f"⚠️ update_prices failed: {e}")
+        
+        print("✅ Immediate run complete. Exiting.")
+    else:
+        # Scheduled mode for server
+        def seconds_until_next_utc_interval(interval_hours=4):
+            now = datetime.now(timezone.utc)
+            next_hour = ((now.hour // interval_hours) + 1) * interval_hours
+            if next_hour >= 24:
+                next_time = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+            else:
+                next_time = now.replace(hour=next_hour, minute=0, second=0, microsecond=0)
+            return (next_time - now).total_seconds()
 
-            print(f"\n🕛 Running daily jobs at UTC {datetime.now(timezone.utc).isoformat()} ...")
-            try:
-                fetch_and_store_exchange_rate()
-            except Exception as e:
-                print(f"⚠️ fetch_and_store_exchange_rate failed: {e}")
+        interval_hours = 4
+        print(f"⏱️ Scheduled to run every {interval_hours} hours at UTC boundaries (e.g. 00:00, 04:00, ...).")
+        try:
+            while True:
+                wait_secs = seconds_until_next_utc_interval(interval_hours)
+                hrs = wait_secs / 3600.0
+                print(f"   Next run in {hrs:.2f} hours ({int(wait_secs)} seconds).")
+                time.sleep(wait_secs)
 
-            try:
-                update_prices()
-            except Exception as e:
-                print(f"⚠️ update_prices failed: {e}")
+                print(f"\n🕒 Running scheduled jobs at UTC {datetime.now(timezone.utc).isoformat()} ...")
+                try:
+                    fetch_and_store_exchange_rate()
+                except Exception as e:
+                    print(f"⚠️ fetch_and_store_exchange_rate failed: {e}")
 
-            # Small sleep to avoid immediate-loop edge cases
-            time.sleep(1)
-    except KeyboardInterrupt:
-        print("✋ Exiting scheduled runner.")
+                try:
+                    update_prices()
+                except Exception as e:
+                    print(f"⚠️ update_prices failed: {e}")
+
+                time.sleep(1)
+        except KeyboardInterrupt:
+            print("✋ Exiting scheduled runner.")
