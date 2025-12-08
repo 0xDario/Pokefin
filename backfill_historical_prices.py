@@ -242,20 +242,26 @@ def parse_short_date(date_str):
 def backfill_prices():
     """
     Main function to backfill historical prices for all products
+    Checks for last 90 days of data, accounting for product release dates
     """
-    # Date range we want to backfill: Nov 5 - Dec 6, 2025
-    # - Nov 5-7 from 3M button (date ranges expanded to daily)
-    # - Nov 8+ from 1M button (daily data)
-    target_start_date = "2025-11-05"
-    target_end_date = "2025-12-06"
+    # Calculate date range: last 90 days
+    today = datetime.now().date()
+    ninety_days_ago = today - timedelta(days=90)
 
-    print(f"🚀 Starting historical price backfill for {target_start_date} to {target_end_date}")
+    target_end_date = today.strftime("%Y-%m-%d")
+    target_start_date = ninety_days_ago.strftime("%Y-%m-%d")
 
-    # Get all products from database
-    response = supabase.table("products").select("id, url, variant").execute()
+    print(f"🚀 Starting historical price backfill for last 90 days")
+    print(f"   Date range: {target_start_date} to {target_end_date}\n")
+
+    # Get all products from database including release_date
+    response = supabase.table("products").select("id, url, variant, release_date").execute()
     products = response.data
 
-    print(f"📦 Found {len(products)} products to process\n")
+    # Reverse the products list to start from the end
+    products.reverse()
+
+    print(f"📦 Found {len(products)} products to process (starting from END)\n")
 
     driver = create_driver()
 
@@ -265,16 +271,41 @@ def backfill_prices():
         product_id = product["id"]
         url = product["url"]
         variant = product.get("variant")
+        release_date_str = product.get("release_date")
 
         variant_info = f" (Variant: {variant})" if variant else ""
         print(f"[{idx}/{len(products)}] 🔍 Checking product ID {product_id}{variant_info}...")
 
-        # === Check if this product already has COMPLETE data for ALL days in target range ===
+        # === Calculate the actual start date based on release date ===
+        # Don't expect price data before the product was released
+        product_start_date = target_start_date
+        release_date = None
+
+        if release_date_str:
+            try:
+                # Parse release date (handle various formats)
+                if 'T' in release_date_str:
+                    release_date = datetime.fromisoformat(release_date_str.replace('Z', '+00:00')).date()
+                else:
+                    release_date = datetime.strptime(release_date_str.split(' ')[0], "%Y-%m-%d").date()
+
+                # Use the later of: (90 days ago) or (release date)
+                ninety_days_ago_date = datetime.strptime(target_start_date, "%Y-%m-%d").date()
+                if release_date > ninety_days_ago_date:
+                    product_start_date = release_date.strftime("%Y-%m-%d")
+                    print(f"   📅 Product released {release_date}, expecting data from {product_start_date}")
+                elif release_date > datetime.strptime(target_end_date, "%Y-%m-%d").date():
+                    print(f"   ⏭️  Skipping - product released {release_date} (after target range)\n")
+                    continue
+            except Exception as e:
+                print(f"   ⚠️  Could not parse release_date '{release_date_str}': {e}")
+
+        # === Check if this product already has COMPLETE data for ALL days in expected range ===
         try:
             existing_records = supabase.table("product_price_history")\
                 .select("recorded_at")\
                 .eq("product_id", product_id)\
-                .gte("recorded_at", f"{target_start_date} 00:00:00")\
+                .gte("recorded_at", f"{product_start_date} 00:00:00")\
                 .lte("recorded_at", f"{target_end_date} 23:59:59")\
                 .execute()
 
@@ -289,9 +320,9 @@ def backfill_prices():
                         date_str = recorded_at.split(' ')[0].split('T')[0]
                         existing_dates.add(date_str)
 
-            # Calculate expected number of days (Nov 5 - Dec 6 inclusive = 32 days)
-            start_dt = datetime.strptime(target_start_date, "%Y-%m-%d")
-            end_dt = datetime.strptime(target_end_date, "%Y-%m-%d")
+            # Calculate expected number of days based on product's actual date range
+            start_dt = datetime.strptime(product_start_date, "%Y-%m-%d").date()
+            end_dt = datetime.strptime(target_end_date, "%Y-%m-%d").date()
             expected_days = (end_dt - start_dt).days + 1
 
             # Check if we have all days
@@ -314,10 +345,10 @@ def backfill_prices():
             print(f"   ⚠️  No historical data found for product {product_id}")
             continue
 
-        # Filter to only dates in our target range
+        # Filter to only dates in our target range (respecting release date)
         filtered_data = [
             entry for entry in historical_data
-            if target_start_date <= entry['date'] <= target_end_date
+            if product_start_date <= entry['date'] <= target_end_date
         ]
 
         if not filtered_data:
