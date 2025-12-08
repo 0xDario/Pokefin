@@ -30,13 +30,11 @@ A live price dashboard for sealed Pokémon TCG products (Booster Boxes, ETBs, Bu
 - **Elite Trainer Boxes (ETBs)** - Standard retail versions
 - **Pokemon Center Exclusive ETBs** - Special exclusives with unique badges  
 - **Booster Bundles** - Value pack offerings
-- **Booster Packs** - Individual packs
-- **Sleeved Booster Packs** - Premium wrapped packs
 
 ## 🧪 Local Development
 
 ### Prerequisites
-- Node.js 18+
+- Node.js 22+
 - Python 3.8+
 - Supabase account
 
