@@ -4,7 +4,7 @@ One-time script to backfill historical price data from TCGPlayer
 Clicks the 1M button and extracts canvas table data for Nov 5 - Dec 6
 """
 import time
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
@@ -254,8 +254,8 @@ def backfill_prices():
     print(f"🚀 Starting historical price backfill for last 90 days")
     print(f"   Date range: {target_start_date} to {target_end_date}\n")
 
-    # Get all products from database including release_date
-    response = supabase.table("products").select("id, url, variant, release_date").execute()
+    # Get all products from database, joining with sets to get release_date
+    response = supabase.table("products").select("id, url, variant, set_id, sets(release_date)").execute()
     products = response.data
 
     # Reverse the products list to start from the end
@@ -271,7 +271,12 @@ def backfill_prices():
         product_id = product["id"]
         url = product["url"]
         variant = product.get("variant")
-        release_date_str = product.get("release_date")
+
+        # Get release_date from the joined sets table
+        release_date_str = None
+        sets_data = product.get("sets")
+        if sets_data and isinstance(sets_data, dict):
+            release_date_str = sets_data.get("release_date")
 
         variant_info = f" (Variant: {variant})" if variant else ""
         print(f"[{idx}/{len(products)}] 🔍 Checking product ID {product_id}{variant_info}...")
