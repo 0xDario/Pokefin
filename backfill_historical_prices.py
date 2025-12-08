@@ -119,7 +119,21 @@ def extract_historical_prices(driver, url):
         all_historical_data.extend(one_month_data)
         print(f"   ✅ Extracted {len(one_month_data)} entries from 1M data")
 
-        return all_historical_data
+        # Deduplicate: prefer 1M data (daily) over 3M data (range averages) for same dates
+        # Build a dict with date as key, keeping the last occurrence (1M data comes last)
+        deduplicated = {}
+        for entry in all_historical_data:
+            date = entry['date']
+            # If date already exists, the later entry (1M) will overwrite the earlier one (3M)
+            deduplicated[date] = entry
+
+        final_data = list(deduplicated.values())
+
+        duplicates_removed = len(all_historical_data) - len(final_data)
+        if duplicates_removed > 0:
+            print(f"   🔄 Removed {duplicates_removed} duplicate dates (kept 1M data over 3M)")
+
+        return final_data
 
     except Exception as e:
         print(f"   ❌ Error extracting historical prices: {e}")
@@ -245,13 +259,18 @@ def backfill_prices():
     Checks for last 90 days of data, accounting for product release dates
     """
     # Calculate date range: last 90 days
-    today = datetime.now().date()
-    ninety_days_ago = today - timedelta(days=90)
+    # Use UTC and set end date to yesterday (today's data might not be available yet)
+    from datetime import timezone
 
-    target_end_date = today.strftime("%Y-%m-%d")
+    utc_now = datetime.now(timezone.utc).date()
+    yesterday = utc_now - timedelta(days=1)
+    ninety_days_ago = yesterday - timedelta(days=90)
+
+    target_end_date = yesterday.strftime("%Y-%m-%d")
     target_start_date = ninety_days_ago.strftime("%Y-%m-%d")
 
     print(f"🚀 Starting historical price backfill for last 90 days")
+    print(f"   Using UTC timezone - End date: {target_end_date} (yesterday)")
     print(f"   Date range: {target_start_date} to {target_end_date}\n")
 
     # Get all products from database, joining with sets to get release_date
