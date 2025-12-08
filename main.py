@@ -6,6 +6,8 @@ from secretsFile import SUPABASE_URL, SUPABASE_KEY
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
 import warnings
 from urllib3.exceptions import NotOpenSSLWarning
 import uuid
@@ -43,7 +45,16 @@ def create_driver():
                 break
     # Windows: webdriver-manager usually handles it automatically
     
-    options.add_argument("--headless")
+    # Bot detection evasion settings
+    options.add_argument("--headless=new")  # Use new headless mode
+    options.add_argument("--disable-blink-features=AutomationControlled")
+    options.add_experimental_option("excludeSwitches", ["enable-automation"])
+    options.add_experimental_option('useAutomationExtension', False)
+
+    # Add realistic user agent
+    options.add_argument("user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+
+    # Standard options
     options.add_argument("--disable-gpu")
     options.add_argument("--no-sandbox")
     options.add_argument("--window-size=1920,1080")
@@ -51,15 +62,18 @@ def create_driver():
     options.add_argument("--no-first-run")
     options.add_argument("--no-default-browser-check")
     options.add_argument("--disable-extensions")
-    options.add_argument("--disable-plugins")
-    options.add_argument("--incognito")
 
     # Optional: Unique user data dir
     user_data_dir = os.path.join(tempfile.gettempdir(), f"chrome_scraper_{int(time.time())}_{os.getpid()}")
     options.add_argument(f"--user-data-dir={user_data_dir}")
     options.add_argument("--disable-background-timer-throttling")
 
-    return webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
+    driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
+
+    # Hide webdriver property
+    driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+
+    return driver
 
 # === Image Download and Upload Logic ===
 def download_and_upload_image(image_url, product_id):
@@ -161,36 +175,85 @@ def get_price_and_image_from_url(driver, url):
     """
     try:
         driver.get(url)
-        time.sleep(3)  # allow JS rendering
-        
-        result = {'price': None, 'image_url': None}
-        
-        # === PRICE EXTRACTION ===
-        rows = driver.find_elements(By.CSS_SELECTOR, "div[class*='price-points__upper'] tr")
-        label_to_price = {}
-        for row in rows:
-            cells = row.find_elements(By.TAG_NAME, "td")
-            if len(cells) < 2:
-                continue
-            label = cells[0].text.strip().lower()
-            if "market price" in label:
-                price = cells[-1].text.strip().replace("$", "").replace(",", "")
-                label_to_price["market"] = price
-            elif "most recent sale" in label:
-                price = cells[-1].text.strip().replace("$", "").replace(",", "")
-                label_to_price["recent"] = price
 
-        # Priority: Market > Most Recent Sale
-        if "market" in label_to_price and label_to_price["market"] not in ("-", "", "N/A"):
+        # Wait for the page to load - TCGPlayer uses client-side rendering
+        # Wait up to 15 seconds for price section to appear
+        wait = WebDriverWait(driver, 15)
+
+        result = {'price': None, 'image_url': None}
+
+        # === PRICE EXTRACTION ===
+        # Updated for new TCGPlayer HTML structure (December 2025)
+        # Try new structure first (span.price-points__upper__price)
+        try:
+            # Wait for price section to load (Vue.js renders this dynamically)
+            price_section = wait.until(
+                EC.presence_of_element_located((By.CSS_SELECTOR, "div[class*='price-points__upper']"))
+            )
+            rows = price_section.find_elements(By.TAG_NAME, "tr")
+
+            label_to_price = {}
+            for row in rows:
+                row_text = row.text.strip().lower()
+
+                # Check if this row contains Market Price
+                if "market price" in row_text:
+                    price_spans = row.find_elements(By.CSS_SELECTOR, "span[class*='price-points__upper__price']")
+                    if price_spans:
+                        price_text = price_spans[0].text.strip().replace("$", "").replace(",", "")
+                        if price_text and price_text not in ("-", "", "N/A"):
+                            label_to_price["market"] = price_text
+
+                # Check if this row contains Most Recent Sale
+                elif "most recent sale" in row_text:
+                    price_spans = row.find_elements(By.CSS_SELECTOR, "span[class*='price-points__upper__price']")
+                    if price_spans:
+                        price_text = price_spans[0].text.strip().replace("$", "").replace(",", "")
+                        if price_text and price_text not in ("-", "", "N/A"):
+                            label_to_price["recent"] = price_text
+
+            # Priority: Market > Most Recent Sale
+            if "market" in label_to_price:
+                try:
+                    result['price'] = float(label_to_price["market"])
+                except ValueError:
+                    pass
+            elif "recent" in label_to_price:
+                try:
+                    result['price'] = float(label_to_price["recent"])
+                except ValueError:
+                    pass
+        except Exception as e:
+            pass  # Silently fail and try fallback
+            # Fallback: Try old structure for backwards compatibility
             try:
-                result['price'] = float(label_to_price["market"])
-            except ValueError:
-                pass
-        elif "recent" in label_to_price and label_to_price["recent"] not in ("-", "", "N/A"):
-            try:
-                result['price'] = float(label_to_price["recent"])
-            except ValueError:
-                pass
+                rows = driver.find_elements(By.CSS_SELECTOR, "div[class*='price-points__upper'] tr")
+                label_to_price = {}
+                for row in rows:
+                    cells = row.find_elements(By.TAG_NAME, "td")
+                    if len(cells) < 2:
+                        continue
+                    label = cells[0].text.strip().lower()
+                    if "market price" in label:
+                        price = cells[-1].text.strip().replace("$", "").replace(",", "")
+                        label_to_price["market"] = price
+                    elif "most recent sale" in label:
+                        price = cells[-1].text.strip().replace("$", "").replace(",", "")
+                        label_to_price["recent"] = price
+
+                # Priority: Market > Most Recent Sale
+                if "market" in label_to_price and label_to_price["market"] not in ("-", "", "N/A"):
+                    try:
+                        result['price'] = float(label_to_price["market"])
+                    except ValueError:
+                        pass
+                elif "recent" in label_to_price and label_to_price["recent"] not in ("-", "", "N/A"):
+                    try:
+                        result['price'] = float(label_to_price["recent"])
+                    except ValueError:
+                        pass
+            except Exception as fallback_error:
+                print(f"   ⚠️ Price extraction failed: {fallback_error}")
         
         # === IMAGE EXTRACTION ===
         image_selectors = [
@@ -396,7 +459,7 @@ def update_prices():
         scraped_data = get_price_and_image_from_url(driver, url)
         price = scraped_data.get('price')
         tcg_image_url = scraped_data.get('image_url')
-        
+
         update_data = {}
         
         # Handle price update
@@ -405,7 +468,7 @@ def update_prices():
             last_updated_dt = parse_timestamp(last_updated)
             if last_updated_dt:
                 needs_price_update = last_updated_dt < price_interval_ago
-        
+
         if price is not None and needs_price_update:
             update_data["usd_price"] = price
             update_data["last_updated"] = datetime.now(timezone.utc).isoformat()
@@ -426,7 +489,7 @@ def update_prices():
             last_image_update_dt = parse_timestamp(last_image_update)
             if last_image_update_dt:
                 needs_image_update = last_image_update_dt < twenty_four_hours_ago
-        
+
         if tcg_image_url and needs_image_update:
             if tcg_image_url != current_image_url:
                 # Download and upload image to Supabase Storage
