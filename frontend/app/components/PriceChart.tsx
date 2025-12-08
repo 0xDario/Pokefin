@@ -3,11 +3,13 @@
 import React, { useMemo } from "react";
 import {
   ResponsiveContainer,
-  AreaChart,
   Area,
   XAxis,
   YAxis,
   Tooltip,
+  CartesianGrid,
+  Line,
+  ComposedChart,
 } from "recharts";
 
 type PriceHistoryEntry = {
@@ -114,20 +116,53 @@ export default function PriceChart({
   // Get the currency symbol
   const currencySymbol = currency === "CAD" ? "C$" : "$";
 
+  // Calculate min and max for better Y-axis domain
+  const priceStats = useMemo(() => {
+    const prices = slicedData.map(d => d.price).filter((p): p is number => p !== null);
+    if (prices.length === 0) return { min: 0, max: 100 };
+
+    const min = Math.min(...prices);
+    const max = Math.max(...prices);
+    const padding = (max - min) * 0.1; // 10% padding
+
+    return {
+      min: Math.max(0, min - padding),
+      max: max + padding,
+    };
+  }, [slicedData]);
+
   // Custom tooltip component with better styling
   const CustomTooltip = ({ active, payload, label }: any) => {
-    if (active && payload && payload.length) {
+    if (active && payload && payload.length && payload[0].value !== null) {
       return (
-        <div className="bg-slate-800 text-white px-3 py-2 rounded-lg shadow-lg border border-slate-600">
-          <p className="text-sm font-medium">{label}</p>
-          <p className="text-sm">
-            <span className="text-green-400">Price: </span>
-            {currencySymbol}{payload[0].value.toFixed(2)} {currency}
+        <div className="bg-slate-900 text-white px-4 py-3 rounded-lg shadow-xl border-2 border-blue-500">
+          <p className="text-xs font-semibold text-slate-300 mb-1">{label}</p>
+          <p className="text-lg font-bold">
+            <span className="text-blue-400">{currencySymbol}{payload[0].value.toFixed(2)}</span>
+            <span className="text-xs text-slate-400 ml-1">{currency}</span>
           </p>
         </div>
       );
     }
     return null;
+  };
+
+  // Custom dot component for data points
+  const CustomDot = (props: any) => {
+    const { cx, cy, payload } = props;
+    if (payload.price === null) return null;
+
+    return (
+      <circle
+        cx={cx}
+        cy={cy}
+        r={3}
+        fill="#3b82f6"
+        stroke="#fff"
+        strokeWidth={1.5}
+        className="transition-all hover:r-5"
+      />
+    );
   };
 
   return (
@@ -146,28 +181,74 @@ export default function PriceChart({
 
       {/* Chart container with conditional styling */}
       <div className={`w-full ${dataAvailability.isIncomplete ? "opacity-90 border-l-4 border-amber-300 pl-2" : ""}`}>
-        <ResponsiveContainer width="100%" height={140}>
-          <AreaChart data={slicedData}>
+        <ResponsiveContainer width="100%" height={200}>
+          <ComposedChart data={slicedData} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
             <defs>
               <linearGradient id="priceArea" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="10%" stopColor="#3b82f6" stopOpacity={0.4} />
-                <stop offset="95%" stopColor="#3b82f6" stopOpacity={0} />
+                <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.15} />
+                <stop offset="95%" stopColor="#3b82f6" stopOpacity={0.01} />
               </linearGradient>
             </defs>
-            <XAxis dataKey="date" hide />
-            <YAxis domain={["dataMin", "dataMax"]} hide />
-            <Tooltip content={<CustomTooltip />} />
+
+            {/* Grid lines */}
+            <CartesianGrid
+              strokeDasharray="3 3"
+              stroke="#e2e8f0"
+              strokeOpacity={0.5}
+              vertical={false}
+            />
+
+            {/* X-Axis with date labels */}
+            <XAxis
+              dataKey="date"
+              tick={{ fill: "#64748b", fontSize: 11 }}
+              tickLine={{ stroke: "#cbd5e1" }}
+              axisLine={{ stroke: "#cbd5e1" }}
+              interval="preserveStartEnd"
+              minTickGap={30}
+            />
+
+            {/* Y-Axis with price labels */}
+            <YAxis
+              domain={[priceStats.min, priceStats.max]}
+              tick={{ fill: "#64748b", fontSize: 11 }}
+              tickLine={{ stroke: "#cbd5e1" }}
+              axisLine={{ stroke: "#cbd5e1" }}
+              tickFormatter={(value) => `${currencySymbol}${value.toFixed(0)}`}
+              width={45}
+            />
+
+            {/* Enhanced Tooltip with crosshair */}
+            <Tooltip
+              content={<CustomTooltip />}
+              cursor={{
+                stroke: "#3b82f6",
+                strokeWidth: 1,
+                strokeDasharray: "5 5",
+              }}
+            />
+
+            {/* Subtle area fill */}
             <Area
               type="monotone"
               dataKey="price"
-              stroke="#3b82f6"
+              stroke="none"
               fillOpacity={1}
               fill="url(#priceArea)"
-              strokeWidth={2}
-              dot={false}
               connectNulls={false}
             />
-          </AreaChart>
+
+            {/* Bold line on top with markers */}
+            <Line
+              type="monotone"
+              dataKey="price"
+              stroke="#3b82f6"
+              strokeWidth={2.5}
+              dot={<CustomDot />}
+              activeDot={{ r: 5, fill: "#3b82f6", stroke: "#fff", strokeWidth: 2 }}
+              connectNulls={false}
+            />
+          </ComposedChart>
         </ResponsiveContainer>
       </div>
     </div>

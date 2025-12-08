@@ -2,6 +2,7 @@
 
 import React, { useEffect, useState, useMemo } from "react";
 import { createClient } from "@supabase/supabase-js";
+import Image from "next/image";
 import PriceChart from "./PriceChart";
 import { fetchUSDToCADRate } from "./ExchangeRateService";
 
@@ -50,13 +51,16 @@ const ProductImage = ({ imageUrl, productName, className = "" }: {
         </div>
       )}
       <div className="w-full h-full flex items-center justify-center p-4">
-        <img
+        <Image
           src={imageUrl}
           alt={productName}
+          width={200}
+          height={200}
           className={`max-w-full max-h-full object-contain transition-opacity ${isLoading ? 'opacity-0' : 'opacity-100'}`}
           onLoad={handleImageLoad}
           onError={handleImageError}
           loading="lazy"
+          unoptimized={imageUrl.includes('tcgplayer') || imageUrl.includes('external')}
         />
       </div>
     </div>
