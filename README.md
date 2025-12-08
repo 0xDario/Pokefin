@@ -34,7 +34,7 @@ A live price dashboard for sealed Pokémon TCG products (Booster Boxes, ETBs, Bu
 ## 🧪 Local Development
 
 ### Prerequisites
-- Node.js 18+
+- Node.js 22+
 - Python 3.8+
 - Supabase account
 
