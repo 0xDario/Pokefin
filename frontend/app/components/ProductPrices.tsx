@@ -2,8 +2,10 @@
 
 import React, { useEffect, useState, useMemo } from "react";
 import { createClient } from "@supabase/supabase-js";
+import Image from "next/image";
 import PriceChart from "./PriceChart";
 import { fetchUSDToCADRate } from "./ExchangeRateService";
+import CardRinkPromo from "./CardRinkPromo";
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -50,13 +52,16 @@ const ProductImage = ({ imageUrl, productName, className = "" }: {
         </div>
       )}
       <div className="w-full h-full flex items-center justify-center p-4">
-        <img
+        <Image
           src={imageUrl}
           alt={productName}
+          width={200}
+          height={200}
           className={`max-w-full max-h-full object-contain transition-opacity ${isLoading ? 'opacity-0' : 'opacity-100'}`}
           onLoad={handleImageLoad}
           onError={handleImageError}
           loading="lazy"
+          unoptimized={imageUrl.includes('tcgplayer') || imageUrl.includes('external')}
         />
       </div>
     </div>
@@ -242,23 +247,69 @@ export default function ProductPrices() {
     };
   };
 
+  const get7DReturn = (history: PriceHistoryEntry[] | undefined) => {
+    if (!history || history.length < 2) return null;
+
+    const currentPrice = convertPrice(history[0].usd_price);
+    const sevenDaysAgo = new Date();
+    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+
+    const pastEntry = history.find(entry => {
+      const entryDate = new Date(entry.recorded_at);
+      return entryDate <= sevenDaysAgo;
+    });
+
+    if (!pastEntry) return null;
+
+    const pastPrice = convertPrice(pastEntry.usd_price);
+    const percentChange = ((currentPrice - pastPrice) / pastPrice) * 100;
+
+    return {
+      percent: percentChange,
+      dollarChange: currentPrice - pastPrice,
+    };
+  };
+
   const get30DReturn = (history: PriceHistoryEntry[] | undefined) => {
     if (!history || history.length < 2) return null;
-    
+
     const currentPrice = convertPrice(history[0].usd_price);
     const thirtyDaysAgo = new Date();
     thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-    
+
     const pastEntry = history.find(entry => {
       const entryDate = new Date(entry.recorded_at);
       return entryDate <= thirtyDaysAgo;
     });
-    
+
     if (!pastEntry) return null;
-    
+
     const pastPrice = convertPrice(pastEntry.usd_price);
     const percentChange = ((currentPrice - pastPrice) / pastPrice) * 100;
-    
+
+    return {
+      percent: percentChange,
+      dollarChange: currentPrice - pastPrice,
+    };
+  };
+
+  const get90DReturn = (history: PriceHistoryEntry[] | undefined) => {
+    if (!history || history.length < 2) return null;
+
+    const currentPrice = convertPrice(history[0].usd_price);
+    const ninetyDaysAgo = new Date();
+    ninetyDaysAgo.setDate(ninetyDaysAgo.getDate() - 90);
+
+    const pastEntry = history.find(entry => {
+      const entryDate = new Date(entry.recorded_at);
+      return entryDate <= ninetyDaysAgo;
+    });
+
+    if (!pastEntry) return null;
+
+    const pastPrice = convertPrice(pastEntry.usd_price);
+    const percentChange = ((currentPrice - pastPrice) / pastPrice) * 100;
+
     return {
       percent: percentChange,
       dollarChange: currentPrice - pastPrice,
@@ -279,16 +330,44 @@ export default function ProductPrices() {
     );
   };
 
+  const render7DReturn = (productId: number, history: Record<number, PriceHistoryEntry[]>) => {
+    const ret = get7DReturn(history[productId]);
+    if (!ret || typeof ret.percent !== "number") return null;
+
+    const percentSign = ret.percent > 0 ? "+" : "";
+    const colorClass = ret.percent > 0 ? "text-green-600" : ret.percent < 0 ? "text-red-600" : "text-slate-500";
+
+    return (
+      <p className="text-sm text-slate-600">
+        7D: <span className={`font-bold ${colorClass}`}>{percentSign}{ret.percent.toFixed(2)}%</span>
+      </p>
+    );
+  };
+
   const render30DReturn = (productId: number, history: Record<number, PriceHistoryEntry[]>) => {
     const ret = get30DReturn(history[productId]);
     if (!ret || typeof ret.percent !== "number") return null;
-    
+
     const percentSign = ret.percent > 0 ? "+" : "";
     const colorClass = ret.percent > 0 ? "text-green-600" : ret.percent < 0 ? "text-red-600" : "text-slate-500";
-    
+
     return (
       <p className="text-sm text-slate-600">
         30D: <span className={`font-bold ${colorClass}`}>{percentSign}{ret.percent.toFixed(2)}%</span>
+      </p>
+    );
+  };
+
+  const render90DReturn = (productId: number, history: Record<number, PriceHistoryEntry[]>) => {
+    const ret = get90DReturn(history[productId]);
+    if (!ret || typeof ret.percent !== "number") return null;
+
+    const percentSign = ret.percent > 0 ? "+" : "";
+    const colorClass = ret.percent > 0 ? "text-green-600" : ret.percent < 0 ? "text-red-600" : "text-slate-500";
+
+    return (
+      <p className="text-sm text-slate-600">
+        90D: <span className={`font-bold ${colorClass}`}>{percentSign}{ret.percent.toFixed(2)}%</span>
       </p>
     );
   };
@@ -518,6 +597,9 @@ export default function ProductPrices() {
         Found {filteredProducts.length} products
       </div>
 
+      {/* CardRinkTCG Promotional Banner */}
+      <CardRinkPromo variant="banner" />
+
       {loading && <div>Loading products...</div>}
 
       {/* Product Display - Flat View */}
@@ -550,8 +632,25 @@ export default function ProductPrices() {
                 <p className="text-3xl font-extrabold text-green-600 tracking-tight mb-1">
                   {formatPrice(product.usd_price)}
                 </p>
-                {render1DReturn(product.id, priceHistory)}
-                {render30DReturn(product.id, priceHistory)}
+                {/* Conditional rendering based on chart timeframe */}
+                {chartTimeframe === "7D" && (
+                  <>
+                    {render1DReturn(product.id, priceHistory)}
+                    {render7DReturn(product.id, priceHistory)}
+                  </>
+                )}
+                {chartTimeframe === "30D" && (
+                  <>
+                    {render7DReturn(product.id, priceHistory)}
+                    {render30DReturn(product.id, priceHistory)}
+                  </>
+                )}
+                {chartTimeframe === "90D" && (
+                  <>
+                    {render30DReturn(product.id, priceHistory)}
+                    {render90DReturn(product.id, priceHistory)}
+                  </>
+                )}
                 {priceHistory[product.id]?.length > 1 && (
                   <div className="mt-2">
                     <PriceChart 
@@ -633,35 +732,101 @@ export default function ProductPrices() {
                         <p className="text-xl font-bold text-green-600">
                           {formatPrice(product.usd_price)}
                         </p>
-                        {/* Returns info */}
+                        {/* Returns info - conditional based on chart timeframe */}
                         <div className="mt-1 text-xs">
-                          {(() => {
-                            const ret = get1DReturn(priceHistory[product.id]);
-                            if (!ret || typeof ret.percent !== "number") return null;
-                            const percentSign = ret.percent > 0 ? "+" : "";
-                            return (
-                              <span>
-                                <span className="text-slate-600">1D:</span>
-                                <span className={`font-bold ml-1 ${ret.percent > 0 ? "text-green-600" : ret.percent < 0 ? "text-red-600" : "text-slate-500"}`}>
-                                  {percentSign}{ret.percent.toFixed(2)}%
-                                </span>
-                              </span>
-                            );
-                          })()}
-                          {" "}
-                          {(() => {
-                            const ret = get30DReturn(priceHistory[product.id]);
-                            if (!ret || typeof ret.percent !== "number") return null;
-                            const percentSign = ret.percent > 0 ? "+" : "";
-                            return (
-                              <span>
-                                <span className="text-slate-600">30D:</span>
-                                <span className={`font-bold ml-1 ${ret.percent > 0 ? "text-green-600" : ret.percent < 0 ? "text-red-600" : "text-slate-500"}`}>
-                                  {percentSign}{ret.percent.toFixed(2)}%
-                                </span>
-                              </span>
-                            );
-                          })()}
+                          {chartTimeframe === "7D" && (
+                            <>
+                              {(() => {
+                                const ret = get1DReturn(priceHistory[product.id]);
+                                if (!ret || typeof ret.percent !== "number") return null;
+                                const percentSign = ret.percent > 0 ? "+" : "";
+                                return (
+                                  <span>
+                                    <span className="text-slate-600">1D:</span>
+                                    <span className={`font-bold ml-1 ${ret.percent > 0 ? "text-green-600" : ret.percent < 0 ? "text-red-600" : "text-slate-500"}`}>
+                                      {percentSign}{ret.percent.toFixed(2)}%
+                                    </span>
+                                  </span>
+                                );
+                              })()}
+                              {" "}
+                              {(() => {
+                                const ret = get7DReturn(priceHistory[product.id]);
+                                if (!ret || typeof ret.percent !== "number") return null;
+                                const percentSign = ret.percent > 0 ? "+" : "";
+                                return (
+                                  <span>
+                                    <span className="text-slate-600">7D:</span>
+                                    <span className={`font-bold ml-1 ${ret.percent > 0 ? "text-green-600" : ret.percent < 0 ? "text-red-600" : "text-slate-500"}`}>
+                                      {percentSign}{ret.percent.toFixed(2)}%
+                                    </span>
+                                  </span>
+                                );
+                              })()}
+                            </>
+                          )}
+                          {chartTimeframe === "30D" && (
+                            <>
+                              {(() => {
+                                const ret = get7DReturn(priceHistory[product.id]);
+                                if (!ret || typeof ret.percent !== "number") return null;
+                                const percentSign = ret.percent > 0 ? "+" : "";
+                                return (
+                                  <span>
+                                    <span className="text-slate-600">7D:</span>
+                                    <span className={`font-bold ml-1 ${ret.percent > 0 ? "text-green-600" : ret.percent < 0 ? "text-red-600" : "text-slate-500"}`}>
+                                      {percentSign}{ret.percent.toFixed(2)}%
+                                    </span>
+                                  </span>
+                                );
+                              })()}
+                              {" "}
+                              {(() => {
+                                const ret = get30DReturn(priceHistory[product.id]);
+                                if (!ret || typeof ret.percent !== "number") return null;
+                                const percentSign = ret.percent > 0 ? "+" : "";
+                                return (
+                                  <span>
+                                    <span className="text-slate-600">30D:</span>
+                                    <span className={`font-bold ml-1 ${ret.percent > 0 ? "text-green-600" : ret.percent < 0 ? "text-red-600" : "text-slate-500"}`}>
+                                      {percentSign}{ret.percent.toFixed(2)}%
+                                    </span>
+                                  </span>
+                                );
+                              })()}
+                            </>
+                          )}
+                          {chartTimeframe === "90D" && (
+                            <>
+                              {(() => {
+                                const ret = get30DReturn(priceHistory[product.id]);
+                                if (!ret || typeof ret.percent !== "number") return null;
+                                const percentSign = ret.percent > 0 ? "+" : "";
+                                return (
+                                  <span>
+                                    <span className="text-slate-600">30D:</span>
+                                    <span className={`font-bold ml-1 ${ret.percent > 0 ? "text-green-600" : ret.percent < 0 ? "text-red-600" : "text-slate-500"}`}>
+                                      {percentSign}{ret.percent.toFixed(2)}%
+                                    </span>
+                                  </span>
+                                );
+                              })()}
+                              {" "}
+                              {(() => {
+                                const ret = get90DReturn(priceHistory[product.id]);
+                                if (!ret || typeof ret.percent !== "number") return null;
+                                const percentSign = ret.percent > 0 ? "+" : "";
+                                return (
+                                  <span>
+                                    <span className="text-slate-600">90D:</span>
+                                    <span className={`font-bold ml-1 ${ret.percent > 0 ? "text-green-600" : ret.percent < 0 ? "text-red-600" : "text-slate-500"}`}>
+                                      {percentSign}{ret.percent.toFixed(2)}%
+                                    </span>
+                                  </span>
+                                );
+                              })()}
+                            </>
+                          )}
                         </div>
                       </div>
                     </div>
