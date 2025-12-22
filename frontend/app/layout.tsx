@@ -23,7 +23,7 @@ export const metadata: Metadata = {
       "Get up-to-date Pokémon sealed product prices, refreshed hourly from TCGPlayer. Track the latest market trends and values for Pokémon TCG sealed items.",
     // Optionally add image and url:
     // images: ["https://yourdomain.com/og-image.png"],
-    url: "https://pokefin.vercel.app",
+    url: "https://pokefin.ca",
   },
 };
 // ...existing code...
