@@ -5,6 +5,7 @@ import { createClient } from "@supabase/supabase-js";
 import Image from "next/image";
 import PriceChart from "./PriceChart";
 import { fetchUSDToCADRate } from "./ExchangeRateService";
+import CardRinkPromo from "./CardRinkPromo";
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -595,6 +596,9 @@ export default function ProductPrices() {
       <div className="text-sm text-slate-600">
         Found {filteredProducts.length} products
       </div>
+
+      {/* CardRinkTCG Promotional Banner */}
+      <CardRinkPromo variant="banner" />
 
       {loading && <div>Loading products...</div>}
 
