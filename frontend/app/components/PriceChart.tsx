@@ -24,11 +24,13 @@ export default function PriceChart({
   range,
   currency = "USD",
   exchangeRate = 1.36,
+  height = 200,
 }: {
   data: PriceHistoryEntry[];
   range: "7D" | "30D" | "90D";
   currency?: Currency;
   exchangeRate?: number;
+  height?: number;
 }) {
   const groupedDaily = useMemo(() => {
     console.log(`[PriceChart] Raw data received (${data.length} entries):`, data.slice(0, 5));
@@ -181,7 +183,7 @@ export default function PriceChart({
 
       {/* Chart container with conditional styling */}
       <div className={`w-full ${dataAvailability.isIncomplete ? "opacity-90 border-l-4 border-amber-300 pl-2" : ""}`}>
-        <ResponsiveContainer width="100%" height={200}>
+        <ResponsiveContainer width="100%" height={height}>
           <ComposedChart data={slicedData} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
             <defs>
               <linearGradient id="priceArea" x1="0" y1="0" x2="0" y2="1">
