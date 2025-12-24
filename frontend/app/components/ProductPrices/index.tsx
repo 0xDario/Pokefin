@@ -7,6 +7,7 @@ import ProductGrid from "./cards/ProductGrid";
 import ProductCard from "./cards/ProductCard";
 import GroupHeader from "./cards/GroupHeader";
 import CardRinkPromo from "../CardRinkPromo";
+import ScrollToTop from "./shared/ScrollToTop";
 import { useProductData } from "./hooks/useProductData";
 import { useCurrencyConversion } from "./hooks/useCurrencyConversion";
 import { filterProducts, getAvailableGenerations, groupProductsBySet } from "./utils/filtering";
@@ -152,6 +153,9 @@ export default function ProductPrices() {
           </div>
         )}
       </div>
+
+      {/* Scroll to Top Button */}
+      <ScrollToTop />
     </div>
   );
 }
