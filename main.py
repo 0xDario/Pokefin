@@ -415,9 +415,12 @@ def update_prices():
     twenty_four_hours_ago = datetime.now(timezone.utc) - timedelta(hours=24)
     
     # Get products that need updates (price OR image) - include variant in query
-    response = supabase.table("products").select("id, url, image_url, last_updated, last_image_update, variant, set_id, product_type_id").or_(
-        f"last_updated.lt.{price_interval_ago.isoformat()},image_url.is.null,last_image_update.is.null,last_image_update.lt.{twenty_four_hours_ago.isoformat()}"
-    ).execute()
+    # Note: last_updated.is.null catches NEW products that have never been updated
+    # Note: usd_price.is.null catches products where price scraping failed
+    # Use range(0, 10000) to override Supabase's default 1000 row limit
+    response = supabase.table("products").select("id, url, usd_price, image_url, last_updated, last_image_update, variant, set_id, product_type_id").or_(
+        f"last_updated.is.null,usd_price.is.null,last_updated.lt.{price_interval_ago.isoformat()},image_url.is.null,last_image_update.is.null,last_image_update.lt.{twenty_four_hours_ago.isoformat()}"
+    ).range(0, 9999).execute()
 
     products_to_update = response.data
 
@@ -463,8 +466,11 @@ def update_prices():
         update_data = {}
         
         # Handle price update
+        current_price = product.get("usd_price")
         needs_price_update = True
-        if last_updated:
+
+        # Always update if current price is NULL, otherwise check time interval
+        if current_price is not None and last_updated:
             last_updated_dt = parse_timestamp(last_updated)
             if last_updated_dt:
                 needs_price_update = last_updated_dt < price_interval_ago

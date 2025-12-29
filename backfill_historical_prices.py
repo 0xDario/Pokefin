@@ -2,7 +2,23 @@
 """
 One-time script to backfill historical price data from TCGPlayer
 Clicks the 1M button and extracts canvas table data for Nov 5 - Dec 6
+
+Usage:
+  # Run forward (products 0-499):
+  python backfill_historical_prices.py --forward
+
+  # Run reverse (products 999-500):
+  python backfill_historical_prices.py --reverse
+
+  # Run both in parallel (two terminals):
+  Terminal 1: python backfill_historical_prices.py --forward
+  Terminal 2: python backfill_historical_prices.py --reverse
+
+  # Custom range:
+  python backfill_historical_prices.py --start 0 --end 500
+  python backfill_historical_prices.py --start 500 --end 1000 --reverse
 """
+import argparse
 import time
 from datetime import datetime, timedelta
 from selenium import webdriver
@@ -253,34 +269,55 @@ def parse_short_date(date_str):
 
     return None
 
-def backfill_prices():
+def backfill_prices(start_idx=None, end_idx=None, reverse=False, days=90):
     """
     Main function to backfill historical prices for all products
-    Checks for last 90 days of data, accounting for product release dates
+    Checks for last N days of data, accounting for product release dates
+
+    Args:
+        start_idx: Starting product index (0-based, inclusive)
+        end_idx: Ending product index (exclusive)
+        reverse: If True, process products in reverse order
+        days: Number of days to backfill (default: 90)
     """
-    # Calculate date range: last 90 days
+    # Calculate date range
     # Use UTC and set end date to yesterday (today's data might not be available yet)
     from datetime import timezone
 
     utc_now = datetime.now(timezone.utc).date()
     yesterday = utc_now - timedelta(days=1)
-    ninety_days_ago = yesterday - timedelta(days=90)
+    days_ago = yesterday - timedelta(days=days)
 
     target_end_date = yesterday.strftime("%Y-%m-%d")
-    target_start_date = ninety_days_ago.strftime("%Y-%m-%d")
+    target_start_date = days_ago.strftime("%Y-%m-%d")
 
-    print(f"🚀 Starting historical price backfill for last 90 days")
+    print(f"🚀 Starting historical price backfill for last {days} days")
     print(f"   Using UTC timezone - End date: {target_end_date} (yesterday)")
     print(f"   Date range: {target_start_date} to {target_end_date}\n")
 
     # Get all products from database, joining with sets to get release_date
-    response = supabase.table("products").select("id, url, variant, set_id, sets(release_date)").execute()
-    products = response.data
+    # Use range(0, 10000) to override Supabase's default 1000 row limit
+    response = supabase.table("products").select("id, url, variant, set_id, sets(release_date)").range(0, 9999).execute()
+    all_products = response.data
 
-    # Reverse the products list to start from the end
-    products.reverse()
+    # Apply index range if specified
+    if start_idx is not None or end_idx is not None:
+        start = start_idx or 0
+        end = end_idx or len(all_products)
+        products = all_products[start:end]
+        range_info = f" (indices {start}-{end-1})"
+    else:
+        products = all_products
+        range_info = ""
 
-    print(f"📦 Found {len(products)} products to process (starting from END)\n")
+    # Reverse the products list if requested
+    if reverse:
+        products = list(reversed(products))
+        direction = "REVERSE"
+    else:
+        direction = "FORWARD"
+
+    print(f"📦 Found {len(products)} products to process{range_info} [{direction}]\n")
 
     driver = create_driver()
 
@@ -416,4 +453,73 @@ def backfill_prices():
     print(f"\n🎉 Backfill complete! Inserted {total_inserted} total historical price records.")
 
 if __name__ == "__main__":
-    backfill_prices()
+    parser = argparse.ArgumentParser(
+        description="Backfill historical price data from TCGPlayer",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Run forward (first half of products):
+  python backfill_historical_prices.py --forward
+
+  # Run reverse (second half of products):
+  python backfill_historical_prices.py --reverse
+
+  # Run both in parallel (open two terminals):
+  Terminal 1: python backfill_historical_prices.py --forward
+  Terminal 2: python backfill_historical_prices.py --reverse
+
+  # Custom range with direction:
+  python backfill_historical_prices.py --start 0 --end 300
+  python backfill_historical_prices.py --start 300 --end 600 --reverse
+
+  # Process all products (no parallelization):
+  python backfill_historical_prices.py --all
+        """
+    )
+
+    parser.add_argument("--forward", action="store_true",
+                        help="Process first half of products in forward order (indices 0 to midpoint)")
+    parser.add_argument("--reverse", action="store_true",
+                        help="Process second half of products in reverse order (indices midpoint to end)")
+    parser.add_argument("--all", action="store_true",
+                        help="Process all products (default behavior, no split)")
+    parser.add_argument("--start", type=int, default=None,
+                        help="Starting product index (0-based, inclusive)")
+    parser.add_argument("--end", type=int, default=None,
+                        help="Ending product index (exclusive)")
+    parser.add_argument("--days", type=int, default=90,
+                        help="Number of days to backfill (default: 90)")
+
+    args = parser.parse_args()
+
+    # Determine range based on flags
+    if args.forward or args.reverse:
+        # Get total product count first to calculate midpoint
+        response = supabase.table("products").select("id", count="exact").execute()
+        total_count = response.count or len(response.data)
+        midpoint = total_count // 2
+
+        if args.forward:
+            # First half, forward order
+            start_idx = args.start if args.start is not None else 0
+            end_idx = args.end if args.end is not None else midpoint
+            reverse = False
+            print(f"🔀 FORWARD MODE: Processing products {start_idx} to {end_idx-1}")
+        else:  # args.reverse
+            # Second half, reverse order
+            start_idx = args.start if args.start is not None else midpoint
+            end_idx = args.end if args.end is not None else total_count
+            reverse = True
+            print(f"🔄 REVERSE MODE: Processing products {end_idx-1} down to {start_idx}")
+    elif args.start is not None or args.end is not None:
+        # Custom range specified
+        start_idx = args.start
+        end_idx = args.end
+        reverse = False
+    else:
+        # Default: process all
+        start_idx = None
+        end_idx = None
+        reverse = False
+
+    backfill_prices(start_idx=start_idx, end_idx=end_idx, reverse=reverse, days=args.days)
