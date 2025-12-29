@@ -1,6 +1,8 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
+import { AuthProvider } from "./context/AuthContext";
+import Header from "./components/Header";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -12,7 +14,6 @@ const geistMono = Geist_Mono({
   subsets: ["latin"],
 });
 
-// ...existing code...
 export const metadata: Metadata = {
   title: "Pokémon Sealed Product Price Tracker",
   description:
@@ -21,12 +22,9 @@ export const metadata: Metadata = {
     title: "Pokémon Sealed Product Price Tracker",
     description:
       "Get up-to-date Pokémon sealed product prices, refreshed hourly from TCGPlayer. Track the latest market trends and values for Pokémon TCG sealed items.",
-    // Optionally add image and url:
-    // images: ["https://yourdomain.com/og-image.png"],
     url: "https://pokefin.ca",
   },
 };
-// ...existing code...
 
 export default function RootLayout({
   children,
@@ -38,7 +36,10 @@ export default function RootLayout({
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
       >
-        {children}
+        <AuthProvider>
+          <Header />
+          {children}
+        </AuthProvider>
       </body>
     </html>
   );
