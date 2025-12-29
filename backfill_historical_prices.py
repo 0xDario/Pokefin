@@ -19,8 +19,10 @@ Usage:
   python backfill_historical_prices.py --start 500 --end 1000 --reverse
 """
 import argparse
+import logging
+import shutil
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
@@ -34,11 +36,23 @@ import tempfile
 import os
 import platform
 
+# === Logging Setup ===
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
+logger = logging.getLogger(__name__)
+
 # === Supabase Setup ===
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 # === Selenium Driver Setup ===
 def create_driver():
+    """
+    Create a Selenium WebDriver with bot detection evasion settings.
+    Returns tuple of (driver, user_data_dir) for proper cleanup.
+    """
     options = Options()
 
     # Set Chrome binary location based on OS
@@ -76,7 +90,23 @@ def create_driver():
     driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
     driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
 
-    return driver
+    return driver, user_data_dir
+
+
+def cleanup_driver(driver, user_data_dir):
+    """Properly cleanup WebDriver and temporary directory."""
+    try:
+        if driver:
+            driver.quit()
+    except Exception as e:
+        logger.warning(f"Error quitting driver: {e}")
+
+    try:
+        if user_data_dir and os.path.exists(user_data_dir):
+            shutil.rmtree(user_data_dir, ignore_errors=True)
+            logger.debug(f"Cleaned up temp directory: {user_data_dir}")
+    except Exception as e:
+        logger.warning(f"Error cleaning up temp directory: {e}")
 
 def extract_historical_prices(driver, url):
     """
@@ -90,50 +120,50 @@ def extract_historical_prices(driver, url):
         wait = WebDriverWait(driver, 15)
 
         # Wait for the chart section to appear
-        print(f"   ⏳ Waiting for chart section to load...")
+        logger.debug("Waiting for chart section to load...")
         wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "canvas")))
         time.sleep(3)  # Extra time for chart to render
 
         all_historical_data = []
 
         # === STEP 1: Extract 3M data first (for Nov 5-7) ===
-        print(f"   📊 Extracting 3M data (date ranges)...")
+        logger.debug("Extracting 3M data (date ranges)...")
 
         # 3M might be default, but let's try to click it to be sure
         try:
             buttons = driver.find_elements(By.CSS_SELECTOR, "button.charts-item")
             for button in buttons:
                 if "3M" in button.text.strip():
-                    print(f"   🖱️  Clicking 3M button...")
+                    logger.debug("Clicking 3M button...")
                     button.click()
                     time.sleep(3)
                     break
         except Exception as e:
-            print(f"   ⚠️  Could not click 3M button, using default view: {e}")
+            logger.warning(f"Could not click 3M button, using default view: {e}")
 
         # Extract 3M data (date ranges)
         three_month_data = extract_canvas_table_data(driver, is_date_range=True)
         all_historical_data.extend(three_month_data)
-        print(f"   ✅ Extracted {len(three_month_data)} entries from 3M data")
+        logger.debug(f"Extracted {len(three_month_data)} entries from 3M data")
 
         # === STEP 2: Click 1M button and extract daily data ===
-        print(f"   📊 Extracting 1M data (daily prices)...")
+        logger.debug("Extracting 1M data (daily prices)...")
 
         try:
             buttons = driver.find_elements(By.CSS_SELECTOR, "button.charts-item")
             for button in buttons:
                 if "1M" in button.text.strip():
-                    print(f"   🖱️  Clicking 1M button...")
+                    logger.debug("Clicking 1M button...")
                     button.click()
                     time.sleep(3)
                     break
         except Exception as e:
-            print(f"   ⚠️  Error clicking 1M button: {e}")
+            logger.warning(f"Error clicking 1M button: {e}")
 
         # Extract 1M data (daily)
         one_month_data = extract_canvas_table_data(driver, is_date_range=False)
         all_historical_data.extend(one_month_data)
-        print(f"   ✅ Extracted {len(one_month_data)} entries from 1M data")
+        logger.debug(f"Extracted {len(one_month_data)} entries from 1M data")
 
         # Deduplicate: prefer 1M data (daily) over 3M data (range averages) for same dates
         # Build a dict with date as key, keeping the last occurrence (1M data comes last)
@@ -147,12 +177,12 @@ def extract_historical_prices(driver, url):
 
         duplicates_removed = len(all_historical_data) - len(final_data)
         if duplicates_removed > 0:
-            print(f"   🔄 Removed {duplicates_removed} duplicate dates (kept 1M data over 3M)")
+            logger.debug(f"Removed {duplicates_removed} duplicate dates (kept 1M data over 3M)")
 
         return final_data
 
     except Exception as e:
-        print(f"   ❌ Error extracting historical prices: {e}")
+        logger.error(f"Error extracting historical prices: {e}")
         return []
 
 
@@ -208,7 +238,6 @@ def extract_canvas_table_data(driver, is_date_range=False):
                                             end_date_str = date_parts[1].strip()
 
                                             # Parse dates (format: "11/5")
-                                            # Assuming year is 2025 for November dates
                                             start_date = parse_short_date(start_date_str)
                                             end_date = parse_short_date(end_date_str)
 
@@ -231,24 +260,30 @@ def extract_canvas_table_data(driver, is_date_range=False):
                                         })
 
                             except (ValueError, IndexError) as e:
+                                logger.debug(f"Could not parse price/date: {e}")
                                 continue
 
                     if historical_data:
                         break  # Found data, no need to check other tables
 
             except Exception as e:
+                logger.debug(f"Canvas parsing error: {e}")
                 continue
 
     except Exception as e:
-        pass
+        logger.warning(f"Error extracting canvas table data: {e}")
 
     return historical_data
 
 
 def parse_short_date(date_str):
     """
-    Parse short date format like "11/5" to a datetime object
-    Assumes year 2025 for November dates, 2024 for September/October
+    Parse short date format like "11/5" to a datetime object.
+    Uses dynamic year logic based on current date to handle year boundaries.
+
+    Logic: Try current year first. If the resulting date is more than 7 days
+    in the future, assume it's from the previous year. This handles edge cases
+    like running in January for December dates.
     """
     try:
         parts = date_str.split("/")
@@ -256,18 +291,115 @@ def parse_short_date(date_str):
             month = int(parts[0])
             day = int(parts[1])
 
-            # Determine year based on month
-            # Nov-Dec = 2025, Sep-Oct = 2024 (based on the 3M data you showed)
-            if month >= 11:  # November, December
-                year = 2025
-            else:  # September, October
-                year = 2024
+            now = datetime.now(timezone.utc)
+            current_year = now.year
 
-            return datetime(year, month, day)
-    except (ValueError, IndexError):
-        pass
+            # Try current year first
+            candidate_date = datetime(current_year, month, day, tzinfo=timezone.utc)
+
+            # If the date is more than 7 days in the future, use previous year
+            # This handles year boundary edge cases naturally
+            if candidate_date > now + timedelta(days=7):
+                candidate_date = datetime(current_year - 1, month, day, tzinfo=timezone.utc)
+
+            # Return naive datetime to maintain compatibility
+            return candidate_date.replace(tzinfo=None)
+    except (ValueError, IndexError) as e:
+        logger.debug(f"Could not parse short date '{date_str}': {e}")
 
     return None
+
+def fetch_products_paginated(batch_size=500):
+    """
+    Fetch all products from database using pagination to handle large datasets.
+    Returns list of all products.
+    """
+    all_products = []
+    offset = 0
+
+    while True:
+        response = supabase.table("products")\
+            .select("id, url, variant, set_id, sets(release_date)")\
+            .range(offset, offset + batch_size - 1)\
+            .execute()
+
+        if not response.data:
+            break
+
+        all_products.extend(response.data)
+        logger.debug(f"Fetched {len(response.data)} products (total: {len(all_products)})")
+
+        if len(response.data) < batch_size:
+            break  # Last page
+
+        offset += batch_size
+
+    return all_products
+
+
+def fetch_existing_price_dates(product_id, start_date, end_date, batch_size=500):
+    """
+    Fetch existing price history dates for a product using pagination.
+    Returns a set of date strings (YYYY-MM-DD format).
+    """
+    existing_dates = set()
+    offset = 0
+
+    while True:
+        response = supabase.table("product_price_history")\
+            .select("recorded_at")\
+            .eq("product_id", product_id)\
+            .gte("recorded_at", f"{start_date} 00:00:00")\
+            .lte("recorded_at", f"{end_date} 23:59:59")\
+            .range(offset, offset + batch_size - 1)\
+            .execute()
+
+        if not response.data:
+            break
+
+        for record in response.data:
+            recorded_at = record.get('recorded_at', '')
+            if recorded_at:
+                # Handle both "YYYY-MM-DD HH:MM:SS" and "YYYY-MM-DDTHH:MM:SS" formats
+                date_str = recorded_at.split(' ')[0].split('T')[0]
+                existing_dates.add(date_str)
+
+        if len(response.data) < batch_size:
+            break  # Last page
+
+        offset += batch_size
+
+    return existing_dates
+
+
+def batch_insert_price_history(entries, batch_size=100):
+    """
+    Insert price history entries in batches to avoid N+1 query pattern.
+    Duplicates are prevented at the application level by filtering existing dates.
+    Returns tuple of (inserted_count, failed_count).
+    """
+    inserted_count = 0
+    failed_count = 0
+
+    for i in range(0, len(entries), batch_size):
+        batch = entries[i:i + batch_size]
+        try:
+            supabase.table("product_price_history").insert(batch).execute()
+            inserted_count += len(batch)
+            logger.debug(f"Batch inserted {len(batch)} records")
+        except Exception as e:
+            logger.error(f"Batch insert failed: {e}")
+            # Fall back to individual inserts for this batch
+            for entry in batch:
+                try:
+                    supabase.table("product_price_history").insert(entry).execute()
+                    inserted_count += 1
+                except Exception as inner_e:
+                    logger.error(f"Individual insert failed for {entry.get('recorded_at', 'unknown')}: {inner_e}")
+                    failed_count += 1
+
+    return inserted_count, failed_count
+
 
 def backfill_prices(start_idx=None, end_idx=None, reverse=False, days=90):
     """
@@ -280,10 +412,6 @@ def backfill_prices(start_idx=None, end_idx=None, reverse=False, days=90):
         reverse: If True, process products in reverse order
         days: Number of days to backfill (default: 90)
     """
-    # Calculate date range
-    # Use UTC and set end date to yesterday (today's data might not be available yet)
-    from datetime import timezone
-
     utc_now = datetime.now(timezone.utc).date()
     yesterday = utc_now - timedelta(days=1)
     days_ago = yesterday - timedelta(days=days)
@@ -291,14 +419,12 @@ def backfill_prices(start_idx=None, end_idx=None, reverse=False, days=90):
     target_end_date = yesterday.strftime("%Y-%m-%d")
     target_start_date = days_ago.strftime("%Y-%m-%d")
 
-    print(f"🚀 Starting historical price backfill for last {days} days")
-    print(f"   Using UTC timezone - End date: {target_end_date} (yesterday)")
-    print(f"   Date range: {target_start_date} to {target_end_date}\n")
+    logger.info(f"Starting historical price backfill for last {days} days")
+    logger.info(f"Using UTC timezone - End date: {target_end_date} (yesterday)")
+    logger.info(f"Date range: {target_start_date} to {target_end_date}")
 
-    # Get all products from database, joining with sets to get release_date
-    # Use range(0, 10000) to override Supabase's default 1000 row limit
-    response = supabase.table("products").select("id, url, variant, set_id, sets(release_date)").range(0, 9999).execute()
-    all_products = response.data
+    # Get all products from database using pagination
+    all_products = fetch_products_paginated()
 
     # Apply index range if specified
     if start_idx is not None or end_idx is not None:
@@ -317,140 +443,128 @@ def backfill_prices(start_idx=None, end_idx=None, reverse=False, days=90):
     else:
         direction = "FORWARD"
 
-    print(f"📦 Found {len(products)} products to process{range_info} [{direction}]\n")
+    logger.info(f"Found {len(products)} products to process{range_info} [{direction}]")
 
-    driver = create_driver()
-
+    driver = None
+    user_data_dir = None
     total_inserted = 0
 
-    for idx, product in enumerate(products, 1):
-        product_id = product["id"]
-        url = product["url"]
-        variant = product.get("variant")
+    try:
+        driver, user_data_dir = create_driver()
 
-        # Get release_date from the joined sets table
-        release_date_str = None
-        sets_data = product.get("sets")
-        if sets_data and isinstance(sets_data, dict):
-            release_date_str = sets_data.get("release_date")
+        for idx, product in enumerate(products, 1):
+            product_id = product["id"]
+            url = product["url"]
+            variant = product.get("variant")
 
-        variant_info = f" (Variant: {variant})" if variant else ""
-        print(f"[{idx}/{len(products)}] 🔍 Checking product ID {product_id}{variant_info}...")
+            # Get release_date from the joined sets table
+            release_date_str = None
+            sets_data = product.get("sets")
+            if sets_data and isinstance(sets_data, dict):
+                release_date_str = sets_data.get("release_date")
 
-        # === Calculate the actual start date based on release date ===
-        # Don't expect price data before the product was released
-        product_start_date = target_start_date
-        release_date = None
+            variant_info = f" (Variant: {variant})" if variant else ""
+            logger.info(f"[{idx}/{len(products)}] Checking product ID {product_id}{variant_info}...")
 
-        if release_date_str:
+            # === Calculate the actual start date based on release date ===
+            # Don't expect price data before the product was released
+            product_start_date = target_start_date
+            release_date = None
+
+            if release_date_str:
+                try:
+                    # Parse release date (handle various formats)
+                    if 'T' in release_date_str:
+                        release_date = datetime.fromisoformat(release_date_str.replace('Z', '+00:00')).date()
+                    else:
+                        release_date = datetime.strptime(release_date_str.split(' ')[0], "%Y-%m-%d").date()
+
+                    # Use the later of: (90 days ago) or (release date)
+                    ninety_days_ago_date = datetime.strptime(target_start_date, "%Y-%m-%d").date()
+                    if release_date > ninety_days_ago_date:
+                        product_start_date = release_date.strftime("%Y-%m-%d")
+                        logger.info(f"   Product released {release_date}, expecting data from {product_start_date}")
+                    elif release_date > datetime.strptime(target_end_date, "%Y-%m-%d").date():
+                        logger.info(f"   Skipping - product released {release_date} (after target range)")
+                        continue
+                except Exception as e:
+                    logger.warning(f"   Could not parse release_date '{release_date_str}': {e}")
+
+            # === Check if this product already has COMPLETE data for ALL days in expected range ===
             try:
-                # Parse release date (handle various formats)
-                if 'T' in release_date_str:
-                    release_date = datetime.fromisoformat(release_date_str.replace('Z', '+00:00')).date()
-                else:
-                    release_date = datetime.strptime(release_date_str.split(' ')[0], "%Y-%m-%d").date()
+                # Use paginated query to handle products with many price records
+                existing_dates = fetch_existing_price_dates(product_id, product_start_date, target_end_date)
 
-                # Use the later of: (90 days ago) or (release date)
-                ninety_days_ago_date = datetime.strptime(target_start_date, "%Y-%m-%d").date()
-                if release_date > ninety_days_ago_date:
-                    product_start_date = release_date.strftime("%Y-%m-%d")
-                    print(f"   📅 Product released {release_date}, expecting data from {product_start_date}")
-                elif release_date > datetime.strptime(target_end_date, "%Y-%m-%d").date():
-                    print(f"   ⏭️  Skipping - product released {release_date} (after target range)\n")
+                # Calculate expected number of days based on product's actual date range
+                start_dt = datetime.strptime(product_start_date, "%Y-%m-%d").date()
+                end_dt = datetime.strptime(target_end_date, "%Y-%m-%d").date()
+                expected_days = (end_dt - start_dt).days + 1
+
+                # Check if we have all days
+                if len(existing_dates) >= expected_days:
+                    logger.info(f"   Skipping - already has complete data ({len(existing_dates)}/{expected_days} days)")
                     continue
+                elif len(existing_dates) > 0:
+                    logger.info(f"   Has partial data ({len(existing_dates)}/{expected_days} days) - will fill missing dates")
             except Exception as e:
-                print(f"   ⚠️  Could not parse release_date '{release_date_str}': {e}")
+                logger.warning(f"   Error checking existing data: {e}")
+                existing_dates = set()
+                # Continue with scraping if check fails
 
-        # === Check if this product already has COMPLETE data for ALL days in expected range ===
-        try:
-            existing_records = supabase.table("product_price_history")\
-                .select("recorded_at")\
-                .eq("product_id", product_id)\
-                .gte("recorded_at", f"{product_start_date} 00:00:00")\
-                .lte("recorded_at", f"{target_end_date} 23:59:59")\
-                .execute()
+            logger.debug(f"   Extracting historical prices...")
 
-            # Build set of existing dates
-            existing_dates = set()
-            if existing_records.data:
-                for record in existing_records.data:
-                    # Extract date portion from timestamp
-                    recorded_at = record.get('recorded_at', '')
-                    if recorded_at:
-                        # Handle both "YYYY-MM-DD HH:MM:SS" and "YYYY-MM-DDTHH:MM:SS" formats
-                        date_str = recorded_at.split(' ')[0].split('T')[0]
-                        existing_dates.add(date_str)
+            # Extract historical data
+            historical_data = extract_historical_prices(driver, url)
 
-            # Calculate expected number of days based on product's actual date range
-            start_dt = datetime.strptime(product_start_date, "%Y-%m-%d").date()
-            end_dt = datetime.strptime(target_end_date, "%Y-%m-%d").date()
-            expected_days = (end_dt - start_dt).days + 1
-
-            # Check if we have all days
-            if len(existing_dates) >= expected_days:
-                print(f"   ⏭️  Skipping - already has complete data ({len(existing_dates)}/{expected_days} days)\n")
+            if not historical_data:
+                logger.warning(f"   No historical data found for product {product_id}")
                 continue
-            elif len(existing_dates) > 0:
-                print(f"   ⚠️  Has partial data ({len(existing_dates)}/{expected_days} days) - will fill missing dates")
-        except Exception as e:
-            print(f"   ⚠️  Error checking existing data: {e}")
-            existing_dates = set()
-            # Continue with scraping if check fails
 
-        print(f"   📊 Extracting historical prices...")
+            # Filter to only dates in our target range (respecting release date)
+            filtered_data = [
+                entry for entry in historical_data
+                if product_start_date <= entry['date'] <= target_end_date
+            ]
 
-        # Extract historical data
-        historical_data = extract_historical_prices(driver, url)
+            if not filtered_data:
+                logger.info(f"   No data in target date range for product {product_id}")
+                continue
 
-        if not historical_data:
-            print(f"   ⚠️  No historical data found for product {product_id}")
-            continue
+            # Filter out dates that already exist
+            new_entries = [entry for entry in filtered_data if entry['date'] not in existing_dates]
 
-        # Filter to only dates in our target range (respecting release date)
-        filtered_data = [
-            entry for entry in historical_data
-            if product_start_date <= entry['date'] <= target_end_date
-        ]
+            if not new_entries:
+                logger.info(f"   All {len(filtered_data)} dates already exist for product {product_id}")
+                continue
 
-        if not filtered_data:
-            print(f"   ℹ️  No data in target date range for product {product_id}")
-            continue
+            logger.info(f"   Inserting {len(new_entries)} new prices (skipping {len(filtered_data) - len(new_entries)} existing)...")
 
-        # Filter out dates that already exist
-        new_entries = [entry for entry in filtered_data if entry['date'] not in existing_dates]
-
-        if not new_entries:
-            print(f"   ℹ️  All {len(filtered_data)} dates already exist for product {product_id}\n")
-            continue
-
-        print(f"   📥 Inserting {len(new_entries)} new prices (skipping {len(filtered_data) - len(new_entries)} existing)...")
-
-        # Insert only new dates
-        inserted_count = 0
-        for entry in new_entries:
-            try:
-                # Insert the historical price
-                supabase.table("product_price_history").insert({
+            # Prepare batch entries
+            batch_entries = [
+                {
                     "product_id": product_id,
                     "usd_price": entry['price'],
-                    "recorded_at": f"{entry['date']} 12:00:00"  # Use noon as timestamp (no timezone)
-                }).execute()
+                    "recorded_at": f"{entry['date']} 12:00:00"  # Use noon as timestamp
+                }
+                for entry in new_entries
+            ]
 
-                inserted_count += 1
-                print(f"      ✅ Inserted {entry['date']}: ${entry['price']:.2f}")
+            # Batch insert
+            inserted_count, failed_count = batch_insert_price_history(batch_entries)
+            total_inserted += inserted_count
 
-            except Exception as e:
-                print(f"      ❌ Error inserting {entry['date']}: {e}")
+            if failed_count > 0:
+                logger.warning(f"   Inserted {inserted_count} records, {failed_count} failed for product {product_id}")
+            else:
+                logger.info(f"   Inserted {inserted_count} new records for product {product_id}")
 
-        total_inserted += inserted_count
-        print(f"   ✅ Inserted {inserted_count} new records for product {product_id}\n")
+            # Polite delay between products
+            time.sleep(2)
 
-        # Polite delay between products
-        time.sleep(2)
+    finally:
+        cleanup_driver(driver, user_data_dir)
 
-    driver.quit()
-
-    print(f"\n🎉 Backfill complete! Inserted {total_inserted} total historical price records.")
+    logger.info(f"Backfill complete! Inserted {total_inserted} total historical price records.")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
@@ -489,8 +603,14 @@ Examples:
                         help="Ending product index (exclusive)")
     parser.add_argument("--days", type=int, default=90,
                         help="Number of days to backfill (default: 90)")
+    parser.add_argument("--debug", action="store_true",
+                        help="Enable debug logging")
 
     args = parser.parse_args()
+
+    # Set logging level based on debug flag (only affects this module's logger)
+    if args.debug:
+        logger.setLevel(logging.DEBUG)
 
     # Determine range based on flags
     if args.forward or args.reverse:
@@ -504,13 +624,13 @@ Examples:
             start_idx = args.start if args.start is not None else 0
             end_idx = args.end if args.end is not None else midpoint
             reverse = False
-            print(f"🔀 FORWARD MODE: Processing products {start_idx} to {end_idx-1}")
+            logger.info(f"FORWARD MODE: Processing products {start_idx} to {end_idx-1}")
         else:  # args.reverse
             # Second half, reverse order
             start_idx = args.start if args.start is not None else midpoint
             end_idx = args.end if args.end is not None else total_count
             reverse = True
-            print(f"🔄 REVERSE MODE: Processing products {end_idx-1} down to {start_idx}")
+            logger.info(f"REVERSE MODE: Processing products {end_idx-1} down to {start_idx}")
     elif args.start is not None or args.end is not None:
         # Custom range specified
         start_idx = args.start
