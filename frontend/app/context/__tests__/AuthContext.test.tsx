@@ -106,6 +106,14 @@ function renderWithProvider(ui: React.ReactElement = <TestConsumer />) {
   return render(<AuthProvider>{ui}</AuthProvider>);
 }
 
+async function renderWithProviderAndWait(ui: React.ReactElement = <TestConsumer />) {
+  const renderResult = renderWithProvider(ui);
+  await waitFor(() => {
+    expect(screen.getByTestId("loading")).toHaveTextContent("false");
+  });
+  return renderResult;
+}
+
 describe("AuthContext", () => {
   beforeEach(() => {
     jest.clearAllMocks();
@@ -122,8 +130,11 @@ describe("AuthContext", () => {
 
   describe("AuthProvider initialization", () => {
     it("should render children", async () => {
-      renderWithProvider(
-        <div data-testid="child">Child Content</div>
+      await renderWithProviderAndWait(
+        <div>
+          <div data-testid="child">Child Content</div>
+          <TestConsumer />
+        </div>
       );
 
       expect(screen.getByTestId("child")).toHaveTextContent("Child Content");
@@ -143,11 +154,9 @@ describe("AuthContext", () => {
         error: null,
       });
 
-      renderWithProvider();
+      await renderWithProviderAndWait();
 
-      await waitFor(() => {
-        expect(screen.getByTestId("loading")).toHaveTextContent("false");
-      });
+      expect(screen.getByTestId("loading")).toHaveTextContent("false");
     });
 
     it("should initialize with null user when no session exists", async () => {
@@ -156,11 +165,9 @@ describe("AuthContext", () => {
         error: null,
       });
 
-      renderWithProvider();
+      await renderWithProviderAndWait();
 
-      await waitFor(() => {
-        expect(screen.getByTestId("user")).toHaveTextContent("no-user");
-      });
+      expect(screen.getByTestId("user")).toHaveTextContent("no-user");
     });
 
     it("should initialize user from existing session", async () => {
@@ -177,11 +184,9 @@ describe("AuthContext", () => {
         error: null,
       });
 
-      renderWithProvider();
+      await renderWithProviderAndWait();
 
-      await waitFor(() => {
-        expect(screen.getByTestId("user")).toHaveTextContent("test@example.com");
-      });
+      expect(screen.getByTestId("user")).toHaveTextContent("test@example.com");
     });
 
     it("should fetch profile when session has user", async () => {
@@ -198,33 +203,24 @@ describe("AuthContext", () => {
         error: null,
       });
 
-      renderWithProvider();
+      await renderWithProviderAndWait();
 
-      await waitFor(() => {
-        expect(mockFrom).toHaveBeenCalledWith("profiles");
-        expect(mockSelect).toHaveBeenCalledWith("id, username, email");
-        expect(mockEq).toHaveBeenCalledWith("id", "user-456");
-      });
+      expect(mockFrom).toHaveBeenCalledWith("profiles");
+      expect(mockSelect).toHaveBeenCalledWith("id, username, email");
+      expect(mockEq).toHaveBeenCalledWith("id", "user-456");
 
-      await waitFor(() => {
-        expect(screen.getByTestId("profile")).toHaveTextContent("profileuser");
-      });
+      expect(screen.getByTestId("profile")).toHaveTextContent("profileuser");
     });
 
     it("should subscribe to auth state changes on mount", async () => {
-      renderWithProvider();
+      await renderWithProviderAndWait();
 
-      await waitFor(() => {
-        expect(mockOnAuthStateChange).toHaveBeenCalled();
-      });
+      expect(mockOnAuthStateChange).toHaveBeenCalled();
     });
 
     it("should unsubscribe from auth state changes on unmount", async () => {
-      const { unmount } = renderWithProvider();
-
-      await waitFor(() => {
-        expect(mockOnAuthStateChange).toHaveBeenCalled();
-      });
+      const { unmount } = await renderWithProviderAndWait();
+      expect(mockOnAuthStateChange).toHaveBeenCalled();
 
       unmount();
 
@@ -249,7 +245,7 @@ describe("AuthContext", () => {
         error: null,
       });
 
-      renderWithProvider();
+      await renderWithProviderAndWait();
 
       await waitFor(() => {
         expect(screen.getByTestId("user")).toHaveTextContent("no-user");
@@ -300,7 +296,7 @@ describe("AuthContext", () => {
         error: null,
       });
 
-      renderWithProvider();
+      await renderWithProviderAndWait();
 
       await waitFor(() => {
         expect(screen.getByTestId("user")).toHaveTextContent("test@example.com");
@@ -329,7 +325,7 @@ describe("AuthContext", () => {
       });
 
       let capturedAuth: ReturnType<typeof useAuth> | null = null;
-      renderWithProvider(
+      await renderWithProviderAndWait(
         <TestConsumer onRender={(auth) => { capturedAuth = auth; }} />
       );
 
@@ -360,7 +356,7 @@ describe("AuthContext", () => {
       });
 
       let capturedAuth: ReturnType<typeof useAuth> | null = null;
-      renderWithProvider(
+      await renderWithProviderAndWait(
         <TestConsumer onRender={(auth) => { capturedAuth = auth; }} />
       );
 
@@ -388,7 +384,7 @@ describe("AuthContext", () => {
       });
 
       let capturedAuth: ReturnType<typeof useAuth> | null = null;
-      renderWithProvider(
+      await renderWithProviderAndWait(
         <TestConsumer onRender={(auth) => { capturedAuth = auth; }} />
       );
 
@@ -413,7 +409,7 @@ describe("AuthContext", () => {
       });
 
       let capturedAuth: ReturnType<typeof useAuth> | null = null;
-      renderWithProvider(
+      await renderWithProviderAndWait(
         <TestConsumer onRender={(auth) => { capturedAuth = auth; }} />
       );
 
@@ -435,7 +431,7 @@ describe("AuthContext", () => {
       mockSignInWithPassword.mockResolvedValue({ error: null });
 
       let capturedAuth: ReturnType<typeof useAuth> | null = null;
-      renderWithProvider(
+      await renderWithProviderAndWait(
         <TestConsumer onRender={(auth) => { capturedAuth = auth; }} />
       );
 
@@ -458,7 +454,7 @@ describe("AuthContext", () => {
       mockSignInWithPassword.mockResolvedValue({ error: null });
 
       let capturedAuth: ReturnType<typeof useAuth> | null = null;
-      renderWithProvider(
+      await renderWithProviderAndWait(
         <TestConsumer onRender={(auth) => { capturedAuth = auth; }} />
       );
 
@@ -480,7 +476,7 @@ describe("AuthContext", () => {
       mockSignInWithPassword.mockResolvedValue({ error: signInError });
 
       let capturedAuth: ReturnType<typeof useAuth> | null = null;
-      renderWithProvider(
+      await renderWithProviderAndWait(
         <TestConsumer onRender={(auth) => { capturedAuth = auth; }} />
       );
 
@@ -511,7 +507,7 @@ describe("AuthContext", () => {
       });
 
       let capturedAuth: ReturnType<typeof useAuth> | null = null;
-      renderWithProvider(
+      await renderWithProviderAndWait(
         <TestConsumer onRender={(auth) => { capturedAuth = auth; }} />
       );
 
@@ -539,7 +535,7 @@ describe("AuthContext", () => {
       });
 
       let capturedAuth: ReturnType<typeof useAuth> | null = null;
-      renderWithProvider(
+      await renderWithProviderAndWait(
         <TestConsumer onRender={(auth) => { capturedAuth = auth; }} />
       );
 
@@ -563,7 +559,7 @@ describe("AuthContext", () => {
       mockResetPasswordForEmail.mockResolvedValue({ error: null });
 
       let capturedAuth: ReturnType<typeof useAuth> | null = null;
-      renderWithProvider(
+      await renderWithProviderAndWait(
         <TestConsumer onRender={(auth) => { capturedAuth = auth; }} />
       );
 
@@ -586,7 +582,7 @@ describe("AuthContext", () => {
       mockResetPasswordForEmail.mockResolvedValue({ error: null });
 
       let capturedAuth: ReturnType<typeof useAuth> | null = null;
-      renderWithProvider(
+      await renderWithProviderAndWait(
         <TestConsumer onRender={(auth) => { capturedAuth = auth; }} />
       );
 
@@ -608,7 +604,7 @@ describe("AuthContext", () => {
       mockResetPasswordForEmail.mockResolvedValue({ error: resetError });
 
       let capturedAuth: ReturnType<typeof useAuth> | null = null;
-      renderWithProvider(
+      await renderWithProviderAndWait(
         <TestConsumer onRender={(auth) => { capturedAuth = auth; }} />
       );
 
@@ -639,7 +635,7 @@ describe("AuthContext", () => {
       });
 
       let capturedAuth: ReturnType<typeof useAuth> | null = null;
-      renderWithProvider(
+      await renderWithProviderAndWait(
         <TestConsumer onRender={(auth) => { capturedAuth = auth; }} />
       );
 
@@ -661,7 +657,7 @@ describe("AuthContext", () => {
       mockUpdateUser.mockResolvedValue({ error: null });
 
       let capturedAuth: ReturnType<typeof useAuth> | null = null;
-      renderWithProvider(
+      await renderWithProviderAndWait(
         <TestConsumer onRender={(auth) => { capturedAuth = auth; }} />
       );
 
@@ -683,7 +679,7 @@ describe("AuthContext", () => {
       mockUpdateUser.mockResolvedValue({ error: updateError });
 
       let capturedAuth: ReturnType<typeof useAuth> | null = null;
-      renderWithProvider(
+      await renderWithProviderAndWait(
         <TestConsumer onRender={(auth) => { capturedAuth = auth; }} />
       );
 
@@ -712,7 +708,7 @@ describe("AuthContext", () => {
         error: { message: "Profile not found" },
       });
 
-      renderWithProvider();
+      await renderWithProviderAndWait();
 
       await waitFor(() => {
         expect(screen.getByTestId("loading")).toHaveTextContent("false");
@@ -732,7 +728,7 @@ describe("AuthContext", () => {
         error: null,
       });
 
-      renderWithProvider();
+      await renderWithProviderAndWait();
 
       await waitFor(() => {
         expect(screen.getByTestId("profile")).toHaveTextContent("fetcheduser");
@@ -756,7 +752,7 @@ describe("AuthContext", () => {
       mockGetSession.mockResolvedValue({ data: { session: null }, error: null });
 
       let capturedAuth: ReturnType<typeof useAuth> | null = null;
-      renderWithProvider(
+      await renderWithProviderAndWait(
         <TestConsumer onRender={(auth) => { capturedAuth = auth; }} />
       );
 
@@ -791,7 +787,7 @@ describe("AuthContext", () => {
         error: null,
       });
 
-      renderWithProvider();
+      await renderWithProviderAndWait();
 
       await waitFor(() => {
         expect(screen.getByTestId("loading")).toHaveTextContent("false");
@@ -811,7 +807,7 @@ describe("AuthContext", () => {
         error: null,
       });
 
-      renderWithProvider();
+      await renderWithProviderAndWait();
 
       await waitFor(() => {
         expect(screen.getByTestId("profile")).toHaveTextContent("no-profile");
@@ -823,7 +819,7 @@ describe("AuthContext", () => {
       mockSignInWithPassword.mockResolvedValue({ error: null });
 
       let capturedAuth: ReturnType<typeof useAuth> | null = null;
-      renderWithProvider(
+      await renderWithProviderAndWait(
         <TestConsumer onRender={(auth) => { capturedAuth = auth; }} />
       );
 
