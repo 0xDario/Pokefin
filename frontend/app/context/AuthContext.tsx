@@ -29,6 +29,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [session, setSession] = useState<Session | null>(null);
   const [loading, setLoading] = useState(true);
+  const isTokenRefreshFailedEvent = (event: string) =>
+    event === "TOKEN_REFRESH_FAILED";
 
   // Fetch user profile from profiles table
   const fetchProfile = async (userId: string, userEmail?: string) => {
@@ -68,11 +70,30 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // Get initial session
     const initSession = async () => {
       const { data: { session } } = await supabase.auth.getSession();
-      setSession(session);
-      setUser(session?.user ?? null);
-      if (session?.user) {
-        await fetchProfile(session.user.id, session.user.email);
+
+      if (!session) {
+        setSession(null);
+        setUser(null);
+        setProfile(null);
+        setLoading(false);
+        return;
       }
+
+      const { data: { user }, error: userError } = await supabase.auth.getUser();
+
+      if (userError || !user) {
+        await supabase.auth.signOut();
+        setSession(null);
+        setUser(null);
+        setProfile(null);
+        setLoading(false);
+        return;
+      }
+
+      const { data: { session: freshSession } } = await supabase.auth.getSession();
+      setSession(freshSession ?? session);
+      setUser(user);
+      await fetchProfile(user.id, user.email);
       setLoading(false);
     };
 
@@ -81,6 +102,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // Listen for auth changes
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       async (event, session) => {
+        if (event === "SIGNED_OUT" || isTokenRefreshFailedEvent(event as string)) {
+          setSession(null);
+          setUser(null);
+          setProfile(null);
+          setLoading(false);
+          return;
+        }
+
         setSession(session);
         setUser(session?.user ?? null);
 
