@@ -167,7 +167,7 @@ def download_and_upload_image(image_url, product_id):
                 {
                     "content-type": f"image/{file_extension}",
                     "cache-control": "3600",
-                    "upsert": True
+                    "upsert": "true"
                 }
             )
 
