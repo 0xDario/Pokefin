@@ -89,11 +89,11 @@ export default function AllocationChart({
 
   if (holdings.length === 0) {
     return (
-      <div className="bg-white dark:bg-gray-800 rounded-lg shadow-lg p-4 md:p-6">
+      <div className="bg-white dark:bg-gray-800 rounded-lg shadow-lg p-4 md:p-6 h-full flex flex-col">
         <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
           Allocation by {groupBy === "set" ? "Set" : "Product Type"}
         </h2>
-        <div className="h-48 flex items-center justify-center text-gray-500 dark:text-gray-400">
+        <div className="flex-1 flex items-center justify-center text-gray-500 dark:text-gray-400">
           No holdings to display
         </div>
       </div>
@@ -101,14 +101,14 @@ export default function AllocationChart({
   }
 
   return (
-    <div className="bg-white dark:bg-gray-800 rounded-lg shadow-lg p-4 md:p-6">
+    <div className="bg-white dark:bg-gray-800 rounded-lg shadow-lg p-4 md:p-6 h-full flex flex-col">
       <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
         Allocation by {groupBy === "set" ? "Set" : "Product Type"}
       </h2>
 
-      <div className="flex flex-col md:flex-row items-center gap-4">
+      <div className="flex-1 flex flex-col items-center justify-center gap-4">
         {/* Pie Chart */}
-        <div className="w-full md:w-1/2 h-48">
+        <div className="w-full h-32">
           <ResponsiveContainer width="100%" height="100%">
             <PieChart>
               <Pie
@@ -117,8 +117,8 @@ export default function AllocationChart({
                 nameKey="name"
                 cx="50%"
                 cy="50%"
-                innerRadius={40}
-                outerRadius={70}
+                innerRadius={35}
+                outerRadius={55}
                 paddingAngle={2}
               >
                 {allocationData.map((entry, index) => (
@@ -131,13 +131,13 @@ export default function AllocationChart({
         </div>
 
         {/* Legend */}
-        <div className="w-full md:w-1/2 max-h-48 overflow-y-auto">
-          <ul className="space-y-2">
-            {allocationData.slice(0, 8).map((item) => (
-              <li key={item.name} className="flex items-center justify-between text-sm">
+        <div className="w-full overflow-y-auto max-h-24">
+          <ul className="space-y-1">
+            {allocationData.slice(0, 6).map((item) => (
+              <li key={item.name} className="flex items-center justify-between text-xs">
                 <div className="flex items-center gap-2 min-w-0">
                   <span
-                    className="w-3 h-3 rounded-full flex-shrink-0"
+                    className="w-2.5 h-2.5 rounded-full flex-shrink-0"
                     style={{ backgroundColor: item.color }}
                   ></span>
                   <span className="text-gray-700 dark:text-gray-300 truncate">
@@ -149,9 +149,9 @@ export default function AllocationChart({
                 </span>
               </li>
             ))}
-            {allocationData.length > 8 && (
+            {allocationData.length > 6 && (
               <li className="text-xs text-gray-400 dark:text-gray-500">
-                +{allocationData.length - 8} more
+                +{allocationData.length - 6} more
               </li>
             )}
           </ul>

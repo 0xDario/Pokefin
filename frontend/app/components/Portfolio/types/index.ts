@@ -161,6 +161,7 @@ export interface ImportMatchResult {
   matchedProduct: ProductSearchResult | null;
   matchConfidence: "exact" | "high" | "low" | "none";
   importStatus: "pending" | "imported" | "skipped" | "error";
+  unmatchedReason?: string;
   errorMessage?: string;
 }
 

@@ -194,6 +194,10 @@ export default function ImportHoldingsModal({
                     <li>Booster Boxes</li>
                     <li>Booster Bundles</li>
                     <li>Elite Trainer Boxes</li>
+                    <li>Booster Packs</li>
+                    <li>Blisters (including 3-pack)</li>
+                    <li>Tins (mini and standard)</li>
+                    <li>Collections (premium, poster, tech sticker, build &amp; battle)</li>
                   </ul>
                   <p className="mt-2 text-xs">Other product types will be skipped during import.</p>
                 </div>
@@ -374,9 +378,14 @@ export default function ImportHoldingsModal({
                           <svg className="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
                           </svg>
-                          <span className="truncate">
-                            {result.csvRow.set} - {result.csvRow.productName} (Qty: {result.csvRow.quantity})
-                          </span>
+                          <div className="min-w-0">
+                            <p className="truncate">
+                              {result.csvRow.set} - {result.csvRow.productName} (Qty: {result.csvRow.quantity})
+                            </p>
+                            <p className="text-xs text-gray-400 dark:text-gray-500">
+                              Reason: {result.unmatchedReason || "No match found"}
+                            </p>
+                          </div>
                         </div>
                       ))}
                     </div>

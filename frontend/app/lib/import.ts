@@ -7,20 +7,106 @@ import type {
 } from "../components/Portfolio/types";
 import { addHolding } from "./portfolio";
 
-// Product types we support for import
-const SUPPORTED_PRODUCT_TYPES = [
-  "booster_box",
-  "booster_bundle",
-  "elite_trainer_box",
-];
+type SupportedProductType = {
+  key: string;
+  label: string;
+  patterns: RegExp[];
+  tokenGroups: string[][];
+  excludeTokens?: string[];
+};
 
-// Keywords to identify product types from Collectr product names
-const PRODUCT_TYPE_PATTERNS: { pattern: RegExp; type: string }[] = [
-  { pattern: /\bBooster Box\b/i, type: "booster_box" },
-  { pattern: /\bEnhanced Booster Box\b/i, type: "booster_box" },
-  { pattern: /\bBooster Bundle\b/i, type: "booster_bundle" },
-  { pattern: /\bElite Trainer Box\b/i, type: "elite_trainer_box" },
-  { pattern: /\bETB\b/i, type: "elite_trainer_box" },
+const SUPPORTED_PRODUCT_TYPES: SupportedProductType[] = [
+  {
+    key: "booster_box",
+    label: "Booster Boxes",
+    patterns: [/\bEnhanced Booster Box(?:es)?\b/i, /\bBooster Box(?:es)?\b/i],
+    tokenGroups: [["booster", "box"]],
+  },
+  {
+    key: "booster_bundle",
+    label: "Booster Bundles",
+    patterns: [/\bBooster Bundle(?:s)?\b/i],
+    tokenGroups: [["booster", "bundle"]],
+  },
+  {
+    key: "elite_trainer_box",
+    label: "Elite Trainer Boxes",
+    patterns: [/\bElite Trainer Box(?:es)?\b/i, /\bETBs?\b/i],
+    tokenGroups: [["elite", "trainer", "box"]],
+  },
+  {
+    key: "ultra_premium_collection",
+    label: "Ultra Premium Collections",
+    patterns: [/\bUltra Premium Collection(?:s)?\b/i],
+    tokenGroups: [
+      ["ultra", "premium", "collection"],
+      ["premium", "collection"],
+    ],
+  },
+  {
+    key: "premium_collection",
+    label: "Premium Collections",
+    patterns: [/\bSuper-Premium Collection(?:s)?\b/i, /\bPremium Collection(?:s)?\b/i],
+    tokenGroups: [["premium", "collection"]],
+  },
+  {
+    key: "poster_collection",
+    label: "Poster Collections",
+    patterns: [/\bPoster Collection(?:s)?\b/i],
+    tokenGroups: [["poster", "collection"]],
+  },
+  {
+    key: "tech_sticker_collection",
+    label: "Tech Sticker Collections",
+    patterns: [/\bTech Sticker Collection(?:s)?\b/i],
+    tokenGroups: [["tech", "sticker", "collection"]],
+  },
+  {
+    key: "collection",
+    label: "Collections",
+    patterns: [/\bCollection(?:s)?\b/i],
+    tokenGroups: [["collection"]],
+  },
+  {
+    key: "build_and_battle_box",
+    label: "Build & Battle Boxes",
+    patterns: [/\bBuild\s*&\s*Battle Box(?:es)?\b/i],
+    tokenGroups: [["build", "battle", "box"]],
+  },
+  {
+    key: "three_pack_blister",
+    label: "3-Pack Blisters",
+    patterns: [/\b3\s*-?\s*Pack Blister(?:s)?\b/i],
+    tokenGroups: [
+      ["3", "pack", "blister"],
+      ["three", "pack", "blister"],
+    ],
+  },
+  {
+    key: "blister",
+    label: "Blisters",
+    patterns: [/\bBlister(?:s)?\b/i],
+    tokenGroups: [["blister"]],
+  },
+  {
+    key: "mini_tin",
+    label: "Mini Tins",
+    patterns: [/\bMini Tin(?:s)?\b/i],
+    tokenGroups: [["mini", "tin"]],
+  },
+  {
+    key: "tin",
+    label: "Tins",
+    patterns: [/\bTin(?:s)?\b/i],
+    tokenGroups: [["tin"]],
+    excludeTokens: ["mini"],
+  },
+  {
+    key: "booster_pack",
+    label: "Booster Packs",
+    patterns: [/\bBooster Pack(?:s)?\b/i],
+    tokenGroups: [["booster", "pack"]],
+  },
 ];
 
 /**
@@ -91,9 +177,9 @@ function parseCSVLine(line: string): string[] {
 /**
  * Detect product type from Collectr product name
  */
-function detectProductType(productName: string): string | null {
-  for (const { pattern, type } of PRODUCT_TYPE_PATTERNS) {
-    if (pattern.test(productName)) {
+function detectProductType(productName: string): SupportedProductType | null {
+  for (const type of SUPPORTED_PRODUCT_TYPES) {
+    if (type.patterns.some((pattern) => pattern.test(productName))) {
       return type;
     }
   }
@@ -104,8 +190,7 @@ function detectProductType(productName: string): string | null {
  * Check if a product type is supported for import
  */
 function isProductTypeSupported(productName: string): boolean {
-  const detectedType = detectProductType(productName);
-  return detectedType !== null && SUPPORTED_PRODUCT_TYPES.includes(detectedType);
+  return detectProductType(productName) !== null;
 }
 
 /**
@@ -114,10 +199,36 @@ function isProductTypeSupported(productName: string): boolean {
 function normalizeSetName(setName: string): string {
   return setName
     .toLowerCase()
+    .replace(/&/g, "and")
     .replace(/[:\-–—]/g, " ")
     .replace(/\s+/g, " ")
     .replace(/^sv\s*/, "") // Remove "SV: " prefix
     .trim();
+}
+
+function normalizeTypeText(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/&/g, "and")
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function tokenize(value: string): Set<string> {
+  return new Set(normalizeTypeText(value).split(" ").filter(Boolean));
+}
+
+function matchesTokenGroups(
+  tokens: Set<string>,
+  tokenGroups: string[][],
+  excludeTokens?: string[]
+): boolean {
+  if (excludeTokens && excludeTokens.some((token) => tokens.has(token))) {
+    return false;
+  }
+
+  return tokenGroups.some((group) => group.every((token) => tokens.has(token)));
 }
 
 /**
@@ -131,7 +242,6 @@ async function fetchSupportedProducts(): Promise<ProductSearchResult[]> {
       sets ( name, code ),
       product_types ( name, label )
     `)
-    .in("product_type_id", [1, 2, 3]) // Assuming these are the IDs for supported types
     .order("id", { ascending: true });
 
   if (error) {
@@ -154,12 +264,23 @@ async function fetchSupportedProducts(): Promise<ProductSearchResult[]> {
 
     // Filter to supported product types
     return ((allData || []) as unknown as ProductSearchResult[]).filter((p) => {
-      const typeName = p.product_types?.name?.toLowerCase() || "";
-      return SUPPORTED_PRODUCT_TYPES.includes(typeName);
+      const typeText = p.product_types?.label || p.product_types?.name || "";
+      if (!typeText) return false;
+      const tokens = tokenize(typeText);
+      return SUPPORTED_PRODUCT_TYPES.some((type) =>
+        matchesTokenGroups(tokens, type.tokenGroups, type.excludeTokens)
+      );
     });
   }
 
-  return (data || []) as unknown as ProductSearchResult[];
+  return ((data || []) as unknown as ProductSearchResult[]).filter((p) => {
+    const typeText = p.product_types?.label || p.product_types?.name || "";
+    if (!typeText) return false;
+    const tokens = tokenize(typeText);
+    return SUPPORTED_PRODUCT_TYPES.some((type) =>
+      matchesTokenGroups(tokens, type.tokenGroups, type.excludeTokens)
+    );
+  });
 }
 
 /**
@@ -168,34 +289,57 @@ async function fetchSupportedProducts(): Promise<ProductSearchResult[]> {
 function matchProduct(
   csvRow: CollectrCSVRow,
   products: ProductSearchResult[]
-): { product: ProductSearchResult | null; confidence: "exact" | "high" | "low" | "none" } {
+): {
+  product: ProductSearchResult | null;
+  confidence: "exact" | "high" | "low" | "none";
+  unmatchedReason?: string;
+} {
   // Check if this is a supported product type
   if (!isProductTypeSupported(csvRow.productName)) {
-    return { product: null, confidence: "none" };
+    return { product: null, confidence: "none", unmatchedReason: "Unsupported product type" };
   }
 
   const detectedType = detectProductType(csvRow.productName);
   const normalizedSetName = normalizeSetName(csvRow.set);
+  const detectedTokens = detectedType ? detectedType.tokenGroups : [];
 
-  // Find products matching the set and type
-  const candidates = products.filter((p) => {
+  const setMatches = products.filter((p) => {
     const productSetName = normalizeSetName(p.sets?.name || "");
-    const productTypeName = p.product_types?.name?.toLowerCase() || "";
-
-    // Check set name match
-    const setMatch =
+    return (
       productSetName === normalizedSetName ||
       productSetName.includes(normalizedSetName) ||
-      normalizedSetName.includes(productSetName);
+      normalizedSetName.includes(productSetName)
+    );
+  });
 
-    // Check type match
-    const typeMatch = productTypeName === detectedType;
+  if (setMatches.length === 0) {
+    return {
+      product: null,
+      confidence: "none",
+      unmatchedReason: "Set not found in database",
+    };
+  }
 
-    return setMatch && typeMatch;
+  // Find products matching the set and type
+  const candidates = setMatches.filter((p) => {
+    if (!detectedType) {
+      return false;
+    }
+
+    const productTypeText = p.product_types?.label || p.product_types?.name || "";
+    const typeTokens = tokenize(productTypeText);
+
+    return matchesTokenGroups(typeTokens, detectedTokens, detectedType.excludeTokens);
   });
 
   if (candidates.length === 0) {
-    return { product: null, confidence: "none" };
+    return {
+      product: null,
+      confidence: "none",
+      unmatchedReason: detectedType
+        ? `No matching ${detectedType.label.toLowerCase()} for this set`
+        : "Product type not found for set",
+    };
   }
 
   // If only one candidate, use it
@@ -250,13 +394,14 @@ export async function processCollectrImport(
       continue;
     }
 
-    const { product, confidence } = matchProduct(csvRow, products);
+    const { product, confidence, unmatchedReason } = matchProduct(csvRow, products);
 
     results.push({
       csvRow,
       matchedProduct: product,
       matchConfidence: confidence,
       importStatus: "pending",
+      unmatchedReason,
     });
   }
 

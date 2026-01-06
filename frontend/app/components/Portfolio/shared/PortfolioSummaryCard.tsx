@@ -30,7 +30,7 @@ export default function PortfolioSummaryCard({
   const isPositive = summary.total_gain_loss >= 0;
 
   return (
-    <div className="bg-white dark:bg-gray-800 rounded-lg shadow-lg p-4 md:p-6">
+    <div className="bg-white dark:bg-gray-800 rounded-lg shadow-lg p-4 md:p-6 h-full">
       <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
         Portfolio Summary
       </h2>
