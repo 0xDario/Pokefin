@@ -138,7 +138,7 @@ def download_and_upload_image(image_url, product_id):
         if file_extension not in ['jpg', 'jpeg', 'png', 'webp']:
             file_extension = 'jpg'
 
-        filename = f"products/{product_id}_{uuid.uuid4().hex[:8]}.{file_extension}"
+        filename = f"products/{product_id}.{file_extension}"
 
         # Download image with proper headers
         headers = {
@@ -166,7 +166,8 @@ def download_and_upload_image(image_url, product_id):
                 response.content,
                 {
                     "content-type": f"image/{file_extension}",
-                    "cache-control": "3600"
+                    "cache-control": "3600",
+                    "upsert": True
                 }
             )
 
