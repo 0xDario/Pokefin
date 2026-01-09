@@ -27,7 +27,7 @@ export default function PriceChart({
   height = 200,
 }: {
   data: PriceHistoryEntry[];
-  range: "7D" | "30D" | "90D";
+  range: "7D" | "1M" | "3M" | "6M" | "1Y";
   currency?: Currency;
   exchangeRate?: number;
   height?: number;
@@ -65,7 +65,7 @@ export default function PriceChart({
   }, [data, currency, exchangeRate]);
 
   const slicedData = useMemo(() => {
-    const daysNeeded = range === "7D" ? 7 : range === "90D" ? 90 : 30;
+    const daysNeeded = range === "7D" ? 7 : range === "1M" ? 30 : range === "3M" ? 90 : range === "6M" ? 180 : 365;
     let result = groupedDaily.slice(-daysNeeded);
 
     console.log(`[PriceChart] Sliced data for ${range} (${result.length} points):`, result);
@@ -103,7 +103,7 @@ export default function PriceChart({
 
   // Calculate data availability
   const dataAvailability = useMemo(() => {
-    const daysNeeded = range === "7D" ? 7 : range === "90D" ? 90 : 30;
+    const daysNeeded = range === "7D" ? 7 : range === "1M" ? 30 : range === "3M" ? 90 : range === "6M" ? 180 : 365;
     const actualDataPoints = groupedDaily.slice(-daysNeeded).length;
     const isIncomplete = actualDataPoints < daysNeeded;
 

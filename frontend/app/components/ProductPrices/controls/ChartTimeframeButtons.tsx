@@ -7,12 +7,13 @@ interface ChartTimeframeButtonsProps {
 
 /**
  * Chart timeframe selector buttons - Mobile-first with larger touch targets
+ * Aligned with TCGPlayer data availability: 7D, 1M, 3M, 6M, 1Y
  */
 export default function ChartTimeframeButtons({
   selected,
   onChange,
 }: ChartTimeframeButtonsProps) {
-  const timeframes: ChartTimeframe[] = ["7D", "30D", "90D"];
+  const timeframes: ChartTimeframe[] = ["7D", "1M", "3M", "6M", "1Y"];
 
   return (
     <div className="flex flex-col gap-2 sm:flex-row sm:items-center w-full sm:w-auto">

@@ -1,27 +1,39 @@
 #!/usr/bin/env python3
 """
-One-time script to backfill historical price data from TCGPlayer
-Clicks the 1M button and extracts canvas table data for Nov 5 - Dec 6
+Enhanced script to backfill historical price data from TCGPlayer
+Automatically scrapes 365 days (max) of price history with intelligent rate limiting
+
+Features:
+- Multi-timeframe scraping (1M, 3M, 6M, 1Y) for maximum data coverage
+- Intelligent rate limiting with exponential backoff
+- Session recycling to avoid bot detection
+- Checkpoint/resume functionality
+- Robust error handling and retries
+- Detailed progress tracking
 
 Usage:
-  # Run forward (products 0-499):
+  # Standard run (all products, 365 days automatically):
+  python backfill_historical_prices.py
+
+  # Run forward direction (first half of products):
   python backfill_historical_prices.py --forward
 
-  # Run reverse (products 999-500):
+  # Run reverse direction (second half of products):
   python backfill_historical_prices.py --reverse
 
-  # Run both in parallel (two terminals):
+  # Run both in parallel (two terminals for faster processing):
   Terminal 1: python backfill_historical_prices.py --forward
   Terminal 2: python backfill_historical_prices.py --reverse
 
-  # Custom range:
-  python backfill_historical_prices.py --start 0 --end 500
-  python backfill_historical_prices.py --start 500 --end 1000 --reverse
+  # Resume from checkpoint after interruption:
+  python backfill_historical_prices.py --resume checkpoint_20250109_143022.json
 """
 import argparse
 import logging
 import shutil
 import time
+import random
+import json
 from datetime import datetime, timedelta, timezone
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
@@ -30,6 +42,7 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.chrome.service import Service
 from webdriver_manager.chrome import ChromeDriverManager
+from selenium.common.exceptions import TimeoutException, WebDriverException
 from supabase import create_client
 from secretsFile import SUPABASE_URL, SUPABASE_KEY
 import tempfile
@@ -47,8 +60,139 @@ logger = logging.getLogger(__name__)
 # === Supabase Setup ===
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
+# === Rate Limiting Configuration ===
+RATE_LIMIT_CONFIG = {
+    'min_delay': 2.0,        # Minimum delay between requests (seconds)
+    'max_delay': 5.0,        # Maximum delay between requests (seconds)
+    'session_recycle_after': 50,  # Recycle browser session after N products
+    'max_retries': 3,        # Maximum retry attempts per product
+    'retry_backoff_base': 2, # Base for exponential backoff (seconds)
+    'timeout': 20,           # Page load timeout (seconds)
+}
+
+# Rotating user agents to avoid detection
+USER_AGENTS = [
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+]
+
+# Timeframe buttons to click (in order from shortest to longest)
+# This allows us to gather comprehensive historical data
+# TCGPlayer only has: 1M, 3M, 6M, 1Y (maximum 365 days of history)
+# Data granularity:
+#   - 1M: Daily price points (most granular, ~30 days)
+#   - 3M: Every 3 days (~90 days)
+#   - 6M: Weekly basis (~180 days)
+#   - 1Y: Weekly basis (~365 days)
+# We extract from all timeframes and deduplicate, preferring shorter timeframes (more granular)
+TIMEFRAME_BUTTONS = ['1M', '3M', '6M', '1Y']
+
+# === Checkpoint Management ===
+class CheckpointManager:
+    """Manages checkpoints for resuming interrupted scraping runs"""
+
+    def __init__(self, checkpoint_file=None):
+        self.checkpoint_file = checkpoint_file or f"checkpoint_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+        self.data = self._load()
+
+    def _load(self):
+        """Load existing checkpoint or create new one"""
+        if os.path.exists(self.checkpoint_file):
+            try:
+                with open(self.checkpoint_file, 'r') as f:
+                    logger.info(f"Loaded checkpoint from {self.checkpoint_file}")
+                    return json.load(f)
+            except Exception as e:
+                logger.warning(f"Could not load checkpoint: {e}")
+
+        return {
+            'processed_products': [],
+            'failed_products': [],
+            'stats': {
+                'total_inserted': 0,
+                'total_failed': 0,
+                'total_skipped': 0,
+            },
+            'last_updated': None,
+        }
+
+    def save(self):
+        """Save checkpoint to disk"""
+        try:
+            self.data['last_updated'] = datetime.now().isoformat()
+            with open(self.checkpoint_file, 'w') as f:
+                json.dump(self.data, f, indent=2)
+            logger.debug(f"Checkpoint saved to {self.checkpoint_file}")
+        except Exception as e:
+            logger.error(f"Failed to save checkpoint: {e}")
+
+    def mark_processed(self, product_id):
+        """Mark a product as successfully processed"""
+        if product_id not in self.data['processed_products']:
+            self.data['processed_products'].append(product_id)
+            self.save()
+
+    def mark_failed(self, product_id):
+        """Mark a product as failed"""
+        if product_id not in self.data['failed_products']:
+            self.data['failed_products'].append(product_id)
+            self.save()
+
+    def is_processed(self, product_id):
+        """Check if product was already processed"""
+        return product_id in self.data['processed_products']
+
+    def update_stats(self, inserted=0, failed=0, skipped=0):
+        """Update statistics"""
+        self.data['stats']['total_inserted'] += inserted
+        self.data['stats']['total_failed'] += failed
+        self.data['stats']['total_skipped'] += skipped
+        self.save()
+
+# === Rate Limiter ===
+class RateLimiter:
+    """Intelligent rate limiter with exponential backoff"""
+
+    def __init__(self, config=RATE_LIMIT_CONFIG):
+        self.config = config
+        self.last_request_time = 0
+        self.consecutive_errors = 0
+
+    def wait(self):
+        """Wait appropriate amount of time before next request"""
+        elapsed = time.time() - self.last_request_time
+
+        # Calculate base delay with jitter
+        base_delay = random.uniform(self.config['min_delay'], self.config['max_delay'])
+
+        # Add exponential backoff if there were recent errors
+        if self.consecutive_errors > 0:
+            backoff = self.config['retry_backoff_base'] ** self.consecutive_errors
+            delay = base_delay + backoff
+            logger.debug(f"Rate limiting with backoff: {delay:.2f}s (errors: {self.consecutive_errors})")
+        else:
+            delay = base_delay
+
+        # Wait if needed
+        if elapsed < delay:
+            sleep_time = delay - elapsed
+            time.sleep(sleep_time)
+
+        self.last_request_time = time.time()
+
+    def record_error(self):
+        """Record an error for backoff calculation"""
+        self.consecutive_errors += 1
+
+    def reset_errors(self):
+        """Reset error count after successful request"""
+        self.consecutive_errors = 0
+
 # === Selenium Driver Setup ===
-def create_driver():
+def create_driver(user_agent=None):
     """
     Create a Selenium WebDriver with bot detection evasion settings.
     Returns tuple of (driver, user_data_dir) for proper cleanup.
@@ -69,12 +213,15 @@ def create_driver():
                 options.binary_location = path
                 break
 
+    # Use provided user agent or pick random one
+    ua = user_agent or random.choice(USER_AGENTS)
+
     # Bot detection evasion settings
     options.add_argument("--headless=new")
     options.add_argument("--disable-blink-features=AutomationControlled")
     options.add_experimental_option("excludeSwitches", ["enable-automation"])
     options.add_experimental_option('useAutomationExtension', False)
-    options.add_argument("user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+    options.add_argument(f"user-agent={ua}")
     options.add_argument("--disable-gpu")
     options.add_argument("--no-sandbox")
     options.add_argument("--window-size=1920,1080")
@@ -87,9 +234,12 @@ def create_driver():
     options.add_argument(f"--user-data-dir={user_data_dir}")
     options.add_argument("--disable-background-timer-throttling")
 
+    # Set page load timeout
     driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
+    driver.set_page_load_timeout(RATE_LIMIT_CONFIG['timeout'])
     driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
 
+    logger.debug(f"Created driver with user agent: {ua[:50]}...")
     return driver, user_data_dir
 
 
@@ -108,16 +258,26 @@ def cleanup_driver(driver, user_data_dir):
     except Exception as e:
         logger.warning(f"Error cleaning up temp directory: {e}")
 
-def extract_historical_prices(driver, url):
+def extract_historical_prices(driver, url, timeframes=None):
     """
-    Navigate to product page, extract both 1M and 3M historical price data
+    Navigate to product page, extract historical price data from multiple timeframes
     Returns list of dicts with {date, price}
+
+    Args:
+        driver: Selenium WebDriver instance
+        url: Product URL to scrape
+        timeframes: List of timeframe buttons to click (e.g., ['1M', '3M', '6M', '1Y', '3Y'])
+                   If None, uses TIMEFRAME_BUTTONS global
     """
+    if timeframes is None:
+        timeframes = TIMEFRAME_BUTTONS
+
     try:
+        logger.debug(f"Loading page: {url}")
         driver.get(url)
 
         # Wait for page to load
-        wait = WebDriverWait(driver, 15)
+        wait = WebDriverWait(driver, RATE_LIMIT_CONFIG['timeout'])
 
         # Wait for the chart section to appear
         logger.debug("Waiting for chart section to load...")
@@ -125,62 +285,68 @@ def extract_historical_prices(driver, url):
         time.sleep(3)  # Extra time for chart to render
 
         all_historical_data = []
+        successful_timeframes = []
 
-        # === STEP 1: Extract 3M data first (for Nov 5-7) ===
-        logger.debug("Extracting 3M data (date ranges)...")
+        # Extract data from each timeframe
+        for timeframe in timeframes:
+            try:
+                logger.debug(f"Extracting {timeframe} data...")
 
-        # 3M might be default, but let's try to click it to be sure
-        try:
-            buttons = driver.find_elements(By.CSS_SELECTOR, "button.charts-item")
-            for button in buttons:
-                if "3M" in button.text.strip():
-                    logger.debug("Clicking 3M button...")
-                    button.click()
-                    time.sleep(3)
-                    break
-        except Exception as e:
-            logger.warning(f"Could not click 3M button, using default view: {e}")
+                # Click the timeframe button
+                button_clicked = False
+                buttons = driver.find_elements(By.CSS_SELECTOR, "button.charts-item")
+                for button in buttons:
+                    if timeframe in button.text.strip():
+                        logger.debug(f"Clicking {timeframe} button...")
+                        button.click()
+                        time.sleep(3)  # Wait for chart to update
+                        button_clicked = True
+                        break
 
-        # Extract 3M data (date ranges)
-        three_month_data = extract_canvas_table_data(driver, is_date_range=True)
-        all_historical_data.extend(three_month_data)
-        logger.debug(f"Extracted {len(three_month_data)} entries from 3M data")
+                if not button_clicked:
+                    logger.warning(f"Could not find {timeframe} button, skipping...")
+                    continue
 
-        # === STEP 2: Click 1M button and extract daily data ===
-        logger.debug("Extracting 1M data (daily prices)...")
+                # Determine if this timeframe uses date ranges or single dates
+                # Longer timeframes (6M+) typically use date ranges
+                is_date_range = timeframe in ['6M', '1Y']
 
-        try:
-            buttons = driver.find_elements(By.CSS_SELECTOR, "button.charts-item")
-            for button in buttons:
-                if "1M" in button.text.strip():
-                    logger.debug("Clicking 1M button...")
-                    button.click()
-                    time.sleep(3)
-                    break
-        except Exception as e:
-            logger.warning(f"Error clicking 1M button: {e}")
+                # Extract data for this timeframe
+                timeframe_data = extract_canvas_table_data(driver, is_date_range=is_date_range)
+                all_historical_data.extend(timeframe_data)
+                successful_timeframes.append(timeframe)
+                logger.debug(f"Extracted {len(timeframe_data)} entries from {timeframe} data")
 
-        # Extract 1M data (daily)
-        one_month_data = extract_canvas_table_data(driver, is_date_range=False)
-        all_historical_data.extend(one_month_data)
-        logger.debug(f"Extracted {len(one_month_data)} entries from 1M data")
+            except Exception as e:
+                logger.warning(f"Error extracting {timeframe} data: {e}")
+                continue
 
-        # Deduplicate: prefer 1M data (daily) over 3M data (range averages) for same dates
-        # Build a dict with date as key, keeping the last occurrence (1M data comes last)
+        # Deduplicate: prefer data from shorter timeframes (more granular)
+        # Since we process from shortest to longest, later entries will overwrite earlier ones
+        # We reverse to process longest to shortest, so shortest wins
         deduplicated = {}
-        for entry in all_historical_data:
+        for entry in reversed(all_historical_data):  # Reverse so shortest timeframe wins
             date = entry['date']
-            # If date already exists, the later entry (1M) will overwrite the earlier one (3M)
-            deduplicated[date] = entry
+            if date not in deduplicated:  # Keep first occurrence (from shortest timeframe)
+                deduplicated[date] = entry
 
         final_data = list(deduplicated.values())
 
         duplicates_removed = len(all_historical_data) - len(final_data)
         if duplicates_removed > 0:
-            logger.debug(f"Removed {duplicates_removed} duplicate dates (kept 1M data over 3M)")
+            logger.debug(f"Removed {duplicates_removed} duplicate dates (kept data from shorter timeframes)")
+
+        if successful_timeframes:
+            logger.debug(f"Successfully extracted from timeframes: {', '.join(successful_timeframes)}")
 
         return final_data
 
+    except TimeoutException:
+        logger.error(f"Timeout loading page: {url}")
+        return []
+    except WebDriverException as e:
+        logger.error(f"WebDriver error: {e}")
+        return []
     except Exception as e:
         logger.error(f"Error extracting historical prices: {e}")
         return []
@@ -401,17 +567,23 @@ def batch_insert_price_history(entries, batch_size=100):
     return inserted_count, failed_count
 
 
-def backfill_prices(start_idx=None, end_idx=None, reverse=False, days=90):
+def backfill_prices(start_idx=None, end_idx=None, reverse=False, days=365, checkpoint_file=None):
     """
-    Main function to backfill historical prices for all products
+    Main function to backfill historical prices for all products with robust error handling
     Checks for last N days of data, accounting for product release dates
 
     Args:
         start_idx: Starting product index (0-based, inclusive)
         end_idx: Ending product index (exclusive)
         reverse: If True, process products in reverse order
-        days: Number of days to backfill (default: 90)
+        days: Number of days to backfill (default: 365, max supported by TCGPlayer)
+        checkpoint_file: Path to checkpoint file for resume capability
     """
+    # Validate days parameter
+    if days > 365:
+        logger.warning(f"TCGPlayer only supports up to 365 days of history. Adjusting from {days} to 365.")
+        days = 365
+
     utc_now = datetime.now(timezone.utc).date()
     yesterday = utc_now - timedelta(days=1)
     days_ago = yesterday - timedelta(days=days)
@@ -422,6 +594,13 @@ def backfill_prices(start_idx=None, end_idx=None, reverse=False, days=90):
     logger.info(f"Starting historical price backfill for last {days} days")
     logger.info(f"Using UTC timezone - End date: {target_end_date} (yesterday)")
     logger.info(f"Date range: {target_start_date} to {target_end_date}")
+
+    # Initialize checkpoint manager
+    checkpoint = CheckpointManager(checkpoint_file)
+    logger.info(f"Checkpoint file: {checkpoint.checkpoint_file}")
+
+    # Initialize rate limiter
+    rate_limiter = RateLimiter()
 
     # Get all products from database using pagination
     all_products = fetch_products_paginated()
@@ -445,14 +624,25 @@ def backfill_prices(start_idx=None, end_idx=None, reverse=False, days=90):
 
     logger.info(f"Found {len(products)} products to process{range_info} [{direction}]")
 
+    # Filter out already processed products from checkpoint
+    products_to_process = [p for p in products if not checkpoint.is_processed(p["id"])]
+    already_processed = len(products) - len(products_to_process)
+
+    if already_processed > 0:
+        logger.info(f"Skipping {already_processed} already processed products from checkpoint")
+        logger.info(f"{len(products_to_process)} products remaining")
+
     driver = None
     user_data_dir = None
-    total_inserted = 0
+    products_processed = 0
+    session_product_count = 0
 
     try:
+        # Create initial driver
         driver, user_data_dir = create_driver()
+        logger.info("Browser session started")
 
-        for idx, product in enumerate(products, 1):
+        for idx, product in enumerate(products_to_process, 1):
             product_id = product["id"]
             url = product["url"]
             variant = product.get("variant")
@@ -464,10 +654,18 @@ def backfill_prices(start_idx=None, end_idx=None, reverse=False, days=90):
                 release_date_str = sets_data.get("release_date")
 
             variant_info = f" (Variant: {variant})" if variant else ""
-            logger.info(f"[{idx}/{len(products)}] Checking product ID {product_id}{variant_info}...")
+            logger.info(f"[{idx}/{len(products_to_process)}] Processing product ID {product_id}{variant_info}...")
+
+            # === Session recycling to avoid detection ===
+            session_product_count += 1
+            if session_product_count >= RATE_LIMIT_CONFIG['session_recycle_after']:
+                logger.info(f"Recycling browser session (processed {session_product_count} products)")
+                cleanup_driver(driver, user_data_dir)
+                time.sleep(random.uniform(3, 7))  # Random delay before new session
+                driver, user_data_dir = create_driver()  # New user agent each time
+                session_product_count = 0
 
             # === Calculate the actual start date based on release date ===
-            # Don't expect price data before the product was released
             product_start_date = target_start_date
             release_date = None
 
@@ -479,13 +677,15 @@ def backfill_prices(start_idx=None, end_idx=None, reverse=False, days=90):
                     else:
                         release_date = datetime.strptime(release_date_str.split(' ')[0], "%Y-%m-%d").date()
 
-                    # Use the later of: (90 days ago) or (release date)
-                    ninety_days_ago_date = datetime.strptime(target_start_date, "%Y-%m-%d").date()
-                    if release_date > ninety_days_ago_date:
+                    # Use the later of: (N days ago) or (release date)
+                    n_days_ago_date = datetime.strptime(target_start_date, "%Y-%m-%d").date()
+                    if release_date > n_days_ago_date:
                         product_start_date = release_date.strftime("%Y-%m-%d")
                         logger.info(f"   Product released {release_date}, expecting data from {product_start_date}")
                     elif release_date > datetime.strptime(target_end_date, "%Y-%m-%d").date():
                         logger.info(f"   Skipping - product released {release_date} (after target range)")
+                        checkpoint.mark_processed(product_id)
+                        checkpoint.update_stats(skipped=1)
                         continue
                 except Exception as e:
                     logger.warning(f"   Could not parse release_date '{release_date_str}': {e}")
@@ -503,6 +703,8 @@ def backfill_prices(start_idx=None, end_idx=None, reverse=False, days=90):
                 # Check if we have all days
                 if len(existing_dates) >= expected_days:
                     logger.info(f"   Skipping - already has complete data ({len(existing_dates)}/{expected_days} days)")
+                    checkpoint.mark_processed(product_id)
+                    checkpoint.update_stats(skipped=1)
                     continue
                 elif len(existing_dates) > 0:
                     logger.info(f"   Has partial data ({len(existing_dates)}/{expected_days} days) - will fill missing dates")
@@ -511,13 +713,53 @@ def backfill_prices(start_idx=None, end_idx=None, reverse=False, days=90):
                 existing_dates = set()
                 # Continue with scraping if check fails
 
-            logger.debug(f"   Extracting historical prices...")
+            # === Retry logic for scraping ===
+            historical_data = None
+            for attempt in range(1, RATE_LIMIT_CONFIG['max_retries'] + 1):
+                try:
+                    # Apply rate limiting before request
+                    rate_limiter.wait()
 
-            # Extract historical data
-            historical_data = extract_historical_prices(driver, url)
+                    logger.debug(f"   Extracting historical prices (attempt {attempt}/{RATE_LIMIT_CONFIG['max_retries']})...")
+                    historical_data = extract_historical_prices(driver, url)
+
+                    if historical_data:
+                        rate_limiter.reset_errors()
+                        break
+                    else:
+                        logger.warning(f"   No data extracted on attempt {attempt}")
+                        if attempt < RATE_LIMIT_CONFIG['max_retries']:
+                            rate_limiter.record_error()
+                            backoff_time = RATE_LIMIT_CONFIG['retry_backoff_base'] ** attempt
+                            logger.info(f"   Retrying in {backoff_time}s...")
+                            time.sleep(backoff_time)
+
+                except (TimeoutException, WebDriverException) as e:
+                    logger.warning(f"   Browser error on attempt {attempt}: {e}")
+                    rate_limiter.record_error()
+
+                    if attempt < RATE_LIMIT_CONFIG['max_retries']:
+                        # Try recycling the session if there's a browser error
+                        try:
+                            cleanup_driver(driver, user_data_dir)
+                            time.sleep(random.uniform(2, 5))
+                            driver, user_data_dir = create_driver()
+                            session_product_count = 0
+                        except Exception as driver_e:
+                            logger.error(f"   Failed to recycle driver: {driver_e}")
+                    continue
+
+                except Exception as e:
+                    logger.error(f"   Unexpected error on attempt {attempt}: {e}")
+                    rate_limiter.record_error()
+                    if attempt < RATE_LIMIT_CONFIG['max_retries']:
+                        time.sleep(RATE_LIMIT_CONFIG['retry_backoff_base'] ** attempt)
+                    continue
 
             if not historical_data:
-                logger.warning(f"   No historical data found for product {product_id}")
+                logger.error(f"   Failed to extract data for product {product_id} after {RATE_LIMIT_CONFIG['max_retries']} attempts")
+                checkpoint.mark_failed(product_id)
+                checkpoint.update_stats(failed=1)
                 continue
 
             # Filter to only dates in our target range (respecting release date)
@@ -528,6 +770,8 @@ def backfill_prices(start_idx=None, end_idx=None, reverse=False, days=90):
 
             if not filtered_data:
                 logger.info(f"   No data in target date range for product {product_id}")
+                checkpoint.mark_processed(product_id)
+                checkpoint.update_stats(skipped=1)
                 continue
 
             # Filter out dates that already exist
@@ -535,6 +779,8 @@ def backfill_prices(start_idx=None, end_idx=None, reverse=False, days=90):
 
             if not new_entries:
                 logger.info(f"   All {len(filtered_data)} dates already exist for product {product_id}")
+                checkpoint.mark_processed(product_id)
+                checkpoint.update_stats(skipped=1)
                 continue
 
             logger.info(f"   Inserting {len(new_entries)} new prices (skipping {len(filtered_data) - len(new_entries)} existing)...")
@@ -551,66 +797,79 @@ def backfill_prices(start_idx=None, end_idx=None, reverse=False, days=90):
 
             # Batch insert
             inserted_count, failed_count = batch_insert_price_history(batch_entries)
-            total_inserted += inserted_count
 
             if failed_count > 0:
                 logger.warning(f"   Inserted {inserted_count} records, {failed_count} failed for product {product_id}")
+                checkpoint.update_stats(inserted=inserted_count, failed=failed_count)
             else:
                 logger.info(f"   Inserted {inserted_count} new records for product {product_id}")
+                checkpoint.update_stats(inserted=inserted_count)
 
-            # Polite delay between products
-            time.sleep(2)
+            # Mark as successfully processed
+            checkpoint.mark_processed(product_id)
+            products_processed += 1
+
+    except KeyboardInterrupt:
+        logger.info("\n\nInterrupted by user. Progress saved to checkpoint.")
+        logger.info(f"Resume with: python backfill_historical_prices.py --resume {checkpoint.checkpoint_file}")
 
     finally:
         cleanup_driver(driver, user_data_dir)
 
-    logger.info(f"Backfill complete! Inserted {total_inserted} total historical price records.")
+    # Print final statistics
+    stats = checkpoint.data['stats']
+    logger.info("="*60)
+    logger.info("Backfill Complete!")
+    logger.info(f"  Total inserted: {stats['total_inserted']} price records")
+    logger.info(f"  Total skipped:  {stats['total_skipped']} products")
+    logger.info(f"  Total failed:   {stats['total_failed']} operations")
+    logger.info(f"  Checkpoint:     {checkpoint.checkpoint_file}")
+    logger.info("="*60)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="Backfill historical price data from TCGPlayer",
+        description="Backfill 365 days of historical price data from TCGPlayer (automatic)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Run forward (first half of products):
+  # Process all products (default):
+  python backfill_historical_prices.py
+
+  # Run forward direction (first half):
   python backfill_historical_prices.py --forward
 
-  # Run reverse (second half of products):
+  # Run reverse direction (second half):
   python backfill_historical_prices.py --reverse
 
-  # Run both in parallel (open two terminals):
+  # Run both in parallel for maximum speed:
   Terminal 1: python backfill_historical_prices.py --forward
   Terminal 2: python backfill_historical_prices.py --reverse
 
-  # Custom range with direction:
-  python backfill_historical_prices.py --start 0 --end 300
-  python backfill_historical_prices.py --start 300 --end 600 --reverse
+  # Resume from checkpoint:
+  python backfill_historical_prices.py --resume checkpoint_20250109_143022.json
 
-  # Process all products (no parallelization):
-  python backfill_historical_prices.py --all
+  # Enable debug logging:
+  python backfill_historical_prices.py --debug
         """
     )
 
     parser.add_argument("--forward", action="store_true",
-                        help="Process first half of products in forward order (indices 0 to midpoint)")
+                        help="Process first half of products in forward order")
     parser.add_argument("--reverse", action="store_true",
-                        help="Process second half of products in reverse order (indices midpoint to end)")
-    parser.add_argument("--all", action="store_true",
-                        help="Process all products (default behavior, no split)")
-    parser.add_argument("--start", type=int, default=None,
-                        help="Starting product index (0-based, inclusive)")
-    parser.add_argument("--end", type=int, default=None,
-                        help="Ending product index (exclusive)")
-    parser.add_argument("--days", type=int, default=90,
-                        help="Number of days to backfill (default: 90)")
+                        help="Process second half of products in reverse order")
+    parser.add_argument("--resume", type=str, default=None,
+                        help="Resume from checkpoint file")
     parser.add_argument("--debug", action="store_true",
                         help="Enable debug logging")
 
     args = parser.parse_args()
 
-    # Set logging level based on debug flag (only affects this module's logger)
+    # Set logging level based on debug flag
     if args.debug:
         logger.setLevel(logging.DEBUG)
+
+    # Always use maximum 365 days
+    days = 365
 
     # Determine range based on flags
     if args.forward or args.reverse:
@@ -621,25 +880,27 @@ Examples:
 
         if args.forward:
             # First half, forward order
-            start_idx = args.start if args.start is not None else 0
-            end_idx = args.end if args.end is not None else midpoint
+            start_idx = 0
+            end_idx = midpoint
             reverse = False
-            logger.info(f"FORWARD MODE: Processing products {start_idx} to {end_idx-1}")
+            logger.info(f"FORWARD MODE: Processing products 0 to {end_idx-1} (first half)")
         else:  # args.reverse
             # Second half, reverse order
-            start_idx = args.start if args.start is not None else midpoint
-            end_idx = args.end if args.end is not None else total_count
+            start_idx = midpoint
+            end_idx = total_count
             reverse = True
-            logger.info(f"REVERSE MODE: Processing products {end_idx-1} down to {start_idx}")
-    elif args.start is not None or args.end is not None:
-        # Custom range specified
-        start_idx = args.start
-        end_idx = args.end
-        reverse = False
+            logger.info(f"REVERSE MODE: Processing products {end_idx-1} down to {start_idx} (second half)")
     else:
-        # Default: process all
+        # Default: process all products
         start_idx = None
         end_idx = None
         reverse = False
+        logger.info("Processing ALL products")
 
-    backfill_prices(start_idx=start_idx, end_idx=end_idx, reverse=reverse, days=args.days)
+    backfill_prices(
+        start_idx=start_idx,
+        end_idx=end_idx,
+        reverse=reverse,
+        days=days,
+        checkpoint_file=args.resume
+    )
