@@ -30,8 +30,10 @@ interface UsePortfolioDataReturn {
 
 const TIMEFRAME_DAYS: Record<PortfolioTimeframe, number> = {
   "7D": 7,
-  "30D": 30,
-  "90D": 90,
+  "1M": 30,
+  "3M": 90,
+  "6M": 180,
+  "1Y": 365,
   "ALL": 365,
 };
 
@@ -43,7 +45,7 @@ export function usePortfolioData(): UsePortfolioDataReturn {
   const [history, setHistory] = useState<PortfolioHistoryPoint[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [timeframe, setTimeframe] = useState<PortfolioTimeframe>("30D");
+  const [timeframe, setTimeframe] = useState<PortfolioTimeframe>("1M");
 
   const fetchData = useCallback(async () => {
     if (!user?.id) {

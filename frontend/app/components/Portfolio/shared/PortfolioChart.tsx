@@ -79,7 +79,7 @@ export default function PortfolioChart({
     return null;
   };
 
-  const timeframes: PortfolioTimeframe[] = ["7D", "30D", "90D", "ALL"];
+  const timeframes: PortfolioTimeframe[] = ["7D", "1M", "3M", "6M", "1Y", "ALL"];
 
   if (chartData.length === 0) {
     return (

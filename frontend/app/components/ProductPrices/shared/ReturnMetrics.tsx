@@ -21,8 +21,10 @@ interface ReturnData {
  * Filters metrics to show only those relevant to the selected chart timeframe
  *
  * - 7D chart → shows 1D and 7D returns
- * - 30D chart → shows 7D and 30D returns
- * - 90D chart → shows 30D and 90D returns
+ * - 1M chart → shows 7D and 1M (30D) returns
+ * - 3M chart → shows 1M (30D) and 3M (90D) returns
+ * - 6M chart → shows 3M (90D) and 6M (180D) returns
+ * - 1Y chart → shows 3M (90D), 6M (180D), and 1Y (365D) returns
  */
 export default function ReturnMetrics({
   productId,
@@ -112,7 +114,7 @@ export default function ReturnMetrics({
     };
   };
 
-  // Calculate 90D return
+  // Calculate 90D (3M) return
   const get90DReturn = (): ReturnData | null => {
     if (!history || history.length < 2) return null;
 
@@ -123,6 +125,54 @@ export default function ReturnMetrics({
     const pastEntry = history.find((entry) => {
       const entryDate = new Date(entry.recorded_at);
       return entryDate <= ninetyDaysAgo;
+    });
+
+    if (!pastEntry) return null;
+
+    const pastPrice = convertPrice(pastEntry.usd_price);
+    const percentChange = ((currentPrice - pastPrice) / pastPrice) * 100;
+
+    return {
+      percent: percentChange,
+      dollarChange: currentPrice - pastPrice,
+    };
+  };
+
+  // Calculate 180D (6M) return
+  const get180DReturn = (): ReturnData | null => {
+    if (!history || history.length < 2) return null;
+
+    const currentPrice = convertPrice(history[0].usd_price);
+    const oneEightyDaysAgo = new Date();
+    oneEightyDaysAgo.setDate(oneEightyDaysAgo.getDate() - 180);
+
+    const pastEntry = history.find((entry) => {
+      const entryDate = new Date(entry.recorded_at);
+      return entryDate <= oneEightyDaysAgo;
+    });
+
+    if (!pastEntry) return null;
+
+    const pastPrice = convertPrice(pastEntry.usd_price);
+    const percentChange = ((currentPrice - pastPrice) / pastPrice) * 100;
+
+    return {
+      percent: percentChange,
+      dollarChange: currentPrice - pastPrice,
+    };
+  };
+
+  // Calculate 365D (1Y) return
+  const get365DReturn = (): ReturnData | null => {
+    if (!history || history.length < 2) return null;
+
+    const currentPrice = convertPrice(history[0].usd_price);
+    const oneYearAgo = new Date();
+    oneYearAgo.setDate(oneYearAgo.getDate() - 365);
+
+    const pastEntry = history.find((entry) => {
+      const entryDate = new Date(entry.recorded_at);
+      return entryDate <= oneYearAgo;
     });
 
     if (!pastEntry) return null;
@@ -169,18 +219,32 @@ export default function ReturnMetrics({
       const metric7D = renderMetric("7D", get7DReturn());
       if (metric1D) metrics.push(metric1D);
       if (metric7D) metrics.push(metric7D);
-    } else if (chartTimeframe === "30D") {
-      // Show 7D and 30D
+    } else if (chartTimeframe === "1M") {
+      // Show 7D and 1M (30D)
       const metric7D = renderMetric("7D", get7DReturn());
-      const metric30D = renderMetric("30D", get30DReturn());
+      const metric1M = renderMetric("1M", get30DReturn());
       if (metric7D) metrics.push(metric7D);
-      if (metric30D) metrics.push(metric30D);
-    } else if (chartTimeframe === "90D") {
-      // Show 30D and 90D
-      const metric30D = renderMetric("30D", get30DReturn());
-      const metric90D = renderMetric("90D", get90DReturn());
-      if (metric30D) metrics.push(metric30D);
-      if (metric90D) metrics.push(metric90D);
+      if (metric1M) metrics.push(metric1M);
+    } else if (chartTimeframe === "3M") {
+      // Show 1M (30D) and 3M (90D)
+      const metric1M = renderMetric("1M", get30DReturn());
+      const metric3M = renderMetric("3M", get90DReturn());
+      if (metric1M) metrics.push(metric1M);
+      if (metric3M) metrics.push(metric3M);
+    } else if (chartTimeframe === "6M") {
+      // Show 3M (90D) and 6M (180D)
+      const metric3M = renderMetric("3M", get90DReturn());
+      const metric6M = renderMetric("6M", get180DReturn());
+      if (metric3M) metrics.push(metric3M);
+      if (metric6M) metrics.push(metric6M);
+    } else if (chartTimeframe === "1Y") {
+      // Show 3M (90D), 6M (180D), and 1Y (365D)
+      const metric3M = renderMetric("3M", get90DReturn());
+      const metric6M = renderMetric("6M", get180DReturn());
+      const metric1Y = renderMetric("1Y", get365DReturn());
+      if (metric3M) metrics.push(metric3M);
+      if (metric6M) metrics.push(metric6M);
+      if (metric1Y) metrics.push(metric1Y);
     }
 
     return metrics;

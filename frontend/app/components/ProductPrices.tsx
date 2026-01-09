@@ -122,7 +122,7 @@ export default function ProductPrices() {
   const [sortKey, setSortKey] = useState<"price" | "release_date">("release_date");
   const [sortDirection, setSortDirection] = useState<"asc" | "desc">("desc");
   const [viewMode, setViewMode] = useState<"flat" | "grouped">("grouped");
-  const [chartTimeframe, setChartTimeframe] = useState<"7D" | "30D" | "90D">("30D");
+  const [chartTimeframe, setChartTimeframe] = useState<"7D" | "1M" | "3M" | "6M" | "1Y">("1M");
   const [priceHistory, setPriceHistory] = useState<Record<number, PriceHistoryEntry[]>>({});
   
   // Currency state
@@ -316,6 +316,52 @@ export default function ProductPrices() {
     };
   };
 
+  const get180DReturn = (history: PriceHistoryEntry[] | undefined) => {
+    if (!history || history.length < 2) return null;
+
+    const currentPrice = convertPrice(history[0].usd_price);
+    const oneEightyDaysAgo = new Date();
+    oneEightyDaysAgo.setDate(oneEightyDaysAgo.getDate() - 180);
+
+    const pastEntry = history.find(entry => {
+      const entryDate = new Date(entry.recorded_at);
+      return entryDate <= oneEightyDaysAgo;
+    });
+
+    if (!pastEntry) return null;
+
+    const pastPrice = convertPrice(pastEntry.usd_price);
+    const percentChange = ((currentPrice - pastPrice) / pastPrice) * 100;
+
+    return {
+      percent: percentChange,
+      dollarChange: currentPrice - pastPrice,
+    };
+  };
+
+  const get365DReturn = (history: PriceHistoryEntry[] | undefined) => {
+    if (!history || history.length < 2) return null;
+
+    const currentPrice = convertPrice(history[0].usd_price);
+    const oneYearAgo = new Date();
+    oneYearAgo.setDate(oneYearAgo.getDate() - 365);
+
+    const pastEntry = history.find(entry => {
+      const entryDate = new Date(entry.recorded_at);
+      return entryDate <= oneYearAgo;
+    });
+
+    if (!pastEntry) return null;
+
+    const pastPrice = convertPrice(pastEntry.usd_price);
+    const percentChange = ((currentPrice - pastPrice) / pastPrice) * 100;
+
+    return {
+      percent: percentChange,
+      dollarChange: currentPrice - pastPrice,
+    };
+  };
+
   const render1DReturn = (productId: number, history: Record<number, PriceHistoryEntry[]>) => {
     const ret = get1DReturn(history[productId]);
     if (!ret || typeof ret.percent !== "number") return null;
@@ -353,7 +399,7 @@ export default function ProductPrices() {
 
     return (
       <p className="text-sm text-slate-600">
-        30D: <span className={`font-bold ${colorClass}`}>{percentSign}{ret.percent.toFixed(2)}%</span>
+        1M: <span className={`font-bold ${colorClass}`}>{percentSign}{ret.percent.toFixed(2)}%</span>
       </p>
     );
   };
@@ -367,7 +413,35 @@ export default function ProductPrices() {
 
     return (
       <p className="text-sm text-slate-600">
-        90D: <span className={`font-bold ${colorClass}`}>{percentSign}{ret.percent.toFixed(2)}%</span>
+        3M: <span className={`font-bold ${colorClass}`}>{percentSign}{ret.percent.toFixed(2)}%</span>
+      </p>
+    );
+  };
+
+  const render180DReturn = (productId: number, history: Record<number, PriceHistoryEntry[]>) => {
+    const ret = get180DReturn(history[productId]);
+    if (!ret || typeof ret.percent !== "number") return null;
+
+    const percentSign = ret.percent > 0 ? "+" : "";
+    const colorClass = ret.percent > 0 ? "text-green-600" : ret.percent < 0 ? "text-red-600" : "text-slate-500";
+
+    return (
+      <p className="text-sm text-slate-600">
+        6M: <span className={`font-bold ${colorClass}`}>{percentSign}{ret.percent.toFixed(2)}%</span>
+      </p>
+    );
+  };
+
+  const render365DReturn = (productId: number, history: Record<number, PriceHistoryEntry[]>) => {
+    const ret = get365DReturn(history[productId]);
+    if (!ret || typeof ret.percent !== "number") return null;
+
+    const percentSign = ret.percent > 0 ? "+" : "";
+    const colorClass = ret.percent > 0 ? "text-green-600" : ret.percent < 0 ? "text-red-600" : "text-slate-500";
+
+    return (
+      <p className="text-sm text-slate-600">
+        1Y: <span className={`font-bold ${colorClass}`}>{percentSign}{ret.percent.toFixed(2)}%</span>
       </p>
     );
   };
@@ -512,7 +586,7 @@ export default function ProductPrices() {
         {/* Chart timeframe */}
         <div className="flex items-center gap-2">
           <span className="font-semibold text-slate-800">Chart:</span>
-          {(["7D", "30D", "90D"] as const).map((timeframe) => (
+          {(["7D", "1M", "3M", "6M", "1Y"] as const).map((timeframe) => (
             <button
               key={timeframe}
               onClick={() => setChartTimeframe(timeframe)}
@@ -639,16 +713,29 @@ export default function ProductPrices() {
                     {render7DReturn(product.id, priceHistory)}
                   </>
                 )}
-                {chartTimeframe === "30D" && (
+                {chartTimeframe === "1M" && (
                   <>
                     {render7DReturn(product.id, priceHistory)}
                     {render30DReturn(product.id, priceHistory)}
                   </>
                 )}
-                {chartTimeframe === "90D" && (
+                {chartTimeframe === "3M" && (
                   <>
                     {render30DReturn(product.id, priceHistory)}
                     {render90DReturn(product.id, priceHistory)}
+                  </>
+                )}
+                {chartTimeframe === "6M" && (
+                  <>
+                    {render90DReturn(product.id, priceHistory)}
+                    {render180DReturn(product.id, priceHistory)}
+                  </>
+                )}
+                {chartTimeframe === "1Y" && (
+                  <>
+                    {render90DReturn(product.id, priceHistory)}
+                    {render180DReturn(product.id, priceHistory)}
+                    {render365DReturn(product.id, priceHistory)}
                   </>
                 )}
                 {priceHistory[product.id]?.length > 1 && (
@@ -765,7 +852,7 @@ export default function ProductPrices() {
                               })()}
                             </>
                           )}
-                          {chartTimeframe === "30D" && (
+                          {chartTimeframe === "1M" && (
                             <>
                               {(() => {
                                 const ret = get7DReturn(priceHistory[product.id]);
@@ -787,7 +874,7 @@ export default function ProductPrices() {
                                 const percentSign = ret.percent > 0 ? "+" : "";
                                 return (
                                   <span>
-                                    <span className="text-slate-600">30D:</span>
+                                    <span className="text-slate-600">1M:</span>
                                     <span className={`font-bold ml-1 ${ret.percent > 0 ? "text-green-600" : ret.percent < 0 ? "text-red-600" : "text-slate-500"}`}>
                                       {percentSign}{ret.percent.toFixed(2)}%
                                     </span>
@@ -796,7 +883,7 @@ export default function ProductPrices() {
                               })()}
                             </>
                           )}
-                          {chartTimeframe === "90D" && (
+                          {chartTimeframe === "3M" && (
                             <>
                               {(() => {
                                 const ret = get30DReturn(priceHistory[product.id]);
@@ -804,7 +891,7 @@ export default function ProductPrices() {
                                 const percentSign = ret.percent > 0 ? "+" : "";
                                 return (
                                   <span>
-                                    <span className="text-slate-600">30D:</span>
+                                    <span className="text-slate-600">1M:</span>
                                     <span className={`font-bold ml-1 ${ret.percent > 0 ? "text-green-600" : ret.percent < 0 ? "text-red-600" : "text-slate-500"}`}>
                                       {percentSign}{ret.percent.toFixed(2)}%
                                     </span>
@@ -818,7 +905,83 @@ export default function ProductPrices() {
                                 const percentSign = ret.percent > 0 ? "+" : "";
                                 return (
                                   <span>
-                                    <span className="text-slate-600">90D:</span>
+                                    <span className="text-slate-600">3M:</span>
+                                    <span className={`font-bold ml-1 ${ret.percent > 0 ? "text-green-600" : ret.percent < 0 ? "text-red-600" : "text-slate-500"}`}>
+                                      {percentSign}{ret.percent.toFixed(2)}%
+                                    </span>
+                                  </span>
+                                );
+                              })()}
+                            </>
+                          )}
+                          {chartTimeframe === "6M" && (
+                            <>
+                              {(() => {
+                                const ret = get90DReturn(priceHistory[product.id]);
+                                if (!ret || typeof ret.percent !== "number") return null;
+                                const percentSign = ret.percent > 0 ? "+" : "";
+                                return (
+                                  <span>
+                                    <span className="text-slate-600">3M:</span>
+                                    <span className={`font-bold ml-1 ${ret.percent > 0 ? "text-green-600" : ret.percent < 0 ? "text-red-600" : "text-slate-500"}`}>
+                                      {percentSign}{ret.percent.toFixed(2)}%
+                                    </span>
+                                  </span>
+                                );
+                              })()}
+                              {" "}
+                              {(() => {
+                                const ret = get180DReturn(priceHistory[product.id]);
+                                if (!ret || typeof ret.percent !== "number") return null;
+                                const percentSign = ret.percent > 0 ? "+" : "";
+                                return (
+                                  <span>
+                                    <span className="text-slate-600">6M:</span>
+                                    <span className={`font-bold ml-1 ${ret.percent > 0 ? "text-green-600" : ret.percent < 0 ? "text-red-600" : "text-slate-500"}`}>
+                                      {percentSign}{ret.percent.toFixed(2)}%
+                                    </span>
+                                  </span>
+                                );
+                              })()}
+                            </>
+                          )}
+                          {chartTimeframe === "1Y" && (
+                            <>
+                              {(() => {
+                                const ret = get90DReturn(priceHistory[product.id]);
+                                if (!ret || typeof ret.percent !== "number") return null;
+                                const percentSign = ret.percent > 0 ? "+" : "";
+                                return (
+                                  <span>
+                                    <span className="text-slate-600">3M:</span>
+                                    <span className={`font-bold ml-1 ${ret.percent > 0 ? "text-green-600" : ret.percent < 0 ? "text-red-600" : "text-slate-500"}`}>
+                                      {percentSign}{ret.percent.toFixed(2)}%
+                                    </span>
+                                  </span>
+                                );
+                              })()}
+                              {" "}
+                              {(() => {
+                                const ret = get180DReturn(priceHistory[product.id]);
+                                if (!ret || typeof ret.percent !== "number") return null;
+                                const percentSign = ret.percent > 0 ? "+" : "";
+                                return (
+                                  <span>
+                                    <span className="text-slate-600">6M:</span>
+                                    <span className={`font-bold ml-1 ${ret.percent > 0 ? "text-green-600" : ret.percent < 0 ? "text-red-600" : "text-slate-500"}`}>
+                                      {percentSign}{ret.percent.toFixed(2)}%
+                                    </span>
+                                  </span>
+                                );
+                              })()}
+                              {" "}
+                              {(() => {
+                                const ret = get365DReturn(priceHistory[product.id]);
+                                if (!ret || typeof ret.percent !== "number") return null;
+                                const percentSign = ret.percent > 0 ? "+" : "";
+                                return (
+                                  <span>
+                                    <span className="text-slate-600">1Y:</span>
                                     <span className={`font-bold ml-1 ${ret.percent > 0 ? "text-green-600" : ret.percent < 0 ? "text-red-600" : "text-slate-500"}`}>
                                       {percentSign}{ret.percent.toFixed(2)}%
                                     </span>

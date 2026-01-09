@@ -35,7 +35,7 @@ export default function ProductPrices() {
   const [searchTerm, setSearchTerm] = useState("");
 
   // View state
-  const [chartTimeframe, setChartTimeframe] = useState<ChartTimeframe>("30D");
+  const [chartTimeframe, setChartTimeframe] = useState<ChartTimeframe>("1M");
   const [sortKey, setSortKey] = useState<SortBy>("release_date");
   const [sortDirection, setSortDirection] = useState<SortDirection>("desc");
   const [viewMode, setViewMode] = useState<ViewMode>("grouped");

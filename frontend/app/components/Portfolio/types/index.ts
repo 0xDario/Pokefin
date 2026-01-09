@@ -114,7 +114,7 @@ export interface AllocationItem {
 }
 
 // Chart timeframe options
-export type PortfolioTimeframe = "7D" | "30D" | "90D" | "ALL";
+export type PortfolioTimeframe = "7D" | "1M" | "3M" | "6M" | "1Y" | "ALL";
 
 // Sort options for holdings
 export type HoldingSortBy = "name" | "value" | "gain_loss" | "gain_loss_percent" | "purchase_date";
