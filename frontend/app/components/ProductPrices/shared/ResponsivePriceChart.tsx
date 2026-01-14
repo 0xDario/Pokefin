@@ -10,6 +10,7 @@ interface ResponsivePriceChartProps {
   currency?: Currency;
   exchangeRate?: number;
   className?: string;
+  releaseDate?: string;
 }
 
 /**
@@ -24,6 +25,7 @@ export default function ResponsivePriceChart({
   currency = "USD",
   exchangeRate = 1.36,
   className = "",
+  releaseDate,
 }: ResponsivePriceChartProps) {
   const { isMobile } = useResponsive();
 
@@ -38,6 +40,7 @@ export default function ResponsivePriceChart({
         currency={currency}
         exchangeRate={exchangeRate}
         height={height}
+        releaseDate={releaseDate}
       />
     </div>
   );

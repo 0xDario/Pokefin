@@ -93,6 +93,7 @@ export default function ProductCard({
                 range={chartTimeframe}
                 currency={selectedCurrency}
                 exchangeRate={exchangeRate}
+                releaseDate={product.sets?.release_date}
               />
             </div>
           )}
@@ -166,6 +167,7 @@ export default function ProductCard({
               range={chartTimeframe}
               currency={selectedCurrency}
               exchangeRate={exchangeRate}
+              releaseDate={product.sets?.release_date}
             />
           )}
 

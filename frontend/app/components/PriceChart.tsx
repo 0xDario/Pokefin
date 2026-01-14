@@ -10,6 +10,7 @@ import {
   CartesianGrid,
   Line,
   ComposedChart,
+  ReferenceLine,
 } from "recharts";
 
 type PriceHistoryEntry = {
@@ -25,12 +26,14 @@ export default function PriceChart({
   currency = "USD",
   exchangeRate = 1.36,
   height = 200,
+  releaseDate,
 }: {
   data: PriceHistoryEntry[];
   range: "7D" | "1M" | "3M" | "6M" | "1Y";
   currency?: Currency;
   exchangeRate?: number;
   height?: number;
+  releaseDate?: string;
 }) {
   const groupedDaily = useMemo(() => {
     console.log(`[PriceChart] Raw data received (${data.length} entries):`, data.slice(0, 5));
@@ -167,6 +170,21 @@ export default function PriceChart({
     );
   };
 
+  // Check if release date is within the visible chart range
+  const releaseDateInfo = useMemo(() => {
+    if (!releaseDate) return null;
+
+    const releaseDateFormatted = new Date(releaseDate + "T00:00:00Z").toLocaleDateString(undefined, {
+      month: "short",
+      day: "numeric",
+    });
+
+    // Check if the release date falls within the sliced data range
+    const isInRange = slicedData.some(d => d.date === releaseDateFormatted);
+
+    return isInRange ? releaseDateFormatted : null;
+  }, [releaseDate, slicedData]);
+
   return (
     <div className="w-full relative">
       {/* Data availability indicator */}
@@ -184,7 +202,7 @@ export default function PriceChart({
       {/* Chart container with conditional styling */}
       <div className={`w-full ${dataAvailability.isIncomplete ? "opacity-90 border-l-4 border-amber-300 pl-2" : ""}`}>
         <ResponsiveContainer width="100%" height={height}>
-          <ComposedChart data={slicedData} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
+          <ComposedChart data={slicedData} margin={{ top: releaseDateInfo ? 25 : 10, right: 10, left: 0, bottom: 0 }}>
             <defs>
               <linearGradient id="priceArea" x1="0" y1="0" x2="0" y2="1">
                 <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.15} />
@@ -229,6 +247,23 @@ export default function PriceChart({
                 strokeDasharray: "5 5",
               }}
             />
+
+            {/* Release Date Reference Line */}
+            {releaseDateInfo && (
+              <ReferenceLine
+                x={releaseDateInfo}
+                stroke="#ef4444"
+                strokeWidth={2}
+                strokeDasharray="3 3"
+                label={{
+                  value: "Release Date",
+                  position: "top",
+                  fill: "#ef4444",
+                  fontSize: 11,
+                  fontWeight: 600,
+                }}
+              />
+            )}
 
             {/* Subtle area fill */}
             <Area
