@@ -23,6 +23,8 @@ interface ControlBarProps {
   exchangeRate: number;
   exchangeRateLoading: boolean;
   onCurrencyChange: (currency: Currency) => void;
+
+  showChartTimeframe?: boolean;
 }
 
 /**
@@ -40,6 +42,7 @@ export default function ControlBar({
   exchangeRate,
   exchangeRateLoading,
   onCurrencyChange,
+  showChartTimeframe = true,
 }: ControlBarProps) {
   return (
     <div className="space-y-3 md:space-y-0 md:flex md:flex-wrap md:items-center md:gap-4 mb-6">
@@ -53,10 +56,12 @@ export default function ControlBar({
 
         <SearchInput value={searchTerm} onChange={onSearchChange} />
 
-        <ChartTimeframeButtons
-          selected={chartTimeframe}
-          onChange={onChartTimeframeChange}
-        />
+        {showChartTimeframe && (
+          <ChartTimeframeButtons
+            selected={chartTimeframe}
+            onChange={onChartTimeframeChange}
+          />
+        )}
       </div>
 
       {/* Secondary Controls - Right Side */}

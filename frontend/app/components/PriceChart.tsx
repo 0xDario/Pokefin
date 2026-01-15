@@ -174,15 +174,39 @@ export default function PriceChart({
   const releaseDateInfo = useMemo(() => {
     if (!releaseDate) return null;
 
-    const releaseDateFormatted = new Date(releaseDate + "T00:00:00Z").toLocaleDateString(undefined, {
-      month: "short",
-      day: "numeric",
-    });
+    const releaseKey = releaseDate.split("T")[0].split(" ")[0];
+    const isoDateRegex = /^\d{4}-\d{2}-\d{2}$/;
 
-    // Check if the release date falls within the sliced data range
-    const isInRange = slicedData.some(d => d.date === releaseDateFormatted);
+    if (!isoDateRegex.test(releaseKey) || slicedData.length === 0) {
+      return null;
+    }
 
-    return isInRange ? releaseDateFormatted : null;
+    const rangeStartKey = slicedData[0].timestamp;
+    const rangeEndKey = slicedData[slicedData.length - 1].timestamp;
+    const toUtcMs = (dateKey: string) => {
+      const [year, month, day] = dateKey.split("-").map(Number);
+      return Date.UTC(year, month - 1, day);
+    };
+    const releaseMs = toUtcMs(releaseKey);
+    const rangeStartMs = toUtcMs(rangeStartKey);
+    const rangeEndMs = toUtcMs(rangeEndKey);
+    const maxAgeMs = 365 * 24 * 60 * 60 * 1000;
+
+    if (Number.isNaN(releaseMs) || Number.isNaN(rangeStartMs) || Number.isNaN(rangeEndMs)) {
+      return null;
+    }
+
+    if (rangeEndMs - releaseMs > maxAgeMs) {
+      return null;
+    }
+
+    if (releaseMs < rangeStartMs || releaseMs > rangeEndMs) {
+      return null;
+    }
+
+    const match = slicedData.find(d => d.timestamp === releaseKey);
+
+    return match ? match.date : null;
   }, [releaseDate, slicedData]);
 
   return (

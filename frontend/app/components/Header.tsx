@@ -38,11 +38,25 @@ export default function Header() {
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex justify-between items-center h-14">
           {/* Logo / Site Title */}
-          <Link href="/" className="flex items-center space-x-2">
-            <span className="text-xl font-bold text-gray-900 dark:text-white">
-              Pokefin
-            </span>
-          </Link>
+          <div className="flex items-center gap-4">
+            <Link href="/" className="flex items-center space-x-2">
+              <span className="text-xl font-bold text-gray-900 dark:text-white">
+                Pokefin
+              </span>
+            </Link>
+            <Link
+              href="/market"
+              className="text-xs sm:text-sm font-medium text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white"
+            >
+              Market View
+            </Link>
+            <Link
+              href="/stats"
+              className="text-xs sm:text-sm font-medium text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white"
+            >
+              Stats
+            </Link>
+          </div>
 
           {/* Auth Section */}
           <div className="flex items-center">
