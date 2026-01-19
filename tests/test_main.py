@@ -580,6 +580,16 @@ class TestEdgeCases:
 
         assert price is None
         assert tcg_image_url is None
+    
+    def test_scraped_data_with_non_positive_price(self):
+        """Should ignore non-positive scraped prices"""
+        scraped_data = {'price': 0, 'image_url': None}
+
+        price = scraped_data.get('price')
+        if price is not None and price <= 0:
+            price = None
+
+        assert price is None
 
     def test_same_image_url_detection(self):
         """Should detect when image URL is unchanged"""

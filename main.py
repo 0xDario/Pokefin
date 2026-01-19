@@ -546,6 +546,9 @@ def update_prices():
             # Get both price and image
             scraped_data = get_price_and_image_from_url(driver, url)
             price = scraped_data.get('price')
+            if price is not None and price <= 0:
+                logger.warning(f"   Ignoring non-positive price from scrape: {price}")
+                price = None
             tcg_image_url = scraped_data.get('image_url')
 
             update_data = {}
@@ -656,6 +659,47 @@ def _flush_price_history_batch(batch):
                 failed_count += 1
 
     return success_count, failed_count
+
+
+# === Shopify Price Check ===
+def check_shopify_prices(threshold_pct: float = 5.0) -> None:
+    """
+    Check Shopify prices against market prices and send Telegram alerts.
+
+    Uses the PriceMonitor to:
+    1. Fetch products from Shopify (via OAuth client credentials)
+    2. Compare against Pokefin market prices
+    3. Send Telegram alert for products priced below market
+
+    Args:
+        threshold_pct: Alert if price is more than X% below market (default: 5.0)
+    """
+    try:
+        from price_monitor import PriceMonitor
+
+        logger.info("Starting Shopify price check...")
+        monitor = PriceMonitor()
+        results = monitor.check_prices(threshold_pct=threshold_pct, send_alerts=True)
+
+        below = len(results.get('below_market', []))
+        matched = len(results.get('matched', []))
+
+        if below > 0:
+            logger.warning(f"Found {below} products priced below market!")
+        else:
+            logger.info(f"Price check complete: {matched} products matched, all prices OK")
+
+    except ImportError as e:
+        logger.error(f"Price monitor not available: {e}")
+        logger.info("Skipping Shopify price check (missing dependencies)")
+
+    except ValueError as e:
+        # Missing Shopify/Telegram credentials - log warning but don't fail
+        logger.warning(f"Shopify price check skipped: {e}")
+
+    except Exception as e:
+        logger.error(f"Shopify price check failed: {e}")
+
 
 # === Run Script ===
 if __name__ == "__main__":
