@@ -176,52 +176,54 @@ export default function ProductPrices() {
     loadExchangeRate();
   }, []);
 
-  // Price history loading
+  // Price history loading - single optimized query
   useEffect(() => {
     if (products.length === 0) return;
-    
-    async function fetchHistoryBatch() {
-      console.log(`[ProductPrices] Fetching history for ${products.length} products...`);
-      
-      const ninetyDaysAgo = new Date();
-      ninetyDaysAgo.setDate(ninetyDaysAgo.getDate() - 90);
-      
-      const historyByProduct: Record<number, PriceHistoryEntry[]> = {};
-      
-      const batchSize = 5;
-      for (let i = 0; i < products.length; i += batchSize) {
-        const batch = products.slice(i, i + batchSize);
-        const batchIds = batch.map(p => p.id);
-        
-        try {
-          const { data, error } = await supabase
-            .from("product_price_history")
-            .select("product_id, usd_price, recorded_at")
-            .in("product_id", batchIds)
-            .gte("recorded_at", ninetyDaysAgo.toISOString())
-            .order("recorded_at", { ascending: false });
-          
-          if (data && !error) {
-            for (const entry of data) {
-              if (!historyByProduct[entry.product_id]) {
-                historyByProduct[entry.product_id] = [];
-              }
-              historyByProduct[entry.product_id].push({
-                usd_price: entry.usd_price,
-                recorded_at: entry.recorded_at,
-              });
-            }
-          }
-        } catch (err) {
-          console.error(`[ProductPrices] Error fetching history for batch:`, err);
+
+    async function fetchHistory() {
+      const daysNeeded = chartTimeframe === "7D" ? 7
+        : chartTimeframe === "1M" ? 30
+        : chartTimeframe === "3M" ? 90
+        : chartTimeframe === "6M" ? 180
+        : 365; // 1Y
+
+      const startDate = new Date();
+      startDate.setDate(startDate.getDate() - daysNeeded);
+
+      const productIds = products.map(p => p.id);
+
+      try {
+        // Use RPC function for deduplicated data (one row per product per day)
+        const { data, error } = await supabase.rpc('get_price_history_deduplicated', {
+          p_product_ids: productIds,
+          p_start_date: startDate.toISOString()
+        });
+
+        if (error) {
+          console.error("[ProductPrices] Fetch error:", error);
+          return;
         }
+
+        // Group by product_id
+        const historyByProduct: Record<number, PriceHistoryEntry[]> = {};
+        for (const entry of data || []) {
+          if (!historyByProduct[entry.product_id]) {
+            historyByProduct[entry.product_id] = [];
+          }
+          historyByProduct[entry.product_id].push({
+            usd_price: entry.usd_price,
+            recorded_at: entry.recorded_at,
+          });
+        }
+
+        setPriceHistory(historyByProduct);
+      } catch (err) {
+        console.error("[ProductPrices] Fetch exception:", err);
       }
-      
-      setPriceHistory(historyByProduct);
     }
-    
-    fetchHistoryBatch();
-  }, [products]);
+
+    fetchHistory();
+  }, [products, chartTimeframe]);
 
   // Return calculations with currency conversion
   const get1DReturn = (history: PriceHistoryEntry[] | undefined) => {

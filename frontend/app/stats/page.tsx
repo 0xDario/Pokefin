@@ -280,7 +280,7 @@ function computeZScore(value: number | null, mean: number, std: number) {
 }
 
 export default function StatsPage() {
-  const { products, priceHistory, loading } = useProductData();
+  const { products, priceHistory, loading } = useProductData("1Y");
 
   const setStats = useMemo(() => {
     const setMap = new Map<

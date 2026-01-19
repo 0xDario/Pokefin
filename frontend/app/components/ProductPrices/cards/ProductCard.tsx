@@ -1,3 +1,4 @@
+import { memo } from "react";
 import ProductImage from "../shared/ProductImage";
 import ExpansionTypeBadge from "../shared/ExpansionTypeBadge";
 import VariantBadge from "../shared/VariantBadge";
@@ -16,10 +17,10 @@ interface ProductCardProps {
 }
 
 /**
- * Unified ProductCard component supporting both flat and grouped views
- * Mobile-first responsive design
+ * Memoized ProductCard component - only re-renders when relevant props change
+ * Supports both flat and grouped views with mobile-first responsive design
  */
-export default function ProductCard({
+const ProductCard = memo(function ProductCard({
   product,
   viewMode,
   chartTimeframe,
@@ -184,4 +185,6 @@ export default function ProductCard({
       </div>
     </div>
   );
-}
+});
+
+export default ProductCard;

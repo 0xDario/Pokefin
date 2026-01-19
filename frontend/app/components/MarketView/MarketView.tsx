@@ -90,7 +90,9 @@ function getDefaultSortDirection(key: SortKey): SortDirection {
 }
 
 export default function MarketView() {
-  const { products, priceHistory, loading } = useProductData();
+  const [chartTimeframe, setChartTimeframe] =
+    useState<ChartTimeframe>("1Y");
+  const { products, priceHistory, loading } = useProductData(chartTimeframe);
   const {
     selectedCurrency,
     exchangeRate,
@@ -102,8 +104,6 @@ export default function MarketView() {
 
   const [selectedGeneration, setSelectedGeneration] = useState("all");
   const [searchTerm, setSearchTerm] = useState("");
-  const [chartTimeframe, setChartTimeframe] =
-    useState<ChartTimeframe>("1Y");
   const [sortKey, setSortKey] = useState<SortKey>("release_date");
   const [sortDirection, setSortDirection] = useState<SortDirection>("desc");
   const [expandedProductId, setExpandedProductId] = useState<number | null>(

@@ -1,28 +1,41 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { createClient } from "@supabase/supabase-js";
-import { Product, PriceHistoryEntry } from "../types";
+import { Product, PriceHistoryEntry, ChartTimeframe } from "../types";
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.NEXT_PUBLIC_SUPABASE_KEY!
 );
 
-const MAX_HISTORY_DAYS = 365;
-const PAGE_SIZE = 1000;
+/**
+ * Calculate days needed based on chart timeframe.
+ */
+function getDaysForTimeframe(timeframe: ChartTimeframe): number {
+  const timeframeToDays: Record<ChartTimeframe, number> = {
+    "7D": 7,
+    "1M": 30,
+    "3M": 90,
+    "6M": 180,
+    "1Y": 365,
+  };
+  return timeframeToDays[timeframe];
+}
 
 /**
- * Hook to fetch products and their price history from Supabase
- *
- * @returns {Object} products, priceHistory, and loading state
+ * Hook to fetch products and their price history from Supabase.
  */
-export function useProductData() {
+export function useProductData(chartTimeframe: ChartTimeframe = "1M") {
   const [products, setProducts] = useState<Product[]>([]);
   const [priceHistory, setPriceHistory] = useState<Record<number, PriceHistoryEntry[]>>({});
   const [loading, setLoading] = useState(true);
+  const [historyLoading, setHistoryLoading] = useState(false);
 
-  // Fetch products
+  // Track if we've already fetched for this timeframe to prevent duplicate fetches.
+  const lastFetchRef = useRef<{ timeframe: string; productIds: string } | null>(null);
+
+  // Fetch products (runs once on mount).
   useEffect(() => {
     async function fetchProducts() {
       const { data, error } = await supabase
@@ -35,80 +48,89 @@ export function useProductData() {
         .order("last_updated", { ascending: false });
 
       if (!error && data) {
-        setProducts(data as any);
+        setProducts(data as Product[]);
       }
       setLoading(false);
     }
     fetchProducts();
   }, []);
 
-  // Fetch price history for all products
+  // Fetch price history.
   useEffect(() => {
     if (products.length === 0) return;
 
-    async function fetchHistoryBatch() {
-      console.log(`[useProductData] Fetching history for ${products.length} products...`);
+    const productIds = products.map((product) => product.id);
+    const productIdsKey = productIds.slice(0, 10).join(",");
 
-      const historyStart = new Date();
-      historyStart.setDate(historyStart.getDate() - MAX_HISTORY_DAYS);
-
-      const historyByProduct: Record<number, PriceHistoryEntry[]> = {};
-
-      const batchSize = 5;
-      for (let i = 0; i < products.length; i += batchSize) {
-        const batch = products.slice(i, i + batchSize);
-        const batchIds = batch.map((p) => p.id);
-
-        try {
-          let from = 0;
-          while (true) {
-            const { data, error } = await supabase
-              .from("product_price_history")
-              .select("product_id, usd_price, recorded_at")
-              .in("product_id", batchIds)
-              .gte("recorded_at", historyStart.toISOString())
-              .order("recorded_at", { ascending: false })
-              .range(from, from + PAGE_SIZE - 1);
-
-            if (error) {
-              console.error(`[useProductData] Error fetching history for batch:`, error);
-              break;
-            }
-
-            if (!data || data.length === 0) {
-              break;
-            }
-
-            for (const entry of data) {
-              if (!historyByProduct[entry.product_id]) {
-                historyByProduct[entry.product_id] = [];
-              }
-              historyByProduct[entry.product_id].push({
-                usd_price: entry.usd_price,
-                recorded_at: entry.recorded_at,
-              });
-            }
-
-            if (data.length < PAGE_SIZE) {
-              break;
-            }
-
-            from += PAGE_SIZE;
-          }
-        } catch (err) {
-          console.error(`[useProductData] Error fetching history for batch:`, err);
-        }
-      }
-
-      setPriceHistory(historyByProduct);
+    if (
+      lastFetchRef.current?.timeframe === chartTimeframe &&
+      lastFetchRef.current?.productIds === productIdsKey
+    ) {
+      return;
     }
 
-    fetchHistoryBatch();
-  }, [products]);
+    let isActive = true;
+
+    async function fetchHistory() {
+      setHistoryLoading(true);
+
+      const daysNeeded = getDaysForTimeframe(chartTimeframe);
+      const startDate = new Date();
+      startDate.setDate(startDate.getDate() - daysNeeded);
+
+      try {
+        const { data, error } = await supabase.rpc("get_price_history_deduplicated", {
+          p_product_ids: productIds,
+          p_start_date: startDate.toISOString(),
+        });
+
+        if (error) {
+          console.error("[useProductData] Fetch error:", error);
+          return;
+        }
+
+        const historyByProduct: Record<number, PriceHistoryEntry[]> = {};
+        for (const entry of data || []) {
+          if (!historyByProduct[entry.product_id]) {
+            historyByProduct[entry.product_id] = [];
+          }
+          historyByProduct[entry.product_id].push({
+            usd_price: entry.usd_price,
+            recorded_at: entry.recorded_at,
+          });
+        }
+
+        Object.values(historyByProduct).forEach((entries) => {
+          entries.sort(
+            (a, b) =>
+              new Date(b.recorded_at).getTime() - new Date(a.recorded_at).getTime()
+          );
+        });
+
+        if (isActive) {
+          setPriceHistory(historyByProduct);
+          lastFetchRef.current = { timeframe: chartTimeframe, productIds: productIdsKey };
+        }
+      } catch (err) {
+        console.error("[useProductData] Fetch exception:", err);
+      } finally {
+        if (isActive) {
+          setHistoryLoading(false);
+        }
+      }
+    }
+
+    fetchHistory();
+
+    return () => {
+      isActive = false;
+    };
+  }, [products, chartTimeframe]);
 
   return {
     products,
     priceHistory,
     loading,
+    historyLoading,
   };
 }
