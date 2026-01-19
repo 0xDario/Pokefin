@@ -94,33 +94,47 @@ export function useProductData(chartTimeframe: ChartTimeframe = "1M") {
       startDate.setDate(startDate.getDate() - daysNeeded);
 
       try {
-        const { data, error } = await supabase.rpc("get_price_history_deduplicated", {
-          p_product_ids: productIds,
-          p_start_date: startDate.toISOString(),
-        });
+        // Query product_price_history directly instead of using RPC
+        const { data, error } = await supabase
+          .from("product_price_history")
+          .select("product_id, usd_price, recorded_at")
+          .in("product_id", productIds)
+          .gte("recorded_at", startDate.toISOString())
+          .order("recorded_at", { ascending: false });
 
         if (error) {
-          console.error("[useProductData] Fetch error:", error);
+          console.error("[useProductData] Fetch error:", {
+            message: error.message,
+            details: error.details,
+            hint: error.hint,
+            code: error.code,
+          });
           return;
         }
 
+        // Deduplicate: keep only the latest entry per product per day
         const historyByProduct: Record<number, PriceHistoryEntry[]> = {};
+        const seenDates: Record<number, Set<string>> = {};
+
         for (const entry of data || []) {
-          if (!historyByProduct[entry.product_id]) {
+          const dateKey = entry.recorded_at.split("T")[0]; // Extract YYYY-MM-DD
+
+          if (!seenDates[entry.product_id]) {
+            seenDates[entry.product_id] = new Set();
             historyByProduct[entry.product_id] = [];
           }
+
+          // Skip if we already have an entry for this product on this date
+          if (seenDates[entry.product_id].has(dateKey)) {
+            continue;
+          }
+
+          seenDates[entry.product_id].add(dateKey);
           historyByProduct[entry.product_id].push({
             usd_price: entry.usd_price,
             recorded_at: entry.recorded_at,
           });
         }
-
-        Object.values(historyByProduct).forEach((entries) => {
-          entries.sort(
-            (a, b) =>
-              new Date(b.recorded_at).getTime() - new Date(a.recorded_at).getTime()
-          );
-        });
 
         if (isActive) {
           setPriceHistory(historyByProduct);
