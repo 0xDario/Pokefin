@@ -48,7 +48,22 @@ export function useProductData(chartTimeframe: ChartTimeframe = "1M") {
         .order("last_updated", { ascending: false });
 
       if (!error && data) {
-        setProducts(data as Product[]);
+        // Transform Supabase array results to single objects
+        const transformedData: Product[] = data.map((item: any) => ({
+          ...item,
+          sets: Array.isArray(item.sets) && item.sets.length > 0
+            ? {
+                ...item.sets[0],
+                generations: Array.isArray(item.sets[0]?.generations) && item.sets[0].generations.length > 0
+                  ? item.sets[0].generations[0]
+                  : item.sets[0]?.generations,
+              }
+            : item.sets,
+          product_types: Array.isArray(item.product_types) && item.product_types.length > 0
+            ? item.product_types[0]
+            : item.product_types,
+        }));
+        setProducts(transformedData);
       }
       setLoading(false);
     }
