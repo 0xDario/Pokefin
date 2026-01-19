@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useMemo } from "react";
+import React, { useMemo, memo } from "react";
 import {
   ResponsiveContainer,
   Area,
@@ -20,7 +20,10 @@ type PriceHistoryEntry = {
 
 type Currency = "USD" | "CAD";
 
-export default function PriceChart({
+/**
+ * Memoized PriceChart component - only re-renders when props change
+ */
+const PriceChart = memo(function PriceChart({
   data,
   range,
   currency = "USD",
@@ -36,20 +39,14 @@ export default function PriceChart({
   releaseDate?: string;
 }) {
   const groupedDaily = useMemo(() => {
-    console.log(`[PriceChart] Raw data received (${data.length} entries):`, data.slice(0, 5));
-
     // Group by date, keeping the first entry for each date (newest since data comes in desc order)
     const map = new Map<string, PriceHistoryEntry>();
     for (const entry of data) {
       const date = new Date(entry.recorded_at).toISOString().split("T")[0];
       if (!map.has(date)) {
         map.set(date, entry);
-        console.log(`[PriceChart] Adding entry for date ${date}:`, entry);
       }
     }
-
-    console.log(`[PriceChart] Unique dates found: ${map.size}`);
-    console.log(`[PriceChart] Date range:`, Array.from(map.keys()).sort());
 
     // Convert to array and sort by date in ascending order (oldest to newest for chart display)
     const result: Array<{ date: string; price: number | null; timestamp: string }> = Array.from(map.entries())
@@ -63,15 +60,12 @@ export default function PriceChart({
       }))
       .sort((a, b) => a.timestamp.localeCompare(b.timestamp)); // Sort by date ascending
 
-    console.log(`[PriceChart] Processed data for chart:`, result);
     return result;
   }, [data, currency, exchangeRate]);
 
   const slicedData = useMemo(() => {
     const daysNeeded = range === "7D" ? 7 : range === "1M" ? 30 : range === "3M" ? 90 : range === "6M" ? 180 : 365;
     let result = groupedDaily.slice(-daysNeeded);
-
-    console.log(`[PriceChart] Sliced data for ${range} (${result.length} points):`, result);
 
     // If we have less data than requested, pad the beginning with null values
     if (result.length < daysNeeded) {
@@ -98,7 +92,6 @@ export default function PriceChart({
       }
 
       result = [...paddedData, ...result];
-      console.log(`[PriceChart] Padded with ${missingDays} null entries for incomplete data`);
     }
 
     return result;
@@ -314,4 +307,6 @@ export default function PriceChart({
       </div>
     </div>
   );
-}
+});
+
+export default PriceChart;
