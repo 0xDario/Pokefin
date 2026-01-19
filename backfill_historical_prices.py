@@ -322,10 +322,10 @@ def extract_historical_prices(driver, url, timeframes=None):
                 continue
 
         # Deduplicate: prefer data from shorter timeframes (more granular)
-        # Since we process from shortest to longest, later entries will overwrite earlier ones
-        # We reverse to process longest to shortest, so shortest wins
+        # We process timeframes in shortest->longest order, so keep the first
+        # occurrence of each date and ignore later (longer timeframe) entries.
         deduplicated = {}
-        for entry in reversed(all_historical_data):  # Reverse so shortest timeframe wins
+        for entry in all_historical_data:
             date = entry['date']
             if date not in deduplicated:  # Keep first occurrence (from shortest timeframe)
                 deduplicated[date] = entry
@@ -393,6 +393,9 @@ def extract_canvas_table_data(driver, is_date_range=False):
 
                             try:
                                 price = float(price_str)
+                                # Ignore non-positive prices (TCGPlayer sometimes shows 0 for no data)
+                                if price <= 0:
+                                    continue
 
                                 if is_date_range:
                                     # Parse date range format: "11/5 to 11/7"
