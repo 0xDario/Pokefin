@@ -51,6 +51,12 @@ export default function Header() {
               Market View
             </Link>
             <Link
+              href="/compare"
+              className="text-xs sm:text-sm font-medium text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white"
+            >
+              Compare Prices
+            </Link>
+            <Link
               href="/stats"
               className="text-xs sm:text-sm font-medium text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white"
             >
