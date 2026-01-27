@@ -79,16 +79,24 @@ def fetch_shopify_products_api(domain: str, token: str, api_version: str) -> dic
             for variant in product.get("variants", []):
                 sku = (variant.get("sku") or "").strip()
                 price_str = (variant.get("price") or "").strip()
+                cost_str = (variant.get("cost") or "").strip()
                 if not sku or not price_str:
                     continue
                 try:
                     price = float(price_str)
                 except ValueError:
                     continue
+                cost = None
+                if cost_str:
+                    try:
+                        cost = float(cost_str)
+                    except ValueError:
+                        cost = None
                 products[sku] = {
                     "sku": sku,
                     "title": title or sku,
                     "shopify_price": price,
+                    "shopify_cost": cost,
                     "handle": handle,
                 }
 
@@ -155,6 +163,7 @@ def load_shopify_products(filepath: str) -> dict:
             sku = row.get('Variant SKU', '').strip()
             title = row.get('Title', '').strip()
             price_str = row.get('Variant Price', '').strip()
+            cost_str = row.get('Cost per item', '').strip()
             handle = row.get('Handle', '').strip()
 
             # Skip rows without SKU or title (image rows)
@@ -166,12 +175,17 @@ def load_shopify_products(filepath: str) -> dict:
                 price = float(price_str) if price_str else None
             except ValueError:
                 price = None
+            try:
+                cost = float(cost_str) if cost_str else None
+            except ValueError:
+                cost = None
 
             if sku and price is not None:
                 products[sku] = {
                     'sku': sku,
                     'title': title,
                     'shopify_price': price,
+                    'shopify_cost': cost,
                     'handle': handle,
                 }
 
@@ -232,11 +246,14 @@ def compare_prices(shopify_products: dict, pokefin_products: dict, exchange_rate
             pokefin = pokefin_products[sku]
             market_price_usd = pokefin.get('market_price')
             shopify_price_cad = shopify.get('shopify_price')
+            shopify_cost = shopify.get('shopify_cost')
 
             if market_price_usd is None:
                 results['no_market_price'].append({
                     **shopify,
                     **pokefin,
+                    'shopify_profit': _calculate_profit(shopify_price_cad, shopify_cost),
+                    'shopify_profit_pct': _calculate_profit_pct(shopify_price_cad, shopify_cost),
                 })
                 continue
 
@@ -253,6 +270,10 @@ def compare_prices(shopify_products: dict, pokefin_products: dict, exchange_rate
                 'market_price_cad': market_price_cad,
                 'difference': diff,
                 'difference_pct': diff_pct,
+                'shopify_profit': _calculate_profit(shopify_price_cad, shopify_cost),
+                'shopify_profit_pct': _calculate_profit_pct(shopify_price_cad, shopify_cost),
+                'market_profit': _calculate_profit(market_price_cad, shopify_cost),
+                'market_profit_pct': _calculate_profit_pct(market_price_cad, shopify_cost),
                 'set_name': pokefin.get('set_name'),
                 'product_type': pokefin.get('product_type'),
                 'last_updated': pokefin.get('last_updated'),
@@ -274,6 +295,39 @@ def compare_prices(shopify_products: dict, pokefin_products: dict, exchange_rate
             results['pokefin_only'].append(pokefin)
 
     return results
+
+
+def _calculate_profit(price: float | None, cost: float | None) -> float | None:
+    if price is None or cost is None:
+        return None
+    return price - cost
+
+
+def _calculate_profit_pct(price: float | None, cost: float | None) -> float | None:
+    if price is None or cost is None or price == 0:
+        return None
+    return ((price - cost) / price) * 100
+
+
+def _fmt_currency(value: float | None, width: int) -> str:
+    if value is None:
+        return f"{'N/A':>{width}}"
+    return f"${value:>{width - 1}.2f}"
+
+
+def _fmt_signed_currency(value: float | None, width: int) -> str:
+    if value is None:
+        return f"{'N/A':>{width}}"
+    sign = "-" if value < 0 else "+"
+    return f"{sign}${abs(value):>{width - 2}.2f}"
+
+
+def _fmt_percent(value: float | None, width: int, show_sign: bool = False) -> str:
+    if value is None:
+        return f"{'N/A':>{width}}"
+    if show_sign and value >= 0:
+        return f"+{value:>{width - 1}.1f}%"
+    return f"{value:>{width}.1f}%"
 
 
 def print_report(results: dict, threshold_pct: float, show_usd: bool = False):
@@ -303,36 +357,72 @@ def print_report(results: dict, threshold_pct: float, show_usd: bool = False):
         print("\n🚨 BELOW MARKET VALUE - Consider raising prices:")
         print("-" * 100)
         if show_usd:
-            print(f"{'SKU':<22} {'Shopify CAD':>12} {'Market USD':>11} {'Market CAD':>11} {'Diff':>10} {'%':>7}  Product")
+            print(
+                f"{'SKU':<22} {'Shopify':>12} {'Cost':>10} {'Market USD':>11} "
+                f"{'Market':>11} {'Diff':>10} {'%':>7}  Product"
+            )
         else:
-            print(f"{'SKU':<22} {'Shopify CAD':>12} {'Market CAD':>12} {'Diff':>10} {'Diff %':>8}  Product")
+            print(
+                f"{'SKU':<22} {'Shopify':>12} {'Cost':>10} {'Market':>12} {'Diff':>10} {'Diff %':>8}  Product"
+            )
         print("-" * 100)
 
         for item in sorted(below, key=lambda x: x['difference_pct']):
+            shopify_price_str = _fmt_currency(item['shopify_price'], 12)
+            shopify_cost_str = _fmt_currency(item.get('shopify_cost'), 10)
+            diff_str = _fmt_signed_currency(item['difference'], 10)
+            diff_pct_str = f"{item['difference_pct']:>6.1f}%"
             if show_usd:
-                print(f"{item['sku']:<22} ${item['shopify_price']:>10.2f} ${item['market_price_usd']:>9.2f} ${item['market_price_cad']:>9.2f} "
-                      f"${item['difference']:>8.2f} {item['difference_pct']:>6.1f}%  {item['title'][:25]}")
+                market_usd_str = _fmt_currency(item['market_price_usd'], 11)
+                market_cad_str = _fmt_currency(item['market_price_cad'], 11)
+                print(
+                    f"{item['sku']:<22} {shopify_price_str} {shopify_cost_str} {market_usd_str} "
+                    f"{market_cad_str} {diff_str} {diff_pct_str}  "
+                    f"{item['title'][:25]}"
+                )
             else:
-                print(f"{item['sku']:<22} ${item['shopify_price']:>10.2f} ${item['market_price_cad']:>10.2f} "
-                      f"${item['difference']:>8.2f} {item['difference_pct']:>7.1f}%  {item['title'][:30]}")
+                market_cad_str = _fmt_currency(item['market_price_cad'], 12)
+                diff_pct_str = f"{item['difference_pct']:>7.1f}%"
+                print(
+                    f"{item['sku']:<22} {shopify_price_str} {shopify_cost_str} "
+                    f"{market_cad_str} {diff_str} {diff_pct_str}  {item['title'][:30]}"
+                )
 
     # Info: Above market
     if above:
         print("\n📈 ABOVE MARKET VALUE - Competitive pricing:")
         print("-" * 100)
         if show_usd:
-            print(f"{'SKU':<22} {'Shopify CAD':>12} {'Market USD':>11} {'Market CAD':>11} {'Diff':>10} {'%':>7}  Product")
+            print(
+                f"{'SKU':<22} {'Shopify':>12} {'Cost':>10} {'Market USD':>11} "
+                f"{'Market':>11} {'Diff':>10} {'%':>7}  Product"
+            )
         else:
-            print(f"{'SKU':<22} {'Shopify CAD':>12} {'Market CAD':>12} {'Diff':>10} {'Diff %':>8}  Product")
+            print(
+                f"{'SKU':<22} {'Shopify':>12} {'Cost':>10} {'Market':>12} {'Diff':>10} {'Diff %':>8}  Product"
+            )
         print("-" * 100)
 
         for item in sorted(above, key=lambda x: -x['difference_pct'])[:10]:
+            shopify_price_str = _fmt_currency(item['shopify_price'], 12)
+            shopify_cost_str = _fmt_currency(item.get('shopify_cost'), 10)
+            diff_str = _fmt_signed_currency(item['difference'], 10)
+            diff_pct_str = f"+{item['difference_pct']:>5.1f}%" if item['difference_pct'] >= 0 else f"{item['difference_pct']:>6.1f}%"
             if show_usd:
-                print(f"{item['sku']:<22} ${item['shopify_price']:>10.2f} ${item['market_price_usd']:>9.2f} ${item['market_price_cad']:>9.2f} "
-                      f"+${item['difference']:>7.2f} +{item['difference_pct']:>5.1f}%  {item['title'][:25]}")
+                market_usd_str = _fmt_currency(item['market_price_usd'], 11)
+                market_cad_str = _fmt_currency(item['market_price_cad'], 11)
+                print(
+                    f"{item['sku']:<22} {shopify_price_str} {shopify_cost_str} {market_usd_str} "
+                    f"{market_cad_str} {diff_str} {diff_pct_str}  "
+                    f"{item['title'][:25]}"
+                )
             else:
-                print(f"{item['sku']:<22} ${item['shopify_price']:>10.2f} ${item['market_price_cad']:>10.2f} "
-                      f"+${item['difference']:>7.2f} +{item['difference_pct']:>6.1f}%  {item['title'][:30]}")
+                market_cad_str = _fmt_currency(item['market_price_cad'], 12)
+                diff_pct_str = f"+{item['difference_pct']:>6.1f}%" if item['difference_pct'] >= 0 else f"{item['difference_pct']:>7.1f}%"
+                print(
+                    f"{item['sku']:<22} {shopify_price_str} {shopify_cost_str} "
+                    f"{market_cad_str} {diff_str} {diff_pct_str}  {item['title'][:30]}"
+                )
 
         if len(above) > 10:
             print(f"  ... and {len(above) - 10} more above market")
@@ -342,9 +432,14 @@ def print_report(results: dict, threshold_pct: float, show_usd: bool = False):
         print("\n📊 ALL MATCHED PRODUCTS:")
         print("-" * 100)
         if show_usd:
-            print(f"{'SKU':<22} {'Shopify CAD':>12} {'Market USD':>11} {'Market CAD':>11} {'Diff':>10} {'%':>7}  Status")
+            print(
+                f"{'SKU':<22} {'Shopify':>12} {'Cost':>10} {'Market USD':>11} "
+                f"{'Market':>11} {'Diff':>10} {'%':>7}  Status"
+            )
         else:
-            print(f"{'SKU':<22} {'Shopify CAD':>12} {'Market CAD':>12} {'Diff':>10} {'Diff %':>8}  Status")
+            print(
+                f"{'SKU':<22} {'Shopify':>12} {'Cost':>10} {'Market':>12} {'Diff':>10} {'Diff %':>8}  Status"
+            )
         print("-" * 100)
 
         for item in sorted(matched, key=lambda x: x['difference_pct']):
@@ -356,29 +451,98 @@ def print_report(results: dict, threshold_pct: float, show_usd: bool = False):
             else:
                 status = "✓  OK"
 
-            diff_str = f"${item['difference']:>8.2f}" if item['difference'] >= 0 else f"-${abs(item['difference']):>7.2f}"
+            shopify_price_str = _fmt_currency(item['shopify_price'], 12)
+            shopify_cost_str = _fmt_currency(item.get('shopify_cost'), 10)
+            diff_str = _fmt_signed_currency(item['difference'], 10)
             pct_str = f"{item['difference_pct']:>6.1f}%" if item['difference_pct'] >= 0 else f"{item['difference_pct']:>6.1f}%"
 
             if show_usd:
-                print(f"{item['sku']:<22} ${item['shopify_price']:>10.2f} ${item['market_price_usd']:>9.2f} ${item['market_price_cad']:>9.2f} "
-                      f"{diff_str} {pct_str}  {status}")
+                market_usd_str = _fmt_currency(item['market_price_usd'], 11)
+                market_cad_str = _fmt_currency(item['market_price_cad'], 11)
+                print(
+                    f"{item['sku']:<22} {shopify_price_str} {shopify_cost_str} {market_usd_str} "
+                    f"{market_cad_str} {diff_str} {pct_str}  {status}"
+                )
             else:
-                print(f"{item['sku']:<22} ${item['shopify_price']:>10.2f} ${item['market_price_cad']:>10.2f} "
-                      f"{diff_str} {pct_str}  {status}")
+                market_cad_str = _fmt_currency(item['market_price_cad'], 12)
+                print(
+                    f"{item['sku']:<22} {shopify_price_str} {shopify_cost_str} "
+                    f"{market_cad_str} {diff_str} {pct_str}  {status}"
+                )
 
     # Shopify products without match
     if shopify_only:
         print("\n⚠️  SHOPIFY PRODUCTS WITHOUT POKEFIN MATCH:")
         print("-" * 100)
         for item in shopify_only:
-            print(f"  {item['sku']:<25} ${item['shopify_price']:>8.2f} CAD  {item['title'][:45]}")
+            shopify_price_str = _fmt_currency(item['shopify_price'], 10)
+            shopify_cost_str = _fmt_currency(item.get('shopify_cost'), 10)
+            print(
+                f"  {item['sku']:<25} {shopify_price_str} {shopify_cost_str}  {item['title'][:45]}"
+            )
 
     # No market price
     if no_price:
         print("\n❓ MATCHED BUT NO MARKET PRICE (needs price update):")
         print("-" * 100)
         for item in no_price:
-            print(f"  {item['sku']:<25} Shopify: ${item['shopify_price']:>8.2f} CAD  {item['title'][:40]}")
+            shopify_price_str = _fmt_currency(item['shopify_price'], 10)
+            shopify_cost_str = _fmt_currency(item.get('shopify_cost'), 10)
+            print(
+                f"  {item['sku']:<25} {shopify_price_str} {shopify_cost_str}  {item['title'][:40]}"
+            )
+
+    if matched:
+        print("\n💰 SHOPIFY PROFIT SUMMARY (ALL MATCHED PRODUCTS):")
+        print("-" * 100)
+        print(
+            f"{'SKU':<22} {'Shopify':>10} {'Cost':>10} {'Profit':>10} {'Margin':>9}"
+        )
+        print("-" * 100)
+
+        for item in sorted(
+            matched,
+            key=lambda x: (x.get('shopify_profit_pct') is None, x.get('shopify_profit_pct', 0))
+        ):
+            shopify_price_str = _fmt_currency(item['shopify_price'], 10)
+            shopify_cost_str = _fmt_currency(item.get('shopify_cost'), 10)
+            shopify_profit_str = _fmt_signed_currency(item.get('shopify_profit'), 10)
+            shopify_profit_pct_str = _fmt_percent(item.get('shopify_profit_pct'), 9)
+            print(
+                f"{item['sku']:<22} {shopify_price_str} {shopify_cost_str} {shopify_profit_str} {shopify_profit_pct_str}"
+            )
+
+        print("\n💰 MARKET PROFIT SUMMARY (ALL MATCHED PRODUCTS):")
+        print("-" * 100)
+        if show_usd:
+            print(
+                f"{'SKU':<22} {'Market USD':>11} {'Market':>10} {'Cost':>10} {'Profit':>10} {'Margin':>9}"
+            )
+        else:
+            print(
+                f"{'SKU':<22} {'Market':>10} {'Cost':>10} {'Profit':>10} {'Margin':>9}"
+            )
+        print("-" * 100)
+
+        for item in sorted(
+            matched,
+            key=lambda x: (x.get('market_profit_pct') is None, x.get('market_profit_pct', 0))
+        ):
+            market_cad_str = _fmt_currency(item['market_price_cad'], 10)
+            market_profit_str = _fmt_signed_currency(item.get('market_profit'), 10)
+            market_profit_pct_str = _fmt_percent(item.get('market_profit_pct'), 9)
+            shopify_cost_str = _fmt_currency(item.get('shopify_cost'), 10)
+
+            if show_usd:
+                market_usd_str = _fmt_currency(item['market_price_usd'], 11)
+                print(
+                    f"{item['sku']:<22} {market_usd_str} {market_cad_str} {shopify_cost_str} "
+                    f"{market_profit_str} {market_profit_pct_str}"
+                )
+            else:
+                print(
+                    f"{item['sku']:<22} {market_cad_str} {shopify_cost_str} {market_profit_str} {market_profit_pct_str}"
+                )
 
     print()
 
@@ -390,8 +554,9 @@ def export_alerts(results: dict, filepath: str, threshold_pct: float):
     with open(filepath, 'w', newline='', encoding='utf-8') as f:
         writer = csv.writer(f)
         writer.writerow([
-            'SKU', 'Title', 'Shopify Price (CAD)', 'Market Price (USD)', 'Market Price (CAD)',
-            'Difference (CAD)', 'Difference (%)', 'Status', 'Set', 'Product Type', 'Exchange Rate'
+            'SKU', 'Title', 'Shopify Price', 'Shopify Cost', 'Shopify Profit',
+            'Market Price (USD)', 'Market Price', 'Market Profit',
+            'Difference', 'Difference (%)', 'Status', 'Set', 'Product Type', 'Exchange Rate'
         ])
 
         for item in sorted(results['matched'], key=lambda x: x['difference_pct']):
@@ -407,8 +572,11 @@ def export_alerts(results: dict, filepath: str, threshold_pct: float):
                 item['sku'],
                 item['title'],
                 f"{item['shopify_price']:.2f}",
+                f"{item.get('shopify_cost'):.2f}" if item.get('shopify_cost') is not None else '',
+                f"{item.get('shopify_profit'):.2f}" if item.get('shopify_profit') is not None else '',
                 f"{item['market_price_usd']:.2f}",
                 f"{item['market_price_cad']:.2f}",
+                f"{item.get('market_profit'):.2f}" if item.get('market_profit') is not None else '',
                 f"{item['difference']:.2f}",
                 f"{item['difference_pct']:.1f}",
                 status,
@@ -423,6 +591,8 @@ def export_alerts(results: dict, filepath: str, threshold_pct: float):
                 item['sku'],
                 item['title'],
                 f"{item['shopify_price']:.2f}",
+                f"{item.get('shopify_cost'):.2f}" if item.get('shopify_cost') is not None else '',
+                f"{_calculate_profit(item['shopify_price'], item.get('shopify_cost')):.2f}" if item.get('shopify_cost') is not None else '',
                 '',
                 '',
                 '',

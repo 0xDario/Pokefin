@@ -75,7 +75,8 @@ export function useProductData(chartTimeframe: ChartTimeframe = "1M") {
     if (products.length === 0) return;
 
     const productIds = products.map((product) => product.id);
-    const productIdsKey = productIds.slice(0, 10).join(",");
+    // Use all product IDs sorted to create a stable cache key
+    const productIdsKey = [...productIds].sort((a, b) => a - b).join(",");
 
     if (
       lastFetchRef.current?.timeframe === chartTimeframe &&
@@ -90,49 +91,90 @@ export function useProductData(chartTimeframe: ChartTimeframe = "1M") {
       setHistoryLoading(true);
 
       const daysNeeded = getDaysForTimeframe(chartTimeframe);
-      const startDate = new Date();
-      startDate.setDate(startDate.getDate() - daysNeeded);
+
+      // Calculate start date in UTC to match database timestamps
+      // Add 1 extra day buffer to ensure we have enough data for the slice
+      const now = new Date();
+      const utcYear = now.getUTCFullYear();
+      const utcMonth = now.getUTCMonth();
+      const utcDay = now.getUTCDate();
+
+      // Create date at midnight UTC, then subtract days
+      const startDate = new Date(Date.UTC(utcYear, utcMonth, utcDay - daysNeeded - 1));
 
       try {
-        // Query product_price_history directly instead of using RPC
-        const { data, error } = await supabase
-          .from("product_price_history")
-          .select("product_id, usd_price, recorded_at")
-          .in("product_id", productIds)
-          .gte("recorded_at", startDate.toISOString())
-          .order("recorded_at", { ascending: false });
+        // Format as YYYY-MM-DD for database comparison
+        const startDateStr = startDate.toISOString().split("T")[0];
 
-        if (error) {
-          console.error("[useProductData] Fetch error:", {
-            message: error.message,
-            details: error.details,
-            hint: error.hint,
-            code: error.code,
-          });
-          return;
+        console.log("[useProductData] Fetching history:", {
+          productCount: productIds.length,
+          daysNeeded,
+          startDateStr,
+        });
+
+        // PostgREST enforces a max row limit; page through results to avoid truncation.
+        const PAGE_SIZE = 1000;
+        const allRows: Array<{ product_id: number; usd_price: number; recorded_at: string }> = [];
+        let from = 0;
+        let to = PAGE_SIZE - 1;
+
+        while (isActive) {
+          const { data, error } = await supabase
+            .from("product_price_history")
+            .select("product_id, usd_price, recorded_at")
+            .in("product_id", productIds)
+            .gte("recorded_at", startDateStr)
+            .order("recorded_at", { ascending: false })
+            .order("product_id", { ascending: true })
+            .range(from, to);
+
+          if (error) {
+            console.error("[useProductData] Fetch error:", {
+              message: error.message,
+              details: error.details,
+              hint: error.hint,
+              code: error.code,
+            });
+            return;
+          }
+
+          if (!data || data.length === 0) break;
+
+          allRows.push(...data);
+
+          if (data.length < PAGE_SIZE) break;
+
+          from += PAGE_SIZE;
+          to += PAGE_SIZE;
         }
 
-        // Deduplicate: keep only the latest entry per product per day
+        console.log("[useProductData] Fetched rows:", allRows.length);
+
         const historyByProduct: Record<number, PriceHistoryEntry[]> = {};
-        const seenDates: Record<number, Set<string>> = {};
-
-        for (const entry of data || []) {
-          const dateKey = entry.recorded_at.split("T")[0]; // Extract YYYY-MM-DD
-
-          if (!seenDates[entry.product_id]) {
-            seenDates[entry.product_id] = new Set();
+        for (const entry of allRows) {
+          if (!historyByProduct[entry.product_id]) {
             historyByProduct[entry.product_id] = [];
           }
-
-          // Skip if we already have an entry for this product on this date
-          if (seenDates[entry.product_id].has(dateKey)) {
-            continue;
-          }
-
-          seenDates[entry.product_id].add(dateKey);
           historyByProduct[entry.product_id].push({
             usd_price: entry.usd_price,
             recorded_at: entry.recorded_at,
+          });
+        }
+
+        // Sort each product's history chronologically (oldest to newest)
+        for (const productId of Object.keys(historyByProduct)) {
+          historyByProduct[Number(productId)].sort(
+            (a, b) => new Date(a.recorded_at).getTime() - new Date(b.recorded_at).getTime()
+          );
+        }
+
+        // Log sample data for debugging
+        const sampleProductId = Object.keys(historyByProduct)[0];
+        if (sampleProductId) {
+          console.log("[useProductData] Sample product history:", {
+            productId: sampleProductId,
+            entries: historyByProduct[Number(sampleProductId)]?.length,
+            dates: historyByProduct[Number(sampleProductId)]?.map(e => e.recorded_at.substring(0, 10)),
           });
         }
 

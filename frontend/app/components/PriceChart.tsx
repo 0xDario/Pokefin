@@ -42,7 +42,9 @@ const PriceChart = memo(function PriceChart({
     // Group by date, keeping the first entry for each date (newest since data comes in desc order)
     const map = new Map<string, PriceHistoryEntry>();
     for (const entry of data) {
-      const date = new Date(entry.recorded_at).toISOString().split("T")[0];
+      // Extract date directly from the string to avoid timezone conversion issues
+      // Handles both "2026-01-25T14:30:00Z" and "2026-01-25 14:30:00" formats
+      const date = entry.recorded_at.substring(0, 10);
       if (!map.has(date)) {
         map.set(date, entry);
       }
@@ -50,14 +52,19 @@ const PriceChart = memo(function PriceChart({
 
     // Convert to array and sort by date in ascending order (oldest to newest for chart display)
     const result: Array<{ date: string; price: number | null; timestamp: string }> = Array.from(map.entries())
-      .map(([date, entry]) => ({
-        date: new Date(date).toLocaleDateString(undefined, {
+      .map(([dateStr, entry]) => {
+        // Parse date parts directly to avoid timezone issues with Date constructor
+        const [year, month, day] = dateStr.split("-").map(Number);
+        const displayDate = new Date(year, month - 1, day).toLocaleDateString(undefined, {
           month: "short",
           day: "numeric",
-        }),
-        price: currency === "CAD" ? entry.usd_price * exchangeRate : entry.usd_price,
-        timestamp: date,
-      }))
+        });
+        return {
+          date: displayDate,
+          price: currency === "CAD" ? entry.usd_price * exchangeRate : entry.usd_price,
+          timestamp: dateStr,
+        };
+      })
       .sort((a, b) => a.timestamp.localeCompare(b.timestamp)); // Sort by date ascending
 
     return result;
@@ -72,22 +79,29 @@ const PriceChart = memo(function PriceChart({
       const missingDays = daysNeeded - result.length;
       const paddedData = [];
 
-      // Get the earliest date from our actual data
-      const earliestDate = result.length > 0
-        ? new Date(result[0].timestamp)
-        : new Date();
+      // Get the earliest date from our actual data, parsed as local date to avoid timezone issues
+      let earliestDate: Date;
+      if (result.length > 0) {
+        const [year, month, day] = result[0].timestamp.split("-").map(Number);
+        earliestDate = new Date(year, month - 1, day);
+      } else {
+        earliestDate = new Date();
+      }
 
       // Add null entries for missing days
       for (let i = missingDays; i > 0; i--) {
         const date = new Date(earliestDate);
         date.setDate(date.getDate() - i);
+        const yyyy = date.getFullYear();
+        const mm = String(date.getMonth() + 1).padStart(2, "0");
+        const dd = String(date.getDate()).padStart(2, "0");
         paddedData.push({
           date: date.toLocaleDateString(undefined, {
             month: "short",
             day: "numeric",
           }),
           price: null,
-          timestamp: date.toISOString().split("T")[0],
+          timestamp: `${yyyy}-${mm}-${dd}`,
         });
       }
 
