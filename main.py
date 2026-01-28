@@ -6,6 +6,7 @@ import tempfile
 import time
 import uuid
 import warnings
+import re
 
 import requests
 from datetime import datetime, timedelta, timezone
@@ -13,9 +14,8 @@ from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
 from supabase import create_client
+from urllib.parse import urlparse, parse_qs
 from urllib3.exceptions import NotOpenSSLWarning
 from webdriver_manager.chrome import ChromeDriverManager
 
@@ -43,6 +43,112 @@ def normalize_hyphens(text):
     for char in hyphen_chars:
         text = text.replace(char, '-')
     return text
+
+
+def extract_tcgplayer_product_id(url):
+    """Extract the TCGPlayer product ID from the product URL."""
+    if not url:
+        return None
+    match = re.search(r"/product/(\d+)", url)
+    if match:
+        return match.group(1)
+    return None
+
+
+def extract_preferred_language(url):
+    """Extract preferred language from the URL query string (if present)."""
+    try:
+        query = parse_qs(urlparse(url).query)
+        lang = query.get("Language") or query.get("language")
+        if lang:
+            return lang[0]
+    except Exception as e:
+        logger.debug(f"Could not parse language from URL: {e}")
+    return None
+
+
+def _select_api_result(data, preferred_variant=None, preferred_language=None):
+    results = data.get("result") or []
+    if not results:
+        return None
+
+    filtered = results
+    if preferred_language:
+        lang_matches = [r for r in filtered if r.get("language") == preferred_language]
+        if lang_matches:
+            filtered = lang_matches
+
+    if preferred_variant:
+        variant_matches = [r for r in filtered if r.get("variant") == preferred_variant]
+        if variant_matches:
+            filtered = variant_matches
+
+    return filtered[0] if filtered else None
+
+
+def fetch_latest_market_price_from_api(session, product_id, referer=None,
+                                       preferred_variant=None, preferred_language=None):
+    """
+    Fetch latest market price from TCGPlayer's infinite-api endpoint.
+    Returns float price or None.
+    """
+    if not product_id:
+        return None
+
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "application/json, text/plain, */*",
+        "Origin": "https://www.tcgplayer.com",
+    }
+    if referer:
+        headers["Referer"] = referer
+
+    range_keys = ["quarter", "month", "semi-annual", "annual"]
+
+    for key in range_keys:
+        url = f"https://infinite-api.tcgplayer.com/price/history/{product_id}/detailed?range={key}"
+        try:
+            response = session.get(url, headers=headers, timeout=15)
+            if response.status_code != 200:
+                continue
+            data = response.json()
+        except Exception:
+            continue
+
+        result = _select_api_result(
+            data,
+            preferred_variant=preferred_variant,
+            preferred_language=preferred_language,
+        )
+        if not result:
+            continue
+
+        buckets = result.get("buckets") or []
+        latest_price = None
+        latest_date = None
+        for bucket in buckets:
+            date_str = bucket.get("bucketStartDate")
+            price_str = bucket.get("marketPrice")
+            if not date_str or price_str is None:
+                continue
+            try:
+                price = float(str(price_str).replace(",", ""))
+            except ValueError:
+                continue
+            if price <= 0:
+                continue
+            try:
+                date_obj = datetime.strptime(date_str, "%Y-%m-%d").date()
+            except ValueError:
+                continue
+            if latest_date is None or date_obj > latest_date:
+                latest_date = date_obj
+                latest_price = price
+
+        if latest_price is not None:
+            return latest_price
+
+    return None
 
 
 # === Logging Setup ===
@@ -220,92 +326,31 @@ def download_and_upload_image(image_url, product_id):
         return None
 
 # === Enhanced scraper with image extraction ===
-def get_price_and_image_from_url(driver, url):
+def get_price_and_image_from_url(driver, url, session=None, variant=None):
     """
-    Extract both price and image URL from TCGPlayer product page
-    Returns dict with 'price' and 'image_url' keys
+    Extract market price (API-only) and image URL from TCGPlayer product page.
+    Returns dict with 'price' and 'image_url' keys.
     """
     try:
-        driver.get(url)
-
-        # Wait for the page to load - TCGPlayer uses client-side rendering
-        # Wait up to 15 seconds for price section to appear
-        wait = WebDriverWait(driver, 15)
-
         result = {'price': None, 'image_url': None}
 
-        # === PRICE EXTRACTION ===
-        # Updated for new TCGPlayer HTML structure (December 2025)
-        # Try new structure first (span.price-points__upper__price)
-        try:
-            # Wait for price section to load (Vue.js renders this dynamically)
-            price_section = wait.until(
-                EC.presence_of_element_located((By.CSS_SELECTOR, "div[class*='price-points__upper']"))
+        tcgplayer_product_id = extract_tcgplayer_product_id(url)
+        preferred_language = extract_preferred_language(url)
+        if session and tcgplayer_product_id:
+            api_price = fetch_latest_market_price_from_api(
+                session=session,
+                product_id=tcgplayer_product_id,
+                referer=url,
+                preferred_variant=variant,
+                preferred_language=preferred_language,
             )
-            rows = price_section.find_elements(By.TAG_NAME, "tr")
+            if api_price is not None:
+                result['price'] = api_price
 
-            label_to_price = {}
-            for row in rows:
-                row_text = row.text.strip().lower()
+        driver.get(url)
 
-                # Check if this row contains Market Price
-                if "market price" in row_text:
-                    price_spans = row.find_elements(By.CSS_SELECTOR, "span[class*='price-points__upper__price']")
-                    if price_spans:
-                        price_text = price_spans[0].text.strip().replace("$", "").replace(",", "")
-                        if price_text and price_text not in ("-", "", "N/A"):
-                            label_to_price["market"] = price_text
-
-                # Check if this row contains Most Recent Sale
-                elif "most recent sale" in row_text:
-                    price_spans = row.find_elements(By.CSS_SELECTOR, "span[class*='price-points__upper__price']")
-                    if price_spans:
-                        price_text = price_spans[0].text.strip().replace("$", "").replace(",", "")
-                        if price_text and price_text not in ("-", "", "N/A"):
-                            label_to_price["recent"] = price_text
-
-            # Priority: Market > Most Recent Sale
-            if "market" in label_to_price:
-                try:
-                    result['price'] = float(label_to_price["market"])
-                except ValueError:
-                    pass
-            elif "recent" in label_to_price:
-                try:
-                    result['price'] = float(label_to_price["recent"])
-                except ValueError:
-                    pass
-        except Exception as e:
-            logger.debug(f"Primary price extraction failed: {e}, trying fallback...")
-            # Fallback: Try old structure for backwards compatibility
-            try:
-                rows = driver.find_elements(By.CSS_SELECTOR, "div[class*='price-points__upper'] tr")
-                label_to_price = {}
-                for row in rows:
-                    cells = row.find_elements(By.TAG_NAME, "td")
-                    if len(cells) < 2:
-                        continue
-                    label = cells[0].text.strip().lower()
-                    if "market price" in label:
-                        price = cells[-1].text.strip().replace("$", "").replace(",", "")
-                        label_to_price["market"] = price
-                    elif "most recent sale" in label:
-                        price = cells[-1].text.strip().replace("$", "").replace(",", "")
-                        label_to_price["recent"] = price
-
-                # Priority: Market > Most Recent Sale
-                if "market" in label_to_price and label_to_price["market"] not in ("-", "", "N/A"):
-                    try:
-                        result['price'] = float(label_to_price["market"])
-                    except ValueError:
-                        pass
-                elif "recent" in label_to_price and label_to_price["recent"] not in ("-", "", "N/A"):
-                    try:
-                        result['price'] = float(label_to_price["recent"])
-                    except ValueError:
-                        pass
-            except Exception as fallback_error:
-                logger.warning(f"Price extraction failed: {fallback_error}")
+        # Allow client-side rendering to hydrate before image extraction
+        time.sleep(2)
 
         # === IMAGE EXTRACTION ===
         image_selectors = [
@@ -526,6 +571,7 @@ def update_prices():
 
     driver = None
     user_data_dir = None
+    api_session = requests.Session()
     updated_count = 0
     price_history_batch = []  # Collect price history entries for batch insert
 
@@ -544,7 +590,12 @@ def update_prices():
             logger.info(f"[{idx}/{len(products_to_update)}] Scraping product ID {product_id}{variant_info}...")
 
             # Get both price and image
-            scraped_data = get_price_and_image_from_url(driver, url)
+            scraped_data = get_price_and_image_from_url(
+                driver,
+                url,
+                session=api_session,
+                variant=variant,
+            )
             price = scraped_data.get('price')
             if price is not None and price <= 0:
                 logger.warning(f"   Ignoring non-positive price from scrape: {price}")
@@ -628,6 +679,10 @@ def update_prices():
 
     finally:
         cleanup_driver(driver, user_data_dir)
+        try:
+            api_session.close()
+        except Exception:
+            pass
 
     logger.info(f"Done! {updated_count} products updated out of {len(products_to_update)} checked.")
 
