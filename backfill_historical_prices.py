@@ -258,6 +258,22 @@ def cleanup_driver(driver, user_data_dir):
     except Exception as e:
         logger.warning(f"Error cleaning up temp directory: {e}")
 
+HISTORY_CONTAINER_SELECTORS = [
+    "div[data-testid='History__Line']",
+    "div[data-testid='History']",
+    "div.martech-charts-history",
+]
+
+
+def _get_history_container(driver):
+    """Find the market price history container to avoid parsing other charts."""
+    for selector in HISTORY_CONTAINER_SELECTORS:
+        elems = driver.find_elements(By.CSS_SELECTOR, selector)
+        if elems:
+            return elems[0]
+    return None
+
+
 def extract_historical_prices(driver, url, timeframes=None):
     """
     Navigate to product page, extract historical price data from multiple timeframes
@@ -307,12 +323,12 @@ def extract_historical_prices(driver, url, timeframes=None):
                     logger.warning(f"Could not find {timeframe} button, skipping...")
                     continue
 
-                # Determine if this timeframe uses date ranges or single dates
-                # Longer timeframes (6M+) typically use date ranges
-                is_date_range = timeframe in ['6M', '1Y']
-
                 # Extract data for this timeframe
-                timeframe_data = extract_canvas_table_data(driver, is_date_range=is_date_range)
+                history_container = _get_history_container(driver)
+                timeframe_data = extract_canvas_table_data(
+                    driver,
+                    root=history_container,
+                )
                 all_historical_data.extend(timeframe_data)
                 successful_timeframes.append(timeframe)
                 logger.debug(f"Extracted {len(timeframe_data)} entries from {timeframe} data")
@@ -352,22 +368,63 @@ def extract_historical_prices(driver, url, timeframes=None):
         return []
 
 
-def extract_canvas_table_data(driver, is_date_range=False):
+def _get_cell_text(cell):
+    text = cell.text.strip()
+    if not text:
+        text = cell.get_attribute('innerText')
+    if not text:
+        text = cell.get_attribute('textContent')
+    return (text or "").strip()
+
+
+def _get_header_labels(table):
+    labels = []
+    headers = table.find_elements(By.CSS_SELECTOR, "thead th")
+    for header in headers:
+        labels.append(_get_cell_text(header).lower())
+    return labels
+
+
+def extract_canvas_table_data(driver, root=None):
     """
     Extract data from canvas table
-    is_date_range: True for 3M data (e.g., "11/5 to 11/7"), False for 1M data (e.g., "2025-11-08")
     Returns list of dicts with {date, price}
     """
     historical_data = []
 
     try:
-        canvas_elements = driver.find_elements(By.CSS_SELECTOR, "canvas")
+        search_root = root or driver
+        canvas_elements = search_root.find_elements(By.CSS_SELECTOR, "canvas")
 
         for canvas in canvas_elements:
             try:
                 tables = canvas.find_elements(By.TAG_NAME, "table")
 
                 for table in tables:
+                    header_labels = _get_header_labels(table)
+                    price_col_idx = None
+
+                    if header_labels:
+                        # Prefer explicit price/variant labels if present
+                        for idx, label in enumerate(header_labels):
+                            if idx == 0:
+                                continue
+                            if any(key in label for key in ["market", "unopened", "normal", "foil", "price"]):
+                                price_col_idx = idx
+                                break
+
+                        # Fallback to first non-date header after the date column
+                        if price_col_idx is None:
+                            for idx, label in enumerate(header_labels):
+                                if idx == 0:
+                                    continue
+                                if label and "date" not in label:
+                                    price_col_idx = idx
+                                    break
+
+                    if price_col_idx is None:
+                        price_col_idx = 1
+
                     tbody = table.find_element(By.TAG_NAME, "tbody")
                     rows = tbody.find_elements(By.TAG_NAME, "tr")
 
@@ -375,19 +432,10 @@ def extract_canvas_table_data(driver, is_date_range=False):
                         cells = row.find_elements(By.TAG_NAME, "td")
                         if len(cells) >= 2:
                             # Extract text using multiple methods
-                            date_str = cells[0].text.strip()
-                            if not date_str:
-                                date_str = cells[0].get_attribute('innerText')
-                            if not date_str:
-                                date_str = cells[0].get_attribute('textContent')
-                            if date_str:
-                                date_str = date_str.strip()
+                            date_str = _get_cell_text(cells[0])
 
-                            price_str = cells[1].text.strip()
-                            if not price_str:
-                                price_str = cells[1].get_attribute('innerText')
-                            if not price_str:
-                                price_str = cells[1].get_attribute('textContent')
+                            price_cell = cells[price_col_idx] if price_col_idx < len(cells) else cells[1]
+                            price_str = _get_cell_text(price_cell)
                             if price_str:
                                 price_str = price_str.strip().replace("$", "").replace(",", "")
 
@@ -397,28 +445,27 @@ def extract_canvas_table_data(driver, is_date_range=False):
                                 if price <= 0:
                                     continue
 
-                                if is_date_range:
-                                    # Parse date range format: "11/5 to 11/7"
-                                    if " to " in date_str:
-                                        # Extract the dates from range
-                                        date_parts = date_str.split(" to ")
-                                        if len(date_parts) == 2:
-                                            start_date_str = date_parts[0].strip()
-                                            end_date_str = date_parts[1].strip()
+                                # Parse date range format: "11/5 to 11/7"
+                                if " to " in date_str:
+                                    # Extract the dates from range
+                                    date_parts = date_str.split(" to ")
+                                    if len(date_parts) == 2:
+                                        start_date_str = date_parts[0].strip()
+                                        end_date_str = date_parts[1].strip()
 
-                                            # Parse dates (format: "11/5")
-                                            start_date = parse_short_date(start_date_str)
-                                            end_date = parse_short_date(end_date_str)
+                                        # Parse dates (format: "11/5")
+                                        start_date = parse_short_date(start_date_str)
+                                        end_date = parse_short_date(end_date_str)
 
-                                            if start_date and end_date:
-                                                # Assign the average price to each day in the range
-                                                current_date = start_date
-                                                while current_date <= end_date:
-                                                    historical_data.append({
-                                                        'date': current_date.strftime("%Y-%m-%d"),
-                                                        'price': price
-                                                    })
-                                                    current_date += timedelta(days=1)
+                                        if start_date and end_date:
+                                            # Assign the average price to each day in the range
+                                            current_date = start_date
+                                            while current_date <= end_date:
+                                                historical_data.append({
+                                                    'date': current_date.strftime("%Y-%m-%d"),
+                                                    'price': price
+                                                })
+                                                current_date += timedelta(days=1)
                                 else:
                                     # Parse single date format: "2025-11-08"
                                     if "-" in date_str and len(date_str) == 10:
@@ -427,6 +474,14 @@ def extract_canvas_table_data(driver, is_date_range=False):
                                             'date': date_obj.strftime("%Y-%m-%d"),
                                             'price': price
                                         })
+                                    elif "/" in date_str and len(date_str) <= 5:
+                                        # Fallback for short date format like "1/8"
+                                        date_obj = parse_short_date(date_str)
+                                        if date_obj:
+                                            historical_data.append({
+                                                'date': date_obj.strftime("%Y-%m-%d"),
+                                                'price': price
+                                            })
 
                             except (ValueError, IndexError) as e:
                                 logger.debug(f"Could not parse price/date: {e}")
