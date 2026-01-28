@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-Enhanced script to backfill historical price data from TCGPlayer
-Automatically scrapes 365 days (max) of price history with intelligent rate limiting
+Enhanced script to backfill historical price data from TCGPlayer's infinite-api
+Automatically fetches 365 days (max) of price history with intelligent rate limiting
 
 Features:
-- Multi-timeframe scraping (1M, 3M, 6M, 1Y) for maximum data coverage
+- Multi-range API fetching (1M, 3M, 6M, 1Y) for maximum data coverage
 - Intelligent rate limiting with exponential backoff
 - Session recycling to avoid bot detection
 - Checkpoint/resume functionality
@@ -30,24 +30,16 @@ Usage:
 """
 import argparse
 import logging
-import shutil
 import time
 import random
 import json
+import re
 from datetime import datetime, timedelta, timezone
-from selenium import webdriver
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-from selenium.webdriver.chrome.service import Service
-from webdriver_manager.chrome import ChromeDriverManager
-from selenium.common.exceptions import TimeoutException, WebDriverException
+from urllib.parse import urlparse, parse_qs
+import requests
 from supabase import create_client
 from secretsFile import SUPABASE_URL, SUPABASE_KEY
-import tempfile
 import os
-import platform
 
 # === Logging Setup ===
 logging.basicConfig(
@@ -64,7 +56,7 @@ supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 RATE_LIMIT_CONFIG = {
     'min_delay': 2.0,        # Minimum delay between requests (seconds)
     'max_delay': 5.0,        # Maximum delay between requests (seconds)
-    'session_recycle_after': 50,  # Recycle browser session after N products
+    'session_recycle_after': 50,  # Recycle API session after N products
     'max_retries': 3,        # Maximum retry attempts per product
     'retry_backoff_base': 2, # Base for exponential backoff (seconds)
     'timeout': 20,           # Page load timeout (seconds)
@@ -79,20 +71,18 @@ USER_AGENTS = [
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
 ]
 
-# Timeframe buttons to click (in order from shortest to longest)
-# This allows us to gather comprehensive historical data
-# TCGPlayer only has: 1M, 3M, 6M, 1Y (maximum 365 days of history)
-# Data granularity:
-#   - 1M: Daily price points (most granular, ~30 days)
-#   - 3M: Every 3 days (~90 days)
-#   - 6M: Weekly basis (~180 days)
-#   - 1Y: Weekly basis (~365 days)
-# We extract from all timeframes and deduplicate, preferring shorter timeframes (more granular)
-TIMEFRAME_BUTTONS = ['1M', '3M', '6M', '1Y']
+# API ranges for the infinite-api endpoint (shortest -> longest)
+# We try multiple keys per range to handle naming variations.
+API_RANGE_CONFIG = [
+    {"label": "1M", "keys": ["month", "monthly", "1m"]},
+    {"label": "3M", "keys": ["quarter", "3m"]},
+    {"label": "6M", "keys": ["semi-annual", "semiannual", "6m"]},
+    {"label": "1Y", "keys": ["annual", "year", "1y"]},
+]
 
 # === Checkpoint Management ===
 class CheckpointManager:
-    """Manages checkpoints for resuming interrupted scraping runs"""
+    """Manages checkpoints for resuming interrupted backfill runs"""
 
     def __init__(self, checkpoint_file=None):
         self.checkpoint_file = checkpoint_file or f"checkpoint_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
@@ -191,347 +181,202 @@ class RateLimiter:
         """Reset error count after successful request"""
         self.consecutive_errors = 0
 
-# === Selenium Driver Setup ===
-def create_driver(user_agent=None):
-    """
-    Create a Selenium WebDriver with bot detection evasion settings.
-    Returns tuple of (driver, user_data_dir) for proper cleanup.
-    """
-    options = Options()
+def extract_tcgplayer_product_id(url):
+    """Extract the TCGPlayer product ID from the product URL."""
+    if not url:
+        return None
+    match = re.search(r"/product/(\d+)", url)
+    if match:
+        return match.group(1)
+    return None
 
-    # Set Chrome binary location based on OS
-    system = platform.system()
-    if system == "Linux":
-        options.binary_location = "/usr/bin/google-chrome"
-    elif system == "Darwin":  # macOS
-        mac_chrome_paths = [
-            "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-            "/Applications/Chromium.app/Contents/MacOS/Chromium",
-        ]
-        for path in mac_chrome_paths:
-            if os.path.exists(path):
-                options.binary_location = path
+
+def extract_preferred_language(url):
+    """Extract preferred language from the URL query string (if present)."""
+    try:
+        query = parse_qs(urlparse(url).query)
+        lang = query.get("Language") or query.get("language")
+        if lang:
+            return lang[0]
+    except Exception as e:
+        logger.debug(f"Could not parse language from URL: {e}")
+    return None
+
+
+def _api_headers(referer=None):
+    headers = {
+        "User-Agent": random.choice(USER_AGENTS),
+        "Accept": "application/json, text/plain, */*",
+        "Origin": "https://www.tcgplayer.com",
+    }
+    if referer:
+        headers["Referer"] = referer
+    return headers
+
+
+def fetch_price_history_json(session, product_id, range_key, referer=None, timeout=15):
+    url = f"https://infinite-api.tcgplayer.com/price/history/{product_id}/detailed?range={range_key}"
+    headers = _api_headers(referer)
+    try:
+        response = session.get(url, headers=headers, timeout=timeout)
+    except requests.RequestException as e:
+        logger.debug(f"API request failed for range={range_key}: {e}")
+        return None
+
+    if response.status_code != 200:
+        logger.debug(f"API response {response.status_code} for range={range_key}")
+        return None
+
+    try:
+        return response.json()
+    except ValueError as e:
+        logger.debug(f"API JSON decode failed for range={range_key}: {e}")
+        return None
+
+
+def _select_api_result(data, preferred_variant=None, preferred_language=None):
+    results = data.get("result") or []
+    if not results:
+        return None
+
+    filtered = results
+    if preferred_language:
+        lang_matches = [r for r in filtered if r.get("language") == preferred_language]
+        if lang_matches:
+            filtered = lang_matches
+
+    if preferred_variant:
+        variant_matches = [r for r in filtered if r.get("variant") == preferred_variant]
+        if variant_matches:
+            filtered = variant_matches
+
+    return filtered[0] if filtered else None
+
+
+def _to_date(date_str):
+    try:
+        return datetime.strptime(date_str, "%Y-%m-%d").date()
+    except (TypeError, ValueError):
+        return None
+
+
+def expand_buckets_to_daily(buckets, target_start_date=None, target_end_date=None):
+    """Expand API bucket data into daily entries."""
+    target_start = _to_date(target_start_date) if target_start_date else None
+    target_end = _to_date(target_end_date) if target_end_date else None
+
+    bucket_items = []
+    for bucket in buckets or []:
+        start_str = bucket.get("bucketStartDate")
+        price_str = bucket.get("marketPrice")
+        if not start_str or price_str is None:
+            continue
+        start_date = _to_date(start_str)
+        if not start_date:
+            continue
+        try:
+            price = float(str(price_str).replace(",", ""))
+        except ValueError:
+            continue
+        if price <= 0:
+            continue
+        bucket_items.append({"start": start_date, "price": price})
+
+    if not bucket_items:
+        return []
+
+    bucket_items.sort(key=lambda x: x["start"])
+
+    expanded = []
+    for idx, bucket in enumerate(bucket_items):
+        start = bucket["start"]
+        if idx + 1 < len(bucket_items):
+            end = bucket_items[idx + 1]["start"] - timedelta(days=1)
+        else:
+            end = start  # Last bucket: assume single day to avoid overfill
+
+        if target_start and end < target_start:
+            continue
+        if target_end and start > target_end:
+            continue
+
+        if target_start:
+            start = max(start, target_start)
+        if target_end:
+            end = min(end, target_end)
+        if end < start:
+            continue
+
+        current = start
+        while current <= end:
+            expanded.append({
+                "date": current.strftime("%Y-%m-%d"),
+                "price": bucket["price"],
+            })
+            current += timedelta(days=1)
+
+    return expanded
+
+
+def extract_historical_prices_api(product_id, referer=None, preferred_variant=None, preferred_language=None,
+                                  target_start_date=None, target_end_date=None, session=None):
+    """
+    Fetch historical prices from TCGPlayer's infinite-api and expand bucketed data to daily prices.
+    Returns list of dicts with {date, price}.
+    """
+    if not product_id:
+        return []
+
+    session = session or requests.Session()
+
+    deduped = {}
+
+    for range_config in API_RANGE_CONFIG:
+        data = None
+        used_key = None
+        for key in range_config["keys"]:
+            data = fetch_price_history_json(
+                session=session,
+                product_id=product_id,
+                range_key=key,
+                referer=referer,
+                timeout=RATE_LIMIT_CONFIG['timeout'],
+            )
+            if data:
+                used_key = key
                 break
 
-    # Use provided user agent or pick random one
-    ua = user_agent or random.choice(USER_AGENTS)
+        if not data:
+            logger.debug(f"API data missing for {range_config['label']}")
+            continue
 
-    # Bot detection evasion settings
-    options.add_argument("--headless=new")
-    options.add_argument("--disable-blink-features=AutomationControlled")
-    options.add_experimental_option("excludeSwitches", ["enable-automation"])
-    options.add_experimental_option('useAutomationExtension', False)
-    options.add_argument(f"user-agent={ua}")
-    options.add_argument("--disable-gpu")
-    options.add_argument("--no-sandbox")
-    options.add_argument("--window-size=1920,1080")
-    options.add_argument("--disable-dev-shm-usage")
-    options.add_argument("--no-first-run")
-    options.add_argument("--no-default-browser-check")
-    options.add_argument("--disable-extensions")
+        result = _select_api_result(
+            data,
+            preferred_variant=preferred_variant,
+            preferred_language=preferred_language,
+        )
+        if not result:
+            logger.debug(f"No matching API result for {range_config['label']}")
+            continue
 
-    user_data_dir = os.path.join(tempfile.gettempdir(), f"chrome_scraper_{int(time.time())}_{os.getpid()}")
-    options.add_argument(f"--user-data-dir={user_data_dir}")
-    options.add_argument("--disable-background-timer-throttling")
+        buckets = result.get("buckets") or []
+        expanded = expand_buckets_to_daily(
+            buckets=buckets,
+            target_start_date=target_start_date,
+            target_end_date=target_end_date,
+        )
 
-    # Set page load timeout
-    driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
-    driver.set_page_load_timeout(RATE_LIMIT_CONFIG['timeout'])
-    driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+        for entry in expanded:
+            if entry["date"] not in deduped:
+                deduped[entry["date"]] = entry
 
-    logger.debug(f"Created driver with user agent: {ua[:50]}...")
-    return driver, user_data_dir
+        logger.debug(
+            f"API {range_config['label']} ({used_key}) -> "
+            f"{len(expanded)} daily entries (deduped total: {len(deduped)})"
+        )
 
+    return list(deduped.values())
 
-def cleanup_driver(driver, user_data_dir):
-    """Properly cleanup WebDriver and temporary directory."""
-    try:
-        if driver:
-            driver.quit()
-    except Exception as e:
-        logger.warning(f"Error quitting driver: {e}")
-
-    try:
-        if user_data_dir and os.path.exists(user_data_dir):
-            shutil.rmtree(user_data_dir, ignore_errors=True)
-            logger.debug(f"Cleaned up temp directory: {user_data_dir}")
-    except Exception as e:
-        logger.warning(f"Error cleaning up temp directory: {e}")
-
-HISTORY_CONTAINER_SELECTORS = [
-    "div[data-testid='History__Line']",
-    "div[data-testid='History']",
-    "div.martech-charts-history",
-]
-
-
-def _get_history_container(driver):
-    """Find the market price history container to avoid parsing other charts."""
-    for selector in HISTORY_CONTAINER_SELECTORS:
-        elems = driver.find_elements(By.CSS_SELECTOR, selector)
-        if elems:
-            return elems[0]
-    return None
-
-
-def extract_historical_prices(driver, url, timeframes=None):
-    """
-    Navigate to product page, extract historical price data from multiple timeframes
-    Returns list of dicts with {date, price}
-
-    Args:
-        driver: Selenium WebDriver instance
-        url: Product URL to scrape
-        timeframes: List of timeframe buttons to click (e.g., ['1M', '3M', '6M', '1Y', '3Y'])
-                   If None, uses TIMEFRAME_BUTTONS global
-    """
-    if timeframes is None:
-        timeframes = TIMEFRAME_BUTTONS
-
-    try:
-        logger.debug(f"Loading page: {url}")
-        driver.get(url)
-
-        # Wait for page to load
-        wait = WebDriverWait(driver, RATE_LIMIT_CONFIG['timeout'])
-
-        # Wait for the chart section to appear
-        logger.debug("Waiting for chart section to load...")
-        wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "canvas")))
-        time.sleep(3)  # Extra time for chart to render
-
-        all_historical_data = []
-        successful_timeframes = []
-
-        # Extract data from each timeframe
-        for timeframe in timeframes:
-            try:
-                logger.debug(f"Extracting {timeframe} data...")
-
-                # Click the timeframe button
-                button_clicked = False
-                buttons = driver.find_elements(By.CSS_SELECTOR, "button.charts-item")
-                for button in buttons:
-                    if timeframe in button.text.strip():
-                        logger.debug(f"Clicking {timeframe} button...")
-                        button.click()
-                        time.sleep(3)  # Wait for chart to update
-                        button_clicked = True
-                        break
-
-                if not button_clicked:
-                    logger.warning(f"Could not find {timeframe} button, skipping...")
-                    continue
-
-                # Extract data for this timeframe
-                history_container = _get_history_container(driver)
-                timeframe_data = extract_canvas_table_data(
-                    driver,
-                    root=history_container,
-                )
-                all_historical_data.extend(timeframe_data)
-                successful_timeframes.append(timeframe)
-                logger.debug(f"Extracted {len(timeframe_data)} entries from {timeframe} data")
-
-            except Exception as e:
-                logger.warning(f"Error extracting {timeframe} data: {e}")
-                continue
-
-        # Deduplicate: prefer data from shorter timeframes (more granular)
-        # We process timeframes in shortest->longest order, so keep the first
-        # occurrence of each date and ignore later (longer timeframe) entries.
-        deduplicated = {}
-        for entry in all_historical_data:
-            date = entry['date']
-            if date not in deduplicated:  # Keep first occurrence (from shortest timeframe)
-                deduplicated[date] = entry
-
-        final_data = list(deduplicated.values())
-
-        duplicates_removed = len(all_historical_data) - len(final_data)
-        if duplicates_removed > 0:
-            logger.debug(f"Removed {duplicates_removed} duplicate dates (kept data from shorter timeframes)")
-
-        if successful_timeframes:
-            logger.debug(f"Successfully extracted from timeframes: {', '.join(successful_timeframes)}")
-
-        return final_data
-
-    except TimeoutException:
-        logger.error(f"Timeout loading page: {url}")
-        return []
-    except WebDriverException as e:
-        logger.error(f"WebDriver error: {e}")
-        return []
-    except Exception as e:
-        logger.error(f"Error extracting historical prices: {e}")
-        return []
-
-
-def _get_cell_text(cell):
-    text = cell.text.strip()
-    if not text:
-        text = cell.get_attribute('innerText')
-    if not text:
-        text = cell.get_attribute('textContent')
-    return (text or "").strip()
-
-
-def _get_header_labels(table):
-    labels = []
-    headers = table.find_elements(By.CSS_SELECTOR, "thead th")
-    for header in headers:
-        labels.append(_get_cell_text(header).lower())
-    return labels
-
-
-def extract_canvas_table_data(driver, root=None):
-    """
-    Extract data from canvas table
-    Returns list of dicts with {date, price}
-    """
-    historical_data = []
-
-    try:
-        search_root = root or driver
-        canvas_elements = search_root.find_elements(By.CSS_SELECTOR, "canvas")
-
-        for canvas in canvas_elements:
-            try:
-                tables = canvas.find_elements(By.TAG_NAME, "table")
-
-                for table in tables:
-                    header_labels = _get_header_labels(table)
-                    price_col_idx = None
-
-                    if header_labels:
-                        # Prefer explicit price/variant labels if present
-                        for idx, label in enumerate(header_labels):
-                            if idx == 0:
-                                continue
-                            if any(key in label for key in ["market", "unopened", "normal", "foil", "price"]):
-                                price_col_idx = idx
-                                break
-
-                        # Fallback to first non-date header after the date column
-                        if price_col_idx is None:
-                            for idx, label in enumerate(header_labels):
-                                if idx == 0:
-                                    continue
-                                if label and "date" not in label:
-                                    price_col_idx = idx
-                                    break
-
-                    if price_col_idx is None:
-                        price_col_idx = 1
-
-                    tbody = table.find_element(By.TAG_NAME, "tbody")
-                    rows = tbody.find_elements(By.TAG_NAME, "tr")
-
-                    for row in rows:
-                        cells = row.find_elements(By.TAG_NAME, "td")
-                        if len(cells) >= 2:
-                            # Extract text using multiple methods
-                            date_str = _get_cell_text(cells[0])
-
-                            price_cell = cells[price_col_idx] if price_col_idx < len(cells) else cells[1]
-                            price_str = _get_cell_text(price_cell)
-                            if price_str:
-                                price_str = price_str.strip().replace("$", "").replace(",", "")
-
-                            try:
-                                price = float(price_str)
-                                # Ignore non-positive prices (TCGPlayer sometimes shows 0 for no data)
-                                if price <= 0:
-                                    continue
-
-                                # Parse date range format: "11/5 to 11/7"
-                                if " to " in date_str:
-                                    # Extract the dates from range
-                                    date_parts = date_str.split(" to ")
-                                    if len(date_parts) == 2:
-                                        start_date_str = date_parts[0].strip()
-                                        end_date_str = date_parts[1].strip()
-
-                                        # Parse dates (format: "11/5")
-                                        start_date = parse_short_date(start_date_str)
-                                        end_date = parse_short_date(end_date_str)
-
-                                        if start_date and end_date:
-                                            # Assign the average price to each day in the range
-                                            current_date = start_date
-                                            while current_date <= end_date:
-                                                historical_data.append({
-                                                    'date': current_date.strftime("%Y-%m-%d"),
-                                                    'price': price
-                                                })
-                                                current_date += timedelta(days=1)
-                                else:
-                                    # Parse single date format: "2025-11-08"
-                                    if "-" in date_str and len(date_str) == 10:
-                                        date_obj = datetime.strptime(date_str, "%Y-%m-%d")
-                                        historical_data.append({
-                                            'date': date_obj.strftime("%Y-%m-%d"),
-                                            'price': price
-                                        })
-                                    elif "/" in date_str and len(date_str) <= 5:
-                                        # Fallback for short date format like "1/8"
-                                        date_obj = parse_short_date(date_str)
-                                        if date_obj:
-                                            historical_data.append({
-                                                'date': date_obj.strftime("%Y-%m-%d"),
-                                                'price': price
-                                            })
-
-                            except (ValueError, IndexError) as e:
-                                logger.debug(f"Could not parse price/date: {e}")
-                                continue
-
-                    if historical_data:
-                        break  # Found data, no need to check other tables
-
-            except Exception as e:
-                logger.debug(f"Canvas parsing error: {e}")
-                continue
-
-    except Exception as e:
-        logger.warning(f"Error extracting canvas table data: {e}")
-
-    return historical_data
-
-
-def parse_short_date(date_str):
-    """
-    Parse short date format like "11/5" to a datetime object.
-    Uses dynamic year logic based on current date to handle year boundaries.
-
-    Logic: Try current year first. If the resulting date is more than 7 days
-    in the future, assume it's from the previous year. This handles edge cases
-    like running in January for December dates.
-    """
-    try:
-        parts = date_str.split("/")
-        if len(parts) == 2:
-            month = int(parts[0])
-            day = int(parts[1])
-
-            now = datetime.now(timezone.utc)
-            current_year = now.year
-
-            # Try current year first
-            candidate_date = datetime(current_year, month, day, tzinfo=timezone.utc)
-
-            # If the date is more than 7 days in the future, use previous year
-            # This handles year boundary edge cases naturally
-            if candidate_date > now + timedelta(days=7):
-                candidate_date = datetime(current_year - 1, month, day, tzinfo=timezone.utc)
-
-            # Return naive datetime to maintain compatibility
-            return candidate_date.replace(tzinfo=None)
-    except (ValueError, IndexError) as e:
-        logger.debug(f"Could not parse short date '{date_str}': {e}")
-
-    return None
 
 def fetch_products_paginated(batch_size=500):
     """
@@ -690,20 +535,25 @@ def backfill_prices(start_idx=None, end_idx=None, reverse=False, days=365, check
         logger.info(f"Skipping {already_processed} already processed products from checkpoint")
         logger.info(f"{len(products_to_process)} products remaining")
 
-    driver = None
-    user_data_dir = None
     products_processed = 0
     session_product_count = 0
+    api_session = None
 
     try:
-        # Create initial driver
-        driver, user_data_dir = create_driver()
-        logger.info("Browser session started")
+        api_session = requests.Session()
 
         for idx, product in enumerate(products_to_process, 1):
             product_id = product["id"]
             url = product["url"]
             variant = product.get("variant")
+            tcgplayer_product_id = extract_tcgplayer_product_id(url)
+            preferred_language = extract_preferred_language(url)
+
+            if not tcgplayer_product_id:
+                logger.warning(f"   Missing TCGPlayer product ID in URL for product {product_id}, skipping")
+                checkpoint.mark_failed(product_id)
+                checkpoint.update_stats(failed=1)
+                continue
 
             # Get release_date from the joined sets table
             release_date_str = None
@@ -717,10 +567,13 @@ def backfill_prices(start_idx=None, end_idx=None, reverse=False, days=365, check
             # === Session recycling to avoid detection ===
             session_product_count += 1
             if session_product_count >= RATE_LIMIT_CONFIG['session_recycle_after']:
-                logger.info(f"Recycling browser session (processed {session_product_count} products)")
-                cleanup_driver(driver, user_data_dir)
-                time.sleep(random.uniform(3, 7))  # Random delay before new session
-                driver, user_data_dir = create_driver()  # New user agent each time
+                logger.info(f"Recycling API session (processed {session_product_count} products)")
+                try:
+                    api_session.close()
+                except Exception:
+                    pass
+                time.sleep(random.uniform(1, 3))
+                api_session = requests.Session()
                 session_product_count = 0
 
             # === Calculate the actual start date based on release date ===
@@ -769,17 +622,28 @@ def backfill_prices(start_idx=None, end_idx=None, reverse=False, days=365, check
             except Exception as e:
                 logger.warning(f"   Error checking existing data: {e}")
                 existing_dates = set()
-                # Continue with scraping if check fails
+                # Continue with API fetch if check fails
 
-            # === Retry logic for scraping ===
+            # === Retry logic for API fetch ===
             historical_data = None
             for attempt in range(1, RATE_LIMIT_CONFIG['max_retries'] + 1):
                 try:
                     # Apply rate limiting before request
                     rate_limiter.wait()
 
-                    logger.debug(f"   Extracting historical prices (attempt {attempt}/{RATE_LIMIT_CONFIG['max_retries']})...")
-                    historical_data = extract_historical_prices(driver, url)
+                    logger.debug(
+                        f"   Fetching historical prices via API (attempt {attempt}/{RATE_LIMIT_CONFIG['max_retries']})..."
+                    )
+
+                    historical_data = extract_historical_prices_api(
+                        product_id=tcgplayer_product_id,
+                        referer=url,
+                        preferred_variant=variant,
+                        preferred_language=preferred_language,
+                        target_start_date=product_start_date,
+                        target_end_date=target_end_date,
+                        session=api_session,
+                    )
 
                     if historical_data:
                         rate_limiter.reset_errors()
@@ -791,21 +655,6 @@ def backfill_prices(start_idx=None, end_idx=None, reverse=False, days=365, check
                             backoff_time = RATE_LIMIT_CONFIG['retry_backoff_base'] ** attempt
                             logger.info(f"   Retrying in {backoff_time}s...")
                             time.sleep(backoff_time)
-
-                except (TimeoutException, WebDriverException) as e:
-                    logger.warning(f"   Browser error on attempt {attempt}: {e}")
-                    rate_limiter.record_error()
-
-                    if attempt < RATE_LIMIT_CONFIG['max_retries']:
-                        # Try recycling the session if there's a browser error
-                        try:
-                            cleanup_driver(driver, user_data_dir)
-                            time.sleep(random.uniform(2, 5))
-                            driver, user_data_dir = create_driver()
-                            session_product_count = 0
-                        except Exception as driver_e:
-                            logger.error(f"   Failed to recycle driver: {driver_e}")
-                    continue
 
                 except Exception as e:
                     logger.error(f"   Unexpected error on attempt {attempt}: {e}")
@@ -872,7 +721,11 @@ def backfill_prices(start_idx=None, end_idx=None, reverse=False, days=365, check
         logger.info(f"Resume with: python backfill_historical_prices.py --resume {checkpoint.checkpoint_file}")
 
     finally:
-        cleanup_driver(driver, user_data_dir)
+        if api_session:
+            try:
+                api_session.close()
+            except Exception:
+                pass
 
     # Print final statistics
     stats = checkpoint.data['stats']
