@@ -111,6 +111,16 @@ const PriceChart = memo(function PriceChart({
     return result;
   }, [range, groupedDaily]);
 
+  // Downsample data for longer ranges to reduce jaggedness
+  const chartData = useMemo(() => {
+    if (range === "7D" || range === "1M") return slicedData;
+
+    // For longer ranges, we smooth the data
+    const step = range === "3M" ? 2 : range === "6M" ? 3 : 7; // 7 days for 1Y
+    
+    return slicedData.filter((_, index) => index % step === 0 || index === slicedData.length - 1);
+  }, [slicedData, range]);
+
   // Calculate data availability
   const dataAvailability = useMemo(() => {
     const daysNeeded = range === "7D" ? 7 : range === "1M" ? 30 : range === "3M" ? 90 : range === "6M" ? 180 : 365;
@@ -130,7 +140,7 @@ const PriceChart = memo(function PriceChart({
 
   // Calculate min and max for better Y-axis domain
   const priceStats = useMemo(() => {
-    const prices = slicedData.map(d => d.price).filter((p): p is number => p !== null);
+    const prices = chartData.map(d => d.price).filter((p): p is number => p !== null);
     if (prices.length === 0) return { min: 0, max: 100 };
 
     const min = Math.min(...prices);
@@ -141,7 +151,7 @@ const PriceChart = memo(function PriceChart({
       min: Math.max(0, min - padding),
       max: max + padding,
     };
-  }, [slicedData]);
+  }, [chartData]);
 
   // Custom tooltip component with better styling
   const CustomTooltip = ({ active, payload, label }: any) => {
@@ -184,12 +194,12 @@ const PriceChart = memo(function PriceChart({
     const releaseKey = releaseDate.split("T")[0].split(" ")[0];
     const isoDateRegex = /^\d{4}-\d{2}-\d{2}$/;
 
-    if (!isoDateRegex.test(releaseKey) || slicedData.length === 0) {
+    if (!isoDateRegex.test(releaseKey) || chartData.length === 0) {
       return null;
     }
 
-    const rangeStartKey = slicedData[0].timestamp;
-    const rangeEndKey = slicedData[slicedData.length - 1].timestamp;
+    const rangeStartKey = chartData[0].timestamp;
+    const rangeEndKey = chartData[chartData.length - 1].timestamp;
     const toUtcMs = (dateKey: string) => {
       const [year, month, day] = dateKey.split("-").map(Number);
       return Date.UTC(year, month - 1, day);
@@ -211,10 +221,10 @@ const PriceChart = memo(function PriceChart({
       return null;
     }
 
-    const match = slicedData.find(d => d.timestamp === releaseKey);
+    const match = chartData.find(d => d.timestamp === releaseKey);
 
     return match ? match.date : null;
-  }, [releaseDate, slicedData]);
+  }, [releaseDate, chartData]);
 
   return (
     <div className="w-full relative">
@@ -233,7 +243,7 @@ const PriceChart = memo(function PriceChart({
       {/* Chart container with conditional styling */}
       <div className={`w-full ${dataAvailability.isIncomplete ? "opacity-90 border-l-4 border-amber-300 pl-2" : ""}`}>
         <ResponsiveContainer width="100%" height={height}>
-          <ComposedChart data={slicedData} margin={{ top: releaseDateInfo ? 25 : 10, right: 10, left: 0, bottom: 0 }}>
+          <ComposedChart data={chartData} margin={{ top: releaseDateInfo ? 25 : 10, right: 10, left: 0, bottom: 0 }}>
             <defs>
               <linearGradient id="priceArea" x1="0" y1="0" x2="0" y2="1">
                 <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.15} />
@@ -312,7 +322,7 @@ const PriceChart = memo(function PriceChart({
               dataKey="price"
               stroke="#3b82f6"
               strokeWidth={2.5}
-              dot={<CustomDot />}
+              dot={range === "7D" ? <CustomDot /> : false}
               activeDot={{ r: 5, fill: "#3b82f6", stroke: "#fff", strokeWidth: 2 }}
               connectNulls={false}
             />
