@@ -46,14 +46,20 @@ export default function ReturnMetrics({
   const get1DReturn = (): ReturnData | null => {
     if (!history || history.length < 2) return null;
 
-    const currentPrice = convertPrice(history[0].usd_price);
+    // History is sorted oldest to newest, so last element is most recent
+    const currentPrice = convertPrice(history[history.length - 1].usd_price);
     const oneDayAgo = new Date();
     oneDayAgo.setDate(oneDayAgo.getDate() - 1);
 
-    const pastEntry = history.find((entry) => {
-      const entryDate = new Date(entry.recorded_at);
-      return entryDate <= oneDayAgo;
-    });
+    // Search backwards from newest to find an entry at or before the target date
+    let pastEntry: PriceHistoryEntry | undefined;
+    for (let i = history.length - 1; i >= 0; i--) {
+      const entryDate = new Date(history[i].recorded_at);
+      if (entryDate <= oneDayAgo) {
+        pastEntry = history[i];
+        break;
+      }
+    }
 
     if (!pastEntry) return null;
 
@@ -70,14 +76,20 @@ export default function ReturnMetrics({
   const get7DReturn = (): ReturnData | null => {
     if (!history || history.length < 2) return null;
 
-    const currentPrice = convertPrice(history[0].usd_price);
+    // History is sorted oldest to newest, so last element is most recent
+    const currentPrice = convertPrice(history[history.length - 1].usd_price);
     const sevenDaysAgo = new Date();
     sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
 
-    const pastEntry = history.find((entry) => {
-      const entryDate = new Date(entry.recorded_at);
-      return entryDate <= sevenDaysAgo;
-    });
+    // Search backwards from newest to find an entry at or before the target date
+    let pastEntry: PriceHistoryEntry | undefined;
+    for (let i = history.length - 1; i >= 0; i--) {
+      const entryDate = new Date(history[i].recorded_at);
+      if (entryDate <= sevenDaysAgo) {
+        pastEntry = history[i];
+        break;
+      }
+    }
 
     if (!pastEntry) return null;
 
@@ -94,14 +106,20 @@ export default function ReturnMetrics({
   const get30DReturn = (): ReturnData | null => {
     if (!history || history.length < 2) return null;
 
-    const currentPrice = convertPrice(history[0].usd_price);
+    // History is sorted oldest to newest, so last element is most recent
+    const currentPrice = convertPrice(history[history.length - 1].usd_price);
     const thirtyDaysAgo = new Date();
     thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
 
-    const pastEntry = history.find((entry) => {
-      const entryDate = new Date(entry.recorded_at);
-      return entryDate <= thirtyDaysAgo;
-    });
+    // Search backwards from newest to find an entry at or before the target date
+    let pastEntry: PriceHistoryEntry | undefined;
+    for (let i = history.length - 1; i >= 0; i--) {
+      const entryDate = new Date(history[i].recorded_at);
+      if (entryDate <= thirtyDaysAgo) {
+        pastEntry = history[i];
+        break;
+      }
+    }
 
     if (!pastEntry) return null;
 
@@ -118,14 +136,20 @@ export default function ReturnMetrics({
   const get90DReturn = (): ReturnData | null => {
     if (!history || history.length < 2) return null;
 
-    const currentPrice = convertPrice(history[0].usd_price);
+    // History is sorted oldest to newest, so last element is most recent
+    const currentPrice = convertPrice(history[history.length - 1].usd_price);
     const ninetyDaysAgo = new Date();
     ninetyDaysAgo.setDate(ninetyDaysAgo.getDate() - 90);
 
-    const pastEntry = history.find((entry) => {
-      const entryDate = new Date(entry.recorded_at);
-      return entryDate <= ninetyDaysAgo;
-    });
+    // Search backwards from newest to find an entry at or before the target date
+    let pastEntry: PriceHistoryEntry | undefined;
+    for (let i = history.length - 1; i >= 0; i--) {
+      const entryDate = new Date(history[i].recorded_at);
+      if (entryDate <= ninetyDaysAgo) {
+        pastEntry = history[i];
+        break;
+      }
+    }
 
     if (!pastEntry) return null;
 
@@ -142,14 +166,20 @@ export default function ReturnMetrics({
   const get180DReturn = (): ReturnData | null => {
     if (!history || history.length < 2) return null;
 
-    const currentPrice = convertPrice(history[0].usd_price);
+    // History is sorted oldest to newest, so last element is most recent
+    const currentPrice = convertPrice(history[history.length - 1].usd_price);
     const oneEightyDaysAgo = new Date();
     oneEightyDaysAgo.setDate(oneEightyDaysAgo.getDate() - 180);
 
-    const pastEntry = history.find((entry) => {
-      const entryDate = new Date(entry.recorded_at);
-      return entryDate <= oneEightyDaysAgo;
-    });
+    // Search backwards from newest to find an entry at or before the target date
+    let pastEntry: PriceHistoryEntry | undefined;
+    for (let i = history.length - 1; i >= 0; i--) {
+      const entryDate = new Date(history[i].recorded_at);
+      if (entryDate <= oneEightyDaysAgo) {
+        pastEntry = history[i];
+        break;
+      }
+    }
 
     if (!pastEntry) return null;
 
@@ -166,14 +196,20 @@ export default function ReturnMetrics({
   const get365DReturn = (): ReturnData | null => {
     if (!history || history.length < 2) return null;
 
-    const currentPrice = convertPrice(history[0].usd_price);
+    // History is sorted oldest to newest, so last element is most recent
+    const currentPrice = convertPrice(history[history.length - 1].usd_price);
     const oneYearAgo = new Date();
     oneYearAgo.setDate(oneYearAgo.getDate() - 365);
 
-    const pastEntry = history.find((entry) => {
-      const entryDate = new Date(entry.recorded_at);
-      return entryDate <= oneYearAgo;
-    });
+    // Search backwards from newest to find an entry at or before the target date
+    let pastEntry: PriceHistoryEntry | undefined;
+    for (let i = history.length - 1; i >= 0; i--) {
+      const entryDate = new Date(history[i].recorded_at);
+      if (entryDate <= oneYearAgo) {
+        pastEntry = history[i];
+        break;
+      }
+    }
 
     if (!pastEntry) return null;
 
