@@ -39,20 +39,42 @@ const PriceChart = memo(function PriceChart({
   releaseDate?: string;
 }) {
   const groupedDaily = useMemo(() => {
-    // Group by date, keeping the first entry for each date (newest since data comes in desc order)
+    // Group by LOCAL date, keeping the first entry for each date.
+    // Convert UTC timestamps to the browser's local timezone so the chart
+    // reflects the user's calendar (e.g., Eastern time sees "Feb 4" data
+    // even if the UTC timestamp is "2026-02-05T01:00:00").
     const map = new Map<string, PriceHistoryEntry>();
     for (const entry of data) {
-      // Extract date directly from the string to avoid timezone conversion issues
-      // Handles both "2026-01-25T14:30:00Z" and "2026-01-25 14:30:00" formats
-      const date = entry.recorded_at.substring(0, 10);
-      if (!map.has(date)) {
-        map.set(date, entry);
+      // Parse the recorded_at timestamp and convert to local date string
+      // Handles "2026-01-25T14:30:00Z", "2026-01-25 14:30:00", "2026-01-25T14:30:00+00:00"
+      let dateObj: Date;
+      const raw = entry.recorded_at;
+      if (raw.endsWith("Z") || raw.includes("+") || /T\d{2}:\d{2}:\d{2}.\d+[+-]/.test(raw)) {
+        // Already has timezone info, parse directly
+        dateObj = new Date(raw);
+      } else if (raw.includes("T")) {
+        // ISO-ish format without timezone — treat as UTC
+        dateObj = new Date(raw + "Z");
+      } else {
+        // "YYYY-MM-DD HH:MM:SS" format — treat as UTC
+        dateObj = new Date(raw.replace(" ", "T") + "Z");
+      }
+
+      // Format as local YYYY-MM-DD
+      const yyyy = dateObj.getFullYear();
+      const mm = String(dateObj.getMonth() + 1).padStart(2, "0");
+      const dd = String(dateObj.getDate()).padStart(2, "0");
+      const localDate = `${yyyy}-${mm}-${dd}`;
+
+      if (!map.has(localDate)) {
+        map.set(localDate, entry);
       }
     }
 
     // Convert to array and sort by date in ascending order (oldest to newest for chart display)
     const result: Array<{ date: string; price: number | null; timestamp: string }> = Array.from(map.entries())
-      .map(([dateStr, entry]) => {
+      .map(([dateStr]) => {
+        const entry = map.get(dateStr)!;
         // Parse date parts directly to avoid timezone issues with Date constructor
         const [year, month, day] = dateStr.split("-").map(Number);
         const displayDate = new Date(year, month - 1, day).toLocaleDateString(undefined, {
@@ -72,40 +94,54 @@ const PriceChart = memo(function PriceChart({
 
   const slicedData = useMemo(() => {
     const daysNeeded = range === "7D" ? 7 : range === "1M" ? 30 : range === "3M" ? 90 : range === "6M" ? 180 : 365;
-    let result = groupedDaily.slice(-daysNeeded);
 
-    // If we have less data than requested, pad the beginning with null values
-    if (result.length < daysNeeded) {
-      const missingDays = daysNeeded - result.length;
-      const paddedData = [];
+    // Anchor the date range to today's LOCAL date so all products share
+    // the exact same start/end dates for a given timeframe.
+    const today = new Date();
+    const endDate = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+    const startDate = new Date(endDate);
+    startDate.setDate(startDate.getDate() - daysNeeded + 1); // inclusive range: startDate..endDate = daysNeeded days
 
-      // Get the earliest date from our actual data, parsed as local date to avoid timezone issues
-      let earliestDate: Date;
-      if (result.length > 0) {
-        const [year, month, day] = result[0].timestamp.split("-").map(Number);
-        earliestDate = new Date(year, month - 1, day);
+    const toKey = (d: Date) => {
+      const yyyy = d.getFullYear();
+      const mm = String(d.getMonth() + 1).padStart(2, "0");
+      const dd = String(d.getDate()).padStart(2, "0");
+      return `${yyyy}-${mm}-${dd}`;
+    };
+
+    const startKey = toKey(startDate);
+    const endKey = toKey(endDate);
+
+    // Build a lookup of actual data points within the range
+    const dataByDate = new Map<string, { date: string; price: number | null; timestamp: string }>();
+    for (const entry of groupedDaily) {
+      if (entry.timestamp >= startKey && entry.timestamp <= endKey) {
+        dataByDate.set(entry.timestamp, entry);
+      }
+    }
+
+    // Build the full date range:
+    // - Before first data point: insert null (no line drawn)
+    // - Between/after data points: forward-fill the last known price
+    //   so the line extends smoothly to the end of the range
+    const result: Array<{ date: string; price: number | null; timestamp: string }> = [];
+    let lastKnownPrice: number | null = null;
+    const cursor = new Date(startDate);
+    while (cursor <= endDate) {
+      const key = toKey(cursor);
+      const displayDate = cursor.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+      const existing = dataByDate.get(key);
+      if (existing) {
+        lastKnownPrice = existing.price;
+        result.push(existing);
+      } else if (lastKnownPrice !== null) {
+        // Forward-fill: carry the last known price through gaps and to the end
+        result.push({ date: displayDate, price: lastKnownPrice, timestamp: key });
       } else {
-        earliestDate = new Date();
+        // Before any data exists: null (no line)
+        result.push({ date: displayDate, price: null, timestamp: key });
       }
-
-      // Add null entries for missing days
-      for (let i = missingDays; i > 0; i--) {
-        const date = new Date(earliestDate);
-        date.setDate(date.getDate() - i);
-        const yyyy = date.getFullYear();
-        const mm = String(date.getMonth() + 1).padStart(2, "0");
-        const dd = String(date.getDate()).padStart(2, "0");
-        paddedData.push({
-          date: date.toLocaleDateString(undefined, {
-            month: "short",
-            day: "numeric",
-          }),
-          price: null,
-          timestamp: `${yyyy}-${mm}-${dd}`,
-        });
-      }
-
-      result = [...paddedData, ...result];
+      cursor.setDate(cursor.getDate() + 1);
     }
 
     return result;
@@ -121,19 +157,21 @@ const PriceChart = memo(function PriceChart({
     return slicedData.filter((_, index) => index % step === 0 || index === slicedData.length - 1);
   }, [slicedData, range]);
 
-  // Calculate data availability
+  // Show "Only Xd of data" badge only for newly released products whose data
+  // starts partway through the visible range (i.e., the first entry is null).
   const dataAvailability = useMemo(() => {
     const daysNeeded = range === "7D" ? 7 : range === "1M" ? 30 : range === "3M" ? 90 : range === "6M" ? 180 : 365;
-    const actualDataPoints = groupedDaily.slice(-daysNeeded).length;
-    const isIncomplete = actualDataPoints < daysNeeded;
+    const firstDataIndex = slicedData.findIndex(d => d.price !== null);
+    const hasLeadingGap = firstDataIndex > 0;
+    const daysCovered = firstDataIndex >= 0 ? slicedData.length - firstDataIndex : 0;
 
     return {
-      isIncomplete,
-      actualDays: actualDataPoints,
+      isIncomplete: hasLeadingGap,
+      actualDays: daysCovered,
       requestedDays: daysNeeded,
-      percentComplete: Math.round((actualDataPoints / daysNeeded) * 100),
+      percentComplete: Math.round((daysCovered / daysNeeded) * 100),
     };
-  }, [range, groupedDaily]);
+  }, [range, slicedData]);
 
   // Get the currency symbol
   const currencySymbol = currency === "CAD" ? "C$" : "$";
