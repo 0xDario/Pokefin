@@ -56,20 +56,84 @@ supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 RATE_LIMIT_CONFIG = {
     'min_delay': 2.0,        # Minimum delay between requests (seconds)
     'max_delay': 5.0,        # Maximum delay between requests (seconds)
-    'session_recycle_after': 50,  # Recycle API session after N products
+    'session_recycle_after': 100,  # Recycle API session after N products
     'max_retries': 3,        # Maximum retry attempts per product
     'retry_backoff_base': 2, # Base for exponential backoff (seconds)
     'timeout': 20,           # Page load timeout (seconds)
 }
 
-# Rotating user agents to avoid detection
-USER_AGENTS = [
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+# Browser fingerprint profiles — one is chosen at random per script run
+# and stays consistent throughout (a real browser doesn't change UA mid-session).
+BROWSER_PROFILES = [
+    {
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+        "Sec-Ch-Ua": '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
+        "Sec-Ch-Ua-Mobile": "?0",
+        "Sec-Ch-Ua-Platform": '"macOS"',
+        "Accept-Language": "en-US,en;q=0.9",
+    },
+    {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+        "Sec-Ch-Ua": '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
+        "Sec-Ch-Ua-Mobile": "?0",
+        "Sec-Ch-Ua-Platform": '"Windows"',
+        "Accept-Language": "en-US,en;q=0.9",
+    },
+    {
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
+        "Sec-Ch-Ua": '"Google Chrome";v="130", "Chromium";v="130", "Not_A Brand";v="24"',
+        "Sec-Ch-Ua-Mobile": "?0",
+        "Sec-Ch-Ua-Platform": '"macOS"',
+        "Accept-Language": "en-US,en;q=0.9",
+    },
+    {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
+        "Sec-Ch-Ua": '"Google Chrome";v="130", "Chromium";v="130", "Not_A Brand";v="24"',
+        "Sec-Ch-Ua-Mobile": "?0",
+        "Sec-Ch-Ua-Platform": '"Windows"',
+        "Accept-Language": "en-US,en;q=0.9",
+    },
+    {
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:133.0) Gecko/20100101 Firefox/133.0",
+        "Sec-Ch-Ua": None,  # Firefox doesn't send Sec-Ch-Ua
+        "Sec-Ch-Ua-Mobile": None,
+        "Sec-Ch-Ua-Platform": None,
+        "Accept-Language": "en-US,en;q=0.5",
+    },
+    {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:133.0) Gecko/20100101 Firefox/133.0",
+        "Sec-Ch-Ua": None,
+        "Sec-Ch-Ua-Mobile": None,
+        "Sec-Ch-Ua-Platform": None,
+        "Accept-Language": "en-US,en;q=0.5",
+    },
 ]
+
+# Select one profile for the entire script run
+ACTIVE_PROFILE = random.choice(BROWSER_PROFILES)
+
+
+def _create_session():
+    """Create a requests.Session pre-configured with the active browser profile."""
+    session = requests.Session()
+    # Set persistent headers on the session so every request uses the same fingerprint
+    session.headers.update({
+        "User-Agent": ACTIVE_PROFILE["User-Agent"],
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Accept-Language": ACTIVE_PROFILE["Accept-Language"],
+        "Origin": "https://www.tcgplayer.com",
+        "Sec-Fetch-Dest": "empty",
+        "Sec-Fetch-Mode": "cors",
+        "Sec-Fetch-Site": "same-site",
+        "Connection": "keep-alive",
+        "DNT": "1",
+    })
+    # Add Sec-Ch-Ua headers only for Chrome profiles (Firefox doesn't send them)
+    for key in ("Sec-Ch-Ua", "Sec-Ch-Ua-Mobile", "Sec-Ch-Ua-Platform"):
+        if ACTIVE_PROFILE.get(key):
+            session.headers[key] = ACTIVE_PROFILE[key]
+    return session
 
 # API ranges for the infinite-api endpoint (shortest -> longest)
 # We try multiple keys per range to handle naming variations.
@@ -204,11 +268,9 @@ def extract_preferred_language(url):
 
 
 def _api_headers(referer=None):
-    headers = {
-        "User-Agent": random.choice(USER_AGENTS),
-        "Accept": "application/json, text/plain, */*",
-        "Origin": "https://www.tcgplayer.com",
-    }
+    """Build per-request headers. The session already carries the fingerprint;
+    this only adds the per-request Referer."""
+    headers = {}
     if referer:
         headers["Referer"] = referer
     return headers
@@ -327,7 +389,7 @@ def extract_historical_prices_api(product_id, referer=None, preferred_variant=No
     if not product_id:
         return []
 
-    session = session or requests.Session()
+    session = session or _create_session()
 
     deduped = {}
 
@@ -495,6 +557,7 @@ def backfill_prices(start_idx=None, end_idx=None, reverse=False, days=365, check
     target_start_date = days_ago.strftime("%Y-%m-%d")
 
     logger.info(f"Starting historical price backfill for last {days} days")
+    logger.info(f"Browser profile: {ACTIVE_PROFILE['User-Agent'][:60]}...")
     logger.info(f"Using UTC timezone - End date: {target_end_date} (yesterday)")
     logger.info(f"Date range: {target_start_date} to {target_end_date}")
 
@@ -540,7 +603,7 @@ def backfill_prices(start_idx=None, end_idx=None, reverse=False, days=365, check
     api_session = None
 
     try:
-        api_session = requests.Session()
+        api_session = _create_session()
 
         for idx, product in enumerate(products_to_process, 1):
             product_id = product["id"]
@@ -573,7 +636,7 @@ def backfill_prices(start_idx=None, end_idx=None, reverse=False, days=365, check
                 except Exception:
                     pass
                 time.sleep(random.uniform(1, 3))
-                api_session = requests.Session()
+                api_session = _create_session()
                 session_product_count = 0
 
             # === Calculate the actual start date based on release date ===
