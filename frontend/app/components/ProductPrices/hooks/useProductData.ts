@@ -92,15 +92,18 @@ export function useProductData(chartTimeframe: ChartTimeframe = "1M") {
 
       const daysNeeded = getDaysForTimeframe(chartTimeframe);
 
-      // Calculate start date in UTC to match database timestamps
-      // Add 1 extra day buffer to ensure we have enough data for the slice
+      // Calculate start date using the browser's local timezone.
+      // The database stores timestamps without timezone (effectively UTC),
+      // but we want the chart date range to reflect the user's local calendar.
+      // Add a 2-day buffer to account for timezone differences (up to UTC+14)
+      // so that after grouping by local date, we have enough data.
       const now = new Date();
-      const utcYear = now.getUTCFullYear();
-      const utcMonth = now.getUTCMonth();
-      const utcDay = now.getUTCDate();
+      const localYear = now.getFullYear();
+      const localMonth = now.getMonth();
+      const localDay = now.getDate();
 
-      // Create date at midnight UTC, then subtract days
-      const startDate = new Date(Date.UTC(utcYear, utcMonth, utcDay - daysNeeded - 1));
+      // Go back daysNeeded + 2 days from today's local date to ensure full coverage
+      const startDate = new Date(localYear, localMonth, localDay - daysNeeded - 2);
 
       try {
         // Format as YYYY-MM-DD for database comparison
