@@ -19,6 +19,7 @@ import VariantBadge from "../ProductPrices/shared/VariantBadge";
 import PriceChart from "../PriceChart";
 import CardRinkPromo from "../CardRinkPromo";
 import MiniSparkline from "./MiniSparkline";
+import { getReturnPercent } from "./returns";
 
 const RETURN_WINDOWS = [
   { label: "7D", days: 7 },
@@ -124,36 +125,14 @@ export default function MarketView() {
     return filtered;
   }, [products, selectedGeneration, searchTerm]);
 
-  const getReturnPercent = (
-    history: PriceHistoryEntry[] | undefined,
-    days: number
-  ) => {
-    if (!history || history.length < 2) return null;
-
-    const currentPrice = convertPrice(history[0].usd_price);
-    const targetDate = new Date();
-    targetDate.setDate(targetDate.getDate() - days);
-
-    const pastEntry = history.find((entry) => {
-      const entryDate = new Date(entry.recorded_at);
-      return entryDate <= targetDate;
-    });
-
-    if (!pastEntry) return null;
-
-    const pastPrice = convertPrice(pastEntry.usd_price);
-    if (pastPrice === 0) return null;
-
-    return ((currentPrice - pastPrice) / pastPrice) * 100;
-  };
-
   const buildReturns = (history: PriceHistoryEntry[] | undefined): ReturnMap => {
+    const referenceDate = new Date();
     return {
-      "7D": getReturnPercent(history, 7),
-      "1M": getReturnPercent(history, 30),
-      "3M": getReturnPercent(history, 90),
-      "6M": getReturnPercent(history, 180),
-      "1Y": getReturnPercent(history, 365),
+      "7D": getReturnPercent(history, 7, convertPrice, referenceDate),
+      "1M": getReturnPercent(history, 30, convertPrice, referenceDate),
+      "3M": getReturnPercent(history, 90, convertPrice, referenceDate),
+      "6M": getReturnPercent(history, 180, convertPrice, referenceDate),
+      "1Y": getReturnPercent(history, 365, convertPrice, referenceDate),
     };
   };
 
