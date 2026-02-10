@@ -15,6 +15,7 @@ type MarketProduct = {
   sku: string;
   marketPriceUsd: number | null;
   setName?: string | null;
+  releaseDate?: string | null;
   productType?: string | null;
   lastUpdated?: string | null;
 };
@@ -31,7 +32,10 @@ type ComparisonRow = {
   shopifyProfit: number | null;
   shopifyMargin: number | null;
   marketProfit: number | null;
+  marketProfitPerDay: number | null;
   marketMargin: number | null;
+  releaseDate: string | null;
+  releaseDateMs: number | null;
   setName?: string | null;
   productType?: string | null;
   lastUpdated?: string | null;
@@ -57,10 +61,12 @@ type ShopifyProfitSortKey =
 type MarketProfitSortKey =
   | "sku"
   | "title"
+  | "releaseDateMs"
   | "marketPriceUsd"
   | "marketPriceCad"
   | "shopifyCost"
   | "marketProfit"
+  | "marketProfitPerDay"
   | "marketMargin";
 
 type SortState<K extends string> = {
@@ -69,6 +75,7 @@ type SortState<K extends string> = {
 };
 
 const DEFAULT_EXCHANGE_RATE = 1.35;
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 function parseCsv(text: string): string[][] {
   const rows: string[][] = [];
@@ -205,6 +212,26 @@ function formatPercent(value: number | null): string {
   return `${value.toFixed(1)}%`;
 }
 
+function getReleaseUtcMs(releaseDate: string | null | undefined): number | null {
+  if (!releaseDate) return null;
+  const dateKey = releaseDate.split("T")[0].split(" ")[0];
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateKey)) return null;
+
+  const ms = Date.parse(`${dateKey}T00:00:00Z`);
+  return Number.isNaN(ms) ? null : ms;
+}
+
+function formatReleaseDate(releaseDate: string | null | undefined): string {
+  const releaseMs = getReleaseUtcMs(releaseDate);
+  if (releaseMs === null) return "Unknown";
+  return new Date(releaseMs).toLocaleDateString();
+}
+
+function getTodayUtcStartMs() {
+  const now = new Date();
+  return Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+}
+
 function calculateProfit(price: number | null, cost: number | null): number | null {
   if (price === null || cost === null) return null;
   return price - cost;
@@ -335,7 +362,7 @@ export default function CompareDashboardPage() {
         const { data: productData, error: productError } = await supabase
           .from("products")
           .select(
-            "sku, usd_price, last_updated, sets(name, code), product_types(name, label)"
+            "sku, usd_price, last_updated, sets(name, code, release_date), product_types(name, label)"
           )
           .not("sku", "is", null);
 
@@ -356,6 +383,7 @@ export default function CompareDashboardPage() {
             marketPriceUsd:
               typeof item.usd_price === "number" ? item.usd_price : null,
             setName: setInfo?.name ?? null,
+            releaseDate: setInfo?.release_date ?? null,
             productType: typeInfo?.label ?? typeInfo?.name ?? null,
             lastUpdated: item.last_updated ?? null,
           };
@@ -380,6 +408,7 @@ export default function CompareDashboardPage() {
   const comparisonRows = useMemo(() => {
     const rows: ComparisonRow[] = [];
     const shopifyList = Object.values(shopifyProducts);
+    const todayUtcMs = getTodayUtcStartMs();
 
     shopifyList.forEach((shopifyItem) => {
       const marketItem = marketProducts[shopifyItem.sku];
@@ -401,6 +430,16 @@ export default function CompareDashboardPage() {
       );
       const marketProfit = calculateProfit(marketCad, shopifyItem.shopifyCost);
       const marketMargin = calculateMargin(marketCad, shopifyItem.shopifyCost);
+      const releaseDate = marketItem.releaseDate ?? null;
+      const releaseDateMs = getReleaseUtcMs(releaseDate);
+      const daysSinceRelease =
+        releaseDateMs === null
+          ? null
+          : Math.max(0, Math.floor((todayUtcMs - releaseDateMs) / DAY_MS));
+      const marketProfitPerDay =
+        marketProfit !== null && daysSinceRelease !== null && daysSinceRelease > 0
+          ? marketProfit / daysSinceRelease
+          : null;
 
       rows.push({
         sku: shopifyItem.sku,
@@ -414,7 +453,10 @@ export default function CompareDashboardPage() {
         shopifyProfit,
         shopifyMargin,
         marketProfit,
+        marketProfitPerDay,
         marketMargin,
+        releaseDate,
+        releaseDateMs,
         setName: marketItem.setName,
         productType: marketItem.productType,
         lastUpdated: marketItem.lastUpdated,
@@ -510,7 +552,7 @@ export default function CompareDashboardPage() {
 
   return (
     <main className="min-h-screen bg-slate-50 dark:bg-slate-950">
-      <div className="mx-auto max-w-7xl space-y-8 px-4 py-6 sm:px-6 lg:px-8">
+      <div className="mx-auto max-w-[96rem] space-y-8 px-4 py-6 sm:px-6 lg:px-8">
         <div className="rounded-2xl bg-gradient-to-br from-white to-slate-100 p-6 shadow-sm ring-1 ring-slate-200 dark:from-slate-900 dark:to-slate-900/60 dark:ring-slate-800">
           <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
             <div>
@@ -623,19 +665,8 @@ export default function CompareDashboardPage() {
             />
           </div>
 
-          <div className="overflow-x-auto">
-            <table className="min-w-full table-fixed border-separate border-spacing-y-2 text-sm">
-              <colgroup>
-                <col className="w-36" />
-                <col className="w-80" />
-                <col className="w-24" />
-                <col className="w-24" />
-                {showUsd && <col className="w-24" />}
-                <col className="w-24" />
-                <col className="w-24" />
-                <col className="w-24" />
-                <col className="w-20" />
-              </colgroup>
+          <div className="overflow-hidden">
+            <table className="w-full table-auto border-separate border-spacing-y-2 text-sm">
               <thead>
                 <tr>
                   <th className="px-3 pb-2 text-left">
@@ -740,11 +771,11 @@ export default function CompareDashboardPage() {
                       key={row.sku}
                       className="rounded-xl bg-slate-50/80 shadow-sm ring-1 ring-slate-200/60 transition hover:bg-white dark:bg-slate-900/70 dark:ring-slate-800"
                     >
-                      <td className="px-3 py-3 font-medium text-slate-900 dark:text-white">
+                      <td className="px-3 py-3 font-medium text-slate-900 dark:text-white break-all">
                         {row.sku}
                       </td>
                       <td
-                        className="px-3 py-3 text-slate-600 dark:text-slate-300 truncate"
+                        className="px-3 py-3 text-slate-600 dark:text-slate-300 break-words"
                         title={row.title}
                       >
                         {row.title}
@@ -806,16 +837,8 @@ export default function CompareDashboardPage() {
                 </p>
               </div>
             </div>
-            <div className="mt-4 overflow-x-auto">
-            <table className="min-w-full table-fixed border-separate border-spacing-y-2 text-sm">
-              <colgroup>
-                <col className="w-36" />
-                <col className="w-80" />
-                <col className="w-24" />
-                <col className="w-24" />
-                <col className="w-24" />
-                <col className="w-24" />
-              </colgroup>
+            <div className="mt-4 overflow-hidden">
+            <table className="w-full table-auto border-separate border-spacing-y-2 text-sm">
               <thead>
                 <tr>
                     <th className="px-3 pb-2 text-left">
@@ -878,11 +901,11 @@ export default function CompareDashboardPage() {
                       key={`shopify-${row.sku}`}
                       className="rounded-xl bg-slate-50/80 shadow-sm ring-1 ring-slate-200/60 transition hover:bg-white dark:bg-slate-900/70 dark:ring-slate-800"
                     >
-                      <td className="px-3 py-3 font-medium text-slate-900 dark:text-white">
+                      <td className="px-3 py-3 font-medium text-slate-900 dark:text-white break-all">
                         {row.sku}
                       </td>
                       <td
-                        className="px-3 py-3 text-slate-600 dark:text-slate-300 truncate"
+                        className="px-3 py-3 text-slate-600 dark:text-slate-300 break-words"
                         title={row.title}
                       >
                         {row.title}
@@ -927,17 +950,8 @@ export default function CompareDashboardPage() {
                 </p>
               </div>
             </div>
-            <div className="mt-4 overflow-x-auto">
-            <table className="min-w-full table-fixed border-separate border-spacing-y-2 text-sm">
-              <colgroup>
-                <col className="w-36" />
-                <col className="w-80" />
-                {showUsd && <col className="w-24" />}
-                <col className="w-24" />
-                <col className="w-24" />
-                <col className="w-24" />
-                <col className="w-24" />
-              </colgroup>
+            <div className="mt-4 overflow-hidden">
+            <table className="w-full table-auto border-separate border-spacing-y-2 text-sm">
               <thead>
                 <tr>
                     <th className="px-3 pb-2 text-left">
@@ -952,6 +966,14 @@ export default function CompareDashboardPage() {
                       <SortButton
                         label="Title"
                         sortKey="title"
+                        sortState={marketProfitSort}
+                        onChange={setMarketProfitSort}
+                      />
+                    </th>
+                    <th className="px-3 pb-2 text-left">
+                      <SortButton
+                        label="Release Date"
+                        sortKey="releaseDateMs"
                         sortState={marketProfitSort}
                         onChange={setMarketProfitSort}
                       />
@@ -996,6 +1018,15 @@ export default function CompareDashboardPage() {
                     </th>
                     <th className="px-3 pb-2 text-right">
                       <SortButton
+                        label="Profit / Day"
+                        sortKey="marketProfitPerDay"
+                        sortState={marketProfitSort}
+                        onChange={setMarketProfitSort}
+                        align="right"
+                      />
+                    </th>
+                    <th className="px-3 pb-2 text-right">
+                      <SortButton
                         label="Margin"
                         sortKey="marketMargin"
                         sortState={marketProfitSort}
@@ -1011,14 +1042,17 @@ export default function CompareDashboardPage() {
                       key={`market-${row.sku}`}
                       className="rounded-xl bg-slate-50/80 shadow-sm ring-1 ring-slate-200/60 transition hover:bg-white dark:bg-slate-900/70 dark:ring-slate-800"
                     >
-                      <td className="px-3 py-3 font-medium text-slate-900 dark:text-white">
+                      <td className="px-3 py-3 font-medium text-slate-900 dark:text-white break-all">
                         {row.sku}
                       </td>
                       <td
-                        className="px-3 py-3 text-slate-600 dark:text-slate-300 truncate"
+                        className="px-3 py-3 text-slate-600 dark:text-slate-300 break-words"
                         title={row.title}
                       >
                         {row.title}
+                      </td>
+                      <td className="px-3 py-3 text-slate-500 dark:text-slate-400">
+                        {formatReleaseDate(row.releaseDate)}
                       </td>
                       {showUsd && (
                         <td className="px-3 py-3 text-right text-slate-500 dark:text-slate-400">
@@ -1035,6 +1069,9 @@ export default function CompareDashboardPage() {
                         {formatSignedCurrency(row.marketProfit)}
                       </td>
                       <td className="px-3 py-3 text-right text-slate-500 dark:text-slate-400">
+                        {formatSignedCurrency(row.marketProfitPerDay)}
+                      </td>
+                      <td className="px-3 py-3 text-right text-slate-500 dark:text-slate-400">
                         {formatPercent(row.marketMargin)}
                       </td>
                     </tr>
@@ -1042,7 +1079,7 @@ export default function CompareDashboardPage() {
                   {sortedMarketProfitRows.length === 0 && (
                     <tr>
                       <td
-                        colSpan={showUsd ? 7 : 6}
+                        colSpan={showUsd ? 9 : 8}
                         className="px-3 py-6 text-center text-sm text-slate-500"
                       >
                         No matched products yet.
