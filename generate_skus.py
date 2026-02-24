@@ -1,5 +1,5 @@
 """
-SKU Generation Script for Pokefin Products
+SKU Generation Script for Pokéfin Products
 
 Generates SKUs in the format: {GENERATION}-{SET_CODE}-{PRODUCT_TYPE}-{VARIANT}
 Examples:
@@ -341,7 +341,7 @@ def print_summary(sku_results: list):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Generate SKUs for Pokefin products",
+        description="Generate SKUs for Pokéfin products",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__
     )

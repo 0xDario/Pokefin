@@ -1,10 +1,10 @@
 """
 Price Comparison Script - Shopify vs Market Prices
 
-Compares your Shopify listing prices (CAD) against Pokefin market prices (USD from TCGPlayer)
+Compares your Shopify listing prices (CAD) against Pokéfin market prices (USD from TCGPlayer)
 to identify products that may be priced below market value.
 
-Uses the latest USD/CAD exchange rate from Bank of Canada (stored in Pokefin).
+Uses the latest USD/CAD exchange rate from Bank of Canada (stored in Pokéfin).
 
 Usage:
   python compare_prices.py                                 # Compare prices from CSV export
@@ -129,7 +129,7 @@ def _raise_shopify_http_error(response: requests.Response, domain: str, api_vers
 
 
 def fetch_exchange_rate() -> tuple[float, str]:
-    """Fetch the latest USD/CAD exchange rate from Pokefin."""
+    """Fetch the latest USD/CAD exchange rate from Pokéfin."""
     logger.info("Fetching latest USD/CAD exchange rate...")
 
     try:
@@ -193,8 +193,8 @@ def load_shopify_products(filepath: str) -> dict:
 
 
 def fetch_pokefin_prices() -> dict:
-    """Fetch current market prices from Pokefin database."""
-    logger.info("Fetching market prices from Pokefin...")
+    """Fetch current market prices from Pokéfin database."""
+    logger.info("Fetching market prices from Pokéfin...")
 
     try:
         response = supabase.table("products").select(
@@ -229,7 +229,7 @@ def fetch_pokefin_prices() -> dict:
 
 
 def compare_prices(shopify_products: dict, pokefin_products: dict, exchange_rate: float, threshold_pct: float = 0) -> dict:
-    """Compare prices between Shopify (CAD) and Pokefin (USD converted to CAD)."""
+    """Compare prices between Shopify (CAD) and Pokéfin (USD converted to CAD)."""
     results = {
         'matched': [],
         'below_market': [],
@@ -289,7 +289,7 @@ def compare_prices(shopify_products: dict, pokefin_products: dict, exchange_rate
         else:
             results['shopify_only'].append(shopify)
 
-    # Find Pokefin products not in Shopify
+    # Find Pokéfin products not in Shopify
     for sku, pokefin in pokefin_products.items():
         if sku not in shopify_products:
             results['pokefin_only'].append(pokefin)
@@ -349,7 +349,7 @@ def print_report(results: dict, threshold_pct: float, show_usd: bool = False):
     print(f"Above market (>{threshold_pct}%):    {len(above)}")
     print(f"No market price:          {len(no_price)}")
     print(f"Shopify only (no match):  {len(shopify_only)}")
-    print(f"Pokefin only (not sold):  {len(pokefin_only)}")
+    print(f"Pokéfin only (not sold):  {len(pokefin_only)}")
     print("=" * 100)
 
     # Alert: Below market
@@ -608,7 +608,7 @@ def export_alerts(results: dict, filepath: str, threshold_pct: float):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Compare Shopify prices (CAD) vs Pokefin market prices (USD)",
+        description="Compare Shopify prices (CAD) vs Pokéfin market prices (USD)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__
     )
@@ -669,9 +669,9 @@ def main():
         shopify_products = load_shopify_products(args.shopify)
         logger.info(f"Loaded {len(shopify_products)} Shopify products with SKUs")
 
-    # Fetch Pokefin market prices
+    # Fetch Pokéfin market prices
     pokefin_products = fetch_pokefin_prices()
-    logger.info(f"Fetched {len(pokefin_products)} Pokefin products with SKUs")
+    logger.info(f"Fetched {len(pokefin_products)} Pokéfin products with SKUs")
 
     # Compare prices (converting USD to CAD)
     results = compare_prices(shopify_products, pokefin_products, exchange_rate, args.threshold)

@@ -50,7 +50,7 @@ export default function Header() {
           <div className="flex items-center gap-8">
             <Link href="/" className="flex items-center space-x-2">
               <span className="text-xl font-bold text-gray-900 dark:text-white tracking-tight">
-                Pokefin
+                Pokéfin
               </span>
             </Link>
 

@@ -1,7 +1,7 @@
-# Pokefin Copilot Instructions
+# Pokéfin Copilot Instructions
 
 ## Project Overview
-Pokefin is a Pokémon TCG sealed product price tracking platform with two main components:
+Pokéfin is a Pokémon TCG sealed product price tracking platform with two main components:
 - **Frontend**: Next.js 16 + React 19 + TypeScript dashboard (Supabase backend)
 - **Python Scraper**: Selenium-based hourly price scraper from TCGPlayer
 

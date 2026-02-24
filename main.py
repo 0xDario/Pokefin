@@ -723,7 +723,7 @@ def check_shopify_prices(threshold_pct: float = 5.0) -> None:
 
     Uses the PriceMonitor to:
     1. Fetch products from Shopify (via OAuth client credentials)
-    2. Compare against Pokefin market prices
+    2. Compare against Pokéfin market prices
     3. Send Telegram alert for products priced below market
 
     Args:
