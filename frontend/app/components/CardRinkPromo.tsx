@@ -142,7 +142,7 @@ export default function CardRinkPromo({ variant }: CardRinkPromoProps) {
             </div>
 
             <div className="mt-6 text-center text-sm text-slate-500 dark:text-slate-400">
-              <p>Powered by Pokefin.ca - Track prices, shop smart 💎</p>
+              <p>Powered by pokefin.ca - Track prices, shop smart 💎</p>
             </div>
           </div>
         </div>

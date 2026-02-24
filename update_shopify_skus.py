@@ -1,8 +1,8 @@
 """
-Update Shopify Product Export with SKUs from Pokefin
+Update Shopify Product Export with SKUs from Pokéfin
 
 This script matches products between your Shopify export (products_export.csv)
-and the Pokefin SKU mapping (sku_mapping.csv), then outputs an updated CSV
+and the Pokéfin SKU mapping (sku_mapping.csv), then outputs an updated CSV
 ready for Shopify import.
 
 Usage:
@@ -300,7 +300,7 @@ def save_updated_csv(rows: list, output_path: str):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Update Shopify export with Pokefin SKUs",
+        description="Update Shopify export with Pokéfin SKUs",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__
     )
