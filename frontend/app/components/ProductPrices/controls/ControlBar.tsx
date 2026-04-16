@@ -1,4 +1,5 @@
 import GenerationFilter from "./GenerationFilter";
+import ProductTypeFilter from "./ProductTypeFilter";
 import SearchInput from "./SearchInput";
 import ChartTimeframeButtons from "./ChartTimeframeButtons";
 import CurrencySelector from "./CurrencySelector";
@@ -9,6 +10,11 @@ interface ControlBarProps {
   selectedGeneration: string;
   availableGenerations: string[];
   onGenerationChange: (generation: string) => void;
+
+  // Product type filter
+  selectedProductType?: string;
+  availableProductTypes?: string[];
+  onProductTypeChange?: (productType: string) => void;
 
   // Search
   searchTerm: string;
@@ -25,6 +31,7 @@ interface ControlBarProps {
   onCurrencyChange: (currency: Currency) => void;
 
   showChartTimeframe?: boolean;
+  showProductTypeFilter?: boolean;
 }
 
 /**
@@ -34,6 +41,9 @@ export default function ControlBar({
   selectedGeneration,
   availableGenerations,
   onGenerationChange,
+  selectedProductType = "all",
+  availableProductTypes = [],
+  onProductTypeChange = () => {},
   searchTerm,
   onSearchChange,
   chartTimeframe,
@@ -43,6 +53,7 @@ export default function ControlBar({
   exchangeRateLoading,
   onCurrencyChange,
   showChartTimeframe = true,
+  showProductTypeFilter = true,
 }: ControlBarProps) {
   return (
     <div className="space-y-3 md:space-y-0 md:flex md:flex-wrap md:items-center md:gap-4 mb-6">
@@ -53,6 +64,14 @@ export default function ControlBar({
           availableGenerations={availableGenerations}
           onChange={onGenerationChange}
         />
+
+        {showProductTypeFilter && (
+          <ProductTypeFilter
+            selectedProductType={selectedProductType}
+            availableProductTypes={availableProductTypes}
+            onChange={onProductTypeChange}
+          />
+        )}
 
         <SearchInput value={searchTerm} onChange={onSearchChange} />
 

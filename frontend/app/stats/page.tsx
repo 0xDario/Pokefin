@@ -84,7 +84,7 @@ const STAT_TOOLTIPS = {
 function InfoIcon({ text }: { text: string }) {
   return (
     <span
-      className="inline-flex h-4 w-4 items-center justify-center rounded-full border border-slate-300 text-[10px] font-semibold text-slate-500"
+      className="inline-flex h-4 w-4 items-center justify-center rounded-full border border-slate-300 text-[10px] font-semibold text-slate-500 dark:border-slate-600 dark:text-slate-300"
       title={text}
       aria-label={text}
       role="img"
@@ -165,14 +165,23 @@ function getReturnPercent(
 ): number | null {
   if (!history || history.length < 2) return null;
 
-  const currentPrice = history[0].usd_price;
+  const latestEntry = history[history.length - 1];
+  const currentPrice = latestEntry.usd_price;
   const targetDate = new Date();
   targetDate.setDate(targetDate.getDate() - days);
 
-  const pastEntry = history.find((entry) => {
-    const entryDate = new Date(entry.recorded_at);
-    return entryDate <= targetDate;
-  });
+  if (new Date(latestEntry.recorded_at) <= targetDate) {
+    return null;
+  }
+
+  let pastEntry: PriceHistoryEntry | undefined;
+  for (let i = history.length - 1; i >= 0; i -= 1) {
+    const entryDate = new Date(history[i].recorded_at);
+    if (entryDate <= targetDate) {
+      pastEntry = history[i];
+      break;
+    }
+  }
 
   if (!pastEntry) return null;
 
@@ -525,19 +534,19 @@ export default function StatsPage() {
         </div>
       </div>
 
-      {loading && <div className="text-slate-600">Loading stats...</div>}
+      {loading && <div className="text-slate-600 dark:text-slate-300">Loading stats...</div>}
 
       {!loading && (
         <div className="space-y-6">
-          <section className="rounded-xl border border-slate-200 bg-white shadow-sm">
-            <div className="border-b border-slate-100 px-4 py-3">
-              <h2 className="text-sm font-semibold text-slate-700">
+          <section className="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-900">
+            <div className="border-b border-slate-100 px-4 py-3 dark:border-slate-700">
+              <h2 className="text-sm font-semibold text-slate-700 dark:text-slate-200">
                 Top Sets by Composite Score
               </h2>
             </div>
             <div className="overflow-x-auto">
-              <table className="min-w-[960px] w-full text-sm">
-                <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
+              <table className="min-w-[960px] w-full text-sm text-slate-700 dark:text-slate-200">
+                <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500 dark:bg-slate-800 dark:text-slate-300">
                   <tr>
                     <th className="px-3 py-3 text-left">
                       <StatHeader label="Rank" tooltip={STAT_TOOLTIPS.rank} />
@@ -586,22 +595,22 @@ export default function StatsPage() {
                 </thead>
                 <tbody>
                   {topRanked.map((set) => (
-                    <tr key={`top-${set.key}`} className="border-t border-slate-100">
-                      <td className="px-3 py-3 text-slate-400">
+                    <tr key={`top-${set.key}`} className="border-t border-slate-100 dark:border-slate-800">
+                      <td className="px-3 py-3 text-slate-500 dark:text-slate-400">
                         {set.rank ?? "--"}
                       </td>
                       <td className="px-3 py-3">
-                        <div className="text-sm font-semibold text-slate-900">
+                        <div className="text-sm font-semibold text-slate-900 dark:text-slate-100">
                           {set.name}
                         </div>
-                        <div className="text-xs text-slate-500">
+                        <div className="text-xs text-slate-500 dark:text-slate-400">
                           {set.generation} / {set.code}
                         </div>
                       </td>
-                      <td className="px-3 py-3 text-xs text-slate-500">
+                      <td className="px-3 py-3 text-xs text-slate-500 dark:text-slate-400">
                         {formatReleaseDate(set.releaseDate)}
                       </td>
-                      <td className="px-3 py-3 text-right text-slate-600">
+                      <td className="px-3 py-3 text-right text-slate-600 dark:text-slate-300">
                         {set.productCount}
                       </td>
                       <td className="px-3 py-3 text-right">
@@ -616,7 +625,7 @@ export default function StatsPage() {
                       <td className="px-3 py-3 text-right">
                         {formatPercent(set.volatility90, false)}
                       </td>
-                      <td className="px-3 py-3 text-right font-semibold text-slate-900">
+                      <td className="px-3 py-3 text-right font-semibold text-slate-900 dark:text-slate-100">
                         {formatScore(set.investScore)}
                       </td>
                     </tr>
@@ -626,19 +635,19 @@ export default function StatsPage() {
             </div>
           </section>
 
-          <section className="rounded-xl border border-slate-200 bg-white shadow-sm">
-            <div className="border-b border-slate-100 px-4 py-3">
-              <h2 className="text-sm font-semibold text-slate-700">
+          <section className="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-900">
+            <div className="border-b border-slate-100 px-4 py-3 dark:border-slate-700">
+              <h2 className="text-sm font-semibold text-slate-700 dark:text-slate-200">
                 All Set Metrics
               </h2>
-              <p className="text-xs text-slate-500">
+              <p className="text-xs text-slate-500 dark:text-slate-400">
                 Returns and trends use USD price history. Composite score is
                 z-score weighted with drawdown and volatility penalties.
               </p>
             </div>
             <div className="overflow-x-auto">
-              <table className="min-w-[1680px] w-full text-sm">
-                <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
+              <table className="min-w-[1680px] w-full text-sm text-slate-700 dark:text-slate-200">
+                <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500 dark:bg-slate-800 dark:text-slate-300">
                   <tr>
                     <th className="px-3 py-3 text-left">
                       <StatHeader label="Rank" tooltip={STAT_TOOLTIPS.rank} />
@@ -747,25 +756,25 @@ export default function StatsPage() {
                 </thead>
                 <tbody>
                   {statsWithScores.map((set) => (
-                    <tr key={set.key} className="border-t border-slate-100">
-                      <td className="px-3 py-3 text-slate-400">
+                    <tr key={set.key} className="border-t border-slate-100 dark:border-slate-800">
+                      <td className="px-3 py-3 text-slate-500 dark:text-slate-400">
                         {set.rank ?? "--"}
                       </td>
                       <td className="px-3 py-3">
-                        <div className="text-sm font-semibold text-slate-900">
+                        <div className="text-sm font-semibold text-slate-900 dark:text-slate-100">
                           {set.name}
                         </div>
-                        <div className="text-xs text-slate-500">
+                        <div className="text-xs text-slate-500 dark:text-slate-400">
                           {set.generation} / {set.code}
                         </div>
                       </td>
-                      <td className="px-3 py-3 text-xs text-slate-500">
+                      <td className="px-3 py-3 text-xs text-slate-500 dark:text-slate-400">
                         {formatReleaseDate(set.releaseDate)}
                       </td>
-                      <td className="px-3 py-3 text-right text-slate-600">
+                      <td className="px-3 py-3 text-right text-slate-600 dark:text-slate-300">
                         {set.daysSinceRelease ?? "--"}
                       </td>
-                      <td className="px-3 py-3 text-right text-slate-600">
+                      <td className="px-3 py-3 text-right text-slate-600 dark:text-slate-300">
                         {set.productCount}
                       </td>
                       <td className="px-3 py-3 text-right">
@@ -810,7 +819,7 @@ export default function StatsPage() {
                       <td className="px-3 py-3 text-right">
                         {formatPercent(set.momentumScore)}
                       </td>
-                      <td className="px-3 py-3 text-right font-semibold text-slate-900">
+                      <td className="px-3 py-3 text-right font-semibold text-slate-900 dark:text-slate-100">
                         {formatScore(set.investScore)}
                       </td>
                     </tr>
