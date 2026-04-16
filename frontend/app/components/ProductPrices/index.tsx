@@ -6,11 +6,18 @@ import SortControls from "./controls/SortControls";
 import ProductGrid from "./cards/ProductGrid";
 import ProductCard from "./cards/ProductCard";
 import GroupHeader from "./cards/GroupHeader";
+import ProductTypeGroupHeader from "./cards/ProductTypeGroupHeader";
 import CardRinkPromo from "../CardRinkPromo";
 import ScrollToTop from "./shared/ScrollToTop";
 import { useProductData } from "./hooks/useProductData";
 import { useCurrencyConversion } from "./hooks/useCurrencyConversion";
-import { filterProducts, getAvailableGenerations, groupProductsBySet } from "./utils/filtering";
+import {
+  filterProducts,
+  getAvailableGenerations,
+  getAvailableProductTypes,
+  groupProductsBySet,
+  groupProductsByType,
+} from "./utils/filtering";
 import { sortProducts } from "./utils/sorting";
 import { ChartTimeframe, SortBy, SortDirection, ViewMode } from "./types";
 
@@ -20,7 +27,7 @@ import { ChartTimeframe, SortBy, SortDirection, ViewMode } from "./types";
  */
 export default function ProductPrices() {
   // View state (declared first so we can pass chartTimeframe to useProductData)
-  const [chartTimeframe, setChartTimeframe] = useState<ChartTimeframe>("1M");
+  const [chartTimeframe, setChartTimeframe] = useState<ChartTimeframe>("3M");
 
   // Data fetching hooks - pass chartTimeframe for dynamic data loading
   const { products, priceHistory, loading, historyLoading } = useProductData(chartTimeframe);
@@ -34,7 +41,7 @@ export default function ProductPrices() {
 
   // Filter state
   const [selectedGeneration, setSelectedGeneration] = useState("all");
-  const [selectedProductType] = useState("all");
+  const [selectedProductType, setSelectedProductType] = useState("all");
   const [searchTerm, setSearchTerm] = useState("");
 
   // View state
@@ -45,6 +52,10 @@ export default function ProductPrices() {
   // Derived data
   const availableGenerations = useMemo(
     () => getAvailableGenerations(products),
+    [products]
+  );
+  const availableProductTypes = useMemo(
+    () => getAvailableProductTypes(products),
     [products]
   );
 
@@ -59,6 +70,9 @@ export default function ProductPrices() {
 
   const groupedProducts = useMemo(() => {
     return groupProductsBySet(filteredAndSortedProducts);
+  }, [filteredAndSortedProducts]);
+  const groupedProductsByType = useMemo(() => {
+    return groupProductsByType(filteredAndSortedProducts);
   }, [filteredAndSortedProducts]);
 
   // Event handlers
@@ -75,6 +89,9 @@ export default function ProductPrices() {
           selectedGeneration={selectedGeneration}
           availableGenerations={availableGenerations}
           onGenerationChange={setSelectedGeneration}
+          selectedProductType={selectedProductType}
+          availableProductTypes={availableProductTypes}
+          onProductTypeChange={setSelectedProductType}
           searchTerm={searchTerm}
           onSearchChange={setSearchTerm}
           chartTimeframe={chartTimeframe}
@@ -163,6 +180,39 @@ export default function ProductPrices() {
                 </ProductGrid>
               </div>
             ))}
+          </div>
+        )}
+
+        {/* Product-Type Grouped View */}
+        {!loading && viewMode === "type_grouped" && (
+          <div className="space-y-8">
+            {Array.from(groupedProductsByType.entries()).map(
+              ([productType, typeProducts]) => (
+                <div key={productType}>
+                  <ProductTypeGroupHeader
+                    productType={productType}
+                    productCount={typeProducts.length}
+                    setCount={new Set(typeProducts.map((product) => product.sets?.name)).size}
+                  />
+
+                  <ProductGrid>
+                    {typeProducts.map((product) => (
+                      <ProductCard
+                        key={product.id}
+                        product={product}
+                        viewMode="grouped"
+                        showSetAsPrimary
+                        chartTimeframe={chartTimeframe}
+                        priceHistory={priceHistory}
+                        selectedCurrency={selectedCurrency}
+                        exchangeRate={exchangeRate}
+                        formatPrice={formatPrice}
+                      />
+                    ))}
+                  </ProductGrid>
+                </div>
+              )
+            )}
           </div>
         )}
       </div>

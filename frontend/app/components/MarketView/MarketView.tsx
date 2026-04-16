@@ -19,7 +19,12 @@ import VariantBadge from "../ProductPrices/shared/VariantBadge";
 import PriceChart from "../PriceChart";
 import CardRinkPromo from "../CardRinkPromo";
 import MiniSparkline from "./MiniSparkline";
-import { getReturnPercent } from "./returns";
+import {
+  getCagrPercent,
+  getMaxDrawdownPercent,
+  getReturnPercent,
+  getVolatilityPercent,
+} from "./returns";
 
 const RETURN_WINDOWS = [
   { label: "7D", days: 7 },
@@ -43,6 +48,9 @@ type SortKey =
   | "release_date"
   | "days_since_release"
   | "price_per_day"
+  | "cagr"
+  | "max_drawdown"
+  | "volatility_30d"
   | "return_7d"
   | "return_1m"
   | "return_3m"
@@ -87,6 +95,7 @@ function getReleaseMs(releaseDate?: string | null) {
 function getDefaultSortDirection(key: SortKey): SortDirection {
   if (key === "product" || key === "set") return "asc";
   if (key === "days_since_release") return "asc";
+  if (key === "max_drawdown" || key === "volatility_30d") return "asc";
   return "desc";
 }
 
@@ -156,10 +165,13 @@ export default function MarketView() {
         typeof product.usd_price === "number"
           ? convertPrice(product.usd_price)
           : null;
-      const pricePerDay =
-        price !== null && daysSinceRelease && daysSinceRelease > 0
-          ? price / daysSinceRelease
-          : null;
+        const pricePerDay =
+          price !== null && daysSinceRelease && daysSinceRelease > 0
+            ? price / daysSinceRelease
+            : null;
+      const cagr = getCagrPercent(history, convertPrice);
+      const maxDrawdown = getMaxDrawdownPercent(history, convertPrice);
+      const volatility30d = getVolatilityPercent(history, convertPrice, 30);
 
       return {
         product,
@@ -169,6 +181,9 @@ export default function MarketView() {
         daysSinceRelease,
         price,
         pricePerDay,
+        cagr,
+        maxDrawdown,
+        volatility30d,
       };
     });
   }, [filteredProducts, priceHistory, convertPrice]);
@@ -198,6 +213,12 @@ export default function MarketView() {
           return row.daysSinceRelease;
         case "price_per_day":
           return row.pricePerDay;
+        case "cagr":
+          return row.cagr;
+        case "max_drawdown":
+          return row.maxDrawdown;
+        case "volatility_30d":
+          return row.volatility30d;
         case "return_7d":
           return row.returns["7D"];
         case "return_1m":
@@ -320,6 +341,7 @@ export default function MarketView() {
           exchangeRateLoading={exchangeRateLoading}
           onCurrencyChange={setSelectedCurrency}
           showChartTimeframe={false}
+          showProductTypeFilter={false}
         />
 
         <CardRinkPromo variant="banner" />
@@ -403,6 +425,33 @@ export default function MarketView() {
                         Price/Day{getSortIndicator("price_per_day")}
                       </button>
                     </th>
+                    <th className="px-3 py-3 text-right">
+                      <button
+                        type="button"
+                        onClick={() => handleSort("cagr")}
+                        className="font-semibold uppercase tracking-wide text-slate-500 hover:text-slate-700"
+                      >
+                        CAGR{getSortIndicator("cagr")}
+                      </button>
+                    </th>
+                    <th className="px-3 py-3 text-right">
+                      <button
+                        type="button"
+                        onClick={() => handleSort("max_drawdown")}
+                        className="font-semibold uppercase tracking-wide text-slate-500 hover:text-slate-700"
+                      >
+                        Max DD{getSortIndicator("max_drawdown")}
+                      </button>
+                    </th>
+                    <th className="px-3 py-3 text-right">
+                      <button
+                        type="button"
+                        onClick={() => handleSort("volatility_30d")}
+                        className="font-semibold uppercase tracking-wide text-slate-500 hover:text-slate-700"
+                      >
+                        Vol 30D{getSortIndicator("volatility_30d")}
+                      </button>
+                    </th>
                     {RETURN_WINDOWS.map((window) => (
                       <th
                         key={window.label}
@@ -452,6 +501,9 @@ export default function MarketView() {
                       returns,
                       daysSinceRelease,
                       pricePerDay,
+                      cagr,
+                      maxDrawdown,
+                      volatility30d,
                     } = row;
                     const isExpanded = expandedProductId === product.id;
 
@@ -476,6 +528,17 @@ export default function MarketView() {
                           </td>
                           <td className="px-3 py-4 text-right text-slate-600">
                             {formatRatio(pricePerDay)}
+                          </td>
+                          <td className="px-3 py-4 text-right">
+                            {renderReturnValue(cagr)}
+                          </td>
+                          <td className="px-3 py-4 text-right">
+                            {renderReturnValue(
+                              maxDrawdown === null ? null : maxDrawdown * -1
+                            )}
+                          </td>
+                          <td className="px-3 py-4 text-right">
+                            {renderReturnValue(volatility30d)}
                           </td>
                           {RETURN_WINDOWS.map((window) => (
                             <td
@@ -507,7 +570,7 @@ export default function MarketView() {
                         </tr>
                         {isExpanded && (
                           <tr className="bg-slate-50">
-                            <td colSpan={13} className="px-6 py-5">
+                            <td colSpan={17} className="px-6 py-5">
                               {history && history.length > 1 ? (
                                 <div className="rounded-lg border border-slate-200 bg-white p-4">
                                   <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">

@@ -1,5 +1,9 @@
 import { Product } from "../types";
 
+function getProductTypeLabel(product: Product): string {
+  return product.product_types?.label || product.product_types?.name || "Unknown Type";
+}
+
 /**
  * Filter products based on generation, product type, and search term
  *
@@ -24,10 +28,7 @@ export function filterProducts(
       product.sets?.generations?.name === selectedGeneration;
 
     // Product type filter
-    const productTypeLabel =
-      product.product_types?.label ||
-      product.product_types?.name ||
-      "";
+    const productTypeLabel = getProductTypeLabel(product);
     const matchesProductType =
       selectedProductType === "all" || productTypeLabel === selectedProductType;
 
@@ -37,6 +38,7 @@ export function filterProducts(
       !searchTerm ||
       product.sets?.name?.toLowerCase().includes(searchLower) ||
       product.sets?.code?.toLowerCase().includes(searchLower) ||
+      productTypeLabel.toLowerCase().includes(searchLower) ||
       product.product_types?.name?.toLowerCase().includes(searchLower) ||
       product.variant?.toLowerCase().includes(searchLower);
 
@@ -59,6 +61,18 @@ export function getAvailableGenerations(products: Product[]): string[] {
 }
 
 /**
+ * Extract available product types from products
+ *
+ * @param products - Array of products
+ * @returns Sorted array of unique product type labels
+ */
+export function getAvailableProductTypes(products: Product[]): string[] {
+  return [...new Set(products.map(getProductTypeLabel))].sort((a, b) =>
+    a.localeCompare(b)
+  );
+}
+
+/**
  * Group products by set name
  *
  * @param products - Array of products
@@ -73,6 +87,26 @@ export function groupProductsBySet(products: Product[]): Map<string, Product[]> 
       groupMap.set(setName, []);
     }
     groupMap.get(setName)!.push(product);
+  }
+
+  return groupMap;
+}
+
+/**
+ * Group products by product type label
+ *
+ * @param products - Array of products
+ * @returns Map of product type to products
+ */
+export function groupProductsByType(products: Product[]): Map<string, Product[]> {
+  const groupMap = new Map<string, Product[]>();
+
+  for (const product of products) {
+    const productType = getProductTypeLabel(product);
+    if (!groupMap.has(productType)) {
+      groupMap.set(productType, []);
+    }
+    groupMap.get(productType)!.push(product);
   }
 
   return groupMap;
