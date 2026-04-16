@@ -84,6 +84,19 @@ CREATE TABLE public.profiles (
   CONSTRAINT profiles_pkey PRIMARY KEY (id),
   CONSTRAINT profiles_id_fkey FOREIGN KEY (id) REFERENCES auth.users(id)
 );
+CREATE TABLE public.box_recipes (
+  id bigint GENERATED ALWAYS AS IDENTITY NOT NULL,
+  user_id uuid,
+  name text NOT NULL,
+  retail_price double precision NOT NULL CHECK (retail_price >= 0),
+  promo_value double precision NOT NULL DEFAULT 0 CHECK (promo_value >= 0),
+  packs jsonb NOT NULL DEFAULT '[]'::jsonb,
+  share_code text UNIQUE,
+  created_at timestamp with time zone NOT NULL DEFAULT timezone('utc'::text, now()),
+  updated_at timestamp with time zone NOT NULL DEFAULT timezone('utc'::text, now()),
+  CONSTRAINT box_recipes_pkey PRIMARY KEY (id),
+  CONSTRAINT box_recipes_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id)
+);
 CREATE TABLE public.sets (
   id bigint GENERATED ALWAYS AS IDENTITY NOT NULL,
   generation_id bigint,
