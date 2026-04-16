@@ -3,12 +3,13 @@ import ProductImage from "../shared/ProductImage";
 import ExpansionTypeBadge from "../shared/ExpansionTypeBadge";
 import VariantBadge from "../shared/VariantBadge";
 import ReturnMetrics from "../shared/ReturnMetrics";
-import ResponsivePriceChart from "../shared/ResponsivePriceChart";
+import LazyPriceChart from "../shared/LazyPriceChart";
 import { Product, PriceHistoryEntry, ChartTimeframe, Currency, ViewMode } from "../types";
 
 interface ProductCardProps {
   product: Product;
   viewMode: ViewMode;
+  showSetAsPrimary?: boolean;
   chartTimeframe: ChartTimeframe;
   priceHistory: Record<number, PriceHistoryEntry[]>;
   selectedCurrency: Currency;
@@ -23,6 +24,7 @@ interface ProductCardProps {
 const ProductCard = memo(function ProductCard({
   product,
   viewMode,
+  showSetAsPrimary = false,
   chartTimeframe,
   priceHistory,
   selectedCurrency,
@@ -89,7 +91,7 @@ const ProductCard = memo(function ProductCard({
           {/* Chart - Responsive height */}
           {priceHistory[product.id]?.length > 1 && (
             <div className="mt-2">
-              <ResponsivePriceChart
+              <LazyPriceChart
                 data={priceHistory[product.id]}
                 range={chartTimeframe}
                 currency={selectedCurrency}
@@ -134,11 +136,28 @@ const ProductCard = memo(function ProductCard({
           <div className="flex flex-col sm:flex-row sm:justify-between gap-2">
             {/* Left: Product info */}
             <div className="flex-1">
-              <h3 className="text-sm md:text-base font-semibold text-slate-900 leading-tight">
-                {productType}
-              </h3>
-              {product.variant && <VariantBadge variant={product.variant} />}
-              <p className="text-xs text-slate-500 mt-1">{generation}</p>
+              {showSetAsPrimary ? (
+                <>
+                  <h3 className="text-sm md:text-base font-semibold text-slate-900 leading-tight">
+                    {setName}
+                  </h3>
+                  <p className="text-xs md:text-sm text-slate-700 mt-1">
+                    {productType}
+                  </p>
+                  {product.variant && <VariantBadge variant={product.variant} />}
+                  <p className="text-xs text-slate-500 mt-1">
+                    {generation} • {setCode} • {releaseDate}
+                  </p>
+                </>
+              ) : (
+                <>
+                  <h3 className="text-sm md:text-base font-semibold text-slate-900 leading-tight">
+                    {productType}
+                  </h3>
+                  {product.variant && <VariantBadge variant={product.variant} />}
+                  <p className="text-xs text-slate-500 mt-1">{generation}</p>
+                </>
+              )}
             </div>
 
             {/* Right: Price & Returns - side by side on desktop, stacked on mobile */}
@@ -162,7 +181,7 @@ const ProductCard = memo(function ProductCard({
 
           {/* Chart - Full width, responsive height */}
           {priceHistory[product.id]?.length > 1 && (
-            <ResponsivePriceChart
+            <LazyPriceChart
               className="mt-3"
               data={priceHistory[product.id]}
               range={chartTimeframe}

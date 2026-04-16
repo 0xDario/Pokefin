@@ -1,5 +1,9 @@
 import { Product, SortBy, SortDirection } from "../types";
 
+function normalize(value?: string | null): string {
+  return (value || "").toLowerCase().replace(/[_-]/g, " ");
+}
+
 /**
  * Determine product sort order within a set based on product type
  *
@@ -7,57 +11,75 @@ import { Product, SortBy, SortDirection } from "../types";
  * @returns Sort order number (lower = higher priority)
  */
 export function getProductSortOrder(product: Product): number {
-  const productTypeName = (product.product_types?.name || "").toLowerCase();
-  const productTypeLabel = (product.product_types?.label || "").toLowerCase();
-  const variant = (product.variant || "").toLowerCase();
+  const productTypeName = normalize(product.product_types?.name);
+  const productTypeLabel = normalize(product.product_types?.label);
+  const variant = normalize(product.variant);
 
   // Booster Box - highest priority
   if (
-    productTypeName.includes("booster_box") ||
+    productTypeName.includes("booster box") ||
     productTypeLabel.includes("booster box")
   ) {
     return 1;
   }
 
-  // ETB (Elite Trainer Box)
+  // Pokemon Center / PKC exclusive ETB
   if (
-    productTypeName.includes("elite_trainer_box") ||
+    (productTypeName.includes("elite trainer box") ||
+      productTypeLabel.includes("elite trainer box")) &&
+    (variant.includes("pokemon center") ||
+      variant.includes("pkc") ||
+      variant.includes("exclusive"))
+  ) {
+    return 2;
+  }
+
+  // Standard ETB (Elite Trainer Box)
+  if (
+    productTypeName.includes("elite trainer box") ||
     productTypeLabel.includes("elite trainer box")
   ) {
-    // Pokemon Center ETB comes first
-    if (variant.includes("pokemon center")) {
-      return 2;
-    }
-    // Standard ETB comes second
     return 3;
   }
 
   // Booster Bundle
   if (
-    productTypeName.includes("booster_bundle") ||
+    productTypeName.includes("booster bundle") ||
     productTypeLabel.includes("booster bundle")
   ) {
     return 4;
   }
 
-  // Booster Pack (includes both regular and sleeved)
+  // Collections
   if (
-    productTypeName.includes("booster_pack") ||
-    productTypeLabel.includes("booster pack")
+    productTypeName.includes("collection") ||
+    productTypeLabel.includes("collection")
   ) {
     return 5;
   }
 
-  // Sleeved Booster Pack
+  // Box sets
   if (
-    productTypeName.includes("sleeved_booster") ||
-    productTypeLabel.includes("sleeved booster")
+    productTypeName.includes("box set") ||
+    productTypeName.includes("box sets") ||
+    productTypeLabel.includes("box set") ||
+    productTypeLabel.includes("box sets")
   ) {
     return 6;
   }
 
-  // Any other product type goes to the end
-  return 999;
+  // Booster Pack should be near the end
+  if (
+    productTypeName.includes("booster pack") ||
+    productTypeName.includes("sleeved booster") ||
+    productTypeLabel.includes("booster pack") ||
+    productTypeLabel.includes("sleeved booster")
+  ) {
+    return 999;
+  }
+
+  // Other products go before booster packs
+  return 700;
 }
 
 /**

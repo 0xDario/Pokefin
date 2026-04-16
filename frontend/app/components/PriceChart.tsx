@@ -20,6 +20,42 @@ type PriceHistoryEntry = {
 
 type Currency = "USD" | "CAD";
 
+type ChartPoint = {
+  date: string;
+  price: number | null;
+  timestamp: string;
+  trend: number | null;
+};
+
+function createYAxisTicks(min: number, max: number, tickCount = 5): number[] {
+  if (!Number.isFinite(min) || !Number.isFinite(max)) {
+    return [0, 25, 50, 75, 100];
+  }
+
+  if (max <= min) {
+    return [min];
+  }
+
+  const step = (max - min) / (tickCount - 1);
+  const ticks = Array.from({ length: tickCount }, (_, index) => min + step * index);
+
+  // Recharts may warn on duplicate tick keys if nearly identical values survive float math.
+  // Round + dedupe to keep each rendered tick unique.
+  const uniqueTicks: number[] = [];
+  const seen = new Set<string>();
+
+  for (const tick of ticks) {
+    const rounded = Number(tick.toFixed(6));
+    const key = rounded.toFixed(6);
+    if (!seen.has(key)) {
+      seen.add(key);
+      uniqueTicks.push(rounded);
+    }
+  }
+
+  return uniqueTicks;
+}
+
 /**
  * Memoized PriceChart component - only re-renders when props change
  */
@@ -148,14 +184,37 @@ const PriceChart = memo(function PriceChart({
   }, [range, groupedDaily]);
 
   // Downsample data for longer ranges to reduce jaggedness
-  const chartData = useMemo(() => {
-    if (range === "7D" || range === "1M") return slicedData;
+  const chartData = useMemo<ChartPoint[]>(() => {
+    if (range === "7D" || range === "1M") {
+      return slicedData.map((point) => ({ ...point, trend: null }));
+    }
 
     // For longer ranges, we smooth the data
     const step = range === "3M" ? 2 : range === "6M" ? 3 : 7; // 7 days for 1Y
     
-    return slicedData.filter((_, index) => index % step === 0 || index === slicedData.length - 1);
+    return slicedData
+      .filter((_, index) => index % step === 0 || index === slicedData.length - 1)
+      .map((point) => ({ ...point, trend: null }));
   }, [slicedData, range]);
+
+  const chartDataWithTrend = useMemo<ChartPoint[]>(() => {
+    const lookback = range === "7D" ? 3 : range === "1M" ? 5 : range === "3M" ? 10 : 14;
+    const window: number[] = [];
+
+    return chartData.map((point) => {
+      if (point.price === null) {
+        return { ...point, trend: null };
+      }
+
+      window.push(point.price);
+      if (window.length > lookback) {
+        window.shift();
+      }
+
+      const trend = window.reduce((sum, value) => sum + value, 0) / window.length;
+      return { ...point, trend };
+    });
+  }, [chartData, range]);
 
   // Show "Only Xd of data" badge only for newly released products whose data
   // starts partway through the visible range (i.e., the first entry is null).
@@ -178,18 +237,79 @@ const PriceChart = memo(function PriceChart({
 
   // Calculate min and max for better Y-axis domain
   const priceStats = useMemo(() => {
-    const prices = chartData.map(d => d.price).filter((p): p is number => p !== null);
+    const prices = chartDataWithTrend
+      .flatMap((d) => [d.price, d.trend])
+      .filter((p): p is number => p !== null);
     if (prices.length === 0) return { min: 0, max: 100 };
 
-    const min = Math.min(...prices);
-    const max = Math.max(...prices);
-    const padding = (max - min) * 0.1; // 10% padding
+    const rawMin = Math.min(...prices);
+    const rawMax = Math.max(...prices);
+    const span = rawMax - rawMin;
+    const minSpan = Math.max(Math.abs(rawMax) * 0.02, 1); // avoid collapsed domains
+    const effectiveSpan = span === 0 ? minSpan : span;
+    const padding = effectiveSpan * 0.1; // 10% padding
 
-    return {
-      min: Math.max(0, min - padding),
-      max: max + padding,
-    };
-  }, [chartData]);
+    const min = Math.max(0, rawMin - padding);
+    const max = rawMax + padding;
+
+    // Final guard against any domain collapse
+    if (max <= min) {
+      return { min: Math.max(0, min - minSpan / 2), max: min + minSpan / 2 };
+    }
+
+    return { min, max };
+  }, [chartDataWithTrend]);
+
+  const yAxisTicks = useMemo(
+    () => createYAxisTicks(priceStats.min, priceStats.max),
+    [priceStats.min, priceStats.max]
+  );
+
+  const investorStats = useMemo(() => {
+    const prices = chartDataWithTrend
+      .map((point) => point.price)
+      .filter((value): value is number => value !== null);
+
+    if (prices.length < 2) {
+      return { returnPct: null, cagr: null, maxDrawdown: null };
+    }
+
+    const first = prices[0];
+    const last = prices[prices.length - 1];
+    const returnPct = first > 0 ? ((last - first) / first) * 100 : null;
+
+    let peak = first;
+    let maxDrawdown = 0;
+
+    for (const value of prices) {
+      if (value > peak) {
+        peak = value;
+      }
+      if (peak > 0) {
+        const drawdown = ((value - peak) / peak) * 100;
+        if (drawdown < maxDrawdown) {
+          maxDrawdown = drawdown;
+        }
+      }
+    }
+
+    const start = chartDataWithTrend.find((point) => point.price !== null)?.timestamp;
+    const end = [...chartDataWithTrend]
+      .reverse()
+      .find((point) => point.price !== null)?.timestamp;
+
+    let cagr: number | null = null;
+    if (start && end) {
+      const startMs = new Date(start).getTime();
+      const endMs = new Date(end).getTime();
+      const years = (endMs - startMs) / (365 * 24 * 60 * 60 * 1000);
+      if (years > 0 && first > 0 && last > 0) {
+        cagr = (Math.pow(last / first, 1 / years) - 1) * 100;
+      }
+    }
+
+    return { returnPct, cagr, maxDrawdown: Math.abs(maxDrawdown) };
+  }, [chartDataWithTrend]);
 
   // Custom tooltip component with better styling
   const CustomTooltip = ({ active, payload, label }: any) => {
@@ -232,12 +352,12 @@ const PriceChart = memo(function PriceChart({
     const releaseKey = releaseDate.split("T")[0].split(" ")[0];
     const isoDateRegex = /^\d{4}-\d{2}-\d{2}$/;
 
-    if (!isoDateRegex.test(releaseKey) || chartData.length === 0) {
+    if (!isoDateRegex.test(releaseKey) || chartDataWithTrend.length === 0) {
       return null;
     }
 
-    const rangeStartKey = chartData[0].timestamp;
-    const rangeEndKey = chartData[chartData.length - 1].timestamp;
+    const rangeStartKey = chartDataWithTrend[0].timestamp;
+    const rangeEndKey = chartDataWithTrend[chartDataWithTrend.length - 1].timestamp;
     const toUtcMs = (dateKey: string) => {
       const [year, month, day] = dateKey.split("-").map(Number);
       return Date.UTC(year, month - 1, day);
@@ -259,10 +379,10 @@ const PriceChart = memo(function PriceChart({
       return null;
     }
 
-    const match = chartData.find(d => d.timestamp === releaseKey);
+    const match = chartDataWithTrend.find(d => d.timestamp === releaseKey);
 
     return match ? match.date : null;
-  }, [releaseDate, chartData]);
+  }, [releaseDate, chartDataWithTrend]);
 
   return (
     <div className="w-full relative">
@@ -280,8 +400,27 @@ const PriceChart = memo(function PriceChart({
 
       {/* Chart container with conditional styling */}
       <div className={`w-full ${dataAvailability.isIncomplete ? "opacity-90 border-l-4 border-amber-300 pl-2" : ""}`}>
+        <div className="mb-2 flex flex-wrap items-center gap-2 text-[11px] text-slate-600">
+          {investorStats.returnPct !== null && (
+            <span className="rounded-full border border-slate-200 bg-white px-2 py-1">
+              ROI: {investorStats.returnPct > 0 ? "+" : ""}
+              {investorStats.returnPct.toFixed(2)}%
+            </span>
+          )}
+          {investorStats.cagr !== null && (
+            <span className="rounded-full border border-slate-200 bg-white px-2 py-1">
+              CAGR: {investorStats.cagr > 0 ? "+" : ""}
+              {investorStats.cagr.toFixed(2)}%
+            </span>
+          )}
+          {investorStats.maxDrawdown !== null && (
+            <span className="rounded-full border border-slate-200 bg-white px-2 py-1">
+              Max DD: -{investorStats.maxDrawdown.toFixed(2)}%
+            </span>
+          )}
+        </div>
         <ResponsiveContainer width="100%" height={height}>
-          <ComposedChart data={chartData} margin={{ top: releaseDateInfo ? 25 : 10, right: 10, left: 0, bottom: 0 }}>
+          <ComposedChart data={chartDataWithTrend} margin={{ top: releaseDateInfo ? 25 : 10, right: 10, left: 0, bottom: 0 }}>
             <defs>
               <linearGradient id="priceArea" x1="0" y1="0" x2="0" y2="1">
                 <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.15} />
@@ -310,6 +449,7 @@ const PriceChart = memo(function PriceChart({
             {/* Y-Axis with price labels */}
             <YAxis
               domain={[priceStats.min, priceStats.max]}
+              ticks={yAxisTicks}
               tick={{ fill: "#64748b", fontSize: 11 }}
               tickLine={{ stroke: "#cbd5e1" }}
               axisLine={{ stroke: "#cbd5e1" }}
@@ -362,6 +502,17 @@ const PriceChart = memo(function PriceChart({
               strokeWidth={2.5}
               dot={range === "7D" ? <CustomDot /> : false}
               activeDot={{ r: 5, fill: "#3b82f6", stroke: "#fff", strokeWidth: 2 }}
+              connectNulls={false}
+            />
+
+            <Line
+              type="monotone"
+              dataKey="trend"
+              stroke="#f59e0b"
+              strokeWidth={2}
+              strokeDasharray="4 3"
+              dot={false}
+              activeDot={false}
               connectNulls={false}
             />
           </ComposedChart>
