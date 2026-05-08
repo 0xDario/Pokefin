@@ -15,7 +15,7 @@ export default function ProductSearchSelect({
   selectedProduct,
   placeholder = "Search for a product...",
 }: ProductSearchSelectProps) {
-  const { searchQuery, setSearchQuery, results, allProducts, loading } = useProductSearch();
+  const { searchQuery, setSearchQuery, results, loading } = useProductSearch();
   const [isOpen, setIsOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -30,7 +30,7 @@ export default function ProductSearchSelect({
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
-  const displayProducts = searchQuery.length >= 2 ? results : allProducts.slice(0, 20);
+  const displayProducts = searchQuery.length >= 2 ? results : [];
 
   const getProductDisplayName = (product: ProductSearchResult) => {
     const setName = product.sets?.name || "Unknown Set";
@@ -96,7 +96,9 @@ export default function ProductSearchSelect({
                 </div>
               ) : displayProducts.length === 0 ? (
                 <div className="p-4 text-center text-gray-500 dark:text-gray-400">
-                  {searchQuery.length >= 2 ? "No products found" : "Type to search..."}
+                  {searchQuery.length >= 2
+                    ? "No products found"
+                    : "Type at least 2 characters to search."}
                 </div>
               ) : (
                 <ul>

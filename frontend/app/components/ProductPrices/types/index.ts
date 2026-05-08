@@ -11,6 +11,15 @@ export interface PriceHistoryEntry {
   recorded_at: string;
 }
 
+export interface ProductReturnMetrics {
+  "1D": number | null;
+  "7D": number | null;
+  "1M": number | null;
+  "3M": number | null;
+  "6M": number | null;
+  "1Y": number | null;
+}
+
 export interface Product {
   id: number;
   usd_price: number;
@@ -18,6 +27,7 @@ export interface Product {
   last_updated: string;
   variant?: string | null;
   image_url?: string | null;
+  sku?: string | null;
   sets?: {
     name: string;
     code: string;
@@ -33,6 +43,7 @@ export interface Product {
     name: string;
     label?: string;
   } | null;
+  returns?: ProductReturnMetrics | null;
 }
 
 export interface Generation {

@@ -19,25 +19,39 @@ import {
   groupProductsByType,
 } from "./utils/filtering";
 import { sortProducts } from "./utils/sorting";
-import { ChartTimeframe, SortBy, SortDirection, ViewMode } from "./types";
+import { ChartTimeframe, Product, SortBy, SortDirection, ViewMode } from "./types";
+
+interface ProductPricesProps {
+  initialProducts?: Product[];
+  initialExchangeRate?: number;
+}
 
 /**
  * Main ProductPrices container component
  * Mobile-first responsive design with modular architecture
  */
-export default function ProductPrices() {
+export default function ProductPrices({
+  initialProducts = [],
+  initialExchangeRate,
+}: ProductPricesProps) {
   // View state (declared first so we can pass chartTimeframe to useProductData)
   const [chartTimeframe, setChartTimeframe] = useState<ChartTimeframe>("3M");
 
-  // Data fetching hooks - pass chartTimeframe for dynamic data loading
-  const { products, priceHistory, loading, historyLoading } = useProductData(chartTimeframe);
+  const {
+    products,
+    priceHistory,
+    loading,
+    historyLoading,
+    loadingProductIds,
+    ensureHistoryLoaded,
+  } = useProductData({ initialProducts });
   const {
     selectedCurrency,
     exchangeRate,
     exchangeRateLoading,
     setSelectedCurrency,
     formatPrice,
-  } = useCurrencyConversion();
+  } = useCurrencyConversion(initialExchangeRate);
 
   // Filter state
   const [selectedGeneration, setSelectedGeneration] = useState("all");
@@ -137,18 +151,20 @@ export default function ProductPrices() {
         {!loading && viewMode === "flat" && (
           <ProductGrid>
             {filteredAndSortedProducts.map((product) => (
-              <ProductCard
-                key={product.id}
-                product={product}
-                viewMode="flat"
-                chartTimeframe={chartTimeframe}
-                priceHistory={priceHistory}
-                selectedCurrency={selectedCurrency}
-                exchangeRate={exchangeRate}
-                formatPrice={formatPrice}
-              />
-            ))}
-          </ProductGrid>
+                <ProductCard
+                  key={product.id}
+                  product={product}
+                  viewMode="flat"
+                  chartTimeframe={chartTimeframe}
+                  history={priceHistory[product.id]}
+                  historyLoading={loadingProductIds.includes(product.id)}
+                  selectedCurrency={selectedCurrency}
+                  exchangeRate={exchangeRate}
+                  formatPrice={formatPrice}
+                  onLoadChart={ensureHistoryLoaded}
+                />
+              ))}
+            </ProductGrid>
         )}
 
         {/* Grouped View */}
@@ -171,10 +187,12 @@ export default function ProductPrices() {
                       product={product}
                       viewMode="grouped"
                       chartTimeframe={chartTimeframe}
-                      priceHistory={priceHistory}
+                      history={priceHistory[product.id]}
+                      historyLoading={loadingProductIds.includes(product.id)}
                       selectedCurrency={selectedCurrency}
                       exchangeRate={exchangeRate}
                       formatPrice={formatPrice}
+                      onLoadChart={ensureHistoryLoaded}
                     />
                   ))}
                 </ProductGrid>
@@ -203,10 +221,12 @@ export default function ProductPrices() {
                         viewMode="grouped"
                         showSetAsPrimary
                         chartTimeframe={chartTimeframe}
-                        priceHistory={priceHistory}
+                        history={priceHistory[product.id]}
+                        historyLoading={loadingProductIds.includes(product.id)}
                         selectedCurrency={selectedCurrency}
                         exchangeRate={exchangeRate}
                         formatPrice={formatPrice}
+                        onLoadChart={ensureHistoryLoaded}
                       />
                     ))}
                   </ProductGrid>
