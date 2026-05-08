@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { supabase } from "../lib/supabase";
+import { fetchLatestExchangeRateClient } from "../lib/exchangeRate";
+import { fetchMarketProductsClient } from "../lib/clientMarketData";
 
 type ShopifyProduct = {
   sku: string;
@@ -341,42 +342,19 @@ export default function CompareDashboardPage() {
       setErrorMessage(null);
 
       try {
-        const { data: rateData, error: rateError } = await supabase
-          .from("exchange_rates")
-          .select("usd_to_cad, recorded_at")
-          .order("recorded_at", { ascending: false })
-          .limit(1);
+        const [rateSnapshot, productData] = await Promise.all([
+          fetchLatestExchangeRateClient(),
+          fetchMarketProductsClient(),
+        ]);
 
-        if (rateError) {
-          throw rateError;
-        }
-
-        if (rateData && rateData.length > 0) {
-          setExchangeRate(rateData[0].usd_to_cad ?? DEFAULT_EXCHANGE_RATE);
-          setExchangeRateDate(rateData[0].recorded_at ?? null);
-        } else {
-          setExchangeRate(DEFAULT_EXCHANGE_RATE);
-          setExchangeRateDate(null);
-        }
-
-        const { data: productData, error: productError } = await supabase
-          .from("products")
-          .select(
-            "sku, usd_price, last_updated, sets(name, code, release_date), product_types(name, label)"
-          )
-          .not("sku", "is", null);
-
-        if (productError) {
-          throw productError;
-        }
+        setExchangeRate(rateSnapshot.rate ?? DEFAULT_EXCHANGE_RATE);
+        setExchangeRateDate(rateSnapshot.date ?? null);
 
         const map: Record<string, MarketProduct> = {};
-        (productData || []).forEach((item: any) => {
+        (productData || []).forEach((item) => {
           if (!item.sku) return;
-          const setInfo = Array.isArray(item.sets) ? item.sets[0] : item.sets;
-          const typeInfo = Array.isArray(item.product_types)
-            ? item.product_types[0]
-            : item.product_types;
+          const setInfo = item.sets;
+          const typeInfo = item.product_types;
 
           map[item.sku] = {
             sku: item.sku,
