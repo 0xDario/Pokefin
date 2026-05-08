@@ -1,14 +1,13 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
-import { searchProducts, getAllProducts } from "../../../lib/portfolio";
+import { useState, useEffect } from "react";
+import { searchProducts } from "../../../lib/portfolio";
 import type { ProductSearchResult } from "../types";
 
 interface UseProductSearchReturn {
   searchQuery: string;
   setSearchQuery: (query: string) => void;
   results: ProductSearchResult[];
-  allProducts: ProductSearchResult[];
   loading: boolean;
   error: string | null;
 }
@@ -16,18 +15,8 @@ interface UseProductSearchReturn {
 export function useProductSearch(): UseProductSearchReturn {
   const [searchQuery, setSearchQuery] = useState("");
   const [results, setResults] = useState<ProductSearchResult[]>([]);
-  const [allProducts, setAllProducts] = useState<ProductSearchResult[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
-  // Load all products on mount for initial display
-  useEffect(() => {
-    async function loadAllProducts() {
-      const products = await getAllProducts();
-      setAllProducts(products);
-    }
-    loadAllProducts();
-  }, []);
 
   // Debounced search
   useEffect(() => {
@@ -56,7 +45,6 @@ export function useProductSearch(): UseProductSearchReturn {
     searchQuery,
     setSearchQuery,
     results,
-    allProducts,
     loading,
     error,
   };

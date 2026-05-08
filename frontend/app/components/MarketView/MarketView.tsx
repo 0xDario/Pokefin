@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import ControlBar from "../ProductPrices/controls/ControlBar";
 import { useProductData } from "../ProductPrices/hooks/useProductData";
 import { useCurrencyConversion } from "../ProductPrices/hooks/useCurrencyConversion";
@@ -10,7 +10,6 @@ import {
 } from "../ProductPrices/utils/filtering";
 import {
   ChartTimeframe,
-  PriceHistoryEntry,
   Product,
 } from "../ProductPrices/types";
 import ProductImage from "../ProductPrices/shared/ProductImage";
@@ -57,6 +56,21 @@ type SortKey =
   | "return_6m"
   | "return_1y";
 
+const AGE_FILTER_OPTIONS = [
+  { label: "All Ages", value: "all", minDays: 0 },
+  { label: "1 Month+", value: "1m", minDays: 30 },
+  { label: "3 Months+", value: "3m", minDays: 90 },
+  { label: "6 Months+", value: "6m", minDays: 180 },
+  { label: "1 Year+", value: "1y", minDays: 365 },
+] as const;
+
+type AgeFilterValue = (typeof AGE_FILTER_OPTIONS)[number]["value"];
+
+interface MarketViewProps {
+  initialProducts?: Product[];
+  initialExchangeRate?: number;
+}
+
 function formatReleaseDate(releaseDate?: string | null) {
   if (!releaseDate) return "Unknown";
   return new Date(`${releaseDate}T00:00:00Z`).toLocaleDateString();
@@ -99,10 +113,19 @@ function getDefaultSortDirection(key: SortKey): SortDirection {
   return "desc";
 }
 
-export default function MarketView() {
+export default function MarketView({
+  initialProducts = [],
+  initialExchangeRate,
+}: MarketViewProps) {
   const [chartTimeframe, setChartTimeframe] =
     useState<ChartTimeframe>("1Y");
-  const { products, priceHistory, loading } = useProductData(chartTimeframe);
+  const {
+    products,
+    priceHistory,
+    loading,
+    loadingProductIds,
+    ensureHistoryLoaded,
+  } = useProductData({ initialProducts });
   const {
     selectedCurrency,
     exchangeRate,
@@ -110,15 +133,22 @@ export default function MarketView() {
     setSelectedCurrency,
     convertPrice,
     formatPrice,
-  } = useCurrencyConversion();
+  } = useCurrencyConversion(initialExchangeRate);
 
   const [selectedGeneration, setSelectedGeneration] = useState("all");
   const [searchTerm, setSearchTerm] = useState("");
+  const [ageFilter, setAgeFilter] = useState<AgeFilterValue>("all");
   const [sortKey, setSortKey] = useState<SortKey>("release_date");
   const [sortDirection, setSortDirection] = useState<SortDirection>("desc");
   const [expandedProductId, setExpandedProductId] = useState<number | null>(
     null
   );
+
+  const ageFilterMinDays = useMemo(() => {
+    return (
+      AGE_FILTER_OPTIONS.find((option) => option.value === ageFilter)?.minDays ?? 0
+    );
+  }, [ageFilter]);
 
   const availableGenerations = useMemo(
     () => getAvailableGenerations(products),
@@ -126,24 +156,34 @@ export default function MarketView() {
   );
 
   const filteredProducts = useMemo(() => {
-    const filtered = filterProducts(products, {
+    const baseFiltered = filterProducts(products, {
       selectedGeneration,
       selectedProductType: "all",
       searchTerm,
     });
-    return filtered;
-  }, [products, selectedGeneration, searchTerm]);
 
-  const buildReturns = (history: PriceHistoryEntry[] | undefined): ReturnMap => {
-    const referenceDate = new Date();
-    return {
-      "7D": getReturnPercent(history, 7, convertPrice, referenceDate),
-      "1M": getReturnPercent(history, 30, convertPrice, referenceDate),
-      "3M": getReturnPercent(history, 90, convertPrice, referenceDate),
-      "6M": getReturnPercent(history, 180, convertPrice, referenceDate),
-      "1Y": getReturnPercent(history, 365, convertPrice, referenceDate),
-    };
-  };
+    if (ageFilterMinDays === 0) {
+      return baseFiltered;
+    }
+
+    const today = new Date();
+    const todayUtcMs = Date.UTC(
+      today.getUTCFullYear(),
+      today.getUTCMonth(),
+      today.getUTCDate()
+    );
+
+    return baseFiltered.filter((product) => {
+      const releaseMs = getReleaseMs(product.sets?.release_date ?? null);
+      if (releaseMs === null) return false;
+
+      const daysSinceRelease = Math.max(
+        0,
+        Math.floor((todayUtcMs - releaseMs) / DAY_MS)
+      );
+      return daysSinceRelease >= ageFilterMinDays;
+    });
+  }, [products, selectedGeneration, searchTerm, ageFilterMinDays]);
 
   const rows = useMemo(() => {
     const today = new Date();
@@ -155,7 +195,13 @@ export default function MarketView() {
 
     return filteredProducts.map((product) => {
       const history = priceHistory[product.id];
-      const returns = buildReturns(history);
+      const returns: ReturnMap = {
+        "7D": product.returns?.["7D"] ?? getReturnPercent(history, 7, convertPrice),
+        "1M": product.returns?.["1M"] ?? getReturnPercent(history, 30, convertPrice),
+        "3M": product.returns?.["3M"] ?? getReturnPercent(history, 90, convertPrice),
+        "6M": product.returns?.["6M"] ?? getReturnPercent(history, 180, convertPrice),
+        "1Y": product.returns?.["1Y"] ?? getReturnPercent(history, 365, convertPrice),
+      };
       const releaseMs = getReleaseMs(product.sets?.release_date ?? null);
       const daysSinceRelease =
         releaseMs === null
@@ -165,10 +211,10 @@ export default function MarketView() {
         typeof product.usd_price === "number"
           ? convertPrice(product.usd_price)
           : null;
-        const pricePerDay =
-          price !== null && daysSinceRelease && daysSinceRelease > 0
-            ? price / daysSinceRelease
-            : null;
+      const pricePerDay =
+        price !== null && daysSinceRelease && daysSinceRelease > 0
+          ? price / daysSinceRelease
+          : null;
       const cagr = getCagrPercent(history, convertPrice);
       const maxDrawdown = getMaxDrawdownPercent(history, convertPrice);
       const volatility30d = getVolatilityPercent(history, convertPrice, 30);
@@ -187,6 +233,12 @@ export default function MarketView() {
       };
     });
   }, [filteredProducts, priceHistory, convertPrice]);
+
+  useEffect(() => {
+    if (expandedProductId !== null) {
+      void ensureHistoryLoaded(expandedProductId, chartTimeframe);
+    }
+  }, [chartTimeframe, ensureHistoryLoaded, expandedProductId]);
 
   const sortedRows = useMemo(() => {
     const getSortValue = (
@@ -258,7 +310,13 @@ export default function MarketView() {
   }, [rows, sortKey, sortDirection]);
 
   const toggleExpanded = (productId: number) => {
-    setExpandedProductId((prev) => (prev === productId ? null : productId));
+    setExpandedProductId((prev) => {
+      const next = prev === productId ? null : productId;
+      if (next !== null) {
+        void ensureHistoryLoaded(next, chartTimeframe);
+      }
+      return next;
+    });
   };
 
   const handleSort = (key: SortKey) => {
@@ -334,6 +392,12 @@ export default function MarketView() {
           onGenerationChange={setSelectedGeneration}
           searchTerm={searchTerm}
           onSearchChange={setSearchTerm}
+          selectedAgeFilter={ageFilter}
+          ageFilterOptions={AGE_FILTER_OPTIONS.map((option) => ({
+            label: option.label,
+            value: option.value,
+          }))}
+          onAgeFilterChange={(value) => setAgeFilter(value as AgeFilterValue)}
           chartTimeframe={chartTimeframe}
           onChartTimeframeChange={setChartTimeframe}
           selectedCurrency={selectedCurrency}
@@ -343,6 +407,13 @@ export default function MarketView() {
           showChartTimeframe={false}
           showProductTypeFilter={false}
         />
+
+        {ageFilter !== "all" && (
+          <div className="text-xs text-slate-500 -mt-3">
+            Products without a valid release date are excluded when a minimum
+            age filter is active.
+          </div>
+        )}
 
         <CardRinkPromo variant="banner" />
 
@@ -550,11 +621,17 @@ export default function MarketView() {
                           ))}
                           <td className="px-3 py-4">
                             <div className="flex justify-end">
-                              <MiniSparkline
-                                history={history}
-                                currency={selectedCurrency}
-                                exchangeRate={exchangeRate}
-                              />
+                              {history && history.length > 1 ? (
+                                <MiniSparkline
+                                  history={history}
+                                  currency={selectedCurrency}
+                                  exchangeRate={exchangeRate}
+                                />
+                              ) : loadingProductIds.includes(product.id) ? (
+                                <span className="text-xs text-slate-400">Loading...</span>
+                              ) : (
+                                <span className="text-xs text-slate-400">Open chart</span>
+                              )}
                             </div>
                           </td>
                           <td className="px-3 py-4 text-right">
@@ -571,7 +648,11 @@ export default function MarketView() {
                         {isExpanded && (
                           <tr className="bg-slate-50">
                             <td colSpan={17} className="px-6 py-5">
-                              {history && history.length > 1 ? (
+                              {loadingProductIds.includes(product.id) ? (
+                                <div className="rounded-lg border border-slate-200 bg-white p-4 text-sm text-slate-500">
+                                  Loading price history...
+                                </div>
+                              ) : history && history.length > 1 ? (
                                 <div className="rounded-lg border border-slate-200 bg-white p-4">
                                   <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                                     <div>

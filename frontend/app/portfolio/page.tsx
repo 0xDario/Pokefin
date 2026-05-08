@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { useAuth } from "../context/AuthContext";
 import PortfolioDashboard from "../components/Portfolio/PortfolioDashboard";
-import { supabase } from "../lib/supabase";
+import { fetchLatestExchangeRateClient } from "../lib/exchangeRate";
 
 export default function PortfolioPage() {
   const { user, loading: authLoading } = useAuth();
@@ -17,19 +17,19 @@ export default function PortfolioPage() {
 
   // Fetch exchange rate
   useEffect(() => {
-    async function fetchExchangeRate() {
-      const { data, error } = await supabase
-        .from("exchange_rates")
-        .select("usd_to_cad")
-        .order("recorded_at", { ascending: false })
-        .limit(1)
-        .single();
+    let cancelled = false;
 
-      if (data && !error) {
-        setExchangeRate(data.usd_to_cad);
+    async function fetchExchangeRate() {
+      const data = await fetchLatestExchangeRateClient();
+      if (!cancelled) {
+        setExchangeRate(data.rate);
       }
     }
     fetchExchangeRate();
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   // Redirect if not logged in

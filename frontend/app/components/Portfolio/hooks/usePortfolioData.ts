@@ -73,7 +73,11 @@ export function usePortfolioData(): UsePortfolioDataReturn {
 
       // Get history based on timeframe
       const days = TIMEFRAME_DAYS[timeframe];
-      const historyData = await getPortfolioHistory(portfolioData.id, days);
+      const historyData = await getPortfolioHistory(
+        portfolioData.id,
+        days,
+        holdingsData
+      );
       setHistory(historyData);
     } catch (err) {
       console.error("Error fetching portfolio data:", err);
