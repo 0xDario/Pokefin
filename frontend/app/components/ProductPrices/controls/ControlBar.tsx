@@ -1,42 +1,38 @@
 import GenerationFilter from "./GenerationFilter";
 import ProductTypeFilter from "./ProductTypeFilter";
+import AgeFilter from "./AgeFilter";
 import SearchInput from "./SearchInput";
 import ChartTimeframeButtons from "./ChartTimeframeButtons";
 import CurrencySelector from "./CurrencySelector";
 import { ChartTimeframe, Currency } from "../types";
 
+interface AgeFilterOption {
+  label: string;
+  value: string;
+}
+
 interface ControlBarProps {
-  // Generation filter
   selectedGeneration: string;
   availableGenerations: string[];
   onGenerationChange: (generation: string) => void;
-
-  // Product type filter
   selectedProductType?: string;
   availableProductTypes?: string[];
   onProductTypeChange?: (productType: string) => void;
-
-  // Search
   searchTerm: string;
   onSearchChange: (term: string) => void;
-
-  // Chart timeframe
+  selectedAgeFilter?: string;
+  ageFilterOptions?: AgeFilterOption[];
+  onAgeFilterChange?: (ageFilter: string) => void;
   chartTimeframe: ChartTimeframe;
   onChartTimeframeChange: (timeframe: ChartTimeframe) => void;
-
-  // Currency
   selectedCurrency: Currency;
   exchangeRate: number;
   exchangeRateLoading: boolean;
   onCurrencyChange: (currency: Currency) => void;
-
   showChartTimeframe?: boolean;
   showProductTypeFilter?: boolean;
 }
 
-/**
- * Main control bar container - Mobile-first layout with vertical stacking
- */
 export default function ControlBar({
   selectedGeneration,
   availableGenerations,
@@ -46,6 +42,9 @@ export default function ControlBar({
   onProductTypeChange = () => {},
   searchTerm,
   onSearchChange,
+  selectedAgeFilter,
+  ageFilterOptions,
+  onAgeFilterChange,
   chartTimeframe,
   onChartTimeframeChange,
   selectedCurrency,
@@ -57,7 +56,6 @@ export default function ControlBar({
 }: ControlBarProps) {
   return (
     <div className="space-y-3 md:space-y-0 md:flex md:flex-wrap md:items-center md:gap-4 mb-6">
-      {/* Primary Controls - Left Side */}
       <div className="flex flex-col gap-3 md:flex-row md:flex-1 md:gap-4">
         <GenerationFilter
           selectedGeneration={selectedGeneration}
@@ -75,6 +73,16 @@ export default function ControlBar({
 
         <SearchInput value={searchTerm} onChange={onSearchChange} />
 
+        {selectedAgeFilter !== undefined &&
+          ageFilterOptions &&
+          onAgeFilterChange && (
+            <AgeFilter
+              selectedAgeFilter={selectedAgeFilter}
+              options={ageFilterOptions}
+              onChange={onAgeFilterChange}
+            />
+          )}
+
         {showChartTimeframe && (
           <ChartTimeframeButtons
             selected={chartTimeframe}
@@ -83,7 +91,6 @@ export default function ControlBar({
         )}
       </div>
 
-      {/* Secondary Controls - Right Side */}
       <div className="flex flex-col gap-3 md:flex-row md:gap-4 md:ml-auto">
         <CurrencySelector
           selectedCurrency={selectedCurrency}

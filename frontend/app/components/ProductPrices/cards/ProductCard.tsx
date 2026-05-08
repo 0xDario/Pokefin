@@ -1,4 +1,6 @@
-import { memo } from "react";
+"use client";
+
+import { memo, useEffect, useState } from "react";
 import ProductImage from "../shared/ProductImage";
 import ExpansionTypeBadge from "../shared/ExpansionTypeBadge";
 import VariantBadge from "../shared/VariantBadge";
@@ -11,26 +13,27 @@ interface ProductCardProps {
   viewMode: ViewMode;
   showSetAsPrimary?: boolean;
   chartTimeframe: ChartTimeframe;
-  priceHistory: Record<number, PriceHistoryEntry[]>;
+  history?: PriceHistoryEntry[];
+  historyLoading?: boolean;
   selectedCurrency: Currency;
   exchangeRate: number;
   formatPrice: (price: number | null | undefined) => string;
+  onLoadChart: (productId: number, timeframe: ChartTimeframe) => void;
 }
 
-/**
- * Memoized ProductCard component - only re-renders when relevant props change
- * Supports both flat and grouped views with mobile-first responsive design
- */
 const ProductCard = memo(function ProductCard({
   product,
   viewMode,
   showSetAsPrimary = false,
   chartTimeframe,
-  priceHistory,
+  history,
+  historyLoading = false,
   selectedCurrency,
   exchangeRate,
   formatPrice,
+  onLoadChart,
 }: ProductCardProps) {
+  const [showChart, setShowChart] = useState(false);
   const setName = product.sets?.name || "Unknown Set";
   const productType = product.product_types?.label || product.product_types?.name || "Unknown Type";
   const generation = product.sets?.generations?.name || "Unknown Generation";
@@ -38,12 +41,21 @@ const ProductCard = memo(function ProductCard({
   const releaseDate = product.sets?.release_date
     ? new Date(product.sets.release_date + "T00:00:00Z").toLocaleDateString()
     : "Unknown";
-  const lastUpdated = new Date(product.last_updated + "Z").toLocaleString(undefined, {
-    timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-    timeZoneName: "short",
-  });
+  const lastUpdated = product.last_updated
+    ? new Date(product.last_updated + "Z").toLocaleString(undefined, {
+        timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+        timeZoneName: "short",
+      })
+    : "Unknown";
 
-  // Flat view - Vertical card layout
+  useEffect(() => {
+    if (showChart) {
+      onLoadChart(product.id, chartTimeframe);
+    }
+  }, [showChart, product.id, chartTimeframe, onLoadChart]);
+
+  const chartToggleLabel = showChart ? "Hide chart" : "Load chart";
+
   if (viewMode === "flat") {
     return (
       <div className="bg-white rounded-xl shadow-sm hover:shadow-md transition-shadow overflow-hidden">
@@ -54,7 +66,6 @@ const ProductCard = memo(function ProductCard({
         />
 
         <div className="p-4 md:p-5">
-          {/* Header */}
           <div className="mb-3">
             <h2 className="text-lg md:text-xl font-bold text-slate-900 leading-tight">
               {setName}
@@ -73,35 +84,45 @@ const ProductCard = memo(function ProductCard({
             </p>
           </div>
 
-          {/* Price */}
           <p className="text-2xl md:text-3xl font-extrabold text-green-600 tracking-tight mb-1">
             {formatPrice(product.usd_price)}
           </p>
 
-          {/* Return Metrics - Filtered by timeframe */}
           <ReturnMetrics
-            productId={product.id}
             chartTimeframe={chartTimeframe}
-            priceHistory={priceHistory}
             selectedCurrency={selectedCurrency}
             exchangeRate={exchangeRate}
+            returnMetrics={product.returns}
+            history={history}
             layout="vertical"
           />
 
-          {/* Chart - Responsive height */}
-          {priceHistory[product.id]?.length > 1 && (
-            <div className="mt-2">
+          <div className="mt-3 space-y-2">
+            <button
+              type="button"
+              onClick={() => setShowChart((prev) => !prev)}
+              className="rounded-md border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-100"
+            >
+              {historyLoading ? "Loading chart..." : chartToggleLabel}
+            </button>
+
+            {showChart && history && history.length > 1 && (
               <LazyPriceChart
-                data={priceHistory[product.id]}
+                data={history}
                 range={chartTimeframe}
                 currency={selectedCurrency}
                 exchangeRate={exchangeRate}
                 releaseDate={product.sets?.release_date}
               />
-            </div>
-          )}
+            )}
 
-          {/* TCGPlayer Link */}
+            {showChart && !historyLoading && (!history || history.length <= 1) && (
+              <div className="rounded-lg border border-dashed border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-500">
+                Price history not available yet.
+              </div>
+            )}
+          </div>
+
           <a
             href={product.url}
             target="_blank"
@@ -111,7 +132,6 @@ const ProductCard = memo(function ProductCard({
             View on TCGPlayer
           </a>
 
-          {/* Updated timestamp */}
           <p className="text-[10px] md:text-xs text-slate-400 mt-2">
             Updated: {lastUpdated}
           </p>
@@ -120,21 +140,17 @@ const ProductCard = memo(function ProductCard({
     );
   }
 
-  // Grouped view - Horizontal card layout (mobile: vertical, desktop: horizontal)
   return (
     <div className="bg-white rounded-lg shadow hover:shadow-md transition-shadow">
       <div className="flex flex-col sm:flex-row">
-        {/* Image - full width on mobile, fixed width on tablet+ */}
         <ProductImage
           imageUrl={product.image_url}
           productName={`${setName} ${productType}`}
           className="w-full h-48 sm:w-32 sm:h-32 flex-shrink-0"
         />
 
-        {/* Content */}
         <div className="flex-1 p-3 md:p-4">
           <div className="flex flex-col sm:flex-row sm:justify-between gap-2">
-            {/* Left: Product info */}
             <div className="flex-1">
               {showSetAsPrimary ? (
                 <>
@@ -160,38 +176,49 @@ const ProductCard = memo(function ProductCard({
               )}
             </div>
 
-            {/* Right: Price & Returns - side by side on desktop, stacked on mobile */}
             <div className="text-left sm:text-right sm:ml-2">
               <p className="text-xl md:text-2xl font-bold text-green-600 tracking-tight">
                 {formatPrice(product.usd_price)}
               </p>
 
-              {/* Return Metrics - Horizontal on desktop */}
               <ReturnMetrics
-                productId={product.id}
                 chartTimeframe={chartTimeframe}
-                priceHistory={priceHistory}
                 selectedCurrency={selectedCurrency}
                 exchangeRate={exchangeRate}
+                returnMetrics={product.returns}
+                history={history}
                 layout="horizontal"
                 className="text-[10px] md:text-xs mt-1"
               />
             </div>
           </div>
 
-          {/* Chart - Full width, responsive height */}
-          {priceHistory[product.id]?.length > 1 && (
-            <LazyPriceChart
-              className="mt-3"
-              data={priceHistory[product.id]}
-              range={chartTimeframe}
-              currency={selectedCurrency}
-              exchangeRate={exchangeRate}
-              releaseDate={product.sets?.release_date}
-            />
-          )}
+          <div className="mt-3 space-y-2">
+            <button
+              type="button"
+              onClick={() => setShowChart((prev) => !prev)}
+              className="rounded-md border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-100"
+            >
+              {historyLoading ? "Loading chart..." : chartToggleLabel}
+            </button>
 
-          {/* TCGPlayer Link */}
+            {showChart && history && history.length > 1 && (
+              <LazyPriceChart
+                data={history}
+                range={chartTimeframe}
+                currency={selectedCurrency}
+                exchangeRate={exchangeRate}
+                releaseDate={product.sets?.release_date}
+              />
+            )}
+
+            {showChart && !historyLoading && (!history || history.length <= 1) && (
+              <div className="rounded-lg border border-dashed border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-500">
+                Price history not available yet.
+              </div>
+            )}
+          </div>
+
           <a
             href={product.url}
             target="_blank"

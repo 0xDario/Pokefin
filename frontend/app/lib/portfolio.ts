@@ -274,10 +274,10 @@ export function calculateHoldingPerformance(holding: HoldingWithProduct): Holdin
  */
 export async function getPortfolioHistory(
   portfolioId: number,
-  days: number
+  days: number,
+  holdingsInput?: HoldingWithProduct[]
 ): Promise<PortfolioHistoryPoint[]> {
-  // Get holdings
-  const holdings = await getHoldings(portfolioId);
+  const holdings = holdingsInput ?? (await getHoldings(portfolioId));
   if (holdings.length === 0) return [];
 
   // Group holdings by product with purchase-date ordering
