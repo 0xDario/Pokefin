@@ -1,26 +1,82 @@
 @import "tailwindcss";
 
+/*
+ * Light-mode only. We disable Tailwind's automatic prefers-color-scheme dark
+ * variant by re-routing `dark:` to a class that's never applied. Existing
+ * `dark:*` utilities in the codebase become inert (no churn required).
+ */
+@custom-variant dark (&:is(.dark *));
+
+/* Pokefin palette — Pokémon-inspired, tuned for finance-grade legibility. */
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  /* Brand */
+  --pf-pokeball: #dc2626;        /* red-600 — primary brand */
+  --pf-pokeball-strong: #b91c1c; /* red-700 — hover/pressed */
+  --pf-pokeblue: #2563eb;        /* blue-600 — secondary brand, links */
+  --pf-pokeblue-strong: #1d4ed8; /* blue-700 */
+  --pf-pokeyellow: #facc15;      /* yellow-400 — accent (use sparingly) */
+
+  /* Neutrals */
+  --pf-bg: #f8fafc;              /* page background */
+  --pf-surface: #ffffff;         /* cards, table rows */
+  --pf-surface-alt: #f1f5f9;     /* table headers, subtle hover */
+  --pf-border: #e2e8f0;          /* dividers, inputs */
+  --pf-ink: #0f172a;             /* primary text */
+  --pf-ink-soft: #475569;        /* secondary text */
+  --pf-muted: #94a3b8;           /* tertiary hints, dashes */
+
+  /* Data semantics — finance convention, distinct from brand red */
+  --pf-gain: #059669;            /* emerald-600 */
+  --pf-gain-soft: #d1fae5;       /* emerald-100 — subtle row tints */
+  --pf-loss: #e11d48;            /* rose-600 — distinct from brand */
+  --pf-loss-soft: #ffe4e6;       /* rose-100 */
+
+  /* Legacy aliases consumed elsewhere */
+  --background: var(--pf-bg);
+  --foreground: var(--pf-ink);
 }
 
 @theme inline {
+  /* Surface and ink as Tailwind tokens so utilities like bg-surface work. */
+  --color-bg: var(--pf-bg);
+  --color-surface: var(--pf-surface);
+  --color-surface-alt: var(--pf-surface-alt);
+  --color-border-soft: var(--pf-border);
+  --color-ink: var(--pf-ink);
+  --color-ink-soft: var(--pf-ink-soft);
+  --color-muted: var(--pf-muted);
+
+  /* Brand */
+  --color-pokeball: var(--pf-pokeball);
+  --color-pokeball-strong: var(--pf-pokeball-strong);
+  --color-pokeblue: var(--pf-pokeblue);
+  --color-pokeblue-strong: var(--pf-pokeblue-strong);
+  --color-pokeyellow: var(--pf-pokeyellow);
+
+  /* Data */
+  --color-gain: var(--pf-gain);
+  --color-loss: var(--pf-loss);
+
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+html, body {
+  background: var(--pf-bg);
+  color: var(--pf-ink);
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-geist-sans), system-ui, -apple-system, "Segoe UI",
+    Roboto, "Helvetica Neue", Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Numeric data should align cleanly in tables and metrics. */
+.tabular-nums,
+table {
+  font-variant-numeric: tabular-nums;
 }

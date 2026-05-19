@@ -414,6 +414,52 @@ async function fetchSetAnalyticsFallback(): Promise<SetAnalyticsRow[]> {
   return scored;
 }
 
+export type ProductDetail = {
+  product: Product;
+  history: PriceHistoryEntry[];
+  siblings: Product[];
+};
+
+async function fetchProductDetail(
+  productId: number
+): Promise<ProductDetail | null> {
+  const allProducts = await getCachedMarketProductSummaries();
+  const product = allProducts.find((p) => p.id === productId);
+  if (!product) return null;
+
+  const supabase = createServerSupabaseClient();
+  const startDate = new Date();
+  startDate.setDate(startDate.getDate() - 367);
+  const startDateStr = startDate.toISOString().split("T")[0];
+
+  const { data: historyRows, error } = await supabase
+    .from("product_price_history")
+    .select("product_id, usd_price, recorded_at")
+    .eq("product_id", productId)
+    .gte("recorded_at", startDateStr)
+    .order("recorded_at", { ascending: true });
+
+  if (error) {
+    console.error("[serverMarketData] product history fetch failed:", error);
+  }
+
+  const history = groupHistoryRowsByProduct(historyRows || [])[productId] || [];
+
+  // Siblings share the same set. Match on set id when present, falling back to
+  // code so products from the cached summaries still group correctly.
+  const setKey = product.sets?.id ?? product.sets?.code;
+  const siblings =
+    setKey === undefined || setKey === null
+      ? []
+      : allProducts.filter(
+          (p) =>
+            p.id !== productId &&
+            (p.sets?.id ?? p.sets?.code) === setKey
+        );
+
+  return { product, history, siblings };
+}
+
 async function fetchLatestExchangeRate(): Promise<ExchangeRateSnapshot> {
   const supabase = createServerSupabaseClient();
   const { data, error } = await supabase
@@ -573,3 +619,12 @@ export const getCachedSetAnalytics = unstable_cache(fetchSetAnalytics, ["set-ana
   revalidate: 3600,
   tags: ["set-analytics"],
 });
+
+export const getCachedProductDetail = unstable_cache(
+  fetchProductDetail,
+  ["product-detail"],
+  {
+    revalidate: 3600,
+    tags: ["market-products"],
+  }
+);

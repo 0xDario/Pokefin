@@ -6,6 +6,29 @@ import Link from "next/link";
 import { Turnstile } from "@marsidev/react-turnstile";
 import { useAuth } from "../../context/AuthContext";
 
+function PokeballGlyph({ className = "w-8 h-8" }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 32 32" className={className} aria-hidden="true">
+      <circle cx="16" cy="16" r="15" fill="#fff" stroke="#0f172a" strokeWidth="1.5" />
+      <path
+        d="M1 16 A15 15 0 0 1 31 16 Z"
+        fill="#dc2626"
+        stroke="#0f172a"
+        strokeWidth="1.5"
+      />
+      <rect x="1" y="15" width="30" height="2" fill="#0f172a" />
+      <circle cx="16" cy="16" r="4.5" fill="#fff" stroke="#0f172a" strokeWidth="1.5" />
+      <circle cx="16" cy="16" r="1.8" fill="#0f172a" />
+    </svg>
+  );
+}
+
+const fieldClass =
+  "w-full px-3.5 py-2.5 border border-slate-300 rounded-lg text-sm text-slate-900 bg-white placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-[var(--pf-pokeblue)] focus:border-[var(--pf-pokeblue)] transition-colors";
+
+const labelClass =
+  "block text-xs font-semibold uppercase tracking-wide text-slate-500 mb-1.5";
+
 export default function SignUpPage() {
   const [email, setEmail] = useState("");
   const [username, setUsername] = useState("");
@@ -22,7 +45,6 @@ export default function SignUpPage() {
     e.preventDefault();
     setError(null);
 
-    // Validate username
     if (username.length < 3) {
       setError("Username must be at least 3 characters long");
       return;
@@ -33,13 +55,11 @@ export default function SignUpPage() {
       return;
     }
 
-    // Validate passwords match
     if (password !== confirmPassword) {
       setError("Passwords do not match");
       return;
     }
 
-    // Validate password strength
     if (password.length < 8) {
       setError("Password must be at least 8 characters long");
       return;
@@ -60,18 +80,21 @@ export default function SignUpPage() {
 
   if (success) {
     return (
-      <div className="min-h-screen flex items-center justify-center p-4">
+      <div className="min-h-[calc(100vh-4rem)] flex items-center justify-center p-4">
         <div className="w-full max-w-md">
-          <div className="bg-white dark:bg-gray-800 rounded-lg shadow-lg p-8 text-center">
-            <div className="text-green-500 text-5xl mb-4">✓</div>
-            <h1 className="text-2xl font-bold mb-4">Check Your Email</h1>
-            <p className="text-gray-600 dark:text-gray-400 mb-6">
-              We&apos;ve sent a confirmation link to <strong>{email}</strong>.
-              Please check your email and click the link to activate your account.
+          <div className="bg-white rounded-2xl shadow-sm ring-1 ring-slate-200 p-8 text-center">
+            <div className="mx-auto w-12 h-12 rounded-full bg-emerald-100 text-emerald-700 flex items-center justify-center text-2xl mb-4">
+              ✓
+            </div>
+            <h1 className="text-2xl font-bold mb-3 text-slate-900">Check your email</h1>
+            <p className="text-slate-600 mb-6">
+              We&apos;ve sent a confirmation link to{" "}
+              <strong className="text-slate-900">{email}</strong>. Click the link to
+              activate your account.
             </p>
             <Link
               href="/auth/login"
-              className="text-blue-600 hover:text-blue-700 font-medium"
+              className="font-semibold text-[var(--pf-pokeblue)] hover:text-[var(--pf-pokeblue-strong)]"
             >
               Return to Sign In
             </Link>
@@ -82,92 +105,72 @@ export default function SignUpPage() {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center p-4">
+    <div className="min-h-[calc(100vh-4rem)] flex items-center justify-center p-4">
       <div className="w-full max-w-md">
-        <div className="bg-white dark:bg-gray-800 rounded-lg shadow-lg p-8">
-          <h1 className="text-2xl font-bold text-center mb-6">Create Account</h1>
+        <div className="bg-white rounded-2xl shadow-sm ring-1 ring-slate-200 p-8">
+          <div className="flex flex-col items-center mb-6">
+            <PokeballGlyph className="w-10 h-10" />
+            <h1 className="mt-3 text-2xl font-bold text-slate-900">Create your account</h1>
+            <p className="mt-1 text-sm text-slate-500">Start tracking your Pokémon sealed collection.</p>
+          </div>
 
           {error && (
-            <div className="bg-red-100 dark:bg-red-900/30 border border-red-400 text-red-700 dark:text-red-400 px-4 py-3 rounded mb-4">
+            <div className="bg-rose-50 border border-rose-200 text-rose-700 px-4 py-3 rounded-lg mb-4 text-sm">
               {error}
             </div>
           )}
 
           <form onSubmit={handleSubmit} className="space-y-4">
             <div>
-              <label
-                htmlFor="username"
-                className="block text-sm font-medium mb-1"
-              >
-                Username
-              </label>
+              <label htmlFor="username" className={labelClass}>Username</label>
               <input
                 id="username"
                 type="text"
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
                 required
-                className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white dark:bg-gray-700"
+                className={fieldClass}
                 placeholder="pokefan123"
               />
-              <p className="text-xs text-gray-500 mt-1">
-                Letters, numbers, and underscores only
-              </p>
+              <p className="text-xs text-slate-500 mt-1">Letters, numbers, and underscores only</p>
             </div>
 
             <div>
-              <label
-                htmlFor="email"
-                className="block text-sm font-medium mb-1"
-              >
-                Email
-              </label>
+              <label htmlFor="email" className={labelClass}>Email</label>
               <input
                 id="email"
                 type="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 required
-                className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white dark:bg-gray-700"
+                className={fieldClass}
                 placeholder="you@example.com"
               />
             </div>
 
             <div>
-              <label
-                htmlFor="password"
-                className="block text-sm font-medium mb-1"
-              >
-                Password
-              </label>
+              <label htmlFor="password" className={labelClass}>Password</label>
               <input
                 id="password"
                 type="password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 required
-                className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white dark:bg-gray-700"
+                className={fieldClass}
                 placeholder="••••••••"
               />
-              <p className="text-xs text-gray-500 mt-1">
-                At least 8 characters
-              </p>
+              <p className="text-xs text-slate-500 mt-1">At least 8 characters</p>
             </div>
 
             <div>
-              <label
-                htmlFor="confirmPassword"
-                className="block text-sm font-medium mb-1"
-              >
-                Confirm Password
-              </label>
+              <label htmlFor="confirmPassword" className={labelClass}>Confirm Password</label>
               <input
                 id="confirmPassword"
                 type="password"
                 value={confirmPassword}
                 onChange={(e) => setConfirmPassword(e.target.value)}
                 required
-                className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white dark:bg-gray-700"
+                className={fieldClass}
                 placeholder="••••••••"
               />
             </div>
@@ -180,18 +183,18 @@ export default function SignUpPage() {
             <button
               type="submit"
               disabled={loading || !captchaToken}
-              className="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2 px-4 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              className="w-full bg-[var(--pf-pokeball)] hover:bg-[var(--pf-pokeball-strong)] text-white font-semibold py-2.5 px-4 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed shadow-sm"
             >
-              {loading ? "Creating account..." : "Create Account"}
+              {loading ? "Creating account…" : "Create Account"}
             </button>
           </form>
 
           <div className="mt-6 text-center">
-            <p className="text-sm text-gray-600 dark:text-gray-400">
+            <p className="text-sm text-slate-500">
               Already have an account?{" "}
               <Link
                 href="/auth/login"
-                className="text-blue-600 hover:text-blue-700 font-medium"
+                className="font-semibold text-[var(--pf-pokeblue)] hover:text-[var(--pf-pokeblue-strong)]"
               >
                 Sign in
               </Link>

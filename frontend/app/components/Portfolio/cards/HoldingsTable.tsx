@@ -68,8 +68,8 @@ export default function HoldingsTable({
       onClick={() => handleSort(field)}
       className={`text-xs font-medium px-2 py-1 rounded ${
         sortBy === field
-          ? "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400"
-          : "text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-700"
+          ? "bg-blue-100 text-blue-700"
+          : "text-slate-500 hover:bg-slate-100"
       }`}
     >
       {label}
@@ -83,9 +83,9 @@ export default function HoldingsTable({
 
   if (holdings.length === 0) {
     return (
-      <div className="bg-white dark:bg-gray-800 rounded-lg shadow-lg p-8 text-center">
+      <div className="bg-white rounded-lg shadow-lg p-8 text-center">
         <svg
-          className="w-16 h-16 mx-auto text-gray-300 dark:text-gray-600 mb-4"
+          className="w-16 h-16 mx-auto text-slate-300 mb-4"
           fill="none"
           stroke="currentColor"
           viewBox="0 0 24 24"
@@ -97,10 +97,10 @@ export default function HoldingsTable({
             d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"
           />
         </svg>
-        <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-2">
+        <h3 className="text-lg font-semibold text-slate-900 mb-2">
           No holdings yet
         </h3>
-        <p className="text-gray-500 dark:text-gray-400">
+        <p className="text-slate-500">
           Add your first holding to start tracking your portfolio.
         </p>
       </div>
@@ -108,11 +108,11 @@ export default function HoldingsTable({
   }
 
   return (
-    <div className="bg-white dark:bg-gray-800 rounded-lg shadow-lg">
+    <div className="bg-white rounded-lg shadow-lg">
       {/* Header */}
-      <div className="p-4 border-b border-gray-200 dark:border-gray-700">
+      <div className="p-4 border-b border-slate-200">
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-          <h2 className="text-lg font-semibold text-gray-900 dark:text-white">
+          <h2 className="text-lg font-semibold text-slate-900">
             Holdings ({holdings.length})
           </h2>
           <div className="flex flex-wrap gap-1">

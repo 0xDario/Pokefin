@@ -29,10 +29,12 @@ export interface Product {
   image_url?: string | null;
   sku?: string | null;
   sets?: {
+    id?: number;
     name: string;
     code: string;
     release_date: string;
     expansion_type?: string;
+    generation_id?: number;
     generations?: {
       id: number;
       name: string;

@@ -9,8 +9,8 @@ import { Currency } from "../types";
  *
  * @returns {Object} selectedCurrency, exchangeRate, loading, handlers, and utility functions
  */
-export function useCurrencyConversion(initialExchangeRate?: number) {
-  const [selectedCurrency, setSelectedCurrency] = useState<Currency>("CAD");
+export function useCurrencyConversion(initialExchangeRate?: number, initialCurrency: Currency = "CAD") {
+  const [selectedCurrency, setSelectedCurrency] = useState<Currency>(initialCurrency);
   const [exchangeRate, setExchangeRate] = useState(initialExchangeRate ?? 1.36);
   const [exchangeRateLoading, setExchangeRateLoading] = useState(!initialExchangeRate);
 
