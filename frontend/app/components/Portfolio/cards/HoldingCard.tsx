@@ -41,7 +41,7 @@ export default function HoldingCard({
   const variant = product?.variant ? ` (${product.variant})` : "";
 
   return (
-    <div className="bg-white dark:bg-gray-800 rounded-lg shadow border border-gray-200 dark:border-gray-700 overflow-hidden">
+    <div className="bg-white rounded-lg shadow border border-slate-200 overflow-hidden">
       <div className="flex items-start gap-3 p-4">
         {/* Product Image */}
         {product?.image_url ? (
@@ -51,8 +51,8 @@ export default function HoldingCard({
             className="w-16 h-16 md:w-20 md:h-20 object-cover rounded-lg flex-shrink-0"
           />
         ) : (
-          <div className="w-16 h-16 md:w-20 md:h-20 bg-gray-200 dark:bg-gray-600 rounded-lg flex-shrink-0 flex items-center justify-center">
-            <svg className="w-8 h-8 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <div className="w-16 h-16 md:w-20 md:h-20 bg-slate-200 rounded-lg flex-shrink-0 flex items-center justify-center">
+            <svg className="w-8 h-8 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
             </svg>
           </div>
@@ -60,18 +60,18 @@ export default function HoldingCard({
 
         {/* Product Info */}
         <div className="flex-1 min-w-0">
-          <h3 className="font-semibold text-gray-900 dark:text-white truncate">
+          <h3 className="font-semibold text-slate-900 truncate">
             {setName}
           </h3>
-          <p className="text-sm text-gray-600 dark:text-gray-400 truncate">
+          <p className="text-sm text-slate-600 truncate">
             {productType}{variant}
           </p>
           <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-sm">
-            <span className="text-gray-600 dark:text-gray-400">
-              Qty: <span className="font-medium text-gray-900 dark:text-white">{holding.quantity}</span>
+            <span className="text-slate-600">
+              Qty: <span className="font-medium text-slate-900">{holding.quantity}</span>
             </span>
-            <span className="text-gray-600 dark:text-gray-400">
-              Avg: <span className="font-medium text-gray-900 dark:text-white">{formatCurrency(holding.purchase_price_usd)}</span>
+            <span className="text-slate-600">
+              Avg: <span className="font-medium text-slate-900">{formatCurrency(holding.purchase_price_usd)}</span>
             </span>
           </div>
         </div>
@@ -80,7 +80,7 @@ export default function HoldingCard({
         <div className="flex flex-col gap-1">
           <button
             onClick={() => onEdit(holding)}
-            className="p-1.5 text-gray-400 hover:text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded"
+            className="p-1.5 text-slate-400 hover:text-[var(--pf-pokeblue)] hover:bg-blue-50 rounded"
             title="Edit"
           >
             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -89,7 +89,7 @@ export default function HoldingCard({
           </button>
           <button
             onClick={() => onDelete(holding.id)}
-            className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 rounded"
+            className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded"
             title="Delete"
           >
             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -100,17 +100,17 @@ export default function HoldingCard({
       </div>
 
       {/* Performance Bar */}
-      <div className="px-4 py-3 bg-gray-50 dark:bg-gray-700/50 border-t border-gray-200 dark:border-gray-700">
+      <div className="px-4 py-3 bg-slate-50 border-t border-slate-200">
         <div className="flex items-center justify-between">
           <div>
-            <p className="text-xs text-gray-500 dark:text-gray-400">Market Value</p>
-            <p className="font-semibold text-gray-900 dark:text-white">
+            <p className="text-xs text-slate-500">Market Value</p>
+            <p className="font-semibold text-slate-900">
               {formatCurrency(performance.current_value)}
             </p>
           </div>
           <div className="text-right">
-            <p className="text-xs text-gray-500 dark:text-gray-400">Gain/Loss</p>
-            <p className={`font-semibold ${isPositive ? "text-green-600 dark:text-green-400" : "text-red-600 dark:text-red-400"}`}>
+            <p className="text-xs text-slate-500">Gain/Loss</p>
+            <p className={`font-semibold ${isPositive ? "text-emerald-600" : "text-rose-600"}`}>
               {isPositive ? "+" : ""}{formatCurrency(performance.gain_loss)}
               <span className="text-xs ml-1">
                 ({formatPercent(performance.gain_loss_percent)})

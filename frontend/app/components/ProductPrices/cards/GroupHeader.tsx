@@ -8,9 +8,6 @@ interface GroupHeaderProps {
   releaseDate: string;
 }
 
-/**
- * Group header for grouped view - Mobile-first responsive layout
- */
 export default function GroupHeader({
   setName,
   setCode,
@@ -23,24 +20,24 @@ export default function GroupHeader({
     : "Unknown";
 
   return (
-    <div className="mb-4">
-      <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-        {/* Left side: Name, code, generation, badge */}
-        <div className="flex flex-wrap items-center gap-2">
-          <h2 className="text-xl md:text-2xl font-bold text-slate-900">
+    <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+        <div className="flex items-baseline gap-2">
+          <span className="h-1.5 w-1.5 rounded-full bg-[var(--pf-pokeball)] self-center" aria-hidden />
+          <h2 className="text-lg md:text-xl font-bold text-slate-900 tracking-tight">
             {setName}
           </h2>
-          <span className="text-xs md:text-sm text-slate-600">
-            ({setCode}) - {generation}
-          </span>
-          {expansionType && <ExpansionTypeBadge type={expansionType} />}
         </div>
-
-        {/* Right side: Release date */}
-        <span className="text-xs md:text-sm text-slate-500 sm:ml-auto">
-          Release: {formattedDate}
+        <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+          {generation}
         </span>
+        <span className="text-[11px] font-mono text-slate-400">{setCode}</span>
+        {expansionType && <ExpansionTypeBadge type={expansionType} />}
       </div>
+
+      <span className="text-xs text-slate-500">
+        Released <span className="font-semibold text-slate-700">{formattedDate}</span>
+      </span>
     </div>
   );
 }

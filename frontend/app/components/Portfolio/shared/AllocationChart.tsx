@@ -89,11 +89,11 @@ export default function AllocationChart({
 
   if (holdings.length === 0) {
     return (
-      <div className="bg-white dark:bg-gray-800 rounded-lg shadow-lg p-4 md:p-6 h-full flex flex-col">
-        <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
+      <div className="bg-white rounded-lg shadow-lg p-4 md:p-6 h-full flex flex-col">
+        <h2 className="text-lg font-semibold text-slate-900 mb-4">
           Allocation by {groupBy === "set" ? "Set" : "Product Type"}
         </h2>
-        <div className="flex-1 flex items-center justify-center text-gray-500 dark:text-gray-400">
+        <div className="flex-1 flex items-center justify-center text-slate-500">
           No holdings to display
         </div>
       </div>
@@ -101,8 +101,8 @@ export default function AllocationChart({
   }
 
   return (
-    <div className="bg-white dark:bg-gray-800 rounded-lg shadow-lg p-4 md:p-6 h-full flex flex-col">
-      <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
+    <div className="bg-white rounded-lg shadow-lg p-4 md:p-6 h-full flex flex-col">
+      <h2 className="text-lg font-semibold text-slate-900 mb-4">
         Allocation by {groupBy === "set" ? "Set" : "Product Type"}
       </h2>
 
@@ -140,17 +140,17 @@ export default function AllocationChart({
                     className="w-2.5 h-2.5 rounded-full flex-shrink-0"
                     style={{ backgroundColor: item.color }}
                   ></span>
-                  <span className="text-gray-700 dark:text-gray-300 truncate">
+                  <span className="text-slate-700 truncate">
                     {item.name}
                   </span>
                 </div>
-                <span className="text-gray-500 dark:text-gray-400 ml-2 flex-shrink-0">
+                <span className="text-slate-500 ml-2 flex-shrink-0">
                   {item.percentage.toFixed(1)}%
                 </span>
               </li>
             ))}
             {allocationData.length > 6 && (
-              <li className="text-xs text-gray-400 dark:text-gray-500">
+              <li className="text-xs text-slate-400">
                 +{allocationData.length - 6} more
               </li>
             )}

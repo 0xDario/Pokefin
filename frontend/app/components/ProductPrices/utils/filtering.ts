@@ -47,17 +47,37 @@ export function filterProducts(
 }
 
 /**
- * Extract available generations from products
+ * Extract available generations from products, ordered by recency
+ * (newest generation first). Recency is the latest set release date
+ * within each generation.
  *
  * @param products - Array of products
- * @returns Sorted array of unique generation names
+ * @returns Generation names sorted newest → oldest
  */
 export function getAvailableGenerations(products: Product[]): string[] {
-  return [
-    ...new Set(
-      products.map((p) => p.sets?.generations?.name).filter(Boolean) as string[]
-    ),
-  ].sort();
+  const latestByGeneration = new Map<string, number>();
+
+  for (const product of products) {
+    const gen = product.sets?.generations?.name;
+    if (!gen) continue;
+    const releaseStr = product.sets?.release_date;
+    // Treat release dates as UTC; missing dates count as oldest (-Infinity).
+    const releaseMs = releaseStr
+      ? Date.parse(`${releaseStr.split("T")[0].split(" ")[0]}T00:00:00Z`)
+      : Number.NaN;
+    const safeMs = Number.isNaN(releaseMs) ? -Infinity : releaseMs;
+    const current = latestByGeneration.get(gen);
+    if (current === undefined || safeMs > current) {
+      latestByGeneration.set(gen, safeMs);
+    }
+  }
+
+  return Array.from(latestByGeneration.entries())
+    .sort(([genA, msA], [genB, msB]) => {
+      if (msB !== msA) return msB - msA;
+      return genA.localeCompare(genB);
+    })
+    .map(([gen]) => gen);
 }
 
 /**

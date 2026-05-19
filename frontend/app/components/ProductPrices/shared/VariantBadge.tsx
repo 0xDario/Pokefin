@@ -2,26 +2,21 @@ interface VariantBadgeProps {
   variant?: string;
 }
 
-/**
- * Badge component for displaying product variants
- * Special styling for Pokemon Center exclusives
- *
- * @param variant - Product variant name
- */
 export default function VariantBadge({ variant }: VariantBadgeProps) {
   if (!variant) return null;
 
-  // Special styling for Pokemon Center exclusives
+  // Pokemon Center exclusives get a Pikachu-yellow accent.
   if (variant.toLowerCase().includes("pokemon center")) {
     return (
-      <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-bold bg-gradient-to-r from-purple-500 to-pink-500 text-white shadow-sm">
-        ⭐ {variant}
+      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-bold bg-[var(--pf-pokeyellow)] text-slate-900 ring-1 ring-yellow-500/40 shadow-sm">
+        <span aria-hidden>★</span>
+        {variant}
       </span>
     );
   }
 
   return (
-    <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-slate-100 text-slate-700 border border-slate-300">
+    <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold bg-slate-100 text-slate-700 ring-1 ring-slate-200">
       {variant}
     </span>
   );
