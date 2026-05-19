@@ -2,7 +2,6 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import Link from "next/link";
 import { useAuth } from "../context/AuthContext";
 import PortfolioDashboard from "../components/Portfolio/PortfolioDashboard";
 import { fetchLatestExchangeRateClient } from "../lib/exchangeRate";
@@ -42,7 +41,7 @@ export default function PortfolioPage() {
   if (authLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-[var(--pf-pokeball)]"></div>
       </div>
     );
   }
@@ -50,63 +49,50 @@ export default function PortfolioPage() {
   if (!user) {
     return (
       <div className="min-h-screen flex items-center justify-center">
-        <div className="flex items-center gap-3 text-gray-600 dark:text-gray-300">
-          <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-blue-600"></div>
-          <span>Redirecting to login...</span>
+        <div className="flex items-center gap-3 text-slate-600">
+          <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-[var(--pf-pokeball)]"></div>
+          <span>Redirecting to login…</span>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
+    <div className="min-h-screen">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
-        {/* Breadcrumb */}
-        <nav className="mb-6">
-          <Link
-            href="/"
-            className="text-blue-600 hover:text-blue-700 text-sm flex items-center w-fit"
-          >
-            <svg
-              className="w-4 h-4 mr-1"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-                d="M15 19l-7-7 7-7"
-              />
-            </svg>
-            Back to Price Tracker
-          </Link>
-        </nav>
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between mb-5 md:mb-6">
+          <div>
+            <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--pf-pokeball)]">
+              Pokéfin
+            </p>
+            <h1 className="mt-1 text-2xl md:text-3xl font-extrabold tracking-tight text-slate-900">
+              My Portfolio
+            </h1>
+            <p className="mt-1 text-sm text-slate-600">
+              Track holdings, returns, and allocation across your sealed collection.
+            </p>
+          </div>
 
-        {/* Currency Toggle */}
-        <div className="flex justify-end mb-4">
-          <div className="inline-flex rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 p-1">
-            <button
-              onClick={() => setCurrency("USD")}
-              className={`px-3 py-1 text-sm font-medium rounded-md transition-colors ${
-                currency === "USD"
-                  ? "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400"
-                  : "text-gray-500 hover:text-gray-700 dark:hover:text-gray-300"
-              }`}
-            >
-              USD
-            </button>
-            <button
-              onClick={() => setCurrency("CAD")}
-              className={`px-3 py-1 text-sm font-medium rounded-md transition-colors ${
-                currency === "CAD"
-                  ? "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400"
-                  : "text-gray-500 hover:text-gray-700 dark:hover:text-gray-300"
-              }`}
-            >
-              CAD
-            </button>
+          {/* Currency Toggle */}
+          <div className="inline-flex rounded-lg border border-slate-300 bg-white p-0.5 self-start sm:self-auto">
+            {(["USD", "CAD"] as const).map((c) => {
+              const active = currency === c;
+              return (
+                <button
+                  key={c}
+                  type="button"
+                  onClick={() => setCurrency(c)}
+                  aria-pressed={active}
+                  className={`px-3 py-1.5 rounded-md text-xs font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-[var(--pf-pokeblue)] focus:ring-offset-1 ${
+                    active
+                      ? "bg-[var(--pf-pokeblue)] text-white shadow-sm"
+                      : "text-slate-600 hover:text-slate-900 hover:bg-slate-100"
+                  }`}
+                >
+                  {c === "USD" ? "🇺🇸 USD" : "🇨🇦 CAD"}
+                </button>
+              );
+            })}
           </div>
         </div>
 

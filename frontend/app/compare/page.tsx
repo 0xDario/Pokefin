@@ -529,20 +529,24 @@ export default function CompareDashboardPage() {
   };
 
   return (
-    <main className="min-h-screen bg-slate-50 dark:bg-slate-950">
+    <main className="min-h-screen bg-[var(--pf-bg)]">
       <div className="mx-auto max-w-[96rem] space-y-8 px-4 py-6 sm:px-6 lg:px-8">
-        <div className="rounded-2xl bg-gradient-to-br from-white to-slate-100 p-6 shadow-sm ring-1 ring-slate-200 dark:from-slate-900 dark:to-slate-900/60 dark:ring-slate-800">
+        <div>
+          <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--pf-pokeball)]">
+            Pokéfin Tools
+          </p>
+          <h1 className="mt-1 text-2xl md:text-3xl font-extrabold tracking-tight text-slate-900">
+            Seller Tools
+          </h1>
+          <p className="mt-1 text-sm text-slate-600">
+            Upload your Shopify export and compare your store prices against the market. Pricing and margin insights surface in sortable tables. All prices are CAD unless noted.
+          </p>
+        </div>
+        <div className="rounded-2xl bg-white p-6 shadow-sm ring-1 ring-slate-200">
           <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
             <div>
-              <h1 className="text-2xl font-bold text-slate-900 dark:text-white">
-                Shopify vs Market Dashboard
-              </h1>
-              <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">
-                Upload your Shopify export and explore pricing + margin insights
-                in sortable tables. All prices are CAD unless noted.
-              </p>
-              <div className="mt-3 flex flex-wrap items-center gap-3 text-xs text-slate-500 dark:text-slate-400">
-                <span>
+              <div className="flex flex-wrap items-center gap-3 text-xs text-slate-500">
+                <span className="tabular-nums">
                   Exchange rate: 1 USD = {exchangeRateValue.toFixed(4)} CAD
                 </span>
                 {exchangeRateDate && (
@@ -554,8 +558,8 @@ export default function CompareDashboardPage() {
               </div>
             </div>
             <div className="flex flex-col gap-2">
-              <label className="flex w-full cursor-pointer flex-col gap-1 rounded-xl border border-dashed border-slate-300 bg-white px-4 py-3 text-sm text-slate-600 transition hover:border-slate-400 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">
-                <span className="font-semibold text-slate-700 dark:text-slate-200">
+              <label className="flex w-full cursor-pointer flex-col gap-1 rounded-xl border border-dashed border-slate-300 bg-white px-4 py-3 text-sm text-slate-600 transition hover:border-slate-400">
+                <span className="font-semibold text-slate-700">
                   Upload Shopify CSV
                 </span>
                 <span className="text-xs">
@@ -575,11 +579,11 @@ export default function CompareDashboardPage() {
                 <button
                   type="button"
                   onClick={() => setShowUsd((prev) => !prev)}
-                  className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 hover:border-slate-300 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
+                  className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 hover:border-slate-300"
                 >
                   {showUsd ? "Hide USD" : "Show USD"}
                 </button>
-                <label className="flex items-center gap-2 text-xs font-semibold text-slate-600 dark:text-slate-300">
+                <label className="flex items-center gap-2 text-xs font-semibold text-slate-600">
                   Threshold %
                   <input
                     type="number"
@@ -589,14 +593,14 @@ export default function CompareDashboardPage() {
                     onChange={(event) =>
                       setThresholdPct(Number(event.target.value) || 0)
                     }
-                    className="w-16 rounded-md border border-slate-200 bg-white px-2 py-1 text-xs text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
+                    className="w-16 rounded-md border border-slate-200 bg-white px-2 py-1 text-xs text-slate-700"
                   />
                 </label>
               </div>
             </div>
           </div>
           {errorMessage && (
-            <div className="mt-4 rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700 dark:border-rose-900/50 dark:bg-rose-900/30 dark:text-rose-200">
+            <div className="mt-4 rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
               {errorMessage}
             </div>
           )}
@@ -612,25 +616,25 @@ export default function CompareDashboardPage() {
           ].map((item) => (
             <div
               key={item.label}
-              className="rounded-xl bg-white p-4 shadow-sm ring-1 ring-slate-200 dark:bg-slate-900 dark:ring-slate-800"
+              className="rounded-xl bg-white p-4 shadow-sm ring-1 ring-slate-200"
             >
-              <p className="text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400">
+              <p className="text-xs uppercase tracking-wide text-slate-500">
                 {item.label}
               </p>
-              <p className="mt-2 text-2xl font-semibold text-slate-900 dark:text-white">
+              <p className="mt-2 text-2xl font-semibold text-slate-900">
                 {item.value}
               </p>
             </div>
           ))}
         </div>
 
-        <div className="flex flex-col gap-4 rounded-2xl bg-white p-6 shadow-sm ring-1 ring-slate-200 dark:bg-slate-900 dark:ring-slate-800">
+        <div className="flex flex-col gap-4 rounded-2xl bg-white p-6 shadow-sm ring-1 ring-slate-200">
           <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
             <div>
-              <h2 className="text-lg font-semibold text-slate-900 dark:text-white">
+              <h2 className="text-lg font-semibold text-slate-900">
                 Shopify vs Market Comparison
               </h2>
-              <p className="text-xs text-slate-500 dark:text-slate-400">
+              <p className="text-xs text-slate-500">
                 Prices in CAD. Sort any column to explore.
               </p>
             </div>
@@ -639,7 +643,7 @@ export default function CompareDashboardPage() {
               placeholder="Search SKU or title"
               value={searchTerm}
               onChange={(event) => setSearchTerm(event.target.value)}
-              className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-slate-300 focus:outline-none dark:border-slate-700 dark:bg-slate-950 dark:text-slate-200 md:w-64"
+              className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-slate-300 focus:outline-none md:w-64"
             />
           </div>
 
@@ -747,35 +751,35 @@ export default function CompareDashboardPage() {
                   return (
                     <tr
                       key={row.sku}
-                      className="rounded-xl bg-slate-50/80 shadow-sm ring-1 ring-slate-200/60 transition hover:bg-white dark:bg-slate-900/70 dark:ring-slate-800"
+                      className="rounded-xl bg-slate-50/80 shadow-sm ring-1 ring-slate-200/60 transition hover:bg-white"
                     >
-                      <td className="px-3 py-3 font-medium text-slate-900 dark:text-white break-all">
+                      <td className="px-3 py-3 font-medium text-slate-900 break-all">
                         {row.sku}
                       </td>
                       <td
-                        className="px-3 py-3 text-slate-600 dark:text-slate-300 break-words"
+                        className="px-3 py-3 text-slate-600 break-words"
                         title={row.title}
                       >
                         {row.title}
                       </td>
-                      <td className="px-3 py-3 text-right text-slate-900 dark:text-white">
+                      <td className="px-3 py-3 text-right text-slate-900">
                         {formatCurrency(row.shopifyPrice)}
                       </td>
-                      <td className="px-3 py-3 text-right text-slate-500 dark:text-slate-400">
+                      <td className="px-3 py-3 text-right text-slate-500">
                         {formatCurrency(row.shopifyCost)}
                       </td>
                       {showUsd && (
-                        <td className="px-3 py-3 text-right text-slate-500 dark:text-slate-400">
+                        <td className="px-3 py-3 text-right text-slate-500">
                           {formatCurrency(row.marketPriceUsd)}
                         </td>
                       )}
-                      <td className="px-3 py-3 text-right text-slate-900 dark:text-white">
+                      <td className="px-3 py-3 text-right text-slate-900">
                         {formatCurrency(row.marketPriceCad)}
                       </td>
-                      <td className="px-3 py-3 text-right font-semibold text-slate-900 dark:text-white">
+                      <td className="px-3 py-3 text-right font-semibold text-slate-900">
                         {formatSignedCurrency(row.difference)}
                       </td>
-                      <td className="px-3 py-3 text-right text-slate-500 dark:text-slate-400">
+                      <td className="px-3 py-3 text-right text-slate-500">
                         {formatPercent(row.differencePct)}
                       </td>
                       <td className="px-3 py-3">
@@ -804,13 +808,13 @@ export default function CompareDashboardPage() {
         </div>
 
         <div className="space-y-6">
-          <div className="rounded-2xl bg-white p-6 shadow-sm ring-1 ring-slate-200 dark:bg-slate-900 dark:ring-slate-800">
+          <div className="rounded-2xl bg-white p-6 shadow-sm ring-1 ring-slate-200">
             <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
               <div>
-                <h2 className="text-lg font-semibold text-slate-900 dark:text-white">
+                <h2 className="text-lg font-semibold text-slate-900">
                   Shopify Margin Table
                 </h2>
-                <p className="text-xs text-slate-500 dark:text-slate-400">
+                <p className="text-xs text-slate-500">
                   Sorted by lowest margin first.
                 </p>
               </div>
@@ -877,27 +881,27 @@ export default function CompareDashboardPage() {
                   {sortedShopifyProfitRows.map((row) => (
                     <tr
                       key={`shopify-${row.sku}`}
-                      className="rounded-xl bg-slate-50/80 shadow-sm ring-1 ring-slate-200/60 transition hover:bg-white dark:bg-slate-900/70 dark:ring-slate-800"
+                      className="rounded-xl bg-slate-50/80 shadow-sm ring-1 ring-slate-200/60 transition hover:bg-white"
                     >
-                      <td className="px-3 py-3 font-medium text-slate-900 dark:text-white break-all">
+                      <td className="px-3 py-3 font-medium text-slate-900 break-all">
                         {row.sku}
                       </td>
                       <td
-                        className="px-3 py-3 text-slate-600 dark:text-slate-300 break-words"
+                        className="px-3 py-3 text-slate-600 break-words"
                         title={row.title}
                       >
                         {row.title}
                       </td>
-                      <td className="px-3 py-3 text-right text-slate-900 dark:text-white">
+                      <td className="px-3 py-3 text-right text-slate-900">
                         {formatCurrency(row.shopifyPrice)}
                       </td>
-                      <td className="px-3 py-3 text-right text-slate-500 dark:text-slate-400">
+                      <td className="px-3 py-3 text-right text-slate-500">
                         {formatCurrency(row.shopifyCost)}
                       </td>
-                      <td className="px-3 py-3 text-right font-semibold text-slate-900 dark:text-white">
+                      <td className="px-3 py-3 text-right font-semibold text-slate-900">
                         {formatSignedCurrency(row.shopifyProfit)}
                       </td>
-                      <td className="px-3 py-3 text-right text-slate-500 dark:text-slate-400">
+                      <td className="px-3 py-3 text-right text-slate-500">
                         {formatPercent(row.shopifyMargin)}
                       </td>
                     </tr>
@@ -917,13 +921,13 @@ export default function CompareDashboardPage() {
             </div>
           </div>
 
-          <div className="rounded-2xl bg-white p-6 shadow-sm ring-1 ring-slate-200 dark:bg-slate-900 dark:ring-slate-800">
+          <div className="rounded-2xl bg-white p-6 shadow-sm ring-1 ring-slate-200">
             <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
               <div>
-                <h2 className="text-lg font-semibold text-slate-900 dark:text-white">
+                <h2 className="text-lg font-semibold text-slate-900">
                   Market Margin Table
                 </h2>
-                <p className="text-xs text-slate-500 dark:text-slate-400">
+                <p className="text-xs text-slate-500">
                   Sorted by lowest margin first.
                 </p>
               </div>
@@ -1018,38 +1022,38 @@ export default function CompareDashboardPage() {
                   {sortedMarketProfitRows.map((row) => (
                     <tr
                       key={`market-${row.sku}`}
-                      className="rounded-xl bg-slate-50/80 shadow-sm ring-1 ring-slate-200/60 transition hover:bg-white dark:bg-slate-900/70 dark:ring-slate-800"
+                      className="rounded-xl bg-slate-50/80 shadow-sm ring-1 ring-slate-200/60 transition hover:bg-white"
                     >
-                      <td className="px-3 py-3 font-medium text-slate-900 dark:text-white break-all">
+                      <td className="px-3 py-3 font-medium text-slate-900 break-all">
                         {row.sku}
                       </td>
                       <td
-                        className="px-3 py-3 text-slate-600 dark:text-slate-300 break-words"
+                        className="px-3 py-3 text-slate-600 break-words"
                         title={row.title}
                       >
                         {row.title}
                       </td>
-                      <td className="px-3 py-3 text-slate-500 dark:text-slate-400">
+                      <td className="px-3 py-3 text-slate-500">
                         {formatReleaseDate(row.releaseDate)}
                       </td>
                       {showUsd && (
-                        <td className="px-3 py-3 text-right text-slate-500 dark:text-slate-400">
+                        <td className="px-3 py-3 text-right text-slate-500">
                           {formatCurrency(row.marketPriceUsd)}
                         </td>
                       )}
-                      <td className="px-3 py-3 text-right text-slate-900 dark:text-white">
+                      <td className="px-3 py-3 text-right text-slate-900">
                         {formatCurrency(row.marketPriceCad)}
                       </td>
-                      <td className="px-3 py-3 text-right text-slate-500 dark:text-slate-400">
+                      <td className="px-3 py-3 text-right text-slate-500">
                         {formatCurrency(row.shopifyCost)}
                       </td>
-                      <td className="px-3 py-3 text-right font-semibold text-slate-900 dark:text-white">
+                      <td className="px-3 py-3 text-right font-semibold text-slate-900">
                         {formatSignedCurrency(row.marketProfit)}
                       </td>
-                      <td className="px-3 py-3 text-right text-slate-500 dark:text-slate-400">
+                      <td className="px-3 py-3 text-right text-slate-500">
                         {formatSignedCurrency(row.marketProfitPerDay)}
                       </td>
-                      <td className="px-3 py-3 text-right text-slate-500 dark:text-slate-400">
+                      <td className="px-3 py-3 text-right text-slate-500">
                         {formatPercent(row.marketMargin)}
                       </td>
                     </tr>

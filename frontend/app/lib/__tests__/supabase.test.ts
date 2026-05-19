@@ -23,8 +23,9 @@ afterAll(() => {
   process.env = originalEnv;
 });
 
-// Mock the Supabase client
-const mockCreateClient = jest.fn(() => ({
+// Mock the Supabase client. Cast to jest.Mock so the inferred zero-arg
+// signature from the default impl doesn't reject spread-args callers.
+const mockCreateClient: jest.Mock = jest.fn(() => ({
   auth: {
     getSession: jest.fn(),
     signUp: jest.fn(),

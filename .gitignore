@@ -2,3 +2,10 @@ secretsFile.py
 .idea
 __pycache__
 venv
+
+# Local inventory data — personal, not shared
+my_listings.json
+
+# Generated price reports (one-off scratch outputs)
+price-check-*.md
+price_report_*.md

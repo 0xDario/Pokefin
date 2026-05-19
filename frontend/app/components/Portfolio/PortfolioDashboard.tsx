@@ -77,7 +77,7 @@ export default function PortfolioDashboard({
       <div className="min-h-[60vh] flex items-center justify-center">
         <div className="text-center">
           <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4"></div>
-          <p className="text-gray-500 dark:text-gray-400">Loading portfolio...</p>
+          <p className="text-slate-500">Loading portfolio...</p>
         </div>
       </div>
     );
@@ -88,7 +88,7 @@ export default function PortfolioDashboard({
       <div className="min-h-[60vh] flex items-center justify-center">
         <div className="text-center">
           <svg
-            className="w-16 h-16 mx-auto text-red-400 mb-4"
+            className="w-16 h-16 mx-auto text-rose-400 mb-4"
             fill="none"
             stroke="currentColor"
             viewBox="0 0 24 24"
@@ -100,10 +100,10 @@ export default function PortfolioDashboard({
               d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"
             />
           </svg>
-          <p className="text-red-600 dark:text-red-400 mb-4">{error}</p>
+          <p className="text-rose-600 mb-4">{error}</p>
           <button
             onClick={refresh}
-            className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg"
+            className="px-4 py-2 bg-[var(--pf-pokeball)] hover:bg-[var(--pf-pokeball-strong)] text-white rounded-lg"
           >
             Try Again
           </button>
@@ -117,17 +117,17 @@ export default function PortfolioDashboard({
       {/* Header Row */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900 dark:text-white">
+          <h1 className="text-2xl font-bold text-slate-900">
             {portfolio?.name || "My Portfolio"}
           </h1>
-          <p className="text-sm text-gray-500 dark:text-gray-400">
+          <p className="text-sm text-slate-500">
             Track your Pokemon TCG sealed product investments
           </p>
         </div>
         <div className="flex items-center gap-2">
           <button
             onClick={() => setIsImportModalOpen(true)}
-            className="inline-flex items-center gap-2 px-4 py-2 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700 font-medium rounded-lg transition-colors"
+            className="inline-flex items-center gap-2 px-4 py-2 border border-slate-300 text-slate-700 hover:bg-slate-50 font-medium rounded-lg transition-colors"
           >
             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
@@ -136,7 +136,7 @@ export default function PortfolioDashboard({
           </button>
           <button
             onClick={() => setIsAddModalOpen(true)}
-            className="inline-flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-lg transition-colors"
+            className="inline-flex items-center gap-2 px-4 py-2 bg-[var(--pf-pokeball)] hover:bg-[var(--pf-pokeball-strong)] text-white font-medium rounded-lg transition-colors"
           >
             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />

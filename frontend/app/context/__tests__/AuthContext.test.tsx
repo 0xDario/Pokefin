@@ -29,9 +29,10 @@ interface MockSession {
   access_token: string;
 }
 
-// Mock Supabase client
+// Mock Supabase client. Cast to jest.Mock so the inferred zero-arg signature
+// from the default impl doesn't reject callers that pass a callback.
 const mockUnsubscribe = jest.fn();
-const mockOnAuthStateChange = jest.fn(() => ({
+const mockOnAuthStateChange: jest.Mock = jest.fn(() => ({
   data: {
     subscription: {
       unsubscribe: mockUnsubscribe,

@@ -2,7 +2,6 @@
 
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
-import Link from "next/link";
 import { useAuth } from "../context/AuthContext";
 import { supabase } from "../lib/supabase";
 
@@ -140,7 +139,7 @@ export default function AccountPage() {
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-[var(--pf-pokeball)]"></div>
       </div>
     );
   }
@@ -148,9 +147,9 @@ export default function AccountPage() {
   if (!user) {
     return (
       <div className="min-h-screen flex items-center justify-center">
-        <div className="flex items-center gap-3 text-gray-600 dark:text-gray-300">
-          <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-blue-600"></div>
-          <span>Redirecting to login...</span>
+        <div className="flex items-center gap-3 text-slate-600">
+          <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-[var(--pf-pokeball)]"></div>
+          <span>Redirecting to login…</span>
         </div>
       </div>
     );
@@ -159,37 +158,24 @@ export default function AccountPage() {
   return (
     <div className="min-h-screen p-4 md:p-8">
       <div className="max-w-2xl mx-auto">
-        <div className="mb-6">
-          <Link
-            href="/"
-            className="text-blue-600 hover:text-blue-700 text-sm flex items-center"
-          >
-            <svg
-              className="w-4 h-4 mr-1"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-                d="M15 19l-7-7 7-7"
-              />
-            </svg>
-            Back to Dashboard
-          </Link>
+        <div className="mb-6 md:mb-8">
+          <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--pf-pokeball)]">
+            Pokéfin
+          </p>
+          <h1 className="mt-1 text-2xl md:text-3xl font-extrabold tracking-tight text-slate-900">
+            Account Settings
+          </h1>
         </div>
 
-        <h1 className="text-2xl font-bold mb-8">Account Settings</h1>
-
         {/* Profile Section */}
-        <div className="bg-white dark:bg-gray-800 rounded-lg shadow-lg p-6 mb-6">
-          <h2 className="text-lg font-semibold mb-4">Profile</h2>
+        <div className="bg-white rounded-xl ring-1 ring-slate-200 shadow-sm p-6 mb-6">
+          <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-500 mb-4">
+            Profile
+          </h2>
 
           <div className="mb-4">
-            <p className="text-sm text-gray-500 dark:text-gray-400">Email</p>
-            <p className="text-gray-900 dark:text-white">{user.email}</p>
+            <p className="text-sm text-slate-500">Email</p>
+            <p className="text-slate-900">{user.email}</p>
           </div>
 
           <form onSubmit={handleUsernameUpdate} className="space-y-4">
@@ -205,21 +191,21 @@ export default function AccountPage() {
                 type="text"
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
-                className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white dark:bg-gray-700"
+                className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-[var(--pf-pokeblue)] focus:border-transparent bg-white"
               />
-              <p className="text-xs text-gray-500 mt-1">
+              <p className="text-xs text-slate-500 mt-1">
                 Letters, numbers, and underscores only
               </p>
             </div>
 
             {usernameError && (
-              <div className="text-red-600 dark:text-red-400 text-sm">
+              <div className="text-rose-600 text-sm">
                 {usernameError}
               </div>
             )}
 
             {usernameSuccess && (
-              <div className="text-green-600 dark:text-green-400 text-sm">
+              <div className="text-emerald-600 text-sm">
                 Username updated successfully!
               </div>
             )}
@@ -227,7 +213,7 @@ export default function AccountPage() {
             <button
               type="submit"
               disabled={usernameLoading}
-              className="bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-4 rounded-lg transition-colors disabled:opacity-50"
+              className="bg-[var(--pf-pokeball)] hover:bg-[var(--pf-pokeball-strong)] text-white font-medium py-2 px-4 rounded-lg transition-colors disabled:opacity-50"
             >
               {usernameLoading ? "Saving..." : "Update Username"}
             </button>
@@ -235,8 +221,10 @@ export default function AccountPage() {
         </div>
 
         {/* Password Section */}
-        <div className="bg-white dark:bg-gray-800 rounded-lg shadow-lg p-6 mb-6">
-          <h2 className="text-lg font-semibold mb-4">Change Password</h2>
+        <div className="bg-white rounded-xl ring-1 ring-slate-200 shadow-sm p-6 mb-6">
+          <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-500 mb-4">
+            Change Password
+          </h2>
 
           <form onSubmit={handlePasswordUpdate} className="space-y-4">
             <div>
@@ -252,10 +240,10 @@ export default function AccountPage() {
                 value={newPassword}
                 onChange={(e) => setNewPassword(e.target.value)}
                 required
-                className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white dark:bg-gray-700"
+                className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-[var(--pf-pokeblue)] focus:border-transparent bg-white"
                 placeholder="••••••••"
               />
-              <p className="text-xs text-gray-500 mt-1">At least 8 characters</p>
+              <p className="text-xs text-slate-500 mt-1">At least 8 characters</p>
             </div>
 
             <div>
@@ -271,19 +259,19 @@ export default function AccountPage() {
                 value={confirmPassword}
                 onChange={(e) => setConfirmPassword(e.target.value)}
                 required
-                className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white dark:bg-gray-700"
+                className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-[var(--pf-pokeblue)] focus:border-transparent bg-white"
                 placeholder="••••••••"
               />
             </div>
 
             {passwordError && (
-              <div className="text-red-600 dark:text-red-400 text-sm">
+              <div className="text-rose-600 text-sm">
                 {passwordError}
               </div>
             )}
 
             {passwordSuccess && (
-              <div className="text-green-600 dark:text-green-400 text-sm">
+              <div className="text-emerald-600 text-sm">
                 Password updated successfully!
               </div>
             )}
@@ -291,7 +279,7 @@ export default function AccountPage() {
             <button
               type="submit"
               disabled={passwordLoading}
-              className="bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-4 rounded-lg transition-colors disabled:opacity-50"
+              className="bg-[var(--pf-pokeball)] hover:bg-[var(--pf-pokeball-strong)] text-white font-medium py-2 px-4 rounded-lg transition-colors disabled:opacity-50"
             >
               {passwordLoading ? "Updating..." : "Update Password"}
             </button>
@@ -299,23 +287,23 @@ export default function AccountPage() {
         </div>
 
         {/* Danger Zone */}
-        <div className="bg-white dark:bg-gray-800 rounded-lg shadow-lg p-6 border border-red-200 dark:border-red-800">
-          <h2 className="text-lg font-semibold mb-4 text-red-600 dark:text-red-400">
+        <div className="bg-white rounded-xl shadow-sm ring-1 ring-rose-200 p-6">
+          <h2 className="text-sm font-semibold uppercase tracking-wide text-rose-600 mb-4">
             Danger Zone
           </h2>
-          <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
+          <p className="text-sm text-slate-600 mb-4">
             Permanently delete your account and all associated data. This action
             cannot be undone.
           </p>
           {deleteError && (
-            <div className="text-red-600 dark:text-red-400 text-sm mb-4">
+            <div className="text-rose-600 text-sm mb-4">
               {deleteError}
             </div>
           )}
           <button
             onClick={handleDeleteAccount}
             disabled={deleteLoading}
-            className="bg-red-600 hover:bg-red-700 text-white font-medium py-2 px-4 rounded-lg transition-colors disabled:opacity-50"
+            className="bg-rose-600 hover:bg-rose-700 text-white font-medium py-2 px-4 rounded-lg transition-colors disabled:opacity-50"
           >
             {deleteLoading ? "Deleting..." : "Delete Account"}
           </button>
