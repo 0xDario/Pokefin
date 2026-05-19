@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { updateHolding } from "../../../lib/portfolio";
+import { useAuth } from "../../../context/AuthContext";
 import type { HoldingWithProduct, UpdateHolding } from "../types";
 
 interface EditHoldingModalProps {
@@ -17,6 +18,7 @@ export default function EditHoldingModal({
   onClose,
   onSuccess,
 }: EditHoldingModalProps) {
+  const { user } = useAuth();
   const [quantity, setQuantity] = useState("");
   const [purchasePrice, setPurchasePrice] = useState("");
   const [purchaseDate, setPurchaseDate] = useState("");
@@ -37,7 +39,7 @@ export default function EditHoldingModal({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!holding) return;
+    if (!holding || !user) return;
 
     setError(null);
 
@@ -67,7 +69,7 @@ export default function EditHoldingModal({
       notes: notes.trim() || null,
     };
 
-    const result = await updateHolding(holding.id, updates);
+    const result = await updateHolding(holding.id, user.id, updates);
 
     if (result) {
       onSuccess();
