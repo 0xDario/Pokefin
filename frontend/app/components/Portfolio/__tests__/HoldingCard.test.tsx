@@ -45,10 +45,12 @@ function createMockHolding(overrides: Partial<{
   variant: string | null;
   image_url: string | null;
 }> = {}): HoldingWithProduct {
-  // Handle null explicitly for current_price, variant, and image_url
-  const currentPrice = "current_price" in overrides ? overrides.current_price : 75;
-  const variant = "variant" in overrides ? overrides.variant : "1st Edition";
-  const imageUrl = "image_url" in overrides ? overrides.image_url : "https://example.com/product.jpg";
+  // Handle null explicitly for current_price, variant, and image_url —
+  // `"x" in overrides` doesn't narrow `undefined` out of a Partial<> field,
+  // so compare against undefined directly.
+  const currentPrice = overrides.current_price !== undefined ? overrides.current_price : 75;
+  const variant = overrides.variant !== undefined ? overrides.variant : "1st Edition";
+  const imageUrl = overrides.image_url !== undefined ? overrides.image_url : "https://example.com/product.jpg";
 
   return {
     id: overrides.id ?? 1,

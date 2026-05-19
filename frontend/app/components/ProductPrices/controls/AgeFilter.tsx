@@ -15,12 +15,14 @@ export default function AgeFilter({
   onChange,
 }: AgeFilterProps) {
   return (
-    <div className="flex flex-col gap-2 sm:flex-row sm:items-center w-full sm:w-auto">
-      <span className="text-sm font-semibold text-slate-800">Min Age:</span>
+    <div className="flex flex-col gap-1.5 sm:flex-row sm:items-center sm:gap-2 w-full sm:w-auto">
+      <label className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+        Min Age
+      </label>
       <select
         value={selectedAgeFilter}
         onChange={(event) => onChange(event.target.value)}
-        className="w-full sm:w-auto min-h-[44px] sm:min-h-0 px-4 py-2.5 sm:py-1 rounded border text-sm font-medium bg-white text-slate-700 hover:bg-gray-50 transition-all focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-purple-500"
+        className="w-full sm:w-auto min-h-[40px] px-3 rounded-lg border border-slate-300 bg-white text-sm font-medium text-slate-900 hover:bg-slate-50 transition-colors focus:outline-none focus:ring-2 focus:ring-[var(--pf-pokeblue)] focus:border-[var(--pf-pokeblue)]"
       >
         {options.map((option) => (
           <option key={option.value} value={option.value}>

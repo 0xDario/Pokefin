@@ -219,11 +219,11 @@ export default function BoxCalculator() {
   if (pricesLoading) {
     return (
       <div className="max-w-4xl mx-auto space-y-6">
-        <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm p-6 animate-pulse">
-          <div className="h-6 bg-gray-200 dark:bg-gray-700 rounded w-48 mb-4" />
-          <div className="h-10 bg-gray-200 dark:bg-gray-700 rounded mb-3" />
-          <div className="h-10 bg-gray-200 dark:bg-gray-700 rounded mb-3" />
-          <div className="h-10 bg-gray-200 dark:bg-gray-700 rounded" />
+        <div className="bg-white rounded-xl shadow-sm p-6 animate-pulse">
+          <div className="h-6 bg-gray-200 rounded w-48 mb-4" />
+          <div className="h-10 bg-gray-200 rounded mb-3" />
+          <div className="h-10 bg-gray-200 rounded mb-3" />
+          <div className="h-10 bg-gray-200 rounded" />
         </div>
       </div>
     );
@@ -245,13 +245,13 @@ export default function BoxCalculator() {
       />
 
       {/* Recipe Name + Actions */}
-      <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm p-5">
+      <div className="bg-white rounded-xl shadow-sm p-5">
         <div className="flex flex-col sm:flex-row sm:items-center gap-3 mb-4">
           <input
             type="text"
             value={recipeName}
             onChange={(e) => setRecipeName(e.target.value)}
-            className="flex-1 text-lg font-semibold bg-transparent border-b-2 border-transparent hover:border-gray-300 focus:border-blue-500 dark:hover:border-gray-600 dark:focus:border-blue-400 outline-none py-1 text-gray-900 dark:text-white transition-colors"
+            className="flex-1 text-lg font-semibold bg-transparent border-b-2 border-transparent hover:border-gray-300 focus:border-blue-500 outline-none py-1 text-gray-900 transition-colors"
             placeholder="Recipe name..."
           />
           <div className="flex items-center gap-2">
@@ -275,14 +275,14 @@ export default function BoxCalculator() {
             {currentShareCode && (
               <button
                 onClick={handleCopyShareLink}
-                className="px-4 py-2 text-sm font-medium bg-gray-100 hover:bg-gray-200 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-200 rounded-lg transition-colors"
+                className="px-4 py-2 text-sm font-medium bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg transition-colors"
               >
                 {copied ? "Copied!" : "Share Link"}
               </button>
             )}
             <button
               onClick={handleNewRecipe}
-              className="px-4 py-2 text-sm font-medium bg-gray-100 hover:bg-gray-200 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-200 rounded-lg transition-colors"
+              className="px-4 py-2 text-sm font-medium bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg transition-colors"
             >
               New
             </button>
@@ -294,7 +294,7 @@ export default function BoxCalculator() {
           <div>
             <button
               onClick={() => setShowSavedRecipes(!showSavedRecipes)}
-              className="text-sm text-blue-600 dark:text-blue-400 hover:underline mb-2"
+              className="text-sm text-blue-600 hover:underline mb-2"
             >
               {showSavedRecipes ? "Hide" : "Show"} saved recipes ({savedRecipes.length})
             </button>
@@ -305,16 +305,16 @@ export default function BoxCalculator() {
                     key={r.id}
                     className={`flex items-center justify-between p-3 rounded-lg border transition-colors cursor-pointer ${
                       currentRecipeId === r.id
-                        ? "border-blue-400 bg-blue-50 dark:bg-blue-900/20"
-                        : "border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700/50"
+                        ? "border-blue-400 bg-blue-50"
+                        : "border-gray-200 hover:bg-gray-50"
                     }`}
                     onClick={() => loadRecipeIntoState(r)}
                   >
                     <div>
-                      <span className="text-sm font-medium text-gray-900 dark:text-white">
+                      <span className="text-sm font-medium text-gray-900">
                         {r.name}
                       </span>
-                      <span className="text-xs text-gray-500 dark:text-gray-400 ml-2">
+                      <span className="text-xs text-gray-500 ml-2">
                         {r.packs.length} pack type{r.packs.length !== 1 ? "s" : ""} &middot; {formatPrice(r.retailPrice)}
                       </span>
                     </div>
@@ -323,7 +323,7 @@ export default function BoxCalculator() {
                         e.stopPropagation();
                         handleDeleteRecipe(r.id!);
                       }}
-                      className="text-gray-400 hover:text-red-500 dark:hover:text-red-400 p-1"
+                      className="text-gray-400 hover:text-red-500 p-1"
                       title="Delete recipe"
                     >
                       <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -339,8 +339,8 @@ export default function BoxCalculator() {
       </div>
 
       {/* Add Booster Packs */}
-      <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm p-5">
-        <h2 className="text-base font-semibold text-gray-900 dark:text-white mb-4">
+      <div className="bg-white rounded-xl shadow-sm p-5">
+        <h2 className="text-base font-semibold text-gray-900 mb-4">
           Booster Packs
         </h2>
 
@@ -349,7 +349,7 @@ export default function BoxCalculator() {
           <select
             value={selectedSetId}
             onChange={(e) => setSelectedSetId(e.target.value ? Number(e.target.value) : "")}
-            className="flex-1 px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
+            className="flex-1 px-3 py-2 rounded-lg border border-gray-300 bg-white text-gray-900 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
           >
             <option value="">Select a set...</option>
             {sets.map((s) => {
@@ -364,14 +364,14 @@ export default function BoxCalculator() {
           </select>
 
           <div className="flex items-center gap-2">
-            <label className="text-sm text-gray-600 dark:text-gray-400 whitespace-nowrap">Qty:</label>
+            <label className="text-sm text-gray-600 whitespace-nowrap">Qty:</label>
             <input
               type="number"
               min={1}
               max={99}
               value={packQuantity}
               onChange={(e) => setPackQuantity(Math.max(1, parseInt(e.target.value) || 1))}
-              className="w-20 px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
+              className="w-20 px-3 py-2 rounded-lg border border-gray-300 bg-white text-gray-900 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
             />
             <button
               onClick={handleAddPack}
@@ -385,7 +385,7 @@ export default function BoxCalculator() {
 
         {/* Pack list */}
         {packs.length === 0 ? (
-          <p className="text-sm text-gray-500 dark:text-gray-400 italic py-4 text-center">
+          <p className="text-sm text-gray-500 italic py-4 text-center">
             Add booster packs from the dropdown above to build your recipe.
           </p>
         ) : (
@@ -397,14 +397,14 @@ export default function BoxCalculator() {
               return (
                 <div
                   key={pack.id}
-                  className="flex items-center justify-between p-3 rounded-lg bg-gray-50 dark:bg-gray-700/50 border border-gray-200 dark:border-gray-600"
+                  className="flex items-center justify-between p-3 rounded-lg bg-gray-50 border border-gray-200"
                 >
                   <div className="flex-1 min-w-0">
-                    <span className="text-sm font-medium text-gray-900 dark:text-white">
+                    <span className="text-sm font-medium text-gray-900">
                       {pack.setName}
                     </span>
                     {packPrice ? (
-                      <span className="text-xs text-gray-500 dark:text-gray-400 ml-2">
+                      <span className="text-xs text-gray-500 ml-2">
                         {formatPrice(packPrice)}/pack
                       </span>
                     ) : (
@@ -416,26 +416,26 @@ export default function BoxCalculator() {
                       <button
                         onClick={() => handleUpdatePackQuantity(pack.id, pack.quantity - 1)}
                         disabled={pack.quantity <= 1}
-                        className="w-7 h-7 flex items-center justify-center rounded bg-gray-200 dark:bg-gray-600 hover:bg-gray-300 dark:hover:bg-gray-500 disabled:opacity-40 text-sm font-bold text-gray-700 dark:text-gray-200 transition-colors"
+                        className="w-7 h-7 flex items-center justify-center rounded bg-gray-200 hover:bg-gray-300 disabled:opacity-40 text-sm font-bold text-gray-700 transition-colors"
                       >
                         -
                       </button>
-                      <span className="w-8 text-center text-sm font-medium text-gray-900 dark:text-white">
+                      <span className="w-8 text-center text-sm font-medium text-gray-900">
                         {pack.quantity}
                       </span>
                       <button
                         onClick={() => handleUpdatePackQuantity(pack.id, pack.quantity + 1)}
-                        className="w-7 h-7 flex items-center justify-center rounded bg-gray-200 dark:bg-gray-600 hover:bg-gray-300 dark:hover:bg-gray-500 text-sm font-bold text-gray-700 dark:text-gray-200 transition-colors"
+                        className="w-7 h-7 flex items-center justify-center rounded bg-gray-200 hover:bg-gray-300 text-sm font-bold text-gray-700 transition-colors"
                       >
                         +
                       </button>
                     </div>
-                    <span className="text-sm font-semibold text-gray-900 dark:text-white w-20 text-right">
+                    <span className="text-sm font-semibold text-gray-900 w-20 text-right">
                       {formatPrice(totalValue)}
                     </span>
                     <button
                       onClick={() => handleRemovePack(pack.id)}
-                      className="text-gray-400 hover:text-red-500 dark:hover:text-red-400 p-1 transition-colors"
+                      className="text-gray-400 hover:text-red-500 p-1 transition-colors"
                       title="Remove"
                     >
                       <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -452,15 +452,15 @@ export default function BoxCalculator() {
 
       {/* Promo Value + Retail Price */}
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-        <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm p-5">
-          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+        <div className="bg-white rounded-xl shadow-sm p-5">
+          <label className="block text-sm font-medium text-gray-700 mb-2">
             Promo / Extras Value ({selectedCurrency})
           </label>
-          <p className="text-xs text-gray-500 dark:text-gray-400 mb-3">
+          <p className="text-xs text-gray-500 mb-3">
             Estimated value of promos, coins, stickers, etc.
           </p>
           <div className="relative">
-            <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500 dark:text-gray-400 text-sm">{currencySymbol}</span>
+            <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500 text-sm">{currencySymbol}</span>
             <input
               type="number"
               min={0}
@@ -468,20 +468,20 @@ export default function BoxCalculator() {
               value={promoValue || ""}
               onChange={(e) => setPromoValue(Math.max(0, parseFloat(e.target.value) || 0))}
               placeholder="0.00"
-              className="w-full pl-7 pr-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
+              className="w-full pl-7 pr-3 py-2 rounded-lg border border-gray-300 bg-white text-gray-900 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
             />
           </div>
         </div>
 
-        <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm p-5">
-          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+        <div className="bg-white rounded-xl shadow-sm p-5">
+          <label className="block text-sm font-medium text-gray-700 mb-2">
             Retail / Sticker Price ({selectedCurrency})
           </label>
-          <p className="text-xs text-gray-500 dark:text-gray-400 mb-3">
+          <p className="text-xs text-gray-500 mb-3">
             The price you&apos;d pay for this collection box.
           </p>
           <div className="relative">
-            <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500 dark:text-gray-400 text-sm">{currencySymbol}</span>
+            <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500 text-sm">{currencySymbol}</span>
             <input
               type="number"
               min={0}
@@ -489,7 +489,7 @@ export default function BoxCalculator() {
               value={retailPrice || ""}
               onChange={(e) => setRetailPrice(Math.max(0, parseFloat(e.target.value) || 0))}
               placeholder="0.00"
-              className="w-full pl-7 pr-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
+              className="w-full pl-7 pr-3 py-2 rounded-lg border border-gray-300 bg-white text-gray-900 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
             />
           </div>
         </div>
@@ -497,15 +497,15 @@ export default function BoxCalculator() {
 
       {/* NAV Results */}
       {navResult && (
-        <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm overflow-hidden">
+        <div className="bg-white rounded-xl shadow-sm overflow-hidden">
           {/* Signal Banner */}
           <div
             className={`px-5 py-4 ${
               navResult.signal === "buy"
-                ? "bg-emerald-50 dark:bg-emerald-900/30 border-b-2 border-emerald-400"
+                ? "bg-emerald-50 border-b-2 border-emerald-400"
                 : navResult.signal === "hold"
-                ? "bg-amber-50 dark:bg-amber-900/30 border-b-2 border-amber-400"
-                : "bg-rose-50 dark:bg-rose-900/30 border-b-2 border-rose-400"
+                ? "bg-amber-50 border-b-2 border-amber-400"
+                : "bg-rose-50 border-b-2 border-rose-400"
             }`}
           >
             <div className="flex items-center justify-between flex-wrap gap-2">
@@ -513,10 +513,10 @@ export default function BoxCalculator() {
                 <span
                   className={`text-2xl font-bold ${
                     navResult.signal === "buy"
-                      ? "text-emerald-700 dark:text-emerald-300"
+                      ? "text-emerald-700"
                       : navResult.signal === "hold"
-                      ? "text-amber-700 dark:text-amber-300"
-                      : "text-rose-700 dark:text-rose-300"
+                      ? "text-amber-700"
+                      : "text-rose-700"
                   }`}
                 >
                   {navResult.signal === "buy"
@@ -528,10 +528,10 @@ export default function BoxCalculator() {
                 <span
                   className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-bold ${
                     navResult.signal === "buy"
-                      ? "bg-emerald-200 text-emerald-800 dark:bg-emerald-800 dark:text-emerald-200"
+                      ? "bg-emerald-200 text-emerald-800"
                       : navResult.signal === "hold"
-                      ? "bg-amber-200 text-amber-800 dark:bg-amber-800 dark:text-amber-200"
-                      : "bg-rose-200 text-rose-800 dark:bg-rose-800 dark:text-rose-200"
+                      ? "bg-amber-200 text-amber-800"
+                      : "bg-rose-200 text-rose-800"
                   }`}
                 >
                   {navResult.premiumDiscount < 0
@@ -548,109 +548,109 @@ export default function BoxCalculator() {
           <div className="p-5">
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-6">
               <div>
-                <span className="block text-xs text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-1">
+                <span className="block text-xs text-gray-500 uppercase tracking-wide mb-1">
                   Pack Value
                 </span>
-                <span className="text-lg font-bold text-gray-900 dark:text-white">
+                <span className="text-lg font-bold text-gray-900">
                   {fmtPrice(navResult.totalPackValue)}
                 </span>
               </div>
               <div>
-                <span className="block text-xs text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-1">
+                <span className="block text-xs text-gray-500 uppercase tracking-wide mb-1">
                   Promo Value
                 </span>
-                <span className="text-lg font-bold text-gray-900 dark:text-white">
+                <span className="text-lg font-bold text-gray-900">
                   {fmtPrice(navResult.promoValue)}
                 </span>
               </div>
               <div>
-                <span className="block text-xs text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-1">
+                <span className="block text-xs text-gray-500 uppercase tracking-wide mb-1">
                   NAV
                 </span>
-                <span className="text-lg font-bold text-blue-600 dark:text-blue-400">
+                <span className="text-lg font-bold text-blue-600">
                   {fmtPrice(navResult.nav)}
                 </span>
               </div>
               <div>
-                <span className="block text-xs text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-1">
+                <span className="block text-xs text-gray-500 uppercase tracking-wide mb-1">
                   Retail Price
                 </span>
-                <span className="text-lg font-bold text-gray-900 dark:text-white">
+                <span className="text-lg font-bold text-gray-900">
                   {fmtPrice(navResult.retailPrice)}
                 </span>
               </div>
             </div>
 
             {/* Pack breakdown table */}
-            <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-3">
+            <h3 className="text-sm font-semibold text-gray-700 mb-3">
               Pack-by-Pack Breakdown
             </h3>
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead>
-                  <tr className="text-left text-xs text-gray-500 dark:text-gray-400 uppercase tracking-wide">
+                  <tr className="text-left text-xs text-gray-500 uppercase tracking-wide">
                     <th className="pb-2 pr-4">Set</th>
                     <th className="pb-2 pr-4 text-right">Per Pack</th>
                     <th className="pb-2 pr-4 text-right">Qty</th>
                     <th className="pb-2 text-right">Value</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
+                <tbody className="divide-y divide-gray-100">
                   {navResult.packBreakdown.map((row, i) => (
                     <tr key={i}>
-                      <td className="py-2 pr-4 font-medium text-gray-900 dark:text-white">
+                      <td className="py-2 pr-4 font-medium text-gray-900">
                         {row.setName}
                       </td>
-                      <td className="py-2 pr-4 text-right text-gray-600 dark:text-gray-300">
+                      <td className="py-2 pr-4 text-right text-gray-600">
                         {row.perPackPrice > 0 ? fmtPrice(row.perPackPrice) : "—"}
                       </td>
-                      <td className="py-2 pr-4 text-right text-gray-600 dark:text-gray-300">
+                      <td className="py-2 pr-4 text-right text-gray-600">
                         {row.quantity}
                       </td>
-                      <td className="py-2 text-right font-semibold text-gray-900 dark:text-white">
+                      <td className="py-2 text-right font-semibold text-gray-900">
                         {fmtPrice(row.totalValue)}
                       </td>
                     </tr>
                   ))}
                   {navResult.promoValue > 0 && (
                     <tr>
-                      <td className="py-2 pr-4 font-medium text-gray-900 dark:text-white">
+                      <td className="py-2 pr-4 font-medium text-gray-900">
                         Promos / Extras
                       </td>
-                      <td className="py-2 pr-4 text-right text-gray-600 dark:text-gray-300">—</td>
-                      <td className="py-2 pr-4 text-right text-gray-600 dark:text-gray-300">—</td>
-                      <td className="py-2 text-right font-semibold text-gray-900 dark:text-white">
+                      <td className="py-2 pr-4 text-right text-gray-600">—</td>
+                      <td className="py-2 pr-4 text-right text-gray-600">—</td>
+                      <td className="py-2 text-right font-semibold text-gray-900">
                         {fmtPrice(navResult.promoValue)}
                       </td>
                     </tr>
                   )}
                 </tbody>
                 <tfoot>
-                  <tr className="border-t-2 border-gray-200 dark:border-gray-600">
-                    <td className="pt-3 pr-4 font-semibold text-gray-900 dark:text-white" colSpan={3}>
+                  <tr className="border-t-2 border-gray-200">
+                    <td className="pt-3 pr-4 font-semibold text-gray-900" colSpan={3}>
                       Total NAV
                     </td>
-                    <td className="pt-3 text-right font-bold text-blue-600 dark:text-blue-400 text-base">
+                    <td className="pt-3 text-right font-bold text-blue-600 text-base">
                       {fmtPrice(navResult.nav)}
                     </td>
                   </tr>
                   <tr>
-                    <td className="pt-1 pr-4 font-semibold text-gray-900 dark:text-white" colSpan={3}>
+                    <td className="pt-1 pr-4 font-semibold text-gray-900" colSpan={3}>
                       Retail Price
                     </td>
-                    <td className="pt-1 text-right font-bold text-gray-900 dark:text-white text-base">
+                    <td className="pt-1 text-right font-bold text-gray-900 text-base">
                       {fmtPrice(navResult.retailPrice)}
                     </td>
                   </tr>
                   <tr>
-                    <td className="pt-1 pr-4 font-semibold text-gray-900 dark:text-white" colSpan={3}>
+                    <td className="pt-1 pr-4 font-semibold text-gray-900" colSpan={3}>
                       {navResult.premiumDiscount > 0 ? "Premium" : "Discount"}
                     </td>
                     <td
                       className={`pt-1 text-right font-bold text-base ${
                         navResult.premiumDiscount > 0
-                          ? "text-rose-600 dark:text-rose-400"
-                          : "text-emerald-600 dark:text-emerald-400"
+                          ? "text-rose-600"
+                          : "text-emerald-600"
                       }`}
                     >
                       {navResult.premiumDiscount > 0 ? "+" : "-"}
@@ -668,11 +668,11 @@ export default function BoxCalculator() {
 
       {/* How it works */}
       {packs.length === 0 && (
-        <div className="bg-gray-50 dark:bg-gray-800/50 rounded-xl p-5 border border-gray-200 dark:border-gray-700">
-          <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-3">
+        <div className="bg-gray-50 rounded-xl p-5 border border-gray-200">
+          <h3 className="text-sm font-semibold text-gray-700 mb-3">
             How it works
           </h3>
-          <ol className="text-sm text-gray-600 dark:text-gray-400 space-y-2 list-decimal list-inside">
+          <ol className="text-sm text-gray-600 space-y-2 list-decimal list-inside">
             <li>Add the booster packs included in the collection box (pick a set, enter quantity)</li>
             <li>Enter the estimated promo/extras value (coins, promo cards, etc.)</li>
             <li>Enter the retail price of the box</li>

@@ -61,10 +61,10 @@ export default function PortfolioChart({
   const CustomTooltip = ({ active, payload, label }: any) => {
     if (active && payload && payload.length && payload[0].value !== null) {
       return (
-        <div className="bg-slate-900 text-white px-4 py-3 rounded-lg shadow-xl border-2 border-green-500">
+        <div className="bg-slate-900 text-white px-4 py-3 rounded-lg shadow-xl border-2 border-emerald-500">
           <p className="text-xs font-semibold text-slate-300 mb-1">{label}</p>
           <p className="text-lg font-bold">
-            <span className="text-green-400">
+            <span className="text-emerald-400">
               {currencySymbol}
               {payload[0].value.toLocaleString(undefined, {
                 minimumFractionDigits: 2,
@@ -83,13 +83,13 @@ export default function PortfolioChart({
 
   if (chartData.length === 0) {
     return (
-      <div className="bg-white dark:bg-gray-800 rounded-lg shadow-lg p-4 md:p-6">
+      <div className="bg-white rounded-lg shadow-lg p-4 md:p-6">
         <div className="flex items-center justify-between mb-4">
-          <h2 className="text-lg font-semibold text-gray-900 dark:text-white">
+          <h2 className="text-lg font-semibold text-slate-900">
             Portfolio Value
           </h2>
         </div>
-        <div className="h-48 flex items-center justify-center text-gray-500 dark:text-gray-400">
+        <div className="h-48 flex items-center justify-center text-slate-500">
           No historical data available yet
         </div>
       </div>
@@ -97,9 +97,9 @@ export default function PortfolioChart({
   }
 
   return (
-    <div className="bg-white dark:bg-gray-800 rounded-lg shadow-lg p-4 md:p-6">
+    <div className="bg-white rounded-lg shadow-lg p-4 md:p-6">
       <div className="flex items-center justify-between mb-4">
-        <h2 className="text-lg font-semibold text-gray-900 dark:text-white">
+        <h2 className="text-lg font-semibold text-slate-900">
           Portfolio Value
         </h2>
         <div className="flex gap-1">
@@ -109,8 +109,8 @@ export default function PortfolioChart({
               onClick={() => onTimeframeChange(tf)}
               className={`px-3 py-1 text-xs font-medium rounded transition-colors ${
                 timeframe === tf
-                  ? "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400"
-                  : "text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-700"
+                  ? "bg-emerald-100 text-emerald-700"
+                  : "text-slate-500 hover:bg-slate-100"
               }`}
             >
               {tf}

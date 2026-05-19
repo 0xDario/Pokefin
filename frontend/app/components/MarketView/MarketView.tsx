@@ -56,6 +56,10 @@ type SortKey =
   | "return_6m"
   | "return_1y";
 
+// Return-window labels that are part of the "key columns" view. Other windows
+// (6M, 1Y) only show when "Show all columns" is toggled on.
+const KEY_RETURN_WINDOWS = new Set<ReturnWindowLabel>(["7D", "1M", "3M"]);
+
 const AGE_FILTER_OPTIONS = [
   { label: "All Ages", value: "all", minDays: 0 },
   { label: "1 Month+", value: "1m", minDays: 30 },
@@ -143,6 +147,10 @@ export default function MarketView({
   const [expandedProductId, setExpandedProductId] = useState<number | null>(
     null
   );
+  const [showAllColumns, setShowAllColumns] = useState(false);
+
+  // Total visible columns drives colSpan on the expanded chart row.
+  const visibleColumnCount = showAllColumns ? 17 : 8;
 
   const ageFilterMinDays = useMemo(() => {
     return (
@@ -384,7 +392,7 @@ export default function MarketView({
   };
 
   return (
-    <div className="p-3 md:p-6 bg-slate-100 min-h-screen">
+    <div className="p-3 md:p-6 bg-[var(--pf-bg)] min-h-screen">
       <div className="space-y-4 md:space-y-6">
         <ControlBar
           selectedGeneration={selectedGeneration}
@@ -419,8 +427,18 @@ export default function MarketView({
 
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between text-sm text-slate-600">
           <div>Found {rows.length} products</div>
-          <div className="text-xs text-slate-500">
-            Click a column header to sort.
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={() => setShowAllColumns((prev) => !prev)}
+              className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 shadow-sm hover:bg-slate-50"
+              aria-pressed={showAllColumns}
+            >
+              {showAllColumns ? "Show key columns" : "Show all columns"}
+            </button>
+            <div className="text-xs text-slate-500">
+              Click a column header to sort.
+            </div>
           </div>
         </div>
 
@@ -429,11 +447,11 @@ export default function MarketView({
         {!loading && (
           <div className="rounded-xl border border-slate-200 bg-white shadow-sm">
             <div className="overflow-x-auto">
-              <table className="min-w-[1440px] w-full text-sm">
+              <table className={`${showAllColumns ? "min-w-[1440px]" : "min-w-[900px]"} w-full text-sm`}>
                 <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
                   <tr>
-                    <th className="px-3 py-3 text-left">#</th>
-                    <th className="px-3 py-3 text-left">
+                    <th className="sticky left-0 z-20 w-14 bg-slate-50 px-3 py-3 text-left">#</th>
+                    <th className="sticky left-14 z-20 bg-slate-50 px-3 py-3 text-left">
                       <button
                         type="button"
                         onClick={() => handleSort("product")}
@@ -469,98 +487,105 @@ export default function MarketView({
                         Price{getSortIndicator("price")}
                       </button>
                     </th>
-                    <th className="px-3 py-3 text-right">
-                      <button
-                        type="button"
-                        onClick={() => handleSort("release_date")}
-                        className="font-semibold uppercase tracking-wide text-slate-500 hover:text-slate-700"
-                      >
-                        Release{getSortIndicator("release_date")}
-                      </button>
-                    </th>
-                    <th className="px-3 py-3 text-right">
-                      <button
-                        type="button"
-                        onClick={() => handleSort("days_since_release")}
-                        className="font-semibold uppercase tracking-wide text-slate-500 hover:text-slate-700"
-                      >
-                        Days Since{getSortIndicator("days_since_release")}
-                      </button>
-                    </th>
-                    <th className="px-3 py-3 text-right">
-                      <button
-                        type="button"
-                        onClick={() => handleSort("price_per_day")}
-                        className="font-semibold uppercase tracking-wide text-slate-500 hover:text-slate-700"
-                      >
-                        Price/Day{getSortIndicator("price_per_day")}
-                      </button>
-                    </th>
-                    <th className="px-3 py-3 text-right">
-                      <button
-                        type="button"
-                        onClick={() => handleSort("cagr")}
-                        className="font-semibold uppercase tracking-wide text-slate-500 hover:text-slate-700"
-                      >
-                        CAGR{getSortIndicator("cagr")}
-                      </button>
-                    </th>
-                    <th className="px-3 py-3 text-right">
-                      <button
-                        type="button"
-                        onClick={() => handleSort("max_drawdown")}
-                        className="font-semibold uppercase tracking-wide text-slate-500 hover:text-slate-700"
-                      >
-                        Max DD{getSortIndicator("max_drawdown")}
-                      </button>
-                    </th>
-                    <th className="px-3 py-3 text-right">
-                      <button
-                        type="button"
-                        onClick={() => handleSort("volatility_30d")}
-                        className="font-semibold uppercase tracking-wide text-slate-500 hover:text-slate-700"
-                      >
-                        Vol 30D{getSortIndicator("volatility_30d")}
-                      </button>
-                    </th>
-                    {RETURN_WINDOWS.map((window) => (
-                      <th
-                        key={window.label}
-                        className="px-3 py-3 text-right"
-                      >
+                    {showAllColumns && (
+                      <th className="px-3 py-3 text-right">
                         <button
                           type="button"
-                          onClick={() =>
-                            handleSort(
-                              window.label === "7D"
-                                ? "return_7d"
-                                : window.label === "1M"
-                                ? "return_1m"
-                                : window.label === "3M"
-                                ? "return_3m"
-                                : window.label === "6M"
-                                ? "return_6m"
-                                : "return_1y"
-                            )
-                          }
+                          onClick={() => handleSort("release_date")}
                           className="font-semibold uppercase tracking-wide text-slate-500 hover:text-slate-700"
                         >
-                          {window.label}
-                          {getSortIndicator(
-                            window.label === "7D"
-                              ? "return_7d"
-                              : window.label === "1M"
-                              ? "return_1m"
-                              : window.label === "3M"
-                              ? "return_3m"
-                              : window.label === "6M"
-                              ? "return_6m"
-                              : "return_1y"
-                          )}
+                          Release{getSortIndicator("release_date")}
                         </button>
                       </th>
-                    ))}
-                    <th className="px-3 py-3 text-right">Last 7D</th>
+                    )}
+                    {showAllColumns && (
+                      <th className="px-3 py-3 text-right">
+                        <button
+                          type="button"
+                          onClick={() => handleSort("days_since_release")}
+                          className="font-semibold uppercase tracking-wide text-slate-500 hover:text-slate-700"
+                        >
+                          Days Since{getSortIndicator("days_since_release")}
+                        </button>
+                      </th>
+                    )}
+                    {showAllColumns && (
+                      <th className="px-3 py-3 text-right">
+                        <button
+                          type="button"
+                          onClick={() => handleSort("price_per_day")}
+                          className="font-semibold uppercase tracking-wide text-slate-500 hover:text-slate-700"
+                        >
+                          Price/Day{getSortIndicator("price_per_day")}
+                        </button>
+                      </th>
+                    )}
+                    {showAllColumns && (
+                      <th className="px-3 py-3 text-right">
+                        <button
+                          type="button"
+                          onClick={() => handleSort("cagr")}
+                          className="font-semibold uppercase tracking-wide text-slate-500 hover:text-slate-700"
+                        >
+                          CAGR{getSortIndicator("cagr")}
+                        </button>
+                      </th>
+                    )}
+                    {showAllColumns && (
+                      <th className="px-3 py-3 text-right">
+                        <button
+                          type="button"
+                          onClick={() => handleSort("max_drawdown")}
+                          className="font-semibold uppercase tracking-wide text-slate-500 hover:text-slate-700"
+                        >
+                          Max DD{getSortIndicator("max_drawdown")}
+                        </button>
+                      </th>
+                    )}
+                    {showAllColumns && (
+                      <th className="px-3 py-3 text-right">
+                        <button
+                          type="button"
+                          onClick={() => handleSort("volatility_30d")}
+                          className="font-semibold uppercase tracking-wide text-slate-500 hover:text-slate-700"
+                        >
+                          Vol 30D{getSortIndicator("volatility_30d")}
+                        </button>
+                      </th>
+                    )}
+                    {RETURN_WINDOWS.map((window) => {
+                      if (!showAllColumns && !KEY_RETURN_WINDOWS.has(window.label)) {
+                        return null;
+                      }
+                      const sortKeyForWindow =
+                        window.label === "7D"
+                          ? "return_7d"
+                          : window.label === "1M"
+                          ? "return_1m"
+                          : window.label === "3M"
+                          ? "return_3m"
+                          : window.label === "6M"
+                          ? "return_6m"
+                          : "return_1y";
+                      return (
+                        <th
+                          key={window.label}
+                          className="px-3 py-3 text-right"
+                        >
+                          <button
+                            type="button"
+                            onClick={() => handleSort(sortKeyForWindow)}
+                            className="font-semibold uppercase tracking-wide text-slate-500 hover:text-slate-700"
+                          >
+                            {window.label}
+                            {getSortIndicator(sortKeyForWindow)}
+                          </button>
+                        </th>
+                      );
+                    })}
+                    {showAllColumns && (
+                      <th className="px-3 py-3 text-right">Last 7D</th>
+                    )}
                     <th className="px-3 py-3 text-right">Chart</th>
                   </tr>
                 </thead>
@@ -580,60 +605,79 @@ export default function MarketView({
 
                     return (
                       <Fragment key={product.id}>
-                        <tr className="border-t border-slate-100 hover:bg-slate-50">
-                          <td className="px-3 py-4 text-slate-400">
+                        <tr className="group border-t border-slate-100 hover:bg-slate-50">
+                          <td className="sticky left-0 z-10 w-14 bg-white px-3 py-4 text-slate-400 group-hover:bg-slate-50">
                             {index + 1}
                           </td>
-                          <td className="px-3 py-4">
+                          <td className="sticky left-14 z-10 bg-white px-3 py-4 group-hover:bg-slate-50">
                             {renderProductCell(product)}
                           </td>
                           <td className="px-3 py-4">{renderSetCell(product)}</td>
                           <td className="px-3 py-4 text-right font-semibold text-slate-900">
                             {formatPrice(product.usd_price)}
                           </td>
-                          <td className="px-3 py-4 text-right text-slate-600">
-                            {formatReleaseDate(product.sets?.release_date)}
-                          </td>
-                          <td className="px-3 py-4 text-right text-slate-600">
-                            {daysSinceRelease ?? "--"}
-                          </td>
-                          <td className="px-3 py-4 text-right text-slate-600">
-                            {formatRatio(pricePerDay)}
-                          </td>
-                          <td className="px-3 py-4 text-right">
-                            {renderReturnValue(cagr)}
-                          </td>
-                          <td className="px-3 py-4 text-right">
-                            {renderReturnValue(
-                              maxDrawdown === null ? null : maxDrawdown * -1
-                            )}
-                          </td>
-                          <td className="px-3 py-4 text-right">
-                            {renderReturnValue(volatility30d)}
-                          </td>
-                          {RETURN_WINDOWS.map((window) => (
-                            <td
-                              key={window.label}
-                              className="px-3 py-4 text-right"
-                            >
-                              {renderReturnValue(returns[window.label])}
+                          {showAllColumns && (
+                            <td className="px-3 py-4 text-right text-slate-600">
+                              {formatReleaseDate(product.sets?.release_date)}
                             </td>
-                          ))}
-                          <td className="px-3 py-4">
-                            <div className="flex justify-end">
-                              {history && history.length > 1 ? (
-                                <MiniSparkline
-                                  history={history}
-                                  currency={selectedCurrency}
-                                  exchangeRate={exchangeRate}
-                                />
-                              ) : loadingProductIds.includes(product.id) ? (
-                                <span className="text-xs text-slate-400">Loading...</span>
-                              ) : (
-                                <span className="text-xs text-slate-400">Open chart</span>
+                          )}
+                          {showAllColumns && (
+                            <td className="px-3 py-4 text-right text-slate-600">
+                              {daysSinceRelease ?? "--"}
+                            </td>
+                          )}
+                          {showAllColumns && (
+                            <td className="px-3 py-4 text-right text-slate-600">
+                              {formatRatio(pricePerDay)}
+                            </td>
+                          )}
+                          {showAllColumns && (
+                            <td className="px-3 py-4 text-right">
+                              {renderReturnValue(cagr)}
+                            </td>
+                          )}
+                          {showAllColumns && (
+                            <td className="px-3 py-4 text-right">
+                              {renderReturnValue(
+                                maxDrawdown === null ? null : maxDrawdown * -1
                               )}
-                            </div>
-                          </td>
+                            </td>
+                          )}
+                          {showAllColumns && (
+                            <td className="px-3 py-4 text-right">
+                              {renderReturnValue(volatility30d)}
+                            </td>
+                          )}
+                          {RETURN_WINDOWS.map((window) => {
+                            if (!showAllColumns && !KEY_RETURN_WINDOWS.has(window.label)) {
+                              return null;
+                            }
+                            return (
+                              <td
+                                key={window.label}
+                                className="px-3 py-4 text-right"
+                              >
+                                {renderReturnValue(returns[window.label])}
+                              </td>
+                            );
+                          })}
+                          {showAllColumns && (
+                            <td className="px-3 py-4">
+                              <div className="flex justify-end">
+                                {history && history.length > 1 ? (
+                                  <MiniSparkline
+                                    history={history}
+                                    currency={selectedCurrency}
+                                    exchangeRate={exchangeRate}
+                                  />
+                                ) : loadingProductIds.includes(product.id) ? (
+                                  <span className="text-xs text-slate-400">Loading...</span>
+                                ) : (
+                                  <span className="text-xs text-slate-400">Open chart</span>
+                                )}
+                              </div>
+                            </td>
+                          )}
                           <td className="px-3 py-4 text-right">
                             <button
                               type="button"
@@ -647,7 +691,7 @@ export default function MarketView({
                         </tr>
                         {isExpanded && (
                           <tr className="bg-slate-50">
-                            <td colSpan={17} className="px-6 py-5">
+                            <td colSpan={visibleColumnCount} className="px-6 py-5">
                               {loadingProductIds.includes(product.id) ? (
                                 <div className="rounded-lg border border-slate-200 bg-white p-4 text-sm text-slate-500">
                                   Loading price history...

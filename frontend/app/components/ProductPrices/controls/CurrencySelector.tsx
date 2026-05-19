@@ -7,9 +7,6 @@ interface CurrencySelectorProps {
   onChange: (currency: Currency) => void;
 }
 
-/**
- * Currency selector with exchange rate display - Mobile-first layout
- */
 export default function CurrencySelector({
   selectedCurrency,
   exchangeRate,
@@ -17,30 +14,35 @@ export default function CurrencySelector({
   onChange,
 }: CurrencySelectorProps) {
   return (
-    <div className="flex flex-col gap-3 sm:flex-row sm:items-center w-full sm:w-auto bg-white p-3 rounded-lg border border-slate-200">
-      {/* Exchange Rate Display */}
-      <div className="flex items-center justify-between sm:justify-start gap-2">
-        <span className="text-sm font-medium text-slate-700">
-          Exchange Rate:
+    <div className="flex flex-col gap-1.5 sm:flex-row sm:items-center sm:gap-2 w-full sm:w-auto">
+      <label className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+        Currency
+      </label>
+      <div className="inline-flex w-full sm:w-auto items-center gap-2">
+        <div className="inline-flex rounded-lg border border-slate-300 bg-white p-0.5">
+          {(["USD", "CAD"] as const).map((currency) => {
+            const active = selectedCurrency === currency;
+            return (
+              <button
+                key={currency}
+                type="button"
+                onClick={() => onChange(currency)}
+                aria-pressed={active}
+                className={`px-3 py-1.5 rounded-md text-xs font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-[var(--pf-pokeblue)] focus:ring-offset-1 ${
+                  active
+                    ? "bg-[var(--pf-pokeblue)] text-white shadow-sm"
+                    : "text-slate-600 hover:text-slate-900 hover:bg-slate-100"
+                }`}
+              >
+                {currency === "USD" ? "🇺🇸 USD" : "🇨🇦 CAD"}
+              </button>
+            );
+          })}
+        </div>
+        <span className="text-[11px] font-medium text-slate-500 tabular-nums whitespace-nowrap">
+          {exchangeRateLoading ? "rate…" : `1 USD = ${exchangeRate.toFixed(4)} CAD`}
         </span>
-        {exchangeRateLoading ? (
-          <span className="text-sm text-blue-600">Loading...</span>
-        ) : (
-          <span className="text-sm font-bold text-blue-600">
-            {exchangeRate.toFixed(4)}
-          </span>
-        )}
       </div>
-
-      {/* Currency Selector Dropdown */}
-      <select
-        value={selectedCurrency}
-        onChange={(e) => onChange(e.target.value as Currency)}
-        className="w-full sm:w-auto min-h-[44px] sm:min-h-0 px-4 py-2.5 sm:py-1 rounded border text-sm font-medium bg-white text-slate-700 hover:bg-gray-50 transition-all focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-      >
-        <option value="USD">🇺🇸 USD</option>
-        <option value="CAD">🇨🇦 CAD</option>
-      </select>
     </div>
   );
 }
