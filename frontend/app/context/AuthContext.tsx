@@ -32,32 +32,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const isTokenRefreshFailedEvent = (event: string) =>
     event === "TOKEN_REFRESH_FAILED";
 
-  // Fetch user profile from profiles table
-  const fetchProfile = async (userId: string, userEmail?: string) => {
+  // Fetch user profile from profiles table. The row is created
+  // server-side by the on_auth_user_created trigger; this client
+  // never inserts into profiles.
+  const fetchProfile = async (userId: string) => {
     const { data, error } = await supabase
       .from("profiles")
       .select("id, username, email")
       .eq("id", userId)
-      .single();
+      .maybeSingle();
 
     if (error) {
-      // PGRST116 = no rows returned (profile doesn't exist yet)
-      if (error.code === "PGRST116") {
-        // Profile doesn't exist, create it
-        const { data: newProfile, error: insertError } = await supabase
-          .from("profiles")
-          .insert({ id: userId, email: userEmail })
-          .select("id, username, email")
-          .single();
-
-        if (insertError) {
-          console.error("Failed to create profile:", insertError.message, insertError.code);
-          return;
-        }
-        setProfile(newProfile);
-        return;
-      }
-      console.error("Failed to fetch profile:", error.message, error.code);
+      console.error("profile_fetch_failed", { code: error.code });
       return;
     }
 
@@ -93,7 +79,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const { data: { session: freshSession } } = await supabase.auth.getSession();
       setSession(freshSession ?? session);
       setUser(user);
-      await fetchProfile(user.id, user.email);
+      await fetchProfile(user.id);
       setLoading(false);
     };
 
@@ -114,7 +100,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setUser(session?.user ?? null);
 
         if (session?.user) {
-          await fetchProfile(session.user.id, session.user.email);
+          await fetchProfile(session.user.id);
         } else {
           setProfile(null);
         }
@@ -129,32 +115,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const signUp = async (email: string, password: string, username: string, captchaToken?: string) => {
-    const { data, error } = await supabase.auth.signUp({
+    // The profile row is created by the on_auth_user_created trigger
+    // using NEW.raw_user_meta_data->>'username'.
+    const { error } = await supabase.auth.signUp({
       email,
       password,
       options: {
         captchaToken,
-        data: {
-          username,
-        },
+        data: { username },
       },
     });
-
-    if (!error && data.user) {
-      // Create profile in profiles table
-      const { error: profileError } = await supabase.from("profiles").insert({
-        id: data.user.id,
-        username,
-        email,
-      });
-
-      if (profileError) {
-        console.error("Failed to create profile:", profileError);
-        // Profile creation failed, but user is created
-        // The profile can be created later or on first login
-      }
-    }
-
     return { error };
   };
 
@@ -175,9 +145,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   const resetPassword = async (email: string) => {
-    const { error } = await supabase.auth.resetPasswordForEmail(email, {
-      redirectTo: `${window.location.origin}/auth/reset-password`,
-    });
+    // redirectTo is intentionally omitted: Supabase uses the project's
+    // configured Site URL + /auth/callback?type=recovery, which we
+    // route to /auth/reset-password. This avoids trusting
+    // window.location.origin on a phishing mirror.
+    const { error } = await supabase.auth.resetPasswordForEmail(email);
     return { error };
   };
 
