@@ -166,7 +166,7 @@ function computeZScore(value: number | null, mean: number, std: number) {
 }
 
 async function fetchSetAnalyticsFallback(): Promise<SetAnalyticsRow[]> {
-  const supabase = createServerSupabaseClient();
+  const supabase = await createServerSupabaseClient();
   const products = await getCachedMarketProductSummaries();
   if (products.length === 0) return [];
 
@@ -427,7 +427,7 @@ async function fetchProductDetail(
   const product = allProducts.find((p) => p.id === productId);
   if (!product) return null;
 
-  const supabase = createServerSupabaseClient();
+  const supabase = await createServerSupabaseClient();
   const startDate = new Date();
   startDate.setDate(startDate.getDate() - 367);
   const startDateStr = startDate.toISOString().split("T")[0];
@@ -461,7 +461,7 @@ async function fetchProductDetail(
 }
 
 async function fetchLatestExchangeRate(): Promise<ExchangeRateSnapshot> {
-  const supabase = createServerSupabaseClient();
+  const supabase = await createServerSupabaseClient();
   const { data, error } = await supabase
     .from("exchange_rates")
     .select("usd_to_cad, recorded_at")
@@ -480,7 +480,7 @@ async function fetchLatestExchangeRate(): Promise<ExchangeRateSnapshot> {
 }
 
 async function fetchProductsWithFallbackReturns(): Promise<Product[]> {
-  const supabase = createServerSupabaseClient();
+  const supabase = await createServerSupabaseClient();
   const { data: fallbackData, error: fallbackError } = await supabase
     .from("products")
     .select(
@@ -555,7 +555,7 @@ async function fetchProductsWithFallbackReturns(): Promise<Product[]> {
 }
 
 async function fetchMarketProductSummaries(): Promise<Product[]> {
-  const supabase = createServerSupabaseClient();
+  const supabase = await createServerSupabaseClient();
   const { data, error } = await supabase.rpc("get_market_product_summaries");
 
   if (!error && data) {
@@ -566,7 +566,7 @@ async function fetchMarketProductSummaries(): Promise<Product[]> {
 }
 
 async function fetchSetAnalytics(): Promise<SetAnalyticsRow[]> {
-  const supabase = createServerSupabaseClient();
+  const supabase = await createServerSupabaseClient();
   const { data, error } = await supabase.rpc("get_set_analytics");
 
   if (error) {

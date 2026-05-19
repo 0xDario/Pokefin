@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { usePortfolioData } from "./hooks";
+import { useAuth } from "../../context/AuthContext";
 import { deleteHolding } from "../../lib/portfolio";
 import PortfolioSummaryCard from "./shared/PortfolioSummaryCard";
 import PortfolioChart from "./shared/PortfolioChart";
@@ -21,6 +22,7 @@ export default function PortfolioDashboard({
   currency = "USD",
   exchangeRate = 1.36,
 }: PortfolioDashboardProps) {
+  const { user } = useAuth();
   const {
     portfolio,
     holdings,
@@ -43,6 +45,8 @@ export default function PortfolioDashboard({
   };
 
   const handleDelete = async (holdingId: number) => {
+    if (!user) return;
+
     const confirmed = window.confirm(
       "Are you sure you want to delete this holding? This action cannot be undone."
     );
@@ -50,7 +54,7 @@ export default function PortfolioDashboard({
     if (!confirmed) return;
 
     setDeleteLoading(holdingId);
-    const success = await deleteHolding(holdingId);
+    const success = await deleteHolding(holdingId, user.id);
     setDeleteLoading(null);
 
     if (success) {

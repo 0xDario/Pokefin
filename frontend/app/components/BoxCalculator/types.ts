@@ -12,6 +12,7 @@ export interface BoxRecipe {
   promoValue: number;
   packs: PackEntry[];
   shareCode?: string | null;
+  isPublic?: boolean;
   userId?: string | null;
   createdAt?: string;
   updatedAt?: string;
