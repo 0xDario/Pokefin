@@ -1,6 +1,7 @@
 import "server-only";
 
 import { unstable_cache } from "next/cache";
+import { createClient } from "@supabase/supabase-js";
 import {
   PriceHistoryEntry,
   Product,
@@ -14,7 +15,23 @@ import {
   MarketSummaryRow,
   SetAnalyticsRow,
 } from "./marketData";
-import { createServerSupabaseClient } from "./serverSupabase";
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_KEY;
+
+if (!supabaseUrl || !supabaseAnonKey) {
+  throw new Error(
+    "Missing Supabase environment variables. Please set NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_KEY."
+  );
+}
+
+function createMarketDataSupabaseClient() {
+  return createClient(supabaseUrl!, supabaseAnonKey!, {
+    auth: {
+      autoRefreshToken: false,
+      persistSession: false,
+    },
+  });
+}
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -166,7 +183,7 @@ function computeZScore(value: number | null, mean: number, std: number) {
 }
 
 async function fetchSetAnalyticsFallback(): Promise<SetAnalyticsRow[]> {
-  const supabase = await createServerSupabaseClient();
+  const supabase = createMarketDataSupabaseClient();
   const products = await getCachedMarketProductSummaries();
   if (products.length === 0) return [];
 
@@ -427,7 +444,7 @@ async function fetchProductDetail(
   const product = allProducts.find((p) => p.id === productId);
   if (!product) return null;
 
-  const supabase = await createServerSupabaseClient();
+  const supabase = createMarketDataSupabaseClient();
   const startDate = new Date();
   startDate.setDate(startDate.getDate() - 367);
   const startDateStr = startDate.toISOString().split("T")[0];
@@ -461,7 +478,7 @@ async function fetchProductDetail(
 }
 
 async function fetchLatestExchangeRate(): Promise<ExchangeRateSnapshot> {
-  const supabase = await createServerSupabaseClient();
+  const supabase = createMarketDataSupabaseClient();
   const { data, error } = await supabase
     .from("exchange_rates")
     .select("usd_to_cad, recorded_at")
@@ -480,7 +497,7 @@ async function fetchLatestExchangeRate(): Promise<ExchangeRateSnapshot> {
 }
 
 async function fetchProductsWithFallbackReturns(): Promise<Product[]> {
-  const supabase = await createServerSupabaseClient();
+  const supabase = createMarketDataSupabaseClient();
   const { data: fallbackData, error: fallbackError } = await supabase
     .from("products")
     .select(
@@ -555,7 +572,7 @@ async function fetchProductsWithFallbackReturns(): Promise<Product[]> {
 }
 
 async function fetchMarketProductSummaries(): Promise<Product[]> {
-  const supabase = await createServerSupabaseClient();
+  const supabase = createMarketDataSupabaseClient();
   const { data, error } = await supabase.rpc("get_market_product_summaries");
 
   if (!error && data) {
@@ -566,7 +583,7 @@ async function fetchMarketProductSummaries(): Promise<Product[]> {
 }
 
 async function fetchSetAnalytics(): Promise<SetAnalyticsRow[]> {
-  const supabase = await createServerSupabaseClient();
+  const supabase = createMarketDataSupabaseClient();
   const { data, error } = await supabase.rpc("get_set_analytics");
 
   if (error) {
