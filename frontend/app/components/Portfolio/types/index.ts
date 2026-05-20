@@ -68,6 +68,7 @@ export interface NewHolding {
   purchase_price_usd: number;
   purchase_date: string;
   notes?: string | null;
+  client_idempotency_key?: string;
 }
 
 // Holding update data

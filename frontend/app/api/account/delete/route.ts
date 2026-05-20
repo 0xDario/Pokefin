@@ -1,12 +1,34 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServerClient } from "@supabase/ssr";
-import { createClient } from "@supabase/supabase-js";
 import { cookies } from "next/headers";
 
-export async function DELETE(request: NextRequest) {
-  const cookieStore = await cookies();
+const ALLOWED_ORIGINS = new Set([
+  process.env.NEXT_PUBLIC_SITE_URL ?? "",
+  "https://pokefin.ca",
+  "https://www.pokefin.ca",
+]);
 
-  // Create client to verify the user is authenticated
+function isAllowedOrigin(origin: string | null) {
+  if (!origin) return false;
+  if (ALLOWED_ORIGINS.has(origin)) return true;
+  // Local development.
+  if (process.env.NODE_ENV !== "production" && origin.startsWith("http://localhost")) {
+    return true;
+  }
+  return false;
+}
+
+export async function DELETE(request: NextRequest) {
+  // CSRF defense: require a custom header that browsers will not
+  // attach on a cross-origin form/link, and an allowlisted Origin.
+  if (request.headers.get("x-pokefin-request") !== "1") {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
+  if (!isAllowedOrigin(request.headers.get("origin"))) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
+
+  const cookieStore = await cookies();
   const supabase = createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_KEY!,
@@ -24,70 +46,26 @@ export async function DELETE(request: NextRequest) {
     }
   );
 
-  // Get the current user
   const {
     data: { user },
     error: userError,
   } = await supabase.auth.getUser();
-
   if (userError || !user) {
-    return NextResponse.json(
-      { error: "Unauthorized" },
-      { status: 401 }
-    );
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  // Delete the profile first (RLS should allow this)
-  const { error: profileError } = await supabase
-    .from("profiles")
-    .delete()
-    .eq("id", user.id);
-
-  if (profileError) {
-    console.error("Failed to delete profile:", profileError);
+  // The delete_my_account() SECURITY DEFINER RPC deletes auth.users
+  // and cascades through profiles/portfolios/portfolio_holdings/
+  // portfolio_lots/box_recipes. No service-role key required.
+  const { error: rpcError } = await supabase.rpc("delete_my_account");
+  if (rpcError) {
+    console.error("delete_my_account_failed", { code: rpcError.code });
     return NextResponse.json(
-      { error: "Failed to delete profile" },
+      { error: "Failed to delete account" },
       { status: 500 }
     );
   }
 
-  // Check if service role key is available for full user deletion
-  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-
-  if (serviceRoleKey) {
-    // Use admin client to delete the auth user
-    const supabaseAdmin = createClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      serviceRoleKey,
-      {
-        auth: {
-          autoRefreshToken: false,
-          persistSession: false,
-        },
-      }
-    );
-
-    const { error: deleteError } = await supabaseAdmin.auth.admin.deleteUser(
-      user.id
-    );
-
-    if (deleteError) {
-      console.error("Failed to delete auth user:", deleteError);
-      return NextResponse.json(
-        { error: "Failed to delete account" },
-        { status: 500 }
-      );
-    }
-  } else {
-    // If no service role key, sign out the user
-    // The auth user will remain but profile is deleted
-    console.warn(
-      "SUPABASE_SERVICE_ROLE_KEY not set - auth user not deleted, only profile"
-    );
-  }
-
-  // Sign out the user
   await supabase.auth.signOut();
-
   return NextResponse.json({ success: true });
 }

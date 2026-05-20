@@ -23,11 +23,13 @@ afterAll(() => {
   process.env = originalEnv;
 });
 
-// Mock the Supabase client. Cast to jest.Mock so the inferred zero-arg
-// signature from the default impl doesn't reject spread-args callers.
+// Mock the Supabase SSR browser client. The app moved from
+// @supabase/supabase-js createClient to @supabase/ssr
+// createBrowserClient (HttpOnly-cookie sessions, PKCE).
 const mockCreateClient: jest.Mock = jest.fn(() => ({
   auth: {
     getSession: jest.fn(),
+    getUser: jest.fn(),
     signUp: jest.fn(),
     signInWithPassword: jest.fn(),
     signOut: jest.fn(),
@@ -39,12 +41,12 @@ const mockCreateClient: jest.Mock = jest.fn(() => ({
     select: jest.fn().mockReturnThis(),
     insert: jest.fn().mockReturnThis(),
     eq: jest.fn().mockReturnThis(),
-    single: jest.fn(),
+    maybeSingle: jest.fn(),
   })),
 }));
 
-jest.mock("@supabase/supabase-js", () => ({
-  createClient: (...args: unknown[]) => mockCreateClient(...args),
+jest.mock("@supabase/ssr", () => ({
+  createBrowserClient: (...args: unknown[]) => mockCreateClient(...args),
 }));
 
 describe("Supabase Client", () => {
@@ -60,7 +62,8 @@ describe("Supabase Client", () => {
 
       expect(mockCreateClient).toHaveBeenCalledWith(
         "https://test-project.supabase.co",
-        "test-anon-key-12345"
+        "test-anon-key-12345",
+        { auth: { flowType: "pkce" } }
       );
       expect(supabase).toBeDefined();
     });
@@ -101,7 +104,8 @@ describe("Supabase Client", () => {
 
       expect(mockCreateClient).toHaveBeenCalledWith(
         "https://custom-url.supabase.co",
-        expect.any(String)
+        expect.any(String),
+        expect.any(Object)
       );
     });
 
@@ -113,7 +117,8 @@ describe("Supabase Client", () => {
 
       expect(mockCreateClient).toHaveBeenCalledWith(
         expect.any(String),
-        "custom-anon-key"
+        "custom-anon-key",
+        expect.any(Object)
       );
     });
   });

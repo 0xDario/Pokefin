@@ -9,3 +9,4 @@ my_listings.json
 # Generated price reports (one-off scratch outputs)
 price-check-*.md
 price_report_*.md
+.vercel

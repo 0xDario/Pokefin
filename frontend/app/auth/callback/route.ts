@@ -1,30 +1,50 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServerClient } from "@supabase/ssr";
-import { cookies } from "next/headers";
+
+function safeNextPath(raw: string | null): string {
+  if (!raw) return "/";
+  // Only allow same-origin relative paths beginning with a single
+  // forward slash. Block protocol-relative ("//evil"), URL-encoded
+  // slashes, backslashes, and anything that decodes to a network-path
+  // reference.
+  if (!raw.startsWith("/")) return "/";
+  if (raw.startsWith("//") || raw.startsWith("/\\")) return "/";
+  try {
+    const decoded = decodeURIComponent(raw);
+    if (decoded.startsWith("//") || decoded.startsWith("/\\")) return "/";
+  } catch {
+    return "/";
+  }
+  return raw;
+}
 
 export async function GET(request: NextRequest) {
   const requestUrl = new URL(request.url);
   const code = requestUrl.searchParams.get("code");
-  const next = requestUrl.searchParams.get("next");
+  const next = safeNextPath(requestUrl.searchParams.get("next"));
+  const type = requestUrl.searchParams.get("type");
 
-  // Validate redirect URL to prevent open redirect attacks
-  const safeNext =
-    next && next.startsWith("/") && !next.startsWith("//") ? next : "/";
+  const redirectTo =
+    type === "recovery"
+      ? new URL("/auth/reset-password", request.url)
+      : new URL(next, request.url);
+
+  const response = NextResponse.redirect(redirectTo);
 
   if (code) {
-    const cookieStore = await cookies();
-
     const supabase = createServerClient(
       process.env.NEXT_PUBLIC_SUPABASE_URL!,
       process.env.NEXT_PUBLIC_SUPABASE_KEY!,
       {
         cookies: {
           getAll() {
-            return cookieStore.getAll();
+            return request.cookies.getAll();
           },
           setAll(cookiesToSet) {
+            // Write Supabase's refreshed session cookies onto the
+            // outgoing response so the browser actually receives them.
             cookiesToSet.forEach(({ name, value, options }) => {
-              cookieStore.set(name, value, options);
+              response.cookies.set({ name, value, ...options });
             });
           },
         },
@@ -34,11 +54,5 @@ export async function GET(request: NextRequest) {
     await supabase.auth.exchangeCodeForSession(code);
   }
 
-  // Check if this is a password reset flow
-  const type = requestUrl.searchParams.get("type");
-  if (type === "recovery") {
-    return NextResponse.redirect(new URL("/auth/reset-password", request.url));
-  }
-
-  return NextResponse.redirect(new URL(safeNext, request.url));
+  return response;
 }
