@@ -1,6 +1,7 @@
 import "server-only";
 
-import { createClient } from "@supabase/supabase-js";
+import { createServerClient } from "@supabase/ssr";
+import { cookies } from "next/headers";
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_KEY;
@@ -11,14 +12,23 @@ if (!supabaseUrl || !supabaseAnonKey) {
   );
 }
 
-export function createServerSupabaseClient() {
-  const url = supabaseUrl!;
-  const anonKey = supabaseAnonKey!;
-
-  return createClient(url, anonKey, {
-    auth: {
-      persistSession: false,
-      autoRefreshToken: false,
+export async function createServerSupabaseClient() {
+  const cookieStore = await cookies();
+  return createServerClient(supabaseUrl!, supabaseAnonKey!, {
+    cookies: {
+      getAll() {
+        return cookieStore.getAll();
+      },
+      setAll(cookiesToSet) {
+        try {
+          cookiesToSet.forEach(({ name, value, options }) => {
+            cookieStore.set(name, value, options);
+          });
+        } catch {
+          // cookieStore.set throws in Server Components; middleware
+          // refreshes session cookies in that case.
+        }
+      },
     },
   });
 }

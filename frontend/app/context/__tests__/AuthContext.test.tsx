@@ -41,6 +41,7 @@ const mockOnAuthStateChange: jest.Mock = jest.fn(() => ({
 }));
 
 const mockGetSession = jest.fn();
+const mockGetUser = jest.fn();
 const mockSignUp = jest.fn();
 const mockSignInWithPassword = jest.fn();
 const mockSignOut = jest.fn();
@@ -49,13 +50,14 @@ const mockUpdateUser = jest.fn();
 const mockFrom = jest.fn();
 const mockSelect = jest.fn();
 const mockEq = jest.fn();
-const mockSingle = jest.fn();
+const mockMaybeSingle = jest.fn();
 const mockInsert = jest.fn();
 
 jest.mock("../../lib/supabase", () => ({
   supabase: {
     auth: {
       getSession: () => mockGetSession(),
+      getUser: () => mockGetUser(),
       signUp: (params: { email: string; password: string; options?: object }) =>
         mockSignUp(params),
       signInWithPassword: (params: { email: string; password: string }) =>
@@ -63,8 +65,8 @@ jest.mock("../../lib/supabase", () => ({
       signOut: () => mockSignOut(),
       onAuthStateChange: (callback: (event: string, session: MockSession | null) => void) =>
         mockOnAuthStateChange(callback),
-      resetPasswordForEmail: (email: string, options: object) =>
-        mockResetPasswordForEmail(email, options),
+      resetPasswordForEmail: (email: string) =>
+        mockResetPasswordForEmail(email),
       updateUser: (params: { password: string }) => mockUpdateUser(params),
     },
     from: (table: string) => mockFrom(table),
@@ -81,7 +83,7 @@ beforeEach(() => {
     eq: mockEq,
   });
   mockEq.mockReturnValue({
-    single: mockSingle,
+    maybeSingle: mockMaybeSingle,
   });
   mockInsert.mockResolvedValue({ data: null, error: null });
 });
@@ -123,7 +125,11 @@ describe("AuthContext", () => {
       data: { session: null },
       error: null,
     });
-    mockSingle.mockResolvedValue({
+    mockGetUser.mockResolvedValue({
+      data: { user: null },
+      error: null,
+    });
+    mockMaybeSingle.mockResolvedValue({
       data: null,
       error: null,
     });
@@ -180,7 +186,8 @@ describe("AuthContext", () => {
         data: { session: mockSession },
         error: null,
       });
-      mockSingle.mockResolvedValue({
+      mockGetUser.mockResolvedValue({ data: { user: mockSession.user }, error: null });
+      mockMaybeSingle.mockResolvedValue({
         data: { id: "user-123", username: "testuser", email: "test@example.com" },
         error: null,
       });
@@ -199,7 +206,8 @@ describe("AuthContext", () => {
         data: { session: mockSession },
         error: null,
       });
-      mockSingle.mockResolvedValue({
+      mockGetUser.mockResolvedValue({ data: { user: mockSession.user }, error: null });
+      mockMaybeSingle.mockResolvedValue({
         data: { id: "user-456", username: "profileuser", email: "user@test.com" },
         error: null,
       });
@@ -257,7 +265,7 @@ describe("AuthContext", () => {
         user: { id: "new-user", email: "new@example.com" },
         access_token: "new-token",
       };
-      mockSingle.mockResolvedValue({
+      mockMaybeSingle.mockResolvedValue({
         data: { id: "new-user", username: "newuser", email: "new@example.com" },
         error: null,
       });
@@ -292,7 +300,8 @@ describe("AuthContext", () => {
         data: { session: initialSession },
         error: null,
       });
-      mockSingle.mockResolvedValue({
+      mockGetUser.mockResolvedValue({ data: { user: initialSession.user }, error: null });
+      mockMaybeSingle.mockResolvedValue({
         data: { id: "user-123", username: "testuser", email: "test@example.com" },
         error: null,
       });
@@ -349,7 +358,7 @@ describe("AuthContext", () => {
       });
     });
 
-    it("should create profile in database after successful signup", async () => {
+    it("should not insert profile client-side (handled by DB trigger)", async () => {
       mockGetSession.mockResolvedValue({ data: { session: null }, error: null });
       mockSignUp.mockResolvedValue({
         data: { user: { id: "created-user-id" } },
@@ -369,11 +378,7 @@ describe("AuthContext", () => {
         await capturedAuth!.signUp("profile@example.com", "password123", "profileuser");
       });
 
-      expect(mockInsert).toHaveBeenCalledWith({
-        id: "created-user-id",
-        username: "profileuser",
-        email: "profile@example.com",
-      });
+      expect(mockInsert).not.toHaveBeenCalled();
     });
 
     it("should return error when signup fails", async () => {
@@ -447,6 +452,7 @@ describe("AuthContext", () => {
       expect(mockSignInWithPassword).toHaveBeenCalledWith({
         email: "user@example.com",
         password: "mypassword",
+        options: { captchaToken: undefined },
       });
     });
 
@@ -501,8 +507,9 @@ describe("AuthContext", () => {
         access_token: "token-123",
       };
       mockGetSession.mockResolvedValue({ data: { session: mockSession }, error: null });
+      mockGetUser.mockResolvedValue({ data: { user: mockSession.user }, error: null });
       mockSignOut.mockResolvedValue({ error: null });
-      mockSingle.mockResolvedValue({
+      mockMaybeSingle.mockResolvedValue({
         data: { id: "user-123", username: "testuser", email: "test@example.com" },
         error: null,
       });
@@ -529,8 +536,9 @@ describe("AuthContext", () => {
         access_token: "token-123",
       };
       mockGetSession.mockResolvedValue({ data: { session: mockSession }, error: null });
+      mockGetUser.mockResolvedValue({ data: { user: mockSession.user }, error: null });
       mockSignOut.mockResolvedValue({ error: null });
-      mockSingle.mockResolvedValue({
+      mockMaybeSingle.mockResolvedValue({
         data: { id: "user-123", username: "testuser", email: "test@example.com" },
         error: null,
       });
@@ -572,10 +580,7 @@ describe("AuthContext", () => {
         await capturedAuth!.resetPassword("reset@example.com");
       });
 
-      expect(mockResetPasswordForEmail).toHaveBeenCalledWith(
-        "reset@example.com",
-        { redirectTo: "http://localhost:3000/auth/reset-password" }
-      );
+      expect(mockResetPasswordForEmail).toHaveBeenCalledWith("reset@example.com");
     });
 
     it("should return null error on success", async () => {
@@ -629,8 +634,9 @@ describe("AuthContext", () => {
         access_token: "token-123",
       };
       mockGetSession.mockResolvedValue({ data: { session: mockSession }, error: null });
+      mockGetUser.mockResolvedValue({ data: { user: mockSession.user }, error: null });
       mockUpdateUser.mockResolvedValue({ error: null });
-      mockSingle.mockResolvedValue({
+      mockMaybeSingle.mockResolvedValue({
         data: { id: "user-123", username: "testuser", email: "test@example.com" },
         error: null,
       });
@@ -704,7 +710,8 @@ describe("AuthContext", () => {
         access_token: "token-123",
       };
       mockGetSession.mockResolvedValue({ data: { session: mockSession }, error: null });
-      mockSingle.mockResolvedValue({
+      mockGetUser.mockResolvedValue({ data: { user: mockSession.user }, error: null });
+      mockMaybeSingle.mockResolvedValue({
         data: null,
         error: { message: "Profile not found" },
       });
@@ -724,7 +731,8 @@ describe("AuthContext", () => {
         access_token: "token-123",
       };
       mockGetSession.mockResolvedValue({ data: { session: mockSession }, error: null });
-      mockSingle.mockResolvedValue({
+      mockGetUser.mockResolvedValue({ data: { user: mockSession.user }, error: null });
+      mockMaybeSingle.mockResolvedValue({
         data: { id: "user-123", username: "fetcheduser", email: "test@example.com" },
         error: null,
       });
@@ -803,7 +811,8 @@ describe("AuthContext", () => {
         access_token: "token-123",
       };
       mockGetSession.mockResolvedValue({ data: { session: mockSession }, error: null });
-      mockSingle.mockResolvedValue({
+      mockGetUser.mockResolvedValue({ data: { user: mockSession.user }, error: null });
+      mockMaybeSingle.mockResolvedValue({
         data: { id: "user-123", username: null, email: null },
         error: null,
       });

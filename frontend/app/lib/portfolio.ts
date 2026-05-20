@@ -54,43 +54,51 @@ export async function getOrCreatePortfolio(userId: string): Promise<Portfolio | 
 }
 
 /**
- * Get portfolio by ID
+ * Get portfolio by ID. Caller passes userId so we filter by owner
+ * server-side as defense-in-depth on top of RLS.
  */
-export async function getPortfolioById(portfolioId: number): Promise<Portfolio | null> {
+export async function getPortfolioById(
+  portfolioId: number,
+  userId: string
+): Promise<Portfolio | null> {
   const { data, error } = await supabase
     .from("portfolios")
     .select("*")
     .eq("id", portfolioId)
-    .single();
+    .eq("user_id", userId)
+    .maybeSingle();
 
   if (error) {
-    console.error("Error fetching portfolio:", error);
+    console.error("portfolio_fetch_failed", { code: error.code });
     return null;
   }
 
-  return data as Portfolio;
+  return data as Portfolio | null;
 }
 
 /**
- * Update portfolio name
+ * Update portfolio name. Ownership-checked to defend against
+ * accidental RLS regressions.
  */
 export async function updatePortfolioName(
   portfolioId: number,
+  userId: string,
   name: string
 ): Promise<Portfolio | null> {
   const { data, error } = await supabase
     .from("portfolios")
     .update({ name })
     .eq("id", portfolioId)
+    .eq("user_id", userId)
     .select()
-    .single();
+    .maybeSingle();
 
   if (error) {
-    console.error("Error updating portfolio:", error);
+    console.error("portfolio_update_failed", { code: error.code });
     return null;
   }
 
-  return data as Portfolio;
+  return data as Portfolio | null;
 }
 
 // ============================================
@@ -123,13 +131,37 @@ export async function getHoldings(portfolioId: number): Promise<HoldingWithProdu
 }
 
 /**
- * Get a single holding by ID
+ * Pre-flight ownership check. Returns true if the given holding
+ * belongs to a portfolio owned by userId. Used as defense-in-depth
+ * on top of RLS for mutations that don't accept a join filter.
  */
-export async function getHoldingById(holdingId: number): Promise<HoldingWithProduct | null> {
+async function userOwnsHolding(holdingId: number, userId: string): Promise<boolean> {
+  const { data, error } = await supabase
+    .from("portfolio_holdings")
+    .select("id, portfolios!inner(user_id)")
+    .eq("id", holdingId)
+    .eq("portfolios.user_id", userId)
+    .maybeSingle();
+  if (error) {
+    console.error("ownership_check_failed", { code: error.code });
+    return false;
+  }
+  return data !== null;
+}
+
+/**
+ * Get a single holding by ID, scoped to the calling user via an
+ * inner join on portfolios.user_id.
+ */
+export async function getHoldingById(
+  holdingId: number,
+  userId: string
+): Promise<HoldingWithProduct | null> {
   const { data, error } = await supabase
     .from("portfolio_holdings")
     .select(`
       id, portfolio_id, product_id, quantity, purchase_price_usd, purchase_date, notes, created_at, updated_at,
+      portfolios!inner ( user_id ),
       products (
         id, usd_price, image_url, variant, url,
         sets ( id, name, code, release_date, expansion_type, generations ( id, name ) ),
@@ -137,18 +169,21 @@ export async function getHoldingById(holdingId: number): Promise<HoldingWithProd
       )
     `)
     .eq("id", holdingId)
-    .single();
+    .eq("portfolios.user_id", userId)
+    .maybeSingle();
 
   if (error) {
-    console.error("Error fetching holding:", error);
+    console.error("holding_fetch_failed", { code: error.code });
     return null;
   }
 
-  return data as unknown as HoldingWithProduct;
+  return data as unknown as HoldingWithProduct | null;
 }
 
 /**
- * Add a new holding to the portfolio
+ * Add a new holding to the portfolio. Accepts an idempotency key so
+ * a retried submit doesn't double-insert (unique index on
+ * (portfolio_id, client_idempotency_key) enforces this in the DB).
  */
 export async function addHolding(holding: NewHolding): Promise<Holding | null> {
   const { data, error } = await supabase
@@ -160,12 +195,18 @@ export async function addHolding(holding: NewHolding): Promise<Holding | null> {
       purchase_price_usd: holding.purchase_price_usd,
       purchase_date: holding.purchase_date,
       notes: holding.notes || null,
+      client_idempotency_key:
+        holding.client_idempotency_key ?? crypto.randomUUID(),
     })
     .select()
     .single();
 
   if (error) {
-    console.error("Error adding holding:", error);
+    // 23505 = unique_violation; treat as success (idempotent retry).
+    if (error.code === "23505") {
+      return null;
+    }
+    console.error("holding_insert_failed", { code: error.code });
     return null;
   }
 
@@ -173,38 +214,47 @@ export async function addHolding(holding: NewHolding): Promise<Holding | null> {
 }
 
 /**
- * Update an existing holding
+ * Update an existing holding. Caller supplies userId so we can
+ * verify ownership server-side before issuing the UPDATE.
  */
 export async function updateHolding(
   holdingId: number,
+  userId: string,
   updates: UpdateHolding
 ): Promise<Holding | null> {
+  if (!(await userOwnsHolding(holdingId, userId))) return null;
+
   const { data, error } = await supabase
     .from("portfolio_holdings")
     .update(updates)
     .eq("id", holdingId)
     .select()
-    .single();
+    .maybeSingle();
 
   if (error) {
-    console.error("Error updating holding:", error);
+    console.error("holding_update_failed", { code: error.code });
     return null;
   }
 
-  return data as Holding;
+  return data as Holding | null;
 }
 
 /**
- * Delete a holding
+ * Delete a holding after verifying the caller owns it.
  */
-export async function deleteHolding(holdingId: number): Promise<boolean> {
+export async function deleteHolding(
+  holdingId: number,
+  userId: string
+): Promise<boolean> {
+  if (!(await userOwnsHolding(holdingId, userId))) return false;
+
   const { error } = await supabase
     .from("portfolio_holdings")
     .delete()
     .eq("id", holdingId);
 
   if (error) {
-    console.error("Error deleting holding:", error);
+    console.error("holding_delete_failed", { code: error.code });
     return false;
   }
 
@@ -389,6 +439,15 @@ export async function getPortfolioHistory(
 // ============================================
 
 /**
+ * Escape Postgres LIKE/ILIKE special characters so user-supplied
+ * input cannot be used to enumerate via wildcards (e.g. "%" matching
+ * everything when a single character was intended).
+ */
+function escapeLike(input: string): string {
+  return input.replace(/[%_\\]/g, "\\$&");
+}
+
+/**
  * Search products for adding to portfolio
  */
 export async function searchProducts(query: string): Promise<ProductSearchResult[]> {
@@ -401,11 +460,11 @@ export async function searchProducts(query: string): Promise<ProductSearchResult
       sets ( name, code ),
       product_types ( name, label )
     `)
-    .ilike("variant", `%${query}%`)
+    .ilike("variant", `%${escapeLike(query)}%`)
     .limit(20);
 
   if (error) {
-    console.error("Error searching products:", error);
+    console.error("product_search_failed", { code: error.code });
     return [];
   }
 
@@ -420,7 +479,7 @@ export async function searchProductsBySet(setName: string): Promise<ProductSearc
   const { data: setsData, error: setsError } = await supabase
     .from("sets")
     .select("id")
-    .ilike("name", `%${setName}%`);
+    .ilike("name", `%${escapeLike(setName)}%`);
 
   if (setsError || !setsData || setsData.length === 0) {
     if (setsError) console.error("Error searching sets:", setsError);

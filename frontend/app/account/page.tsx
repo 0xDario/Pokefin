@@ -121,6 +121,7 @@ export default function AccountPage() {
     try {
       const response = await fetch("/api/account/delete", {
         method: "DELETE",
+        headers: { "x-pokefin-request": "1" },
       });
 
       if (!response.ok) {

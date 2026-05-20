@@ -6,12 +6,11 @@ import { useAuth } from "../../../context/AuthContext";
 import { BoxRecipe, PackEntry } from "../types";
 
 function generateShareCode(): string {
-  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789";
-  let code = "";
-  for (let i = 0; i < 8; i++) {
-    code += chars.charAt(Math.floor(Math.random() * chars.length));
-  }
-  return code;
+  // 16 bytes = 128 bits of entropy. crypto.getRandomValues is a CSPRNG,
+  // unlike Math.random which is predictable.
+  const bytes = new Uint8Array(16);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
 }
 
 function toDbPacks(packs: PackEntry[]): { set_id: number; quantity: number }[] {
@@ -46,7 +45,7 @@ export function useBoxRecipes(setNameMap: Map<number, string>) {
       .order("updated_at", { ascending: false });
 
     if (error) {
-      console.error("[useBoxRecipes] Load error:", error);
+      console.error("recipes_load_failed", { code: error.code });
       setRecipesLoading(false);
       return;
     }
@@ -60,6 +59,7 @@ export function useBoxRecipes(setNameMap: Map<number, string>) {
           promoValue: r.promo_value,
           packs: fromDbPacks(r.packs || [], setNameMap),
           shareCode: r.share_code,
+          isPublic: r.is_public,
           userId: r.user_id,
           createdAt: r.created_at,
           updatedAt: r.updated_at,
@@ -74,7 +74,12 @@ export function useBoxRecipes(setNameMap: Map<number, string>) {
     async (recipe: BoxRecipe): Promise<BoxRecipe | null> => {
       if (!user) return null;
 
-      const shareCode = recipe.shareCode || generateShareCode();
+      // Only generate / persist a share code when the user explicitly
+      // makes the recipe public. Never auto-share on save.
+      const isPublic = recipe.isPublic === true;
+      const shareCode = isPublic
+        ? recipe.shareCode || generateShareCode()
+        : null;
 
       if (recipe.id) {
         // Update existing
@@ -86,6 +91,7 @@ export function useBoxRecipes(setNameMap: Map<number, string>) {
             promo_value: recipe.promoValue,
             packs: toDbPacks(recipe.packs),
             share_code: shareCode,
+            is_public: isPublic,
             updated_at: new Date().toISOString(),
           })
           .eq("id", recipe.id)
@@ -94,13 +100,14 @@ export function useBoxRecipes(setNameMap: Map<number, string>) {
           .single();
 
         if (error) {
-          console.error("[useBoxRecipes] Update error:", error);
+          console.error("recipe_update_failed", { code: error.code });
           return null;
         }
 
         const updated: BoxRecipe = {
           ...recipe,
           shareCode: data.share_code,
+          isPublic: data.is_public,
           updatedAt: data.updated_at,
         };
 
@@ -120,12 +127,13 @@ export function useBoxRecipes(setNameMap: Map<number, string>) {
             promo_value: recipe.promoValue,
             packs: toDbPacks(recipe.packs),
             share_code: shareCode,
+            is_public: isPublic,
           })
           .select()
           .single();
 
         if (error) {
-          console.error("[useBoxRecipes] Insert error:", error);
+          console.error("recipe_insert_failed", { code: error.code });
           return null;
         }
 
@@ -133,6 +141,7 @@ export function useBoxRecipes(setNameMap: Map<number, string>) {
           ...recipe,
           id: data.id,
           shareCode: data.share_code,
+          isPublic: data.is_public,
           userId: data.user_id,
           createdAt: data.created_at,
           updatedAt: data.updated_at,
@@ -156,7 +165,7 @@ export function useBoxRecipes(setNameMap: Map<number, string>) {
         .eq("user_id", user.id);
 
       if (error) {
-        console.error("[useBoxRecipes] Delete error:", error);
+        console.error("recipe_delete_failed", { code: error.code });
         return;
       }
 
@@ -167,27 +176,31 @@ export function useBoxRecipes(setNameMap: Map<number, string>) {
 
   const loadSharedRecipe = useCallback(
     async (shareCode: string): Promise<BoxRecipe | null> => {
-      const { data, error } = await supabase
-        .from("box_recipes")
-        .select("*")
-        .eq("share_code", shareCode)
-        .single();
+      // The get_shared_recipe RPC returns at most one row matched
+      // by exact share_code AND is_public=true. The anon role
+      // cannot enumerate via PostgREST filters because direct table
+      // SELECT for non-owners is denied by RLS.
+      const { data, error } = await supabase.rpc("get_shared_recipe", {
+        p_share_code: shareCode,
+      });
 
-      if (error || !data) {
-        console.error("[useBoxRecipes] Share load error:", error);
+      if (error || !data || data.length === 0) {
+        if (error) console.error("shared_recipe_fetch_failed", { code: error.code });
         return null;
       }
 
+      const row = Array.isArray(data) ? data[0] : data;
       return {
-        id: data.id,
-        name: data.name,
-        retailPrice: data.retail_price,
-        promoValue: data.promo_value,
-        packs: fromDbPacks(data.packs || [], setNameMap),
-        shareCode: data.share_code,
-        userId: data.user_id,
-        createdAt: data.created_at,
-        updatedAt: data.updated_at,
+        id: row.id,
+        name: row.name,
+        retailPrice: row.retail_price,
+        promoValue: row.promo_value,
+        packs: fromDbPacks(row.packs || [], setNameMap),
+        shareCode: row.share_code,
+        isPublic: row.is_public,
+        userId: row.user_id,
+        createdAt: row.created_at,
+        updatedAt: row.updated_at,
       };
     },
     [setNameMap]
