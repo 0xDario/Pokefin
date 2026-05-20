@@ -1,16 +1,20 @@
-# Pokefin Hardening — Remaining Manual Steps
+# Pokefin Hardening — Manual Follow-ups Status
 
 The code commits on `claude/security-vulnerability-analysis-LT3JQ`
 land the file-level fixes (RLS migrations, security headers,
 middleware, SSR cookies, account-delete RPC, CSRF gate, defense-in-
 depth filters, CSPRNG share codes). A few items can't be fixed from
-the repo alone — they need Supabase dashboard, Vercel env, or infra
-decisions. This document lists exactly what to do.
+the repo alone and require dashboard/infra configuration.
 
-## 1. Apply the new migrations to production
+Status snapshot (2026-05-19):
+- Completed: sections 1, 2 (except leaked-password toggle), and 3.
+- Deferred by plan: leaked-password protection (Supabase Pro+ feature).
+- Remaining optional/deferred work: sections 4-6.
 
-Order matters; run them in numeric order via Supabase CLI or the
-SQL editor. They're idempotent so re-running is safe.
+## 1. Apply the new migrations to production (done)
+
+Applied in production via Supabase MCP in numeric order. They are
+idempotent and safe to re-run.
 
 ```bash
 supabase db push                  # or paste each file in the SQL editor
@@ -20,9 +24,11 @@ supabase db push                  # or paste each file in the SQL editor
 #   migrations/0003_integrity_constraints.sql
 #   migrations/0004_handle_new_user_trigger.sql
 #   migrations/0005_box_recipes_share_code_hardening.sql
+#   migrations/0006_function_execute_grants_hardening.sql
 ```
 
-After applying, run the audit assertions:
+Verification queries were run and passed for RLS/policies, constraints,
+and function presence/grants.
 
 ```sql
 -- Every public table should have rls_on = t and policy_count >= 1.
@@ -46,30 +52,30 @@ because pre-existing rows already violate it, fix the offending rows
 first (`SELECT id, purchase_date FROM portfolio_holdings WHERE purchase_date > current_date`)
 and rerun.
 
-## 2. Supabase dashboard settings
+## 2. Supabase dashboard settings (mostly done)
 
 These are configured in the project dashboard (not in code):
 
-| Setting | Where | Required value | Audit ref |
-|---|---|---|---|
-| Site URL | Auth → URL Configuration | `https://pokefin.ca` | M-3 |
-| Redirect URLs allowlist | Auth → URL Configuration | `https://pokefin.ca/auth/callback`, `https://pokefin.ca/auth/reset-password` (+ localhost for dev) | M-3, L-1 |
-| Captcha protection | Auth → Captcha | Enable Turnstile, paste secret | H-5, L-3 |
-| Leaked password protection | Auth → Password policy | Enable HIBP check | L-2 |
-| Minimum password length | Auth → Password policy | 12 (current code allows 8) | L-2 |
-| Rate limits | Auth → Rate Limits | Defaults are conservative — verify | H-5 |
-| Email templates | Auth → Email Templates | Make sure reset/confirmation links use PKCE-compatible URLs (default OK) | M-2 |
+| Setting | Where | Required value | Status | Audit ref |
+|---|---|---|---|---|
+| Site URL | Auth → URL Configuration | `https://pokefin.ca` | Done | M-3 |
+| Redirect URLs allowlist | Auth → URL Configuration | `https://pokefin.ca/auth/callback`, `https://pokefin.ca/auth/reset-password` (+ localhost for dev) | Done | M-3, L-1 |
+| Captcha protection | Auth → Configuration → Attack Protection → Bot and Abuse Protection | Enable Turnstile, paste secret | Done | H-5, L-3 |
+| Leaked password protection | Auth → Configuration → Attack Protection | Enable HIBP check | Deferred (Supabase Pro+ only) | L-2 |
+| Minimum password length | Auth → Configuration → Password Security | 12 (current code allows 8) | Done | L-2 |
+| Rate limits | Auth → Rate Limits | Defaults are conservative — verify | Done | H-5 |
+| Email templates / confirmation | Auth → Email Templates / Providers | PKCE-compatible links and email confirmation enabled | Done | M-2 |
 
-## 3. Vercel environment variables
+## 3. Vercel environment variables (done)
 
 | Variable | Value | Notes |
 |---|---|---|
 | `NEXT_PUBLIC_SUPABASE_URL` | Supabase project URL | Already set |
 | `NEXT_PUBLIC_SUPABASE_KEY` | Supabase anon key | Already set |
-| `NEXT_PUBLIC_SITE_URL` | `https://pokefin.ca` | New — used by CSRF allowlist in `app/api/account/delete/route.ts` |
-| `SUPABASE_SERVICE_ROLE_KEY` | (remove) | No longer needed — the RPC replaces it. Delete it to shrink blast radius. |
+| `NEXT_PUBLIC_SITE_URL` | `https://pokefin.ca` | Added in production |
+| `SUPABASE_SERVICE_ROLE_KEY` | (remove) | Not present in production env list |
 
-After redeploying, verify the security headers landed:
+After redeploying, security headers were verified on `https://www.pokefin.ca`.
 
 ```bash
 curl -sI https://pokefin.ca | grep -iE 'content-security-policy|strict-transport-security|x-frame-options|x-content-type-options|referrer-policy|permissions-policy'
