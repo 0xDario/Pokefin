@@ -1,10 +1,5 @@
 import "@testing-library/jest-dom";
 
-// Mock window.location for tests that use it
-Object.defineProperty(window, "location", {
-  value: {
-    origin: "http://localhost:3000",
-    href: "http://localhost:3000",
-  },
-  writable: true,
-});
+// window.location.origin is provided by jest-environment-jsdom and configured
+// via testEnvironmentOptions.url in jest.config.js (jsdom 26 made the
+// location object non-configurable, so we no longer redefine it here).

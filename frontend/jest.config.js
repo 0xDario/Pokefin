@@ -9,6 +9,11 @@ const createJestConfig = nextJest({
 const customJestConfig = {
   setupFilesAfterEnv: ['<rootDir>/jest.setup.ts'],
   testEnvironment: 'jsdom',
+  // jsdom 26 (shipped with jest-environment-jsdom 30) makes window.location
+  // non-configurable. Set the origin here instead of redefining it in setup.
+  testEnvironmentOptions: {
+    url: 'http://localhost:3000/',
+  },
   moduleNameMapper: {
     '^@/(.*)$': '<rootDir>/$1',
   },
