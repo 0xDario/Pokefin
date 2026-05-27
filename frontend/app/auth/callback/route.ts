@@ -1,21 +1,25 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServerClient } from "@supabase/ssr";
+import { stripControlChars } from "../../lib/validation";
 
 function safeNextPath(raw: string | null): string {
   if (!raw) return "/";
+  // Strip ASCII control characters (CR/LF can split log lines or
+  // headers if the value is ever propagated).
+  const cleaned = stripControlChars(raw);
   // Only allow same-origin relative paths beginning with a single
   // forward slash. Block protocol-relative ("//evil"), URL-encoded
   // slashes, backslashes, and anything that decodes to a network-path
   // reference.
-  if (!raw.startsWith("/")) return "/";
-  if (raw.startsWith("//") || raw.startsWith("/\\")) return "/";
+  if (!cleaned.startsWith("/")) return "/";
+  if (cleaned.startsWith("//") || cleaned.startsWith("/\\")) return "/";
   try {
-    const decoded = decodeURIComponent(raw);
+    const decoded = decodeURIComponent(cleaned);
     if (decoded.startsWith("//") || decoded.startsWith("/\\")) return "/";
   } catch {
     return "/";
   }
-  return raw;
+  return cleaned;
 }
 
 export async function GET(request: NextRequest) {

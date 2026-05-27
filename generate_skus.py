@@ -19,7 +19,9 @@ import csv
 import logging
 from datetime import datetime
 from supabase import create_client
-from secretsFile import SUPABASE_URL, SUPABASE_KEY
+from secrets_loader import load_supabase_credentials
+
+SUPABASE_URL, SUPABASE_KEY = load_supabase_credentials()
 
 # === Logging Setup ===
 logging.basicConfig(

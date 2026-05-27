@@ -28,6 +28,13 @@ export async function DELETE(request: NextRequest) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
+  // Reject oversized request bodies. We don't read a body for DELETE
+  // anyway, but Content-Length above this cap suggests abuse.
+  const contentLength = parseInt(request.headers.get("content-length") ?? "0", 10);
+  if (Number.isFinite(contentLength) && contentLength > 1024) {
+    return NextResponse.json({ error: "Payload too large" }, { status: 413 });
+  }
+
   const cookieStore = await cookies();
   const supabase = createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,

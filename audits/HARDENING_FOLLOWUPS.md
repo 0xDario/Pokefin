@@ -6,10 +6,15 @@ middleware, SSR cookies, account-delete RPC, CSRF gate, defense-in-
 depth filters, CSPRNG share codes). A few items can't be fixed from
 the repo alone and require dashboard/infra configuration.
 
-Status snapshot (2026-05-19):
-- Completed: sections 1, 2 (except leaked-password toggle), and 3.
-- Deferred by plan: leaked-password protection (Supabase Pro+ feature).
-- Remaining optional/deferred work: sections 4-6.
+Status snapshot (2026-05-27):
+- Completed: sections 1 (all migrations 0001-0013 applied to prod),
+  2 (except leaked-password toggle), 3, 4 (in-memory rate limiter
+  shipped), 5 (privacy page + data export shipped).
+- Deferred by plan: leaked-password protection (Supabase Pro+ feature),
+  Upstash upgrade path noted but not required for current scale.
+- Remaining optional work: section 6 (manual curl/SQL verification),
+  section 7 (rotate scraper key, optional Sentry DSN, review privacy
+  copy, confirm CI on next PR).
 
 ## 1. Apply the new migrations to production (done)
 
@@ -19,12 +24,19 @@ idempotent and safe to re-run.
 ```bash
 supabase db push                  # or paste each file in the SQL editor
 # Files (in order):
-#   migrations/0001_enable_rls_and_policies.sql
-#   migrations/0002_account_deletion.sql
-#   migrations/0003_integrity_constraints.sql
-#   migrations/0004_handle_new_user_trigger.sql
-#   migrations/0005_box_recipes_share_code_hardening.sql
-#   migrations/0006_function_execute_grants_hardening.sql
+#   migrations/0001_enable_rls_and_policies.sql                 (applied)
+#   migrations/0002_account_deletion.sql                        (applied)
+#   migrations/0003_integrity_constraints.sql                   (applied)
+#   migrations/0004_handle_new_user_trigger.sql                 (applied)
+#   migrations/0005_box_recipes_share_code_hardening.sql        (applied)
+#   migrations/0006_function_execute_grants_hardening.sql       (applied)
+#   migrations/0007_search_path_hardening.sql                   (applied)
+#   migrations/0008_box_recipes_rls_hardening.sql               (applied)
+#   migrations/0009_db_resource_guards.sql                      (applied)
+#   migrations/0010_audit_log.sql                               (applied)
+#   migrations/0011_export_my_data.sql                          (applied)
+#   migrations/0012_advisor_followups.sql                       (applied)
+#   migrations/0013_revoke_anon_on_user_tables.sql              (applied)
 ```
 
 Verification queries were run and passed for RLS/policies, constraints,
@@ -71,9 +83,9 @@ These are configured in the project dashboard (not in code):
 | Variable | Value | Notes |
 |---|---|---|
 | `NEXT_PUBLIC_SUPABASE_URL` | Supabase project URL | Already set |
-| `NEXT_PUBLIC_SUPABASE_KEY` | Supabase anon key | Already set |
+| `NEXT_PUBLIC_SUPABASE_KEY` | `sb_publishable_…` (modern publishable key) | Migrated from legacy `eyJ…` anon JWT 2026-05-27 |
 | `NEXT_PUBLIC_SITE_URL` | `https://pokefin.ca` | Added in production |
-| `SUPABASE_SERVICE_ROLE_KEY` | (remove) | Not present in production env list |
+| `SUPABASE_SERVICE_ROLE_KEY` | (not used by web tier) | Web app uses the publishable key; the scraper uses `sb_secret_…` via its own env file |
 
 After redeploying, security headers were verified on `https://www.pokefin.ca`.
 
@@ -83,49 +95,74 @@ curl -sI https://pokefin.ca | grep -iE 'content-security-policy|strict-transport
 
 All six headers should appear.
 
-## 4. Rate limiting (deferred — needs Upstash)
+## 4. Rate limiting (shipped: in-memory limiter)
 
-The audit's H-5 fix uses `@upstash/ratelimit` + `@upstash/redis`. Not
-yet committed because it requires an Upstash account. To enable:
+Implemented in `frontend/app/lib/rateLimit.ts` and wired into
+`frontend/middleware.ts`. 60 req/min general, 5 req/min for
+`/api/account/*` and `/auth/*`. Limit state is per-instance (not
+durable across serverless cold starts) — that's the known tradeoff
+for shipping without an external account.
+
+Upgrade path: when scale or attacker volume justifies it, swap to
+Upstash Redis:
 
 ```bash
 cd frontend
 npm install @upstash/ratelimit @upstash/redis
 ```
 
-Then add to `frontend/middleware.ts` inside the existing `middleware`
-function (before the auth gate):
+Then replace the call in `middleware.ts` with the Upstash limiter
+keyed identically (`${routeClass}:${ip}`). Set
+`UPSTASH_REDIS_REST_URL` and `UPSTASH_REDIS_REST_TOKEN` in Vercel.
+Cloudflare WAF rate-limiting rules are an equivalent alternative
+that needs no code change.
 
-```ts
-import { Ratelimit } from "@upstash/ratelimit";
-import { Redis } from "@upstash/redis";
+## 5. Privacy + GDPR (shipped)
 
-const limiter = new Ratelimit({
-  redis: Redis.fromEnv(),
-  limiter: Ratelimit.fixedWindow(60, "1 m"),
-  prefix: "pokefin:rl",
-});
-
-const ip = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? "anon";
-if (req.nextUrl.pathname.startsWith("/api/") || req.nextUrl.pathname.startsWith("/auth/")) {
-  const { success } = await limiter.limit(`ip:${ip}`);
-  if (!success) return new NextResponse("Too Many Requests", { status: 429 });
-}
-```
-
-Set `UPSTASH_REDIS_REST_URL` and `UPSTASH_REDIS_REST_TOKEN` in Vercel.
-Cloudflare WAF rate-limiting rules are an equivalent alternative.
-
-## 5. Privacy + GDPR follow-ups (not security but compliance)
-
-- Publish a privacy notice at `/privacy` (Art. 13 / 14).
-- Add an "Export my data" route that returns the user's portfolios +
-  holdings + box recipes as JSON or CSV (Art. 15 / 20).
-- Add an `auth_events` audit table written from a Supabase trigger on
-  `auth.users` (Art. 33).
+- `/privacy` page lists data we collect, sub-processors, retention,
+  and user rights (Art. 13/14).
+- "Export my data" button on `/account` calls the new
+  `POST /api/account/export`, which invokes the `export_my_data()`
+  RPC (migration `0011`) and downloads a JSON of profile +
+  portfolios + holdings + lots + box recipes (Art. 15/20).
+- `auth_events` table populated by a trigger on `auth.users` (created
+  / deleted / password_changed / email_confirmed) plus explicit
+  `account_deletion_requested` and `data_exported` rows from the
+  RPCs (Art. 33 prerequisite). Migration `0010`.
 
 ## 6. Manual verification curl/SQL suite
 
 After deploying, run the testing guide from
 `audits/comprehensive-security-report.md` §Testing Guide (T1–T11).
 All probes should return the expected 401/403/429/redirect results.
+
+## 7. Round-2 follow-ups
+
+- **Migrations 0008–0014 applied** (2026-05-27, via Supabase MCP).
+  Advisor re-run confirms all critical issues resolved; remaining
+  warnings are intentional (reference-table anon SELECT, definer
+  functions with internal scoping, Pro+ leaked-password toggle).
+- **Optional**: create a Sentry project, add `NEXT_PUBLIC_SENTRY_DSN`
+  to Vercel (and `SENTRY_AUTH_TOKEN` + `SENTRY_ORG` + `SENTRY_PROJECT`
+  if you want source-map upload). Sentry wiring is no-op until DSN is
+  set.
+- **Scraper key migration completed** (2026-05-27):
+  - JWT signing key migrated symmetric HS256 → asymmetric ECC P-256
+    (HS256 retained as standby for the rollback window).
+  - New publishable / secret API keys generated.
+  - `NEXT_PUBLIC_SUPABASE_KEY` in Vercel swapped to `sb_publishable_…`;
+    web app verified end-to-end in incognito.
+  - Scraper on home laptop swapped to `sb_secret_…` via
+    `~/.config/pokefin/env` (`run_scraper.sh` sources it before invoking
+    `main.py`). `secretsFile.SUPABASE_KEY` blanked out on the host;
+    `secrets_loader.py` now reads exclusively from env.
+  - Legacy `anon` and `service_role` JWT-based API keys **revoked** in
+    the Supabase dashboard.
+- **Pending**: revoke the **HS256 standby JWT signing key** after
+  ~30 days. Until then, sessions issued before the asymmetric migration
+  remain verifiable. After 30 days every active session will have
+  rotated to ECC P-256 and the standby can be safely retired.
+- **Review `/privacy` page copy** for legal accuracy and add a contact
+  email/handle (currently points at the GitHub repo).
+- **CI**: confirm the new GitHub Actions workflow runs on the next PR
+  (tsc + lint + jest + npm audit + pip-audit + trufflehog).

@@ -15,17 +15,24 @@ import {
   MarketSummaryRow,
   SetAnalyticsRow,
 } from "./marketData";
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_KEY;
+import { logSupabaseError } from "./logger";
+const supabaseUrl =
+  process.env.NEXT_PUBLIC_SUPABASE_URL || "https://placeholder.supabase.invalid";
+const supabaseAnonKey =
+  process.env.NEXT_PUBLIC_SUPABASE_KEY || "placeholder-key";
 
-if (!supabaseUrl || !supabaseAnonKey) {
-  throw new Error(
-    "Missing Supabase environment variables. Please set NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_KEY."
+if (
+  !process.env.NEXT_PUBLIC_SUPABASE_URL ||
+  !process.env.NEXT_PUBLIC_SUPABASE_KEY
+) {
+  // eslint-disable-next-line no-console
+  console.warn(
+    "[serverMarketData] NEXT_PUBLIC_SUPABASE_URL or NEXT_PUBLIC_SUPABASE_KEY is unset; using placeholders, runtime calls will fail."
   );
 }
 
 function createMarketDataSupabaseClient() {
-  return createClient(supabaseUrl!, supabaseAnonKey!, {
+  return createClient(supabaseUrl, supabaseAnonKey, {
     auth: {
       autoRefreshToken: false,
       persistSession: false,
@@ -199,8 +206,11 @@ async function fetchSetAnalyticsFallback(): Promise<SetAnalyticsRow[]> {
     recorded_at: string;
   }> = [];
 
+  // Bounded loop - MAX_PAGES * PAGE_SIZE caps the worst-case fetch
+  // so a runaway query can't tie up a serverless function indefinitely.
+  const MAX_PAGES = 50;
   let from = 0;
-  while (true) {
+  for (let page = 0; page < MAX_PAGES; page++) {
     const to = from + PAGE_SIZE - 1;
     const { data, error } = await supabase
       .from("product_price_history")
@@ -457,7 +467,7 @@ async function fetchProductDetail(
     .order("recorded_at", { ascending: true });
 
   if (error) {
-    console.error("[serverMarketData] product history fetch failed:", error);
+    logSupabaseError("server_product_history_failed", error);
   }
 
   const history = groupHistoryRowsByProduct(historyRows || [])[productId] || [];
@@ -529,8 +539,11 @@ async function fetchProductsWithFallbackReturns(): Promise<Product[]> {
     recorded_at: string;
   }> = [];
 
+  // Bounded loop - MAX_PAGES * PAGE_SIZE caps the worst-case fetch
+  // so a runaway query can't tie up a serverless function indefinitely.
+  const MAX_PAGES = 50;
   let from = 0;
-  while (true) {
+  for (let page = 0; page < MAX_PAGES; page++) {
     const to = from + PAGE_SIZE - 1;
     const { data, error } = await supabase
       .from("product_price_history")
@@ -587,7 +600,7 @@ async function fetchSetAnalytics(): Promise<SetAnalyticsRow[]> {
   const { data, error } = await supabase.rpc("get_set_analytics");
 
   if (error) {
-    console.error("[serverMarketData] get_set_analytics failed:", error);
+    logSupabaseError("server_set_analytics_failed", error);
     return fetchSetAnalyticsFallback();
   }
 

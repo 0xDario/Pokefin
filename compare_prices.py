@@ -22,10 +22,17 @@ import os
 import requests
 from datetime import datetime
 from supabase import create_client
-from secretsFile import SUPABASE_URL, SUPABASE_KEY
+from secrets_loader import (
+    load_shopify_credentials,
+    load_supabase_credentials,
+)
+
+SUPABASE_URL, SUPABASE_KEY = load_supabase_credentials()
 try:
-    from secretsFile import SHOPIFY_STORE_DOMAIN, SHOPIFY_ADMIN_API_TOKEN, SHOPIFY_API_VERSION
-except ImportError:
+    SHOPIFY_STORE_DOMAIN, SHOPIFY_ADMIN_API_TOKEN, SHOPIFY_API_VERSION = (
+        load_shopify_credentials()
+    )
+except RuntimeError:
     SHOPIFY_STORE_DOMAIN = ""
     SHOPIFY_ADMIN_API_TOKEN = ""
     SHOPIFY_API_VERSION = "2024-07"
