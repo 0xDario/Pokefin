@@ -66,9 +66,7 @@ export default function ProductImage({
           onLoad={handleImageLoad}
           onError={handleImageError}
           loading="lazy"
-          unoptimized={
-            imageUrl.includes("tcgplayer") || imageUrl.includes("external")
-          }
+          unoptimized
         />
       </div>
     </div>
