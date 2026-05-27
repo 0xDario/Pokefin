@@ -81,6 +81,9 @@ jobs:
       - uses: trufflesecurity/trufflehog@main
         with:
           path: ./
-          base: ${{ github.event.repository.default_branch }}
-          head: HEAD
+          # On pull_request, diff the PR branch against the base. On push,
+          # leave base/head unset so the action auto-detects from the push
+          # event (otherwise master == HEAD and the action errors out).
+          base: ${{ github.event_name == 'pull_request' && github.event.repository.default_branch || '' }}
+          head: ${{ github.event_name == 'pull_request' && 'HEAD' || '' }}
           extra_args: --only-verified
