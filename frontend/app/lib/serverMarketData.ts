@@ -199,8 +199,11 @@ async function fetchSetAnalyticsFallback(): Promise<SetAnalyticsRow[]> {
     recorded_at: string;
   }> = [];
 
+  // Bounded loop - MAX_PAGES * PAGE_SIZE caps the worst-case fetch
+  // so a runaway query can't tie up a serverless function indefinitely.
+  const MAX_PAGES = 50;
   let from = 0;
-  while (true) {
+  for (let page = 0; page < MAX_PAGES; page++) {
     const to = from + PAGE_SIZE - 1;
     const { data, error } = await supabase
       .from("product_price_history")
@@ -529,8 +532,11 @@ async function fetchProductsWithFallbackReturns(): Promise<Product[]> {
     recorded_at: string;
   }> = [];
 
+  // Bounded loop - MAX_PAGES * PAGE_SIZE caps the worst-case fetch
+  // so a runaway query can't tie up a serverless function indefinitely.
+  const MAX_PAGES = 50;
   let from = 0;
-  while (true) {
+  for (let page = 0; page < MAX_PAGES; page++) {
     const to = from + PAGE_SIZE - 1;
     const { data, error } = await supabase
       .from("product_price_history")
