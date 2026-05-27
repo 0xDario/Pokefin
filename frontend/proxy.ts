@@ -23,7 +23,7 @@ function tooManyRequests(resetSeconds: number) {
   });
 }
 
-export async function middleware(req: NextRequest) {
+export async function proxy(req: NextRequest) {
   const path = req.nextUrl.pathname;
 
   // 1) Rate limit /api/* and /auth/* before any auth work.
