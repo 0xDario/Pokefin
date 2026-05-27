@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { createServerClient } from "@supabase/ssr";
+import { hardenCookieOptions } from "./app/lib/cookieOptions";
 import {
   RATE_LIMITS,
   classifyRoute,
@@ -55,7 +56,11 @@ export async function middleware(req: NextRequest) {
       },
       setAll(cookiesToSet) {
         cookiesToSet.forEach(({ name, value, options }) => {
-          res.cookies.set({ name, value, ...options });
+          res.cookies.set({
+            name,
+            value,
+            ...hardenCookieOptions(options),
+          });
         });
       },
     },
@@ -72,7 +77,15 @@ export async function middleware(req: NextRequest) {
     const url = req.nextUrl.clone();
     url.pathname = "/auth/login";
     url.searchParams.set("next", path);
-    return NextResponse.redirect(url);
+    const redirectRes = NextResponse.redirect(url);
+    // Carry over any cookies setAll wrote onto `res` (e.g. a refresh-
+    // token rotation that landed mid-request). Without this, the
+    // rotation is lost and the next request still presents the old
+    // refresh token. Audit finding session-cookie F-5.
+    res.cookies.getAll().forEach((cookie) => {
+      redirectRes.cookies.set(cookie);
+    });
+    return redirectRes;
   }
 
   return res;
