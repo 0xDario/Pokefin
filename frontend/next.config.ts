@@ -68,7 +68,16 @@ export default withSentryConfig(nextConfig, {
   org: process.env.SENTRY_ORG,
   project: process.env.SENTRY_PROJECT,
   authToken: process.env.SENTRY_AUTH_TOKEN,
-  disableLogger: true,
+  // `disableLogger` was deprecated in @sentry/nextjs 10.x in favour of
+  // the nested `webpack.treeshake.removeDebugLogging` option. Same
+  // semantics — strips Sentry's internal debug logger calls from the
+  // production bundle to shave bundle size. (Currently a no-op under
+  // Turbopack; Sentry surfaces a separate notice for that.)
+  webpack: {
+    treeshake: {
+      removeDebugLogging: true,
+    },
+  },
   sourcemaps: {
     // Delete sourcemap files after they've been uploaded so they
     // don't ship in the public bundle.
