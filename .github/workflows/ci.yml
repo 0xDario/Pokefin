@@ -52,7 +52,24 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install pip-audit
-      - run: pip-audit --requirement requirements.txt --strict
+      # pip-audit hits PyPI's JSON API once per dependency and has no
+      # built-in retry. A single TLS hiccup between the runner and PyPI
+      # (e.g. Connection reset by peer mid-handshake) fails --strict.
+      # Retry up to 3 times with backoff so transient flakes don't redden
+      # CI; real CVE findings still exit non-zero on the first attempt
+      # and again on retries, so the job still fails.
+      - name: pip-audit (with retry on network flakes)
+        run: |
+          for attempt in 1 2 3; do
+            if pip-audit --requirement requirements.txt --strict; then
+              exit 0
+            fi
+            if [ "$attempt" -lt 3 ]; then
+              echo "::warning::pip-audit attempt $attempt failed, retrying in 15s..."
+              sleep 15
+            fi
+          done
+          exit 1
 
   secret-scan:
     name: Secret scan (trufflehog)
