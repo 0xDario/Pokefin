@@ -1,9 +1,9 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { supabase } from "../../lib/supabase";
+import { useAuth } from "../../context/AuthContext";
 
 function PokeballGlyph({ className = "w-8 h-8" }: { className?: string }) {
   return (
@@ -24,58 +24,22 @@ const labelClass =
   "block text-xs font-semibold uppercase tracking-wide text-slate-500 mb-1.5";
 
 export default function ResetPasswordPage() {
+  const { user, loading: authLoading, updatePassword } = useAuth();
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [isValidSession, setIsValidSession] = useState(false);
-  const [checkingSession, setCheckingSession] = useState(true);
   const router = useRouter();
 
-  useEffect(() => {
-    const checkRecoverySession = async () => {
-      const hashParams = new URLSearchParams(window.location.hash.substring(1));
-      const accessToken = hashParams.get("access_token");
-      const type = hashParams.get("type");
-
-      if (accessToken && type === "recovery") {
-        const { error } = await supabase.auth.setSession({
-          access_token: accessToken,
-          refresh_token: hashParams.get("refresh_token") || "",
-        });
-
-        if (!error) {
-          setIsValidSession(true);
-        }
-        setCheckingSession(false);
-        return;
-      }
-
-      const { data: { session } } = await supabase.auth.getSession();
-
-      const { data: { subscription } } = supabase.auth.onAuthStateChange(
-        (event, session) => {
-          if (event === "PASSWORD_RECOVERY" && session) {
-            setIsValidSession(true);
-            setCheckingSession(false);
-          }
-        }
-      );
-
-      if (session) {
-        setIsValidSession(true);
-      }
-
-      setCheckingSession(false);
-
-      return () => {
-        subscription.unsubscribe();
-      };
-    };
-
-    checkRecoverySession();
-  }, []);
+  // Recovery flow: the email link points at /auth/callback?code=…&type=recovery,
+  // which exchanges the PKCE code for a session (HttpOnly cookies) and
+  // redirects here. We just check whether AuthContext sees a user.
+  //
+  // The old implicit-flow branch that parsed access_token from
+  // window.location.hash and called supabase.auth.setSession() was
+  // removed (audit finding session-cookie F-3) - PKCE is the only
+  // supported flow now and the access token is never in JS-land.
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -93,9 +57,7 @@ export default function ResetPasswordPage() {
 
     setLoading(true);
 
-    const { error } = await supabase.auth.updateUser({
-      password: password,
-    });
+    const { error } = await updatePassword(password);
 
     if (error) {
       setError(error.message);
@@ -106,7 +68,7 @@ export default function ResetPasswordPage() {
     }
   };
 
-  if (checkingSession) {
+  if (authLoading) {
     return (
       <div className="min-h-[calc(100vh-4rem)] flex items-center justify-center p-4">
         <div className="text-center">
@@ -117,7 +79,7 @@ export default function ResetPasswordPage() {
     );
   }
 
-  if (!isValidSession) {
+  if (!user) {
     return (
       <div className="min-h-[calc(100vh-4rem)] flex items-center justify-center p-4">
         <div className="w-full max-w-md">
