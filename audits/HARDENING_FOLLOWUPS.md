@@ -7,12 +7,14 @@ depth filters, CSPRNG share codes). A few items can't be fixed from
 the repo alone and require dashboard/infra configuration.
 
 Status snapshot (2026-05-27):
-- Completed: sections 1 (pending 0008-0011 apply), 2 (except leaked-
-  password toggle), 3, 4 (in-memory rate limiter shipped), 5 (privacy
-  page + data export shipped).
+- Completed: sections 1 (all migrations 0001-0013 applied to prod),
+  2 (except leaked-password toggle), 3, 4 (in-memory rate limiter
+  shipped), 5 (privacy page + data export shipped).
 - Deferred by plan: leaked-password protection (Supabase Pro+ feature),
   Upstash upgrade path noted but not required for current scale.
-- Remaining optional work: section 6 (manual curl/SQL verification).
+- Remaining optional work: section 6 (manual curl/SQL verification),
+  section 7 (rotate scraper key, optional Sentry DSN, review privacy
+  copy, confirm CI on next PR).
 
 ## 1. Apply the new migrations to production (done)
 
@@ -29,10 +31,12 @@ supabase db push                  # or paste each file in the SQL editor
 #   migrations/0005_box_recipes_share_code_hardening.sql        (applied)
 #   migrations/0006_function_execute_grants_hardening.sql       (applied)
 #   migrations/0007_search_path_hardening.sql                   (applied)
-#   migrations/0008_box_recipes_rls_hardening.sql               (apply)
-#   migrations/0009_db_resource_guards.sql                      (apply)
-#   migrations/0010_audit_log.sql                               (apply)
-#   migrations/0011_export_my_data.sql                          (apply)
+#   migrations/0008_box_recipes_rls_hardening.sql               (applied)
+#   migrations/0009_db_resource_guards.sql                      (applied)
+#   migrations/0010_audit_log.sql                               (applied)
+#   migrations/0011_export_my_data.sql                          (applied)
+#   migrations/0012_advisor_followups.sql                       (applied)
+#   migrations/0013_revoke_anon_on_user_tables.sql              (applied)
 ```
 
 Verification queries were run and passed for RLS/policies, constraints,
@@ -132,9 +136,12 @@ After deploying, run the testing guide from
 `audits/comprehensive-security-report.md` §Testing Guide (T1–T11).
 All probes should return the expected 401/403/429/redirect results.
 
-## 7. Round-2 follow-ups (do after deploy)
+## 7. Round-2 follow-ups
 
-- **Apply migrations 0008–0011** via Supabase MCP / CLI.
+- **Migrations 0008–0013 applied** (2026-05-27, via Supabase MCP).
+  Advisor re-run confirms all critical issues resolved; remaining
+  warnings are intentional (reference-table anon SELECT, definer
+  functions with internal scoping, Pro+ leaked-password toggle).
 - **Optional**: create a Sentry project, add `NEXT_PUBLIC_SENTRY_DSN`
   to Vercel (and `SENTRY_AUTH_TOKEN` + `SENTRY_ORG` + `SENTRY_PROJECT`
   if you want source-map upload). Sentry wiring is no-op until DSN is
