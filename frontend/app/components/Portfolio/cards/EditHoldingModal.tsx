@@ -4,6 +4,16 @@ import { useState, useEffect } from "react";
 import { updateHolding } from "../../../lib/portfolio";
 import { useAuth } from "../../../context/AuthContext";
 import type { HoldingWithProduct, UpdateHolding } from "../types";
+import {
+  QUANTITY_MAX,
+  QUANTITY_MIN,
+  PRICE_MAX,
+  PRICE_MIN,
+  clampNotes,
+  isValidPastDate,
+  isValidPrice,
+  isValidQuantity,
+} from "../../../lib/validation";
 
 interface EditHoldingModalProps {
   holding: HoldingWithProduct | null;
@@ -43,20 +53,20 @@ export default function EditHoldingModal({
 
     setError(null);
 
-    const qty = parseInt(quantity);
-    if (isNaN(qty) || qty < 1) {
-      setError("Quantity must be at least 1");
+    const qty = parseInt(quantity, 10);
+    if (!isValidQuantity(qty)) {
+      setError(`Quantity must be a whole number between ${QUANTITY_MIN} and ${QUANTITY_MAX}`);
       return;
     }
 
     const price = parseFloat(purchasePrice);
-    if (isNaN(price) || price < 0) {
-      setError("Please enter a valid purchase price");
+    if (!isValidPrice(price)) {
+      setError(`Purchase price must be between ${PRICE_MIN} and ${PRICE_MAX.toLocaleString()}`);
       return;
     }
 
-    if (!purchaseDate) {
-      setError("Please select a purchase date");
+    if (!isValidPastDate(purchaseDate)) {
+      setError("Please select a valid date that is not in the future");
       return;
     }
 
@@ -66,7 +76,7 @@ export default function EditHoldingModal({
       quantity: qty,
       purchase_price_usd: price,
       purchase_date: purchaseDate,
-      notes: notes.trim() || null,
+      notes: clampNotes(notes),
     };
 
     const result = await updateHolding(holding.id, user.id, updates);
