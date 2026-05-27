@@ -9,6 +9,7 @@ import {
   CSV_MAX_ROWS,
 } from "../../../lib/import";
 import type { ImportMatchResult } from "../types";
+import { logCaughtError } from "../../../lib/logger";
 
 const CSV_ACCEPTED_MIME = new Set([
   "text/csv",
@@ -112,7 +113,7 @@ export default function ImportHoldingsModal({
       setStep("preview");
     } catch (err) {
       setError("Failed to parse CSV file. Please check the format.");
-      console.error("CSV parse error:", err);
+      logCaughtError("csv_parse_failed", err);
     }
 
     setLoading(false);
@@ -163,7 +164,7 @@ export default function ImportHoldingsModal({
       setStep("complete");
     } catch (err) {
       setError("Import failed. Please try again.");
-      console.error("Import error:", err);
+      logCaughtError("import_failed", err);
       setStep("preview");
     }
 

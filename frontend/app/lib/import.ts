@@ -1,4 +1,5 @@
 import { supabase } from "./supabase";
+import { logSupabaseError } from "./logger";
 import type {
   CollectrCSVRow,
   ImportMatchResult,
@@ -276,7 +277,7 @@ async function fetchSupportedProducts(): Promise<ProductSearchResult[]> {
     .order("id", { ascending: true });
 
   if (error) {
-    console.error("Error fetching products for import:", error);
+    logSupabaseError("import_products_fetch_failed", error);
 
     // Fallback: fetch all and filter client-side
     const { data: allData, error: allError } = await supabase
@@ -289,7 +290,7 @@ async function fetchSupportedProducts(): Promise<ProductSearchResult[]> {
       .order("id", { ascending: true });
 
     if (allError) {
-      console.error("Error fetching all products:", allError);
+      logSupabaseError("import_all_products_fetch_failed", allError);
       return [];
     }
 

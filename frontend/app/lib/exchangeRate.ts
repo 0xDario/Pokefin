@@ -2,6 +2,7 @@
 
 import { DEFAULT_EXCHANGE_RATE, ExchangeRateSnapshot } from "./marketData";
 import { supabase } from "./supabase";
+import { logCaughtError } from "./logger";
 
 let exchangeRateCache: ExchangeRateSnapshot | null = null;
 let exchangeRatePromise: Promise<ExchangeRateSnapshot> | null = null;
@@ -34,7 +35,7 @@ export async function fetchLatestExchangeRateClient(): Promise<ExchangeRateSnaps
       };
       return exchangeRateCache;
     } catch (error) {
-      console.error("[exchangeRate] Failed to load exchange rate:", error);
+      logCaughtError("client_exchange_rate_failed", error);
       exchangeRateCache = {
         rate: DEFAULT_EXCHANGE_RATE,
         date: null,

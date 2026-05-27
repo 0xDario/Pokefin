@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useCallback } from "react";
 import { supabase } from "../../../lib/supabase";
+import { logSupabaseError } from "../../../lib/logger";
 import { BoosterPackPrice, SetOption } from "../types";
 
 export function useBoosterPackPrices() {
@@ -23,7 +24,7 @@ export function useBoosterPackPrices() {
         .order("usd_price", { ascending: false });
 
       if (productsError) {
-        console.error("[useBoosterPackPrices] Error:", productsError);
+        logSupabaseError("booster_pack_prices_failed", productsError);
         setLoading(false);
         return;
       }
