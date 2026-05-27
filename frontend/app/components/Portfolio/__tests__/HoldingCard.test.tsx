@@ -247,7 +247,7 @@ describe("HoldingCard", () => {
       expect(screen.getByText("Gain/Loss")).toBeInTheDocument();
       // Cost: 100, Value: 200, Gain: 100
       const gainElement = screen.getByText("+$100.00");
-      expect(gainElement).toHaveClass("text-green-600");
+      expect(gainElement).toHaveClass("text-emerald-600");
     });
 
     it("should display negative gain/loss with red styling", () => {
@@ -266,7 +266,7 @@ describe("HoldingCard", () => {
       // Cost: 200, Value: 100, Loss: -100
       // toLocaleString formats as $-100.00
       const lossElement = screen.getByText("$-100.00");
-      expect(lossElement).toHaveClass("text-red-600");
+      expect(lossElement).toHaveClass("text-rose-600");
     });
 
     it("should display gain/loss percentage", () => {
