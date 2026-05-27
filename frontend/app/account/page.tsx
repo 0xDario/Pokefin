@@ -26,6 +26,10 @@ export default function AccountPage() {
   const [deleteLoading, setDeleteLoading] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
 
+  // Data export (GDPR Art. 15 / 20)
+  const [exportLoading, setExportLoading] = useState(false);
+  const [exportError, setExportError] = useState<string | null>(null);
+
   useEffect(() => {
     if (profile?.username) {
       setUsername(profile.username);
@@ -106,6 +110,34 @@ export default function AccountPage() {
     }
 
     setPasswordLoading(false);
+  };
+
+  const handleExportData = async () => {
+    setExportError(null);
+    setExportLoading(true);
+    try {
+      const response = await fetch("/api/account/export", {
+        method: "POST",
+        headers: { "x-pokefin-request": "1" },
+      });
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
+        throw new Error(data.error || "Failed to export data");
+      }
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `pokefin-data-${Date.now()}.json`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      setExportError(err instanceof Error ? err.message : "Failed to export data");
+    } finally {
+      setExportLoading(false);
+    }
   };
 
   const handleDeleteAccount = async () => {
@@ -285,6 +317,27 @@ export default function AccountPage() {
               {passwordLoading ? "Updating..." : "Update Password"}
             </button>
           </form>
+        </div>
+
+        {/* Your data (GDPR Art. 15 / 20) */}
+        <div className="bg-white rounded-xl shadow-sm ring-1 ring-slate-200 p-6">
+          <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-600 mb-4">
+            Your data
+          </h2>
+          <p className="text-sm text-slate-600 mb-4">
+            Download a copy of every record we hold about you - profile,
+            portfolios, holdings, lots, and box recipes - as a JSON file.
+          </p>
+          {exportError && (
+            <div className="text-rose-600 text-sm mb-4">{exportError}</div>
+          )}
+          <button
+            onClick={handleExportData}
+            disabled={exportLoading}
+            className="bg-slate-700 hover:bg-slate-800 text-white font-medium py-2 px-4 rounded-lg transition-colors disabled:opacity-50"
+          >
+            {exportLoading ? "Preparing..." : "Export my data"}
+          </button>
         </div>
 
         {/* Danger Zone */}

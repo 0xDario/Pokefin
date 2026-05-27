@@ -101,9 +101,15 @@ export default function Footer() {
 
         <div className="mt-8 pt-5 border-t border-slate-100 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
           <p className="text-xs text-slate-500">© {year} Pokéfin</p>
-          <p className="text-xs text-slate-500">
-            Data refreshed hourly from TCGPlayer
-          </p>
+          <div className="flex items-center gap-4 text-xs text-slate-500">
+            <Link
+              href="/privacy"
+              className="hover:text-[var(--pf-pokeball)] transition-colors"
+            >
+              Privacy
+            </Link>
+            <span>Data refreshed hourly from TCGPlayer</span>
+          </div>
         </div>
       </div>
     </footer>
