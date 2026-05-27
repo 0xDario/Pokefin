@@ -36,9 +36,23 @@ const nextConfig: NextConfig = {
   poweredByHeader: false,
   images: {
     remotePatterns: [
-      { protocol: "https", hostname: "**.tcgplayer.com" },
-      { protocol: "https", hostname: "tcgplayer.com" },
-      { protocol: "https", hostname: "**.supabase.co" },
+      // Limit the next/image optimizer to specific paths on these hosts.
+      // Closes file-handling F-6 (overly broad remotePatterns).
+      {
+        protocol: "https",
+        hostname: "**.tcgplayer.com",
+        pathname: "/images/**",
+      },
+      {
+        protocol: "https",
+        hostname: "tcgplayer.com",
+        pathname: "/images/**",
+      },
+      {
+        protocol: "https",
+        hostname: "**.supabase.co",
+        pathname: "/storage/v1/object/public/**",
+      },
     ],
   },
   async headers() {

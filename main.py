@@ -1,7 +1,9 @@
+import ipaddress
 import logging
 import os
 import platform
 import shutil
+import socket
 import tempfile
 import time
 import uuid
@@ -19,7 +21,75 @@ from urllib.parse import urlparse, parse_qs
 from urllib3.exceptions import NotOpenSSLWarning
 from webdriver_manager.chrome import ChromeDriverManager
 
-from secretsFile import SUPABASE_URL, SUPABASE_KEY
+from secrets_loader import load_supabase_credentials
+
+SUPABASE_URL, SUPABASE_KEY = load_supabase_credentials()
+
+# === Image fetch hardening ===
+IMAGE_MAX_BYTES = 8 * 1024 * 1024  # 8 MiB
+IMAGE_ALLOWED_EXTS = {"jpg", "jpeg", "png", "webp"}
+IMAGE_ALLOWED_MIMES = {"image/jpeg", "image/png", "image/webp"}
+# Magic numbers (file signatures) for the formats we accept.
+IMAGE_MAGIC_BYTES: list[tuple[bytes, str]] = [
+    (b"\xff\xd8\xff", "jpeg"),
+    (b"\x89PNG\r\n\x1a\n", "png"),
+    (b"RIFF", "webp"),  # WEBP RIFF header; full check below
+]
+IMAGE_HOST_ALLOWLIST = {
+    # Known image hosts the scraper is expected to fetch from. Add
+    # entries here when a legitimate new source appears.
+    "tcgplayer.com",
+    "www.tcgplayer.com",
+    "product-images.tcgplayer.com",
+    "static.tcgplayer.com",
+    "tcgplayer-cdn.tcgplayer.com",
+}
+
+
+def _host_is_allowed(host: str) -> bool:
+    if not host:
+        return False
+    host = host.lower()
+    if host in IMAGE_HOST_ALLOWLIST:
+        return True
+    # Accept any *.tcgplayer.com to keep the list small.
+    return host.endswith(".tcgplayer.com")
+
+
+def _ip_is_safe(host: str) -> bool:
+    """Resolve host and refuse private/loopback/link-local addresses."""
+    try:
+        infos = socket.getaddrinfo(host, None)
+    except socket.gaierror:
+        return False
+    for info in infos:
+        addr = info[4][0]
+        try:
+            ip = ipaddress.ip_address(addr)
+        except ValueError:
+            return False
+        if (
+            ip.is_private
+            or ip.is_loopback
+            or ip.is_link_local
+            or ip.is_multicast
+            or ip.is_reserved
+            or ip.is_unspecified
+        ):
+            return False
+    return True
+
+
+def _detect_image_format(buf: bytes) -> str | None:
+    if len(buf) < 12:
+        return None
+    if buf.startswith(b"\xff\xd8\xff"):
+        return "jpeg"
+    if buf.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "png"
+    if buf.startswith(b"RIFF") and buf[8:12] == b"WEBP":
+        return "webp"
+    return None
 
 # === Silence SSL warning from urllib3 ===
 warnings.simplefilter("ignore", NotOpenSSLWarning)
@@ -235,49 +305,98 @@ def cleanup_driver(driver, user_data_dir):
 # === Image Download and Upload Logic ===
 def download_and_upload_image(image_url, product_id):
     """
-    Download image from TCGPlayer and upload to Supabase Storage
-    Returns the public URL or None if failed
+    Download an image from an allowlisted host, validate its size and
+    magic-number signature, then upload it to Supabase Storage.
+    Returns the public URL or None.
+
+    Hardening (audit findings F-1, F-2, F-3):
+    - Scheme/host allowlist + private-IP refusal (SSRF defense).
+    - allow_redirects=False (no redirect to file:// or internal host).
+    - 8 MiB hard cap, streamed (no OOM via Content-Length lying).
+    - Magic-number validation (caller-provided extension is ignored).
     """
     try:
-        # Generate unique filename
-        file_extension = image_url.split('.')[-1].split('?')[0].lower()
-        if file_extension not in ['jpg', 'jpeg', 'png', 'webp']:
-            file_extension = 'jpg'
+        parsed = urlparse(image_url)
+        if parsed.scheme not in {"http", "https"}:
+            logger.warning("image_url has unsupported scheme: %s", parsed.scheme)
+            return None
+        host = parsed.hostname or ""
+        if not _host_is_allowed(host):
+            logger.warning("image_url host not in allowlist: %s", host)
+            return None
+        if not _ip_is_safe(host):
+            logger.warning("image_url resolves to a private/reserved address: %s", host)
+            return None
 
-        filename = f"products/{product_id}.{file_extension}"
-
-        # Download image with proper headers
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
             'Accept': 'image/webp,image/apng,image/*,*/*;q=0.8',
             'Accept-Language': 'en-US,en;q=0.9',
-            'Accept-Encoding': 'gzip, deflate, br',
+            'Accept-Encoding': 'gzip, deflate',
             'DNT': '1',
             'Connection': 'keep-alive',
-            'Upgrade-Insecure-Requests': '1',
         }
 
-        response = requests.get(image_url, headers=headers, timeout=30)
-        response.raise_for_status()
+        # Stream the response so we can stop reading once we hit the
+        # size cap, even if Content-Length lies.
+        with requests.get(
+            image_url,
+            headers=headers,
+            timeout=30,
+            stream=True,
+            allow_redirects=False,
+        ) as response:
+            response.raise_for_status()
 
-        # Check if response contains image data
-        if len(response.content) < 1000:
-            logger.warning(f"Image too small, likely not valid: {len(response.content)} bytes")
+            declared_type = (response.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+            if declared_type and declared_type not in IMAGE_ALLOWED_MIMES:
+                logger.warning("Rejecting non-image Content-Type: %s", declared_type)
+                return None
+
+            content_length = response.headers.get("Content-Length")
+            if content_length and int(content_length) > IMAGE_MAX_BYTES:
+                logger.warning("Image too large (Content-Length=%s)", content_length)
+                return None
+
+            buf = bytearray()
+            for chunk in response.iter_content(chunk_size=64 * 1024):
+                if not chunk:
+                    continue
+                buf.extend(chunk)
+                if len(buf) > IMAGE_MAX_BYTES:
+                    logger.warning(
+                        "Image exceeded %d-byte cap during streaming download",
+                        IMAGE_MAX_BYTES,
+                    )
+                    return None
+
+        if len(buf) < 1000:
+            logger.warning("Image too small, likely not valid: %d bytes", len(buf))
             return None
 
-        # Upload to Supabase Storage with updated API handling
+        # Magic-number check trumps the URL-derived extension. This
+        # prevents an attacker uploading e.g. an SVG-with-script or an
+        # HTML page disguised as foo.jpg.
+        fmt = _detect_image_format(bytes(buf[:32]))
+        if fmt is None:
+            logger.warning("Image magic bytes did not match jpeg/png/webp")
+            return None
+        file_extension = "jpg" if fmt == "jpeg" else fmt
+        content_type = f"image/{'jpeg' if fmt == 'jpeg' else fmt}"
+
+        filename = f"products/{product_id}.{file_extension}"
+
         try:
             upload_response = supabase.storage.from_("product-images").upload(
                 filename,
-                response.content,
+                bytes(buf),
                 {
-                    "content-type": f"image/{file_extension}",
+                    "content-type": content_type,
                     "cache-control": "3600",
-                    "upsert": "true"
-                }
+                    "upsert": "true",
+                },
             )
 
-            # Handle different response formats
             upload_success = False
             if hasattr(upload_response, 'data') and upload_response.data:
                 upload_success = True
@@ -286,43 +405,36 @@ def download_and_upload_image(image_url, product_id):
             elif isinstance(upload_response, dict) and ('path' in upload_response or 'Key' in upload_response):
                 upload_success = True
 
-            if upload_success:
-                # Get public URL
-                try:
-                    public_url_response = supabase.storage.from_("product-images").get_public_url(filename)
-
-                    # Handle different public URL response formats
-                    public_url = None
-                    if hasattr(public_url_response, 'data') and public_url_response.data:
-                        public_url = public_url_response.data.get('publicUrl')
-                    elif hasattr(public_url_response, 'publicUrl'):
-                        public_url = public_url_response.publicUrl
-                    elif isinstance(public_url_response, dict):
-                        public_url = public_url_response.get('publicUrl')
-                    elif isinstance(public_url_response, str):
-                        public_url = public_url_response
-
-                    if public_url:
-                        logger.info(f"Image uploaded: {public_url}")
-                        return public_url
-                    else:
-                        logger.error(f"Failed to get public URL for {filename}")
-                        logger.debug(f"Public URL response: {public_url_response}")
-                        return None
-
-                except Exception as url_error:
-                    logger.error(f"Error getting public URL: {url_error}")
-                    return None
-            else:
-                logger.error(f"Upload failed: {upload_response}")
+            if not upload_success:
+                logger.error("upload_failed status=%s", getattr(upload_response, "status_code", "unknown"))
                 return None
 
+            try:
+                public_url_response = supabase.storage.from_("product-images").get_public_url(filename)
+                public_url = None
+                if hasattr(public_url_response, 'data') and public_url_response.data:
+                    public_url = public_url_response.data.get('publicUrl')
+                elif hasattr(public_url_response, 'publicUrl'):
+                    public_url = public_url_response.publicUrl
+                elif isinstance(public_url_response, dict):
+                    public_url = public_url_response.get('publicUrl')
+                elif isinstance(public_url_response, str):
+                    public_url = public_url_response
+
+                if public_url:
+                    logger.info("image_uploaded filename=%s", filename)
+                    return public_url
+                logger.error("public_url_lookup_failed filename=%s", filename)
+                return None
+            except Exception as url_error:
+                logger.error("public_url_lookup_error filename=%s err=%s", filename, type(url_error).__name__)
+                return None
         except Exception as upload_error:
-            logger.error(f"Upload error: {upload_error}")
+            logger.error("upload_error filename=%s err=%s", filename, type(upload_error).__name__)
             return None
 
     except Exception as e:
-        logger.error(f"Image upload error for product {product_id}: {e}")
+        logger.error("download_and_upload_image_error product=%s err=%s", product_id, type(e).__name__)
         return None
 
 # === Enhanced scraper with image extraction ===

@@ -38,7 +38,9 @@ from datetime import datetime, timedelta, timezone
 from urllib.parse import urlparse, parse_qs
 import requests
 from supabase import create_client
-from secretsFile import SUPABASE_URL, SUPABASE_KEY
+from secrets_loader import load_supabase_credentials
+
+SUPABASE_URL, SUPABASE_KEY = load_supabase_credentials()
 import os
 
 # === Logging Setup ===
