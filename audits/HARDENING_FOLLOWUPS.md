@@ -83,9 +83,9 @@ These are configured in the project dashboard (not in code):
 | Variable | Value | Notes |
 |---|---|---|
 | `NEXT_PUBLIC_SUPABASE_URL` | Supabase project URL | Already set |
-| `NEXT_PUBLIC_SUPABASE_KEY` | Supabase anon key | Already set |
+| `NEXT_PUBLIC_SUPABASE_KEY` | `sb_publishable_…` (modern publishable key) | Migrated from legacy `eyJ…` anon JWT 2026-05-27 |
 | `NEXT_PUBLIC_SITE_URL` | `https://pokefin.ca` | Added in production |
-| `SUPABASE_SERVICE_ROLE_KEY` | (remove) | Not present in production env list |
+| `SUPABASE_SERVICE_ROLE_KEY` | (not used by web tier) | Web app uses the publishable key; the scraper uses `sb_secret_…` via its own env file |
 
 After redeploying, security headers were verified on `https://www.pokefin.ca`.
 
@@ -138,7 +138,7 @@ All probes should return the expected 401/403/429/redirect results.
 
 ## 7. Round-2 follow-ups
 
-- **Migrations 0008–0013 applied** (2026-05-27, via Supabase MCP).
+- **Migrations 0008–0014 applied** (2026-05-27, via Supabase MCP).
   Advisor re-run confirms all critical issues resolved; remaining
   warnings are intentional (reference-table anon SELECT, definer
   functions with internal scoping, Pro+ leaked-password toggle).
@@ -146,11 +146,22 @@ All probes should return the expected 401/403/429/redirect results.
   to Vercel (and `SENTRY_AUTH_TOKEN` + `SENTRY_ORG` + `SENTRY_PROJECT`
   if you want source-map upload). Sentry wiring is no-op until DSN is
   set.
-- **Rotate the scraper key**: now that the four Python scripts read
-  `SUPABASE_SERVICE_ROLE_KEY` from env via `secrets_loader.py`, rotate
-  the existing key, set the new one on the scraper host, then delete
-  `secretsFile.py` from the host. Local dev can keep using
-  `secretsFile.py` per `.gitignore`.
+- **Scraper key migration completed** (2026-05-27):
+  - JWT signing key migrated symmetric HS256 → asymmetric ECC P-256
+    (HS256 retained as standby for the rollback window).
+  - New publishable / secret API keys generated.
+  - `NEXT_PUBLIC_SUPABASE_KEY` in Vercel swapped to `sb_publishable_…`;
+    web app verified end-to-end in incognito.
+  - Scraper on home laptop swapped to `sb_secret_…` via
+    `~/.config/pokefin/env` (`run_scraper.sh` sources it before invoking
+    `main.py`). `secretsFile.SUPABASE_KEY` blanked out on the host;
+    `secrets_loader.py` now reads exclusively from env.
+  - Legacy `anon` and `service_role` JWT-based API keys **revoked** in
+    the Supabase dashboard.
+- **Pending**: revoke the **HS256 standby JWT signing key** after
+  ~30 days. Until then, sessions issued before the asymmetric migration
+  remain verifiable. After 30 days every active session will have
+  rotated to ECC P-256 and the standby can be safely retired.
 - **Review `/privacy` page copy** for legal accuracy and add a contact
   email/handle (currently points at the GitHub repo).
 - **CI**: confirm the new GitHub Actions workflow runs on the next PR
