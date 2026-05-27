@@ -5,8 +5,18 @@ import {
   processCollectrImport,
   importHoldings,
   calculateImportSummary,
+  CSV_MAX_BYTES,
+  CSV_MAX_ROWS,
 } from "../../../lib/import";
 import type { ImportMatchResult } from "../types";
+
+const CSV_ACCEPTED_MIME = new Set([
+  "text/csv",
+  "application/vnd.ms-excel",
+  "application/csv",
+  "text/plain",
+  "",
+]);
 
 interface ImportHoldingsModalProps {
   portfolioId: number;
@@ -32,8 +42,22 @@ export default function ImportHoldingsModal({
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    setError(null);
     const file = e.target.files?.[0];
     if (!file) return;
+
+    if (file.size > CSV_MAX_BYTES) {
+      setError(
+        `File is too large (${(file.size / 1024 / 1024).toFixed(1)} MB). Maximum is ${CSV_MAX_BYTES / 1024 / 1024} MB.`
+      );
+      if (fileInputRef.current) fileInputRef.current.value = "";
+      return;
+    }
+    if (!CSV_ACCEPTED_MIME.has(file.type) && !file.name.toLowerCase().endsWith(".csv")) {
+      setError(`Unsupported file type: ${file.type || "unknown"}. Please upload a .csv file.`);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+      return;
+    }
 
     const content = await file.text();
     setCsvContent(content);
@@ -43,6 +67,19 @@ export default function ImportHoldingsModal({
   const handlePasteContent = async () => {
     if (!csvContent.trim()) {
       setError("Please paste CSV content first");
+      return;
+    }
+    if (csvContent.length > CSV_MAX_BYTES) {
+      setError(
+        `Pasted content is too large. Maximum is ${CSV_MAX_BYTES / 1024 / 1024} MB.`
+      );
+      return;
+    }
+    const lineCount = csvContent.split("\n").length;
+    if (lineCount > CSV_MAX_ROWS + 1) {
+      setError(
+        `Too many rows (${lineCount - 1}). Maximum is ${CSV_MAX_ROWS} rows.`
+      );
       return;
     }
     await processCSV(csvContent);

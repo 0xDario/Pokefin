@@ -8,6 +8,12 @@ import { useBoxRecipes } from "./hooks/useBoxRecipes";
 import { useCurrencyConversion } from "../ProductPrices/hooks/useCurrencyConversion";
 import CurrencySelector from "../ProductPrices/controls/CurrencySelector";
 import { PackEntry, BoxRecipe, NavResult } from "./types";
+import {
+  PRICE_MAX,
+  RECIPE_NAME_MAX_LEN,
+  RECIPE_PACKS_MAX,
+  isFiniteInRange,
+} from "../../lib/validation";
 
 /**
  * Calculate NAV in the user's display currency.
@@ -166,11 +172,34 @@ export default function BoxCalculator() {
 
   const handleSave = async () => {
     if (!user) return;
+
+    const trimmedName = recipeName.trim();
+    if (trimmedName.length < 1 || trimmedName.length > RECIPE_NAME_MAX_LEN) {
+      setSaveStatus("idle");
+      alert(`Recipe name must be 1-${RECIPE_NAME_MAX_LEN} characters`);
+      return;
+    }
+    if (!isFiniteInRange(retailPrice, 0, PRICE_MAX)) {
+      setSaveStatus("idle");
+      alert(`Retail price must be between 0 and ${PRICE_MAX.toLocaleString()}`);
+      return;
+    }
+    if (!isFiniteInRange(promoValue, 0, PRICE_MAX)) {
+      setSaveStatus("idle");
+      alert(`Promo value must be between 0 and ${PRICE_MAX.toLocaleString()}`);
+      return;
+    }
+    if (packs.length === 0 || packs.length > RECIPE_PACKS_MAX) {
+      setSaveStatus("idle");
+      alert(`Recipe must have 1-${RECIPE_PACKS_MAX} pack types`);
+      return;
+    }
+
     setSaveStatus("saving");
 
     const recipe: BoxRecipe = {
       id: currentRecipeId,
-      name: recipeName,
+      name: trimmedName,
       retailPrice,
       promoValue,
       packs,

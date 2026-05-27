@@ -6,6 +6,31 @@ import type {
   NewHolding,
 } from "../components/Portfolio/types";
 import { addHolding } from "./portfolio";
+import {
+  QUANTITY_MAX,
+  QUANTITY_MIN,
+  PRICE_MAX,
+  PRICE_MIN,
+  clampNotes,
+  isFiniteInRange,
+} from "./validation";
+
+export const CSV_MAX_BYTES = 2 * 1024 * 1024; // 2 MiB
+export const CSV_MAX_ROWS = 10_000;
+
+function safeFloat(raw: string | undefined, min: number, max: number): number {
+  if (raw === undefined) return 0;
+  const n = parseFloat(raw);
+  return isFiniteInRange(n, min, max) ? n : 0;
+}
+
+function safeInt(raw: string | undefined, min: number, max: number): number {
+  if (raw === undefined) return 0;
+  const n = parseInt(raw, 10);
+  if (!Number.isInteger(n)) return 0;
+  if (n < min || n > max) return 0;
+  return n;
+}
 
 type SupportedProductType = {
   key: string;
@@ -110,14 +135,20 @@ const SUPPORTED_PRODUCT_TYPES: SupportedProductType[] = [
 ];
 
 /**
- * Parse a Collectr CSV file content into structured rows
+ * Parse a Collectr CSV file content into structured rows.
+ *
+ * Numeric coercion uses safeFloat/safeInt which reject Infinity, NaN,
+ * negative and out-of-range values — matching DB CHECK constraints.
+ * The caller is expected to enforce CSV_MAX_BYTES before invoking
+ * (see ImportHoldingsModal); we also enforce CSV_MAX_ROWS here so
+ * an oversized server-side caller can't bypass it.
  */
 export function parseCollectrCSV(csvContent: string): CollectrCSVRow[] {
   const lines = csvContent.split("\n").filter((line) => line.trim());
   if (lines.length < 2) return [];
 
   // Skip header row
-  const dataLines = lines.slice(1);
+  const dataLines = lines.slice(1).slice(0, CSV_MAX_ROWS);
   const rows: CollectrCSVRow[] = [];
 
   for (const line of dataLines) {
@@ -125,22 +156,22 @@ export function parseCollectrCSV(csvContent: string): CollectrCSVRow[] {
     if (values.length < 16) continue;
 
     const row: CollectrCSVRow = {
-      portfolioName: values[0] || "",
-      category: values[1] || "",
-      set: values[2] || "",
-      productName: values[3] || "",
-      cardNumber: values[4] || "",
-      rarity: values[5] || "",
-      variance: values[6] || "",
-      grade: values[7] || "",
-      cardCondition: values[8] || "",
-      averageCostPaid: parseFloat(values[9]) || 0,
-      quantity: parseInt(values[10]) || 0,
-      marketPrice: parseFloat(values[11]) || 0,
-      priceOverride: parseFloat(values[12]) || 0,
+      portfolioName: (values[0] || "").slice(0, 200),
+      category: (values[1] || "").slice(0, 200),
+      set: (values[2] || "").slice(0, 200),
+      productName: (values[3] || "").slice(0, 500),
+      cardNumber: (values[4] || "").slice(0, 50),
+      rarity: (values[5] || "").slice(0, 100),
+      variance: (values[6] || "").slice(0, 200),
+      grade: (values[7] || "").slice(0, 50),
+      cardCondition: (values[8] || "").slice(0, 50),
+      averageCostPaid: safeFloat(values[9], PRICE_MIN, PRICE_MAX),
+      quantity: safeInt(values[10], 0, QUANTITY_MAX),
+      marketPrice: safeFloat(values[11], PRICE_MIN, PRICE_MAX),
+      priceOverride: safeFloat(values[12], PRICE_MIN, PRICE_MAX),
       watchlist: values[13]?.toLowerCase() === "true",
-      dateAdded: values[14] || "",
-      notes: values[15] || "",
+      dateAdded: (values[14] || "").slice(0, 32),
+      notes: clampNotes(values[15]) ?? "",
     };
 
     rows.push(row);
@@ -423,6 +454,33 @@ export async function importHoldings(
       results.push({
         ...match,
         importStatus: match.matchedProduct ? "skipped" : "skipped",
+      });
+      continue;
+    }
+
+    // Defense-in-depth: reject rows where validation coerced quantity
+    // to 0 (Infinity, NaN, negative, out-of-range in CSV).
+    if (
+      !Number.isInteger(match.csvRow.quantity) ||
+      match.csvRow.quantity < QUANTITY_MIN ||
+      match.csvRow.quantity > QUANTITY_MAX
+    ) {
+      results.push({
+        ...match,
+        importStatus: "error",
+        errorMessage: `Invalid quantity (${match.csvRow.quantity})`,
+      });
+      continue;
+    }
+    if (
+      !Number.isFinite(match.csvRow.averageCostPaid) ||
+      match.csvRow.averageCostPaid < PRICE_MIN ||
+      match.csvRow.averageCostPaid > PRICE_MAX
+    ) {
+      results.push({
+        ...match,
+        importStatus: "error",
+        errorMessage: "Invalid price",
       });
       continue;
     }
