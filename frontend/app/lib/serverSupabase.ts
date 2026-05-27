@@ -2,6 +2,7 @@ import "server-only";
 
 import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
+import { hardenCookieOptions } from "./cookieOptions";
 
 // Placeholder fallbacks so module load succeeds during page-data
 // collection. Runtime calls fail loudly when env vars are absent.
@@ -30,7 +31,7 @@ export async function createServerSupabaseClient() {
       setAll(cookiesToSet) {
         try {
           cookiesToSet.forEach(({ name, value, options }) => {
-            cookieStore.set(name, value, options);
+            cookieStore.set(name, value, hardenCookieOptions(options));
           });
         } catch {
           // cookieStore.set throws in Server Components; middleware

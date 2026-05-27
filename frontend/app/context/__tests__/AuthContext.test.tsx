@@ -99,7 +99,6 @@ function TestConsumer({ onRender }: { onRender?: (auth: ReturnType<typeof useAut
       <span data-testid="loading">{auth.loading.toString()}</span>
       <span data-testid="user">{auth.user?.email ?? "no-user"}</span>
       <span data-testid="profile">{auth.profile?.username ?? "no-profile"}</span>
-      <span data-testid="session">{auth.session ? "has-session" : "no-session"}</span>
     </div>
   );
 }
@@ -772,7 +771,8 @@ describe("AuthContext", () => {
       // Check all properties are present
       expect(capturedAuth).toHaveProperty("user");
       expect(capturedAuth).toHaveProperty("profile");
-      expect(capturedAuth).toHaveProperty("session");
+      // `session` intentionally NOT exposed - audit finding session-cookie
+      expect(capturedAuth).not.toHaveProperty("session");
       expect(capturedAuth).toHaveProperty("loading");
       expect(capturedAuth).toHaveProperty("signUp");
       expect(capturedAuth).toHaveProperty("signIn");

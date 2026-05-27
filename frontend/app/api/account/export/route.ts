@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
+import { hardenCookieOptions } from "../../../lib/cookieOptions";
 import { logSupabaseError } from "../../../lib/logger";
 
 const ALLOWED_ORIGINS = new Set([
@@ -46,7 +47,7 @@ export async function POST(request: NextRequest) {
         },
         setAll(cookiesToSet) {
           cookiesToSet.forEach(({ name, value, options }) => {
-            cookieStore.set(name, value, options);
+            cookieStore.set(name, value, hardenCookieOptions(options));
           });
         },
       },

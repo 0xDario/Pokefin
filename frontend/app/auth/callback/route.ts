@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServerClient } from "@supabase/ssr";
+import { hardenCookieOptions } from "../../lib/cookieOptions";
 import { stripControlChars } from "../../lib/validation";
 
 function safeNextPath(raw: string | null): string {
@@ -46,9 +47,13 @@ export async function GET(request: NextRequest) {
           },
           setAll(cookiesToSet) {
             // Write Supabase's refreshed session cookies onto the
-            // outgoing response so the browser actually receives them.
+            // outgoing response with HttpOnly + Secure enforced.
             cookiesToSet.forEach(({ name, value, options }) => {
-              response.cookies.set({ name, value, ...options });
+              response.cookies.set({
+                name,
+                value,
+                ...hardenCookieOptions(options),
+              });
             });
           },
         },

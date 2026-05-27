@@ -1,7 +1,7 @@
 "use client";
 
 import { createContext, useContext, useEffect, useState, ReactNode } from "react";
-import { User, Session, AuthError } from "@supabase/supabase-js";
+import { User, AuthError } from "@supabase/supabase-js";
 import { supabase } from "../lib/supabase";
 
 interface UserProfile {
@@ -13,7 +13,6 @@ interface UserProfile {
 interface AuthContextType {
   user: User | null;
   profile: UserProfile | null;
-  session: Session | null;
   loading: boolean;
   signUp: (email: string, password: string, username: string, captchaToken?: string) => Promise<{ error: AuthError | null }>;
   signIn: (email: string, password: string, captchaToken?: string) => Promise<{ error: AuthError | null }>;
@@ -27,7 +26,6 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [profile, setProfile] = useState<UserProfile | null>(null);
-  const [session, setSession] = useState<Session | null>(null);
   const [loading, setLoading] = useState(true);
   const isTokenRefreshFailedEvent = (event: string) =>
     event === "TOKEN_REFRESH_FAILED";
@@ -53,12 +51,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   useEffect(() => {
-    // Get initial session
+    // Get initial session. We deliberately do NOT keep the raw session
+    // object in React state - access/refresh tokens should not be
+    // reachable via React DevTools or window.__NEXT_DATA__ snapshots
+    // (audit finding session-cookie F-useAuth-session-leak).
     const initSession = async () => {
       const { data: { session } } = await supabase.auth.getSession();
 
       if (!session) {
-        setSession(null);
         setUser(null);
         setProfile(null);
         setLoading(false);
@@ -69,15 +69,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
       if (userError || !user) {
         await supabase.auth.signOut();
-        setSession(null);
         setUser(null);
         setProfile(null);
         setLoading(false);
         return;
       }
 
-      const { data: { session: freshSession } } = await supabase.auth.getSession();
-      setSession(freshSession ?? session);
       setUser(user);
       await fetchProfile(user.id);
       setLoading(false);
@@ -89,14 +86,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       async (event, session) => {
         if (event === "SIGNED_OUT" || isTokenRefreshFailedEvent(event as string)) {
-          setSession(null);
           setUser(null);
           setProfile(null);
           setLoading(false);
           return;
         }
 
-        setSession(session);
         setUser(session?.user ?? null);
 
         if (session?.user) {
@@ -165,7 +160,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       value={{
         user,
         profile,
-        session,
         loading,
         signUp,
         signIn,
