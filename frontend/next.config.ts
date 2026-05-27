@@ -1,4 +1,5 @@
 import type { NextConfig } from "next";
+import { withSentryConfig } from "@sentry/nextjs";
 
 const csp = [
   "default-src 'self'",
@@ -60,4 +61,17 @@ const nextConfig: NextConfig = {
   },
 };
 
-export default nextConfig;
+// withSentryConfig is a no-op when SENTRY_AUTH_TOKEN / NEXT_PUBLIC_SENTRY_DSN
+// aren't set; safe to ship before you provision the Sentry project.
+export default withSentryConfig(nextConfig, {
+  silent: !process.env.SENTRY_AUTH_TOKEN,
+  org: process.env.SENTRY_ORG,
+  project: process.env.SENTRY_PROJECT,
+  authToken: process.env.SENTRY_AUTH_TOKEN,
+  disableLogger: true,
+  sourcemaps: {
+    // Delete sourcemap files after they've been uploaded so they
+    // don't ship in the public bundle.
+    deleteSourcemapsAfterUpload: true,
+  },
+});
