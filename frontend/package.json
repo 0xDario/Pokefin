@@ -12,7 +12,7 @@
     "test:coverage": "jest --coverage"
   },
   "dependencies": {
-    "@marsidev/react-turnstile": "^1.4.1",
+    "@marsidev/react-turnstile": "^1.5.2",
     "@sentry/nextjs": "^10.54.0",
     "@supabase/ssr": "^0.8.0",
     "@supabase/supabase-js": "^2.106.2",
