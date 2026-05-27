@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, useContext, useEffect, useState, ReactNode } from "react";
+import { createContext, useContext, useEffect, useState, ReactNode, useCallback } from "react";
 import { User, AuthError } from "@supabase/supabase-js";
 import { supabase } from "../lib/supabase";
 
@@ -23,17 +23,38 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
+const FETCH_HEADERS = {
+  "Content-Type": "application/json",
+  "x-pokefin-request": "1",
+} as const;
+
+/**
+ * Coerce an arbitrary thrown value or fetch error into the shape the
+ * UI expects (`AuthError | null`). We only need a `.message` string,
+ * but keep the AuthError type for backwards-compat with the auth pages.
+ */
+function asAuthError(message: string): AuthError {
+  return { name: "AuthError", message, status: 0 } as AuthError;
+}
+
+async function readErrorMessage(res: Response, fallback: string): Promise<string> {
+  try {
+    const data = await res.json();
+    if (data && typeof data.error === "string") return data.error;
+  } catch {
+    /* ignore parse errors */
+  }
+  return fallback;
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
-  const isTokenRefreshFailedEvent = (event: string) =>
-    event === "TOKEN_REFRESH_FAILED";
 
-  // Fetch user profile from profiles table. The row is created
-  // server-side by the on_auth_user_created trigger; this client
-  // never inserts into profiles.
-  const fetchProfile = async (userId: string) => {
+  // Profile rows are created server-side by the on_auth_user_created
+  // trigger; this client only reads them.
+  const fetchProfile = useCallback(async (userId: string) => {
     const { data, error } = await supabase
       .from("profiles")
       .select("id, username, email")
@@ -45,114 +66,141 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       return;
     }
 
-    if (data) {
-      setProfile(data);
+    if (data) setProfile(data);
+  }, []);
+
+  // Authoritative source of "am I signed in?" is the HttpOnly session
+  // cookie, which the browser client cannot read. Ask the server via
+  // /api/auth/me instead.
+  const refreshSession = useCallback(async () => {
+    try {
+      const res = await fetch("/api/auth/me", {
+        method: "GET",
+        credentials: "same-origin",
+        cache: "no-store",
+      });
+      if (!res.ok) {
+        setUser(null);
+        setProfile(null);
+        return;
+      }
+      const { user: fetchedUser } = (await res.json()) as { user: User | null };
+      setUser(fetchedUser);
+      if (fetchedUser) {
+        await fetchProfile(fetchedUser.id);
+      } else {
+        setProfile(null);
+      }
+    } catch {
+      setUser(null);
+      setProfile(null);
+    }
+  }, [fetchProfile]);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      await refreshSession();
+      if (!cancelled) setLoading(false);
+    })();
+
+    // Refresh on window focus catches: "I returned to the tab after my
+    // session expired" and "I signed out / in from another tab".
+    const onFocus = () => {
+      refreshSession().catch(() => {});
+    };
+    window.addEventListener("focus", onFocus);
+
+    return () => {
+      cancelled = true;
+      window.removeEventListener("focus", onFocus);
+    };
+  }, [refreshSession]);
+
+  const signUp = async (
+    email: string,
+    password: string,
+    username: string,
+    captchaToken?: string
+  ) => {
+    try {
+      const res = await fetch("/api/auth/sign-up", {
+        method: "POST",
+        headers: FETCH_HEADERS,
+        credentials: "same-origin",
+        body: JSON.stringify({ email, password, username, captchaToken }),
+      });
+      if (!res.ok) {
+        const message = await readErrorMessage(res, "Sign-up failed");
+        return { error: asAuthError(message) };
+      }
+      const { user: signedUpUser } = (await res.json()) as { user: User | null };
+      setUser(signedUpUser);
+      if (signedUpUser) await fetchProfile(signedUpUser.id);
+      return { error: null };
+    } catch {
+      return { error: asAuthError("Network error") };
     }
   };
 
-  useEffect(() => {
-    // Get initial session. We deliberately do NOT keep the raw session
-    // object in React state - access/refresh tokens should not be
-    // reachable via React DevTools or window.__NEXT_DATA__ snapshots
-    // (audit finding session-cookie F-useAuth-session-leak).
-    const initSession = async () => {
-      const { data: { session } } = await supabase.auth.getSession();
-
-      if (!session) {
-        setUser(null);
-        setProfile(null);
-        setLoading(false);
-        return;
-      }
-
-      const { data: { user }, error: userError } = await supabase.auth.getUser();
-
-      if (userError || !user) {
-        await supabase.auth.signOut();
-        setUser(null);
-        setProfile(null);
-        setLoading(false);
-        return;
-      }
-
-      setUser(user);
-      await fetchProfile(user.id);
-      setLoading(false);
-    };
-
-    initSession();
-
-    // Listen for auth changes
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(
-      async (event, session) => {
-        if (event === "SIGNED_OUT" || isTokenRefreshFailedEvent(event as string)) {
-          setUser(null);
-          setProfile(null);
-          setLoading(false);
-          return;
-        }
-
-        setUser(session?.user ?? null);
-
-        if (session?.user) {
-          await fetchProfile(session.user.id);
-        } else {
-          setProfile(null);
-        }
-
-        setLoading(false);
-      }
-    );
-
-    return () => {
-      subscription.unsubscribe();
-    };
-  }, []);
-
-  const signUp = async (email: string, password: string, username: string, captchaToken?: string) => {
-    // The profile row is created by the on_auth_user_created trigger
-    // using NEW.raw_user_meta_data->>'username'.
-    const { error } = await supabase.auth.signUp({
-      email,
-      password,
-      options: {
-        captchaToken,
-        data: { username },
-      },
-    });
-    return { error };
-  };
-
   const signIn = async (email: string, password: string, captchaToken?: string) => {
-    const { error } = await supabase.auth.signInWithPassword({
-      email,
-      password,
-      options: {
-        captchaToken,
-      },
-    });
-    return { error };
+    try {
+      const res = await fetch("/api/auth/sign-in", {
+        method: "POST",
+        headers: FETCH_HEADERS,
+        credentials: "same-origin",
+        body: JSON.stringify({ email, password, captchaToken }),
+      });
+      if (!res.ok) {
+        const message = await readErrorMessage(res, "Sign-in failed");
+        return { error: asAuthError(message) };
+      }
+      const { user: signedInUser } = (await res.json()) as { user: User | null };
+      setUser(signedInUser);
+      if (signedInUser) await fetchProfile(signedInUser.id);
+      return { error: null };
+    } catch {
+      return { error: asAuthError("Network error") };
+    }
   };
 
   const signOut = async () => {
-    await supabase.auth.signOut();
-    setProfile(null);
+    try {
+      await fetch("/api/auth/sign-out", {
+        method: "POST",
+        headers: FETCH_HEADERS,
+        credentials: "same-origin",
+      });
+    } finally {
+      setUser(null);
+      setProfile(null);
+    }
   };
 
   const resetPassword = async (email: string) => {
-    // redirectTo is intentionally omitted: Supabase uses the project's
-    // configured Site URL + /auth/callback?type=recovery, which we
-    // route to /auth/reset-password. This avoids trusting
-    // window.location.origin on a phishing mirror.
+    // resetPasswordForEmail just sends an email - no session change,
+    // safe to call from the browser client. Server-side hardening
+    // would just add a hop with no security benefit.
     const { error } = await supabase.auth.resetPasswordForEmail(email);
     return { error };
   };
 
   const updatePassword = async (newPassword: string) => {
-    const { error } = await supabase.auth.updateUser({
-      password: newPassword,
-    });
-    return { error };
+    try {
+      const res = await fetch("/api/auth/update-password", {
+        method: "POST",
+        headers: FETCH_HEADERS,
+        credentials: "same-origin",
+        body: JSON.stringify({ password: newPassword }),
+      });
+      if (!res.ok) {
+        const message = await readErrorMessage(res, "Failed to update password");
+        return { error: asAuthError(message) };
+      }
+      return { error: null };
+    } catch {
+      return { error: asAuthError("Network error") };
+    }
   };
 
   return (
