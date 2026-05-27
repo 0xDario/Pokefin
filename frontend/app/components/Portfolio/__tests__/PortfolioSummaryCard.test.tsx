@@ -161,7 +161,7 @@ describe("PortfolioSummaryCard", () => {
 
       // Find the gain/loss value element - it should have green text class
       const gainLossValue = screen.getByText("+$100.00");
-      expect(gainLossValue).toHaveClass("text-green-600");
+      expect(gainLossValue).toHaveClass("text-emerald-600");
     });
   });
 
@@ -206,7 +206,7 @@ describe("PortfolioSummaryCard", () => {
 
       // Find the gain/loss value element - it should have red text class
       const lossValue = screen.getByText("$-100.00");
-      expect(lossValue).toHaveClass("text-red-600");
+      expect(lossValue).toHaveClass("text-rose-600");
     });
   });
 
@@ -233,7 +233,7 @@ describe("PortfolioSummaryCard", () => {
       );
 
       const zeroGain = screen.getByText("+$0.00");
-      expect(zeroGain).toHaveClass("text-green-600");
+      expect(zeroGain).toHaveClass("text-emerald-600");
     });
   });
 
