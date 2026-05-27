@@ -3,6 +3,11 @@ secretsFile.py
 __pycache__
 venv
 
+# Environment files — never commit
+.env
+.env.*
+!.env.example
+
 # Local inventory data — personal, not shared
 my_listings.json
 
@@ -10,3 +15,7 @@ my_listings.json
 price-check-*.md
 price_report_*.md
 .vercel
+
+# Selenium scrape dumps (e.g. page_source.html)
+page_source.html
+*.scrape.html

@@ -18,15 +18,38 @@ function toDbPacks(packs: PackEntry[]): { set_id: number; quantity: number }[] {
 }
 
 function fromDbPacks(
-  dbPacks: { set_id: number; quantity: number }[],
+  dbPacks: unknown,
   setNameMap: Map<number, string>
 ): PackEntry[] {
-  return dbPacks.map((p) => ({
-    id: crypto.randomUUID(),
-    setId: p.set_id,
-    setName: setNameMap.get(p.set_id) || `Set #${p.set_id}`,
-    quantity: p.quantity,
-  }));
+  // Defense-in-depth: a malformed JSONB row (or a freshly shared
+  // recipe whose schema drifted) must not crash the UI. We accept
+  // only entries with { set_id: positive int, quantity: 1-100000 }
+  // and silently drop anything else.
+  if (!Array.isArray(dbPacks)) return [];
+  const out: PackEntry[] = [];
+  for (const raw of dbPacks) {
+    if (!raw || typeof raw !== "object") continue;
+    const p = raw as { set_id?: unknown; quantity?: unknown };
+    if (
+      typeof p.set_id !== "number" ||
+      !Number.isInteger(p.set_id) ||
+      p.set_id <= 0
+    ) continue;
+    if (
+      typeof p.quantity !== "number" ||
+      !Number.isInteger(p.quantity) ||
+      p.quantity < 1 ||
+      p.quantity > 100_000
+    ) continue;
+    out.push({
+      id: crypto.randomUUID(),
+      setId: p.set_id,
+      setName: setNameMap.get(p.set_id) || `Set #${p.set_id}`,
+      quantity: p.quantity,
+    });
+    if (out.length >= 50) break;
+  }
+  return out;
 }
 
 export function useBoxRecipes(setNameMap: Map<number, string>) {

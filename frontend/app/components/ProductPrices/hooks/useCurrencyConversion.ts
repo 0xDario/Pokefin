@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback } from "react";
 import { fetchLatestExchangeRateClient } from "../../../lib/exchangeRate";
 import { Currency } from "../types";
+import { logCaughtError } from "../../../lib/logger";
 
 /**
  * Hook to manage currency conversion and exchange rates
@@ -32,7 +33,7 @@ export function useCurrencyConversion(initialExchangeRate?: number, initialCurre
           setExchangeRate(result.rate);
         }
       } catch (error) {
-        console.error("[useCurrencyConversion] Failed to load exchange rate:", error);
+        logCaughtError("exchange_rate_load_failed", error);
       } finally {
         if (!cancelled) {
           setExchangeRateLoading(false);

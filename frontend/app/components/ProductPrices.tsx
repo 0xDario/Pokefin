@@ -3,6 +3,7 @@
 import React, { useEffect, useState, useMemo } from "react";
 import { createClient } from "@supabase/supabase-js";
 import Image from "next/image";
+import { logCaughtError, logSupabaseError } from "../lib/logger";
 import PriceChart from "./PriceChart";
 import { fetchUSDToCADRate } from "./ExchangeRateService";
 import CardRinkPromo from "./CardRinkPromo";
@@ -168,7 +169,7 @@ export default function ProductPrices() {
         setExchangeRate(result.rate);
         console.log(`[ProductPrices] Exchange rate loaded: ${result.rate} (date: ${result.date})`);
       } catch (error) {
-        console.error('[ProductPrices] Failed to load exchange rate:', error);
+        logCaughtError("exchange_rate_load_failed", error);
       } finally {
         setExchangeRateLoading(false);
       }
@@ -200,7 +201,7 @@ export default function ProductPrices() {
         });
 
         if (error) {
-          console.error("[ProductPrices] Fetch error:", error);
+          logSupabaseError("product_prices_fetch_failed", error);
           return;
         }
 
@@ -218,7 +219,7 @@ export default function ProductPrices() {
 
         setPriceHistory(historyByProduct);
       } catch (err) {
-        console.error("[ProductPrices] Fetch exception:", err);
+        logCaughtError("product_prices_fetch_exception", err);
       }
     }
 

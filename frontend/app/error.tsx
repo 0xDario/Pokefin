@@ -1,6 +1,20 @@
 "use client";
 
-export default function Error({ reset }: { error: Error; reset: () => void }) {
+import { useEffect } from "react";
+import * as Sentry from "@sentry/nextjs";
+
+export default function Error({
+  error,
+  reset,
+}: {
+  error: Error & { digest?: string };
+  reset: () => void;
+}) {
+  useEffect(() => {
+    // No-op when SENTRY_DSN is unset (see sentry.client.config.ts).
+    Sentry.captureException(error);
+  }, [error]);
+
   return (
     <div className="min-h-screen flex items-center justify-center p-8">
       <div className="max-w-md text-center space-y-4">

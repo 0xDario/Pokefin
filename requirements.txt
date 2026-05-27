@@ -1,5 +1,7 @@
-requests
-selenium
-webdriver-manager
-supabase
-beautifulsoup4
+# Pinned to avoid silent upgrades pulling in CVEs (audit proj F-7).
+# Bump deliberately; verify against `pip-audit` in CI.
+requests==2.33.0
+selenium==4.25.0
+webdriver-manager==4.0.2
+supabase==2.10.0
+beautifulsoup4==4.12.3

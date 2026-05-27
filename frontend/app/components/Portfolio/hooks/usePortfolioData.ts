@@ -8,6 +8,7 @@ import {
   calculatePortfolioSummary,
   getPortfolioHistory,
 } from "../../../lib/portfolio";
+import { logCaughtError } from "../../../lib/logger";
 import type {
   Portfolio,
   HoldingWithProduct,
@@ -80,7 +81,7 @@ export function usePortfolioData(): UsePortfolioDataReturn {
       );
       setHistory(historyData);
     } catch (err) {
-      console.error("Error fetching portfolio data:", err);
+      logCaughtError("portfolio_data_fetch_failed", err);
       setError(err instanceof Error ? err.message : "An error occurred");
     } finally {
       setLoading(false);
