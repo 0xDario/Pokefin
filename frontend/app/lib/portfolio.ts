@@ -1,4 +1,5 @@
 import { supabase } from "./supabase";
+import { logSupabaseError } from "./logger";
 import type {
   Portfolio,
   Holding,
@@ -34,7 +35,7 @@ export async function getOrCreatePortfolio(userId: string): Promise<Portfolio | 
 
   // If no portfolio exists and it's not just a "no rows" error, return null
   if (fetchError && fetchError.code !== "PGRST116") {
-    console.error("Error fetching portfolio:", fetchError);
+    logSupabaseError("portfolio_fetch_failed", fetchError);
     return null;
   }
 
@@ -46,7 +47,7 @@ export async function getOrCreatePortfolio(userId: string): Promise<Portfolio | 
     .single();
 
   if (createError) {
-    console.error("Error creating portfolio:", createError);
+    logSupabaseError("portfolio_create_failed", createError);
     return null;
   }
 
@@ -123,7 +124,7 @@ export async function getHoldings(portfolioId: number): Promise<HoldingWithProdu
     .order("created_at", { ascending: false });
 
   if (error) {
-    console.error("Error fetching holdings:", error);
+    logSupabaseError("holdings_fetch_failed", error);
     return [];
   }
 
@@ -364,7 +365,7 @@ export async function getPortfolioHistory(
     .order("recorded_at", { ascending: true });
 
   if (error || !priceHistory) {
-    console.error("Error fetching price history:", error);
+    logSupabaseError("price_history_fetch_failed", error);
     return [];
   }
 
@@ -482,7 +483,7 @@ export async function searchProductsBySet(setName: string): Promise<ProductSearc
     .ilike("name", `%${escapeLike(setName)}%`);
 
   if (setsError || !setsData || setsData.length === 0) {
-    if (setsError) console.error("Error searching sets:", setsError);
+    if (setsError) logSupabaseError("sets_search_failed", setsError);
     return [];
   }
 
@@ -499,7 +500,7 @@ export async function searchProductsBySet(setName: string): Promise<ProductSearc
     .limit(50);
 
   if (error) {
-    console.error("Error searching products by set:", error);
+    logSupabaseError("products_by_set_search_failed", error);
     return [];
   }
 
@@ -520,7 +521,7 @@ export async function getAllProducts(): Promise<ProductSearchResult[]> {
     .order("id", { ascending: true });
 
   if (error) {
-    console.error("Error fetching all products:", error);
+    logSupabaseError("all_products_fetch_failed", error);
     return [];
   }
 

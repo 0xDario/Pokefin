@@ -15,6 +15,7 @@ import {
   MarketSummaryRow,
   SetAnalyticsRow,
 } from "./marketData";
+import { logSupabaseError } from "./logger";
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_KEY;
 
@@ -460,7 +461,7 @@ async function fetchProductDetail(
     .order("recorded_at", { ascending: true });
 
   if (error) {
-    console.error("[serverMarketData] product history fetch failed:", error);
+    logSupabaseError("server_product_history_failed", error);
   }
 
   const history = groupHistoryRowsByProduct(historyRows || [])[productId] || [];
@@ -593,7 +594,7 @@ async function fetchSetAnalytics(): Promise<SetAnalyticsRow[]> {
   const { data, error } = await supabase.rpc("get_set_analytics");
 
   if (error) {
-    console.error("[serverMarketData] get_set_analytics failed:", error);
+    logSupabaseError("server_set_analytics_failed", error);
     return fetchSetAnalyticsFallback();
   }
 

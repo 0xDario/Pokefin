@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { fetchMarketProductsClient, fetchProductHistoryClient } from "../../../lib/clientMarketData";
 import { getDaysForTimeframe } from "../../../lib/marketData";
+import { logCaughtError } from "../../../lib/logger";
 import { Product, PriceHistoryEntry, ChartTimeframe } from "../types";
 
 type UseProductDataOptions = {
@@ -34,7 +35,7 @@ export function useProductData(options: UseProductDataOptions = {}) {
           setProducts(nextProducts);
         }
       } catch (error) {
-        console.error("[useProductData] Failed to load products:", error);
+        logCaughtError("market_products_load_failed", error);
       } finally {
         if (!cancelled) {
           setLoading(false);
@@ -86,7 +87,7 @@ export function useProductData(options: UseProductDataOptions = {}) {
         }));
         return history;
       } catch (error) {
-        console.error("[useProductData] Failed to load history:", error);
+        logCaughtError("product_history_load_failed", error);
         return [];
       } finally {
         setLoadingProductIds((prev) => prev.filter((id) => id !== productId));
