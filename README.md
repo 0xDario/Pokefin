@@ -41,21 +41,21 @@ A live price dashboard for sealed Pokémon TCG products (Booster Boxes, ETBs, Bu
 ### Setup
 ```bash
 # Clone repo
-git clone https://github.com/your-username/pokemon-price-dashboard.git
-cd pokemon-price-dashboard
+git clone https://github.com/0xDario/Pokefin.git
+cd Pokefin
 
-# Frontend setup
+# Frontend setup (uses pnpm — see package.json "packageManager")
 cd frontend
-npm install
+pnpm install
 
 # Create environment file
 cp .env.example .env.local
-# Add your Supabase credentials:
-NEXT_PUBLIC_SUPABASE_URL=your-supabase-url
-NEXT_PUBLIC_SUPABASE_KEY=your-supabase-anon-key
+# Then fill in your Supabase credentials (and any other values) in .env.local:
+#   NEXT_PUBLIC_SUPABASE_URL=your-supabase-url
+#   NEXT_PUBLIC_SUPABASE_KEY=your-supabase-anon-key
 
 # Run development server
-npm run dev
+pnpm dev
 
 # Backend setup (separate terminal)
 cd ../
