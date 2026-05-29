@@ -14,34 +14,42 @@ jobs:
         working-directory: frontend
     steps:
       - uses: actions/checkout@v6
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
       - uses: actions/setup-node@v6
         with:
-          node-version: "20"
-          cache: "npm"
-          cache-dependency-path: frontend/package-lock.json
-      - run: npm ci
-      - run: npx tsc --noEmit
-      # Lint is reported but not blocking yet - the codebase has 15
+          node-version: "22"
+          cache: "pnpm"
+          cache-dependency-path: frontend/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec tsc --noEmit
+      # Lint is reported but not blocking yet - the codebase has
       # pre-existing React 19 / Next 16 strict-mode violations (inline
       # components, setState-in-effect) that were never caught because
       # `next lint` was broken on master. Fixing them is a separate PR.
       - name: Lint (non-blocking)
-        run: npm run lint
+        run: pnpm run lint
         continue-on-error: true
-      - run: npm test -- --ci
+      # pnpm forwards a literal `--` to the script, which jest treats as a
+      # path pattern; pass --ci directly instead of via `pnpm test -- --ci`.
+      - run: pnpm test --ci
 
-  npm-audit:
-    name: npm audit (high+ severity)
+  audit:
+    name: pnpm audit (high+ severity)
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: frontend
     steps:
       - uses: actions/checkout@v6
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
       - uses: actions/setup-node@v6
         with:
-          node-version: "20"
-      - run: npm audit --audit-level=high --production
+          node-version: "22"
+      - run: pnpm audit --audit-level high --prod
 
   python:
     name: Python (pip-audit)
