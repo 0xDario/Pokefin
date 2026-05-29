@@ -1,6 +1,6 @@
 # Pinned to avoid silent upgrades pulling in CVEs (audit proj F-7).
 # Bump deliberately; verify against `pip-audit` in CI.
-requests==2.33.0
+requests==2.34.2
 selenium==4.44.0
 webdriver-manager==4.1.1
 supabase==2.30.1
