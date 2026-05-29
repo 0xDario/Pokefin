@@ -9,6 +9,12 @@ updates:
     # Each open PR triggers its own Vercel preview deployment, and a burst
     # of ungrouped bumps once tripped Vercel's deployment rate limit (429).
     # Grouping production deps keeps simultaneous deploys to ~3 PRs.
+    ignore:
+      # eslint-config-next 16.x bundles eslint-plugin-react 7.37, which
+      # crashes on eslint 10's API ("contextOrFilename.getFilename is not a
+      # function"). Stay on eslint 9 until eslint-config-next supports 10.
+      - dependency-name: "eslint"
+        versions: [">=10"]
     groups:
       types-deps:
         patterns:
