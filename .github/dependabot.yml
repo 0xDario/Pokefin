@@ -5,12 +5,20 @@ updates:
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 5
+    # Batch updates into a few grouped PRs instead of one-per-package.
+    # Each open PR triggers its own Vercel preview deployment, and a burst
+    # of ungrouped bumps once tripped Vercel's deployment rate limit (429).
+    # Grouping production deps keeps simultaneous deploys to ~3 PRs.
     groups:
       types-deps:
         patterns:
           - "@types/*"
       dev-deps:
         dependency-type: "development"
+        exclude-patterns:
+          - "@types/*"
+      production-deps:
+        dependency-type: "production"
   - package-ecosystem: "pip"
     directory: "/"
     schedule:
