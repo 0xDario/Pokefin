@@ -5,6 +5,7 @@ import { createClient } from "@supabase/supabase-js";
 import {
   PriceHistoryEntry,
   Product,
+  SalesHistoryEntry,
 } from "../components/ProductPrices/types";
 import {
   DEFAULT_EXCHANGE_RATE,
@@ -441,9 +442,18 @@ async function fetchSetAnalyticsFallback(): Promise<SetAnalyticsRow[]> {
   return scored;
 }
 
+export type ProductListingsSnapshot = {
+  active_listings: number | null;
+  total_quantity_available: number | null;
+  lowest_listing_price: number | null;
+  snapshot_date: string | null;
+};
+
 export type ProductDetail = {
   product: Product;
   history: PriceHistoryEntry[];
+  salesHistory: SalesHistoryEntry[];
+  listings: ProductListingsSnapshot | null;
   siblings: Product[];
 };
 
@@ -472,6 +482,53 @@ async function fetchProductDetail(
 
   const history = groupHistoryRowsByProduct(historyRows || [])[productId] || [];
 
+  // Sales-volume history (both 'day' and 'week' granularities). The tables
+  // may not exist yet pre-migration; errors degrade to an empty array.
+  const salesStartDate = new Date();
+  salesStartDate.setDate(salesStartDate.getDate() - 400);
+  const salesStartDateStr = salesStartDate.toISOString().split("T")[0];
+
+  let salesHistory: SalesHistoryEntry[] = [];
+  const { data: salesRows, error: salesError } = await supabase
+    .from("product_sales_history")
+    .select(
+      "bucket_date, granularity, quantity_sold, transaction_count, low_sale_price, high_sale_price, market_price"
+    )
+    .eq("product_id", productId)
+    .gte("bucket_date", salesStartDateStr)
+    .order("bucket_date", { ascending: true });
+
+  if (salesError) {
+    logSupabaseError("server_product_sales_history_failed", salesError);
+  } else {
+    salesHistory = (salesRows || []) as SalesHistoryEntry[];
+  }
+
+  // Latest marketplace listings snapshot; null when missing.
+  let listings: ProductListingsSnapshot | null = null;
+  const { data: listingsRows, error: listingsError } = await supabase
+    .from("product_listings_history")
+    .select(
+      "active_listings, total_quantity_available, lowest_listing_price, snapshot_date"
+    )
+    .eq("product_id", productId)
+    .order("snapshot_date", { ascending: false })
+    .limit(1);
+
+  if (listingsError) {
+    logSupabaseError("server_product_listings_failed", listingsError);
+  } else {
+    const row = listingsRows?.[0];
+    if (row) {
+      listings = {
+        active_listings: row.active_listings ?? null,
+        total_quantity_available: row.total_quantity_available ?? null,
+        lowest_listing_price: row.lowest_listing_price ?? null,
+        snapshot_date: row.snapshot_date ?? null,
+      };
+    }
+  }
+
   // Siblings share the same set. Match on set id when present, falling back to
   // code so products from the cached summaries still group correctly.
   const setKey = product.sets?.id ?? product.sets?.code;
@@ -484,7 +541,7 @@ async function fetchProductDetail(
             (p.sets?.id ?? p.sets?.code) === setKey
         );
 
-  return { product, history, siblings };
+  return { product, history, salesHistory, listings, siblings };
 }
 
 async function fetchLatestExchangeRate(): Promise<ExchangeRateSnapshot> {
