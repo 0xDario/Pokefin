@@ -3,7 +3,12 @@ import { withSentryConfig } from "@sentry/nextjs";
 
 const csp = [
   "default-src 'self'",
-  "script-src 'self' 'unsafe-inline' https://challenges.cloudflare.com",
+  // React/Next dev mode needs eval() for debugging features (reconstructing
+  // callstacks etc.); production builds never use eval, so the shipped CSP
+  // stays eval-free.
+  `script-src 'self' 'unsafe-inline'${
+    process.env.NODE_ENV === "development" ? " 'unsafe-eval'" : ""
+  } https://challenges.cloudflare.com`,
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' data: blob: https://*.tcgplayer.com https://tcgplayer.com https://*.supabase.co",
   "font-src 'self' data:",
