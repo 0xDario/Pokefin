@@ -4,6 +4,8 @@ import { Fragment, useEffect, useMemo, useState } from "react";
 import ControlBar from "../ProductPrices/controls/ControlBar";
 import { useProductData } from "../ProductPrices/hooks/useProductData";
 import { useCurrencyConversion } from "../ProductPrices/hooks/useCurrencyConversion";
+import { useVolumeMetrics } from "../ProductPrices/hooks/useVolumeMetrics";
+import { getVolumeTrendPercent } from "../../lib/marketPulse";
 import {
   filterProducts,
   getAvailableGenerations,
@@ -54,7 +56,9 @@ type SortKey =
   | "return_1m"
   | "return_3m"
   | "return_6m"
-  | "return_1y";
+  | "return_1y"
+  | "vol_30d"
+  | "vol_trend";
 
 // Return-window labels that are part of the "key columns" view. Other windows
 // (6M, 1Y) only show when "Show all columns" is toggled on.
@@ -138,6 +142,8 @@ export default function MarketView({
     convertPrice,
     formatPrice,
   } = useCurrencyConversion(initialExchangeRate);
+  // Session-cached, referentially stable Record keyed by product_id.
+  const volumeMetrics = useVolumeMetrics();
 
   const [selectedGeneration, setSelectedGeneration] = useState("all");
   const [searchTerm, setSearchTerm] = useState("");
@@ -150,7 +156,7 @@ export default function MarketView({
   const [showAllColumns, setShowAllColumns] = useState(false);
 
   // Total visible columns drives colSpan on the expanded chart row.
-  const visibleColumnCount = showAllColumns ? 17 : 8;
+  const visibleColumnCount = showAllColumns ? 19 : 10;
 
   const ageFilterMinDays = useMemo(() => {
     return (
@@ -226,6 +232,12 @@ export default function MarketView({
       const cagr = getCagrPercent(history, convertPrice);
       const maxDrawdown = getMaxDrawdownPercent(history, convertPrice);
       const volatility30d = getVolatilityPercent(history, convertPrice, 30);
+      const productVolume = volumeMetrics[product.id];
+      const unitsSold30d = productVolume?.units_sold_30d ?? null;
+      const volumeTrend = getVolumeTrendPercent(
+        unitsSold30d,
+        productVolume?.units_sold_prior_30d ?? null
+      );
 
       return {
         product,
@@ -238,9 +250,11 @@ export default function MarketView({
         cagr,
         maxDrawdown,
         volatility30d,
+        unitsSold30d,
+        volumeTrend,
       };
     });
-  }, [filteredProducts, priceHistory, convertPrice]);
+  }, [filteredProducts, priceHistory, convertPrice, volumeMetrics]);
 
   useEffect(() => {
     if (expandedProductId !== null) {
@@ -289,6 +303,10 @@ export default function MarketView({
           return row.returns["6M"];
         case "return_1y":
           return row.returns["1Y"];
+        case "vol_30d":
+          return row.unitsSold30d;
+        case "vol_trend":
+          return row.volumeTrend;
         default:
           return null;
       }
@@ -583,6 +601,24 @@ export default function MarketView({
                         </th>
                       );
                     })}
+                    <th className="px-3 py-3 text-right">
+                      <button
+                        type="button"
+                        onClick={() => handleSort("vol_30d")}
+                        className="font-semibold uppercase tracking-wide text-slate-500 hover:text-slate-700"
+                      >
+                        Vol (30d){getSortIndicator("vol_30d")}
+                      </button>
+                    </th>
+                    <th className="px-3 py-3 text-right">
+                      <button
+                        type="button"
+                        onClick={() => handleSort("vol_trend")}
+                        className="font-semibold uppercase tracking-wide text-slate-500 hover:text-slate-700"
+                      >
+                        Vol Δ{getSortIndicator("vol_trend")}
+                      </button>
+                    </th>
                     {showAllColumns && (
                       <th className="px-3 py-3 text-right">Last 7D</th>
                     )}
@@ -600,6 +636,8 @@ export default function MarketView({
                       cagr,
                       maxDrawdown,
                       volatility30d,
+                      unitsSold30d,
+                      volumeTrend,
                     } = row;
                     const isExpanded = expandedProductId === product.id;
 
@@ -661,6 +699,18 @@ export default function MarketView({
                               </td>
                             );
                           })}
+                          <td className="px-3 py-4 text-right">
+                            {unitsSold30d !== null ? (
+                              <span className="font-semibold text-slate-700 tabular-nums">
+                                {unitsSold30d}
+                              </span>
+                            ) : (
+                              <span className="text-slate-400">--</span>
+                            )}
+                          </td>
+                          <td className="px-3 py-4 text-right">
+                            {renderReturnValue(volumeTrend)}
+                          </td>
                           {showAllColumns && (
                             <td className="px-3 py-4">
                               <div className="flex justify-end">

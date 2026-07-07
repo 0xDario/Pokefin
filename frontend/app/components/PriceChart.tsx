@@ -4,6 +4,7 @@ import React, { useMemo, memo } from "react";
 import {
   ResponsiveContainer,
   Area,
+  Bar,
   XAxis,
   YAxis,
   Tooltip,
@@ -12,6 +13,8 @@ import {
   ComposedChart,
   ReferenceLine,
 } from "recharts";
+import { buildVolumeSeries } from "../lib/marketData";
+import type { SalesHistoryEntry } from "./ProductPrices/types";
 
 type PriceHistoryEntry = {
   usd_price: number;
@@ -25,6 +28,8 @@ type ChartPoint = {
   price: number | null;
   timestamp: string;
   trend: number | null;
+  volume?: number;
+  volumeIsWeekly?: boolean;
 };
 
 function createYAxisTicks(min: number, max: number, tickCount = 5): number[] {
@@ -66,6 +71,7 @@ const PriceChart = memo(function PriceChart({
   exchangeRate = 1.36,
   height = 200,
   releaseDate,
+  salesHistory,
 }: {
   data: PriceHistoryEntry[];
   range: "7D" | "1M" | "3M" | "6M" | "1Y";
@@ -73,6 +79,7 @@ const PriceChart = memo(function PriceChart({
   exchangeRate?: number;
   height?: number;
   releaseDate?: string;
+  salesHistory?: SalesHistoryEntry[];
 }) {
   const groupedDaily = useMemo(() => {
     // Group by LOCAL date, keeping the first entry for each date.
@@ -183,19 +190,78 @@ const PriceChart = memo(function PriceChart({
     return result;
   }, [range, groupedDaily]);
 
+  // Opt-in sales-volume series. Only computed when the salesHistory prop is
+  // provided; without it the chart renders exactly as before.
+  const volumeSeries = useMemo(() => {
+    if (!salesHistory || salesHistory.length === 0) return null;
+    return buildVolumeSeries(salesHistory, range);
+  }, [salesHistory, range]);
+
+  const hasVolume = volumeSeries !== null;
+
+  // Merge volume into the same local-date calendar the chart iterates:
+  // days without a volume point get 0 (volume is never forward-filled).
+  const slicedDataWithVolume = useMemo<ChartPoint[]>(() => {
+    if (!volumeSeries) {
+      return slicedData.map((point) => ({ ...point, trend: null }));
+    }
+
+    const volumeByDate = new Map(volumeSeries.map((point) => [point.date, point]));
+    const isWeeklySeries = volumeSeries.some((point) => point.isWeekly);
+
+    return slicedData.map((point) => {
+      const volumePoint = volumeByDate.get(point.timestamp);
+      return {
+        ...point,
+        trend: null,
+        volume: volumePoint ? volumePoint.volume : 0,
+        volumeIsWeekly: volumePoint ? volumePoint.isWeekly : isWeeklySeries,
+      };
+    });
+  }, [slicedData, volumeSeries]);
+
   // Downsample data for longer ranges to reduce jaggedness
   const chartData = useMemo<ChartPoint[]>(() => {
     if (range === "7D" || range === "1M") {
-      return slicedData.map((point) => ({ ...point, trend: null }));
+      return slicedDataWithVolume;
     }
 
     // For longer ranges, we smooth the data
     const step = range === "3M" ? 2 : range === "6M" ? 3 : 7; // 7 days for 1Y
-    
-    return slicedData
-      .filter((_, index) => index % step === 0 || index === slicedData.length - 1)
-      .map((point) => ({ ...point, trend: null }));
-  }, [slicedData, range]);
+
+    if (!hasVolume) {
+      return slicedDataWithVolume.filter(
+        (_, index) => index % step === 0 || index === slicedDataWithVolume.length - 1
+      );
+    }
+
+    // With volume present, skipped points must roll their volume into the
+    // next retained point so no sold units are ever dropped.
+    const result: ChartPoint[] = [];
+    let carriedVolume = 0;
+    let carriedWeekly = false;
+
+    for (let index = 0; index < slicedDataWithVolume.length; index += 1) {
+      const point = slicedDataWithVolume[index];
+      const retained =
+        index % step === 0 || index === slicedDataWithVolume.length - 1;
+
+      if (retained) {
+        result.push({
+          ...point,
+          volume: (point.volume ?? 0) + carriedVolume,
+          volumeIsWeekly: Boolean(point.volumeIsWeekly) || carriedWeekly,
+        });
+        carriedVolume = 0;
+        carriedWeekly = false;
+      } else {
+        carriedVolume += point.volume ?? 0;
+        carriedWeekly = carriedWeekly || Boolean(point.volumeIsWeekly);
+      }
+    }
+
+    return result;
+  }, [slicedDataWithVolume, range, hasVolume]);
 
   const chartDataWithTrend = useMemo<ChartPoint[]>(() => {
     const lookback = range === "7D" ? 3 : range === "1M" ? 5 : range === "3M" ? 10 : 14;
@@ -313,18 +379,30 @@ const PriceChart = memo(function PriceChart({
 
   // Custom tooltip component with better styling
   const CustomTooltip = ({ active, payload, label }: any) => {
-    if (active && payload && payload.length && payload[0].value !== null) {
-      return (
-        <div className="bg-slate-900 text-white px-4 py-3 rounded-lg shadow-xl border-2 border-blue-500">
-          <p className="text-xs font-semibold text-slate-300 mb-1">{label}</p>
-          <p className="text-lg font-bold">
-            <span className="text-blue-400">{currencySymbol}{payload[0].value.toFixed(2)}</span>
-            <span className="text-xs text-slate-400 ml-1">{currency}</span>
+    if (!active || !payload || !payload.length) return null;
+
+    // With volume bars enabled the payload gains a "volume" entry, so find
+    // the price entry explicitly instead of relying on payload order.
+    const priceEntry = payload.find((entry: any) => entry.dataKey === "price");
+    if (!priceEntry || priceEntry.value === null) return null;
+
+    const point = priceEntry.payload ?? {};
+    const showVolume = hasVolume && typeof point.volume === "number";
+
+    return (
+      <div className="bg-slate-900 text-white px-4 py-3 rounded-lg shadow-xl border-2 border-blue-500">
+        <p className="text-xs font-semibold text-slate-300 mb-1">{label}</p>
+        <p className="text-lg font-bold">
+          <span className="text-blue-400">{currencySymbol}{priceEntry.value.toFixed(2)}</span>
+          <span className="text-xs text-slate-400 ml-1">{currency}</span>
+        </p>
+        {showVolume && (
+          <p className="text-xs text-slate-300 mt-1 tabular-nums">
+            {point.volume} sold{point.volumeIsWeekly ? " (week)" : ""}
           </p>
-        </div>
-      );
-    }
-    return null;
+        )}
+      </div>
+    );
   };
 
   // Custom dot component for data points
@@ -457,6 +535,17 @@ const PriceChart = memo(function PriceChart({
               width={45}
             />
 
+            {/* Hidden right-hand axis keeps volume bars in the bottom
+                quarter of the plot (max scaled 4x, minimum 4). */}
+            {hasVolume && (
+              <YAxis
+                yAxisId="volume"
+                orientation="right"
+                hide
+                domain={[0, (dataMax: number) => Math.max(dataMax * 4, 4)]}
+              />
+            )}
+
             {/* Enhanced Tooltip with crosshair */}
             <Tooltip
               content={<CustomTooltip />}
@@ -481,6 +570,17 @@ const PriceChart = memo(function PriceChart({
                   fontSize: 11,
                   fontWeight: 600,
                 }}
+              />
+            )}
+
+            {/* Sales-volume bars, rendered before the Area/Line so they sit behind */}
+            {hasVolume && (
+              <Bar
+                yAxisId="volume"
+                dataKey="volume"
+                fill="#94a3b8"
+                fillOpacity={0.5}
+                isAnimationActive={false}
               />
             )}
 
