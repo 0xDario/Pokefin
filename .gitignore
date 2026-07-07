@@ -19,3 +19,10 @@ price_report_*.md
 # Selenium scrape dumps (e.g. page_source.html)
 page_source.html
 *.scrape.html
+
+# Backfill checkpoint files (per-run resume state)
+backfill_sales_checkpoint_*.json
+checkpoint_*.json
+
+# macOS
+.DS_Store
