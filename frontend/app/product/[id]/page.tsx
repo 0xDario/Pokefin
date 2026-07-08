@@ -194,6 +194,10 @@ export default async function ProductPage({
   const priceReturn30d = product.returns?.["1M"] ?? null;
   const pulseSignal = getPulseSignal(priceReturn30d, volumeTrend);
   const pulseMeta = pulseSignal ? PULSE_SIGNAL_META[pulseSignal] : null;
+  // A null signal means "below thresholds" only when both inputs exist;
+  // with either input missing there is no basis for a verdict, and showing
+  // "Stable" would misread as a neutral market signal.
+  const hasPulseInputs = priceReturn30d !== null && volumeTrend !== null;
 
   return (
     <main className="p-3 md:p-6">
@@ -312,10 +316,16 @@ export default async function ProductPage({
                 : PULSE_TONE_CLASSES.neutral
             }`}
           >
-            {pulseMeta ? pulseMeta.label : "Stable"}
+            {pulseMeta ? pulseMeta.label : hasPulseInputs ? "Stable" : "No signal"}
           </span>
-          {pulseMeta && (
+          {pulseMeta ? (
             <span className="text-xs text-slate-500">{pulseMeta.description}</span>
+          ) : (
+            !hasPulseInputs && (
+              <span className="text-xs text-slate-500">
+                Not enough volume history yet
+              </span>
+            )
           )}
         </div>
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">

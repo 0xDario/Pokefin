@@ -93,9 +93,12 @@ export type VolumeSeriesPoint = {
   isWeekly: boolean;
 };
 
-// Timeframes covering at most this many days render one volume bar per day;
-// longer timeframes aggregate into Monday-start weekly buckets.
-const DAILY_VOLUME_MAX_DAYS = 92;
+// Timeframes covering at most this many days render one volume bar per day
+// (7D and 1M); longer timeframes aggregate into Monday-start weekly buckets.
+// The scraper only maintains ~30 trailing daily buckets, so a daily-only 3M
+// chart would render its first ~60 days as zero even though backfilled
+// weekly rows cover them — 3M and up must take the weekly merge path.
+const DAILY_VOLUME_MAX_DAYS = 35;
 
 function toLocalDateKey(d: Date): string {
   const yyyy = d.getFullYear();

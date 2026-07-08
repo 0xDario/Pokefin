@@ -292,6 +292,28 @@ class TestFetchListingsSnapshot:
         assert snapshot["total_quantity_available"] == 48  # 1*30 + 2*9
         assert snapshot["lowest_listing_price"] == 157.0
 
+    def test_request_payload_asks_for_quantity_and_scopes_language(self):
+        """The quantity aggregation must be requested explicitly (it feeds
+        total_quantity_available), and a preferred language must scope the
+        term filters so multi-language product ids don't mix markets."""
+        from main import fetch_listings_snapshot
+
+        session = MagicMock()
+        session.post.return_value = _make_response(200, self._listings_payload())
+
+        fetch_listings_snapshot(session, "12345", preferred_language="English")
+
+        payload = session.post.call_args.kwargs["json"]
+        assert "quantity" in payload["aggregations"]
+        assert payload["filters"]["term"]["language"] == ["English"]
+
+        # Without a preferred language, no language filter is applied.
+        session.post.reset_mock()
+        session.post.return_value = _make_response(200, self._listings_payload())
+        fetch_listings_snapshot(session, "12345")
+        payload = session.post.call_args.kwargs["json"]
+        assert "language" not in payload["filters"]["term"]
+
     def test_missing_quantity_aggregation_gives_none(self):
         """Missing quantity aggregation should give total_quantity_available=None"""
         from main import fetch_listings_snapshot
