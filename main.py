@@ -295,12 +295,19 @@ def parse_daily_sales_buckets(buckets, product_id):
     return rows
 
 
-def fetch_listings_snapshot(session, tcgplayer_product_id, referer=None):
+def fetch_listings_snapshot(session, tcgplayer_product_id, referer=None,
+                            preferred_language=None):
     """
     Fetch a snapshot of live listings depth from TCGPlayer's mp-search-api.
     Returns dict with keys active_listings (int|None),
     total_quantity_available (int|None), lowest_listing_price (float|None),
     or None on any failure (non-200, parse error, ...).
+
+    preferred_language scopes the snapshot to one language when the product
+    URL pins one (?Language=...), so multi-language product ids don't mix
+    markets. Listings carry no variant dimension for sealed product (the
+    'printing' term uses Normal/Holofoil, not our display variants), so no
+    variant filter is applied.
     """
     if not tcgplayer_product_id:
         return None
@@ -315,9 +322,13 @@ def fetch_listings_snapshot(session, tcgplayer_product_id, referer=None):
     if referer:
         headers["Referer"] = referer
 
+    term_filters = {"sellerStatus": "Live", "channelId": 0, "listingType": "standard"}
+    if preferred_language:
+        term_filters["language"] = [preferred_language]
+
     payload = {
         "filters": {
-            "term": {"sellerStatus": "Live", "channelId": 0, "listingType": "standard"},
+            "term": term_filters,
             "range": {"quantity": {"gte": 1}},
             "exclude": {"channelExclusion": 0},
         },
@@ -325,7 +336,9 @@ def fetch_listings_snapshot(session, tcgplayer_product_id, referer=None):
         "size": 1,
         "sort": {"field": "price+shipping", "order": "asc"},
         "context": {"shippingCountry": "US"},
-        "aggregations": ["listingType"],
+        # quantity must be requested explicitly — total_quantity_available
+        # is derived from its histogram below.
+        "aggregations": ["listingType", "quantity"],
     }
 
     try:
@@ -957,7 +970,10 @@ def update_prices():
                 if tcgplayer_product_id:
                     # Extra politeness delay before hitting the listings endpoint
                     time.sleep(0.5 + random.uniform(0, 0.5))
-                    snapshot = fetch_listings_snapshot(api_session, tcgplayer_product_id, referer=url)
+                    snapshot = fetch_listings_snapshot(
+                        api_session, tcgplayer_product_id, referer=url,
+                        preferred_language=extract_preferred_language(url),
+                    )
                     if snapshot is not None:
                         listings_history_batch.append({
                             "product_id": product_id,

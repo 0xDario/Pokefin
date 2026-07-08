@@ -407,17 +407,22 @@ def extract_sales_history_api(product_id, db_product_id, referer=None,
                               min_bucket_date=None, session=None):
     """
     Fetch sales-volume history from TCGPlayer's infinite-api.
-    Returns a deduped list of upsert-ready product_sales_history rows:
-    granularity='week' rows from range=annual and granularity='day' rows
-    from range=month. Week and day rows never collide (granularity is part
-    of the key), but the intra-batch dedupe guard still applies.
+    Returns (rows, all_ranges_ok): a deduped list of upsert-ready
+    product_sales_history rows (granularity='week' from range=annual,
+    granularity='day' from range=month; they never collide because
+    granularity is part of the key), and a flag that is True only when
+    EVERY configured range produced a usable API response. Callers must
+    not checkpoint a product as processed unless all_ranges_ok — a
+    transient failure of one range would otherwise leave that granularity
+    permanently missing (--resume skips processed products).
     """
     if not product_id:
-        return []
+        return [], False
 
     session = session or _create_session()
 
     deduped = {}
+    all_ranges_ok = True
 
     for range_config in SALES_RANGE_CONFIG:
         data = fetch_price_history_json(
@@ -430,6 +435,7 @@ def extract_sales_history_api(product_id, db_product_id, referer=None,
 
         if not data:
             logger.debug(f"API data missing for {range_config['label']}")
+            all_ranges_ok = False
             continue
 
         result = _select_api_result(
@@ -439,6 +445,7 @@ def extract_sales_history_api(product_id, db_product_id, referer=None,
         )
         if not result:
             logger.debug(f"No matching API result for {range_config['label']}")
+            all_ranges_ok = False
             continue
 
         buckets = result.get("buckets") or []
@@ -461,7 +468,7 @@ def extract_sales_history_api(product_id, db_product_id, referer=None,
             f"{len(rows)} {range_config['granularity']} rows (deduped total: {len(deduped)})"
         )
 
-    return list(deduped.values())
+    return list(deduped.values()), all_ranges_ok
 
 
 def fetch_products_paginated(batch_size=500):
@@ -473,8 +480,12 @@ def fetch_products_paginated(batch_size=500):
     offset = 0
 
     while True:
+        # Explicit order: PostgREST row order is otherwise unspecified, and
+        # the --forward/--reverse split slices this list by index — two
+        # parallel runs must see the same ordering or products get missed.
         response = supabase.table("products")\
             .select("id, url, variant, set_id, sets(release_date)")\
+            .order("id")\
             .range(offset, offset + batch_size - 1)\
             .execute()
 
@@ -650,7 +661,12 @@ def backfill_sales_volume(start_idx=None, end_idx=None, reverse=False, checkpoin
                     release_date = None
 
             # === Retry logic for API fetch ===
-            sales_rows = None
+            # A product only counts as processed when BOTH ranges (annual
+            # weekly + month daily) returned usable responses; a partial
+            # fetch is retried and, if it stays partial, salvaged via
+            # upsert but marked failed so --resume revisits it.
+            sales_rows = []
+            ranges_ok = False
             for attempt in range(1, RATE_LIMIT_CONFIG['max_retries'] + 1):
                 try:
                     # Apply rate limiting before request
@@ -660,7 +676,7 @@ def backfill_sales_volume(start_idx=None, end_idx=None, reverse=False, checkpoin
                         f"   Fetching sales volume via API (attempt {attempt}/{RATE_LIMIT_CONFIG['max_retries']})..."
                     )
 
-                    sales_rows = extract_sales_history_api(
+                    sales_rows, ranges_ok = extract_sales_history_api(
                         product_id=tcgplayer_product_id,
                         db_product_id=product_id,
                         referer=url,
@@ -670,11 +686,14 @@ def backfill_sales_volume(start_idx=None, end_idx=None, reverse=False, checkpoin
                         session=api_session,
                     )
 
-                    if sales_rows:
+                    if ranges_ok:
                         rate_limiter.reset_errors()
                         break
                     else:
-                        logger.warning(f"   No data extracted on attempt {attempt}")
+                        logger.warning(
+                            f"   Incomplete API data on attempt {attempt} "
+                            f"({len(sales_rows)} rows from the ranges that responded)"
+                        )
                         if attempt < RATE_LIMIT_CONFIG['max_retries']:
                             rate_limiter.record_error()
                             backoff_time = RATE_LIMIT_CONFIG['retry_backoff_base'] ** attempt
@@ -688,10 +707,22 @@ def backfill_sales_volume(start_idx=None, end_idx=None, reverse=False, checkpoin
                         time.sleep(RATE_LIMIT_CONFIG['retry_backoff_base'] ** attempt)
                     continue
 
-            if not sales_rows:
-                logger.error(f"   Failed to extract data for product {product_id} after {RATE_LIMIT_CONFIG['max_retries']} attempts")
+            if not ranges_ok:
+                logger.error(f"   Incomplete data for product {product_id} after {RATE_LIMIT_CONFIG['max_retries']} attempts")
+                if sales_rows:
+                    # Salvage what we got (upserts are idempotent); the
+                    # product stays unprocessed so a resume retries it.
+                    salvaged, salvage_failed = batch_upsert_sales_history(sales_rows)
+                    logger.info(f"   Salvaged {salvaged} partial rows (product will be retried on resume)")
+                    checkpoint.update_stats(inserted=salvaged, failed=salvage_failed)
                 checkpoint.mark_failed(product_id)
                 checkpoint.update_stats(failed=1)
+                continue
+
+            if not sales_rows:
+                logger.info(f"   No sales history reported for product {product_id} (new/no-sales product)")
+                checkpoint.mark_processed(product_id)
+                checkpoint.update_stats(skipped=1)
                 continue
 
             day_count = sum(1 for row in sales_rows if row["granularity"] == "day")
