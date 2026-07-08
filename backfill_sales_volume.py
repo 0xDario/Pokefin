@@ -43,7 +43,7 @@ import random
 import json
 import re
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from urllib.parse import urlparse, parse_qs
 import requests
 from supabase import create_client
@@ -374,7 +374,10 @@ def parse_sales_buckets(buckets, product_id, granularity, min_bucket_date=None):
     Defensive parsing: API numeric values are strings, possibly with
     commas. Buckets with a missing/invalid bucketStartDate are skipped;
     negative counts and non-positive prices become None. Buckets older
-    than min_bucket_date (the set release date) are dropped.
+    than min_bucket_date (the set release date) are dropped — but a
+    weekly bucket is only dropped when its ENTIRE week precedes the
+    release date: weekly buckets are Monday-anchored, so a mid-week
+    release's launch-week sales live in a bucket dated before release.
     """
     rows = []
     for bucket in buckets or []:
@@ -386,8 +389,14 @@ def parse_sales_buckets(buckets, product_id, granularity, min_bucket_date=None):
         bucket_date = _to_date(str(date_str))
         if not bucket_date:
             continue
-        if min_bucket_date and bucket_date < min_bucket_date:
-            continue
+        if min_bucket_date:
+            bucket_end = (
+                bucket_date + timedelta(days=6)
+                if granularity == "week"
+                else bucket_date
+            )
+            if bucket_end < min_bucket_date:
+                continue
 
         rows.append({
             "product_id": product_id,
@@ -733,11 +742,17 @@ def backfill_sales_volume(start_idx=None, end_idx=None, reverse=False, checkpoin
             upserted_count, failed_count = batch_upsert_sales_history(sales_rows)
 
             if failed_count > 0:
-                logger.warning(f"   Upserted {upserted_count} records, {failed_count} failed for product {product_id}")
+                # Do NOT checkpoint as processed: --resume only revisits
+                # unprocessed products, so a partial write (e.g. migration
+                # 0015 missing, transient PostgREST error) would otherwise
+                # be skipped forever with incomplete volume rows.
+                logger.warning(f"   Upserted {upserted_count} records, {failed_count} failed for product {product_id} (will be retried on resume)")
                 checkpoint.update_stats(inserted=upserted_count, failed=failed_count)
-            else:
-                logger.info(f"   Upserted {upserted_count} records for product {product_id}")
-                checkpoint.update_stats(inserted=upserted_count)
+                checkpoint.mark_failed(product_id)
+                continue
+
+            logger.info(f"   Upserted {upserted_count} records for product {product_id}")
+            checkpoint.update_stats(inserted=upserted_count)
 
             # Mark as successfully processed
             checkpoint.mark_processed(product_id)
