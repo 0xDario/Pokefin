@@ -8,6 +8,7 @@ import VariantBadge from "../shared/VariantBadge";
 import ReturnMetrics from "../shared/ReturnMetrics";
 import LazyPriceChart from "../shared/LazyPriceChart";
 import MiniSparkline from "../../MarketView/MiniSparkline";
+import { useVolumeMetrics } from "../hooks/useVolumeMetrics";
 import { Product, PriceHistoryEntry, ChartTimeframe, Currency, ViewMode } from "../types";
 
 interface ProductCardProps {
@@ -34,6 +35,18 @@ function getAccentClass(oneMonthReturn: number | null | undefined): string {
   return "border-l-4 border-l-transparent";
 }
 
+// Quiet slate chip showing trailing 30-day sales volume. Hidden entirely
+// when volume metrics for the product are missing or null.
+function VolumeChip({ unitsSold30d }: { unitsSold30d: number | null }) {
+  if (unitsSold30d === null) return null;
+
+  return (
+    <span className="inline-flex w-fit items-center px-2 py-0.5 rounded-full text-[11px] font-semibold bg-slate-100 text-slate-600 ring-1 ring-slate-200 tabular-nums">
+      {unitsSold30d} sold/30d
+    </span>
+  );
+}
+
 const ProductCard = memo(function ProductCard({
   product,
   viewMode,
@@ -49,6 +62,9 @@ const ProductCard = memo(function ProductCard({
   const [showFullChart, setShowFullChart] = useState(false);
   const cardRef = useRef<HTMLDivElement>(null);
   const hasTriggeredLoad = useRef(false);
+
+  const volumeMetrics = useVolumeMetrics();
+  const unitsSold30d = volumeMetrics[product.id]?.units_sold_30d ?? null;
 
   const setName = product.sets?.name || "Unknown Set";
   const productType = product.product_types?.label || product.product_types?.name || "Unknown Type";
@@ -161,6 +177,12 @@ const ProductCard = memo(function ProductCard({
             layout="vertical"
           />
 
+          {unitsSold30d !== null && (
+            <div className="mt-2">
+              <VolumeChip unitsSold30d={unitsSold30d} />
+            </div>
+          )}
+
           <div className="mt-3 space-y-2">
             {hasHistory && (
               <button
@@ -269,6 +291,12 @@ const ProductCard = memo(function ProductCard({
                 layout="horizontal"
                 className="text-[10px] md:text-xs mt-1"
               />
+
+              {unitsSold30d !== null && (
+                <div className="mt-1 flex sm:justify-end">
+                  <VolumeChip unitsSold30d={unitsSold30d} />
+                </div>
+              )}
             </div>
           </div>
 

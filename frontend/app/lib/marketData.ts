@@ -1,4 +1,10 @@
-import { ChartTimeframe, PriceHistoryEntry, Product, ProductReturnMetrics } from "../components/ProductPrices/types";
+import {
+  ChartTimeframe,
+  PriceHistoryEntry,
+  Product,
+  ProductReturnMetrics,
+  SalesHistoryEntry,
+} from "../components/ProductPrices/types";
 
 export type MarketSummaryRow = {
   id: number;
@@ -79,6 +85,137 @@ export function getHistoryStartDate(timeframe: ChartTimeframe): string {
     now.getDate() - getDaysForTimeframe(timeframe) - 2
   );
   return startDate.toISOString().split("T")[0];
+}
+
+export type VolumeSeriesPoint = {
+  date: string;
+  volume: number;
+  isWeekly: boolean;
+};
+
+// Timeframes covering at most this many days render one volume bar per day
+// (7D and 1M); longer timeframes aggregate into Monday-start weekly buckets.
+// The scraper only maintains ~30 trailing daily buckets, so a daily-only 3M
+// chart would render its first ~60 days as zero even though backfilled
+// weekly rows cover them — 3M and up must take the weekly merge path.
+const DAILY_VOLUME_MAX_DAYS = 35;
+
+function toLocalDateKey(d: Date): string {
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd}`;
+}
+
+// Date-only strings must be parsed via split, never new Date("YYYY-MM-DD"),
+// which is UTC midnight and shifts a day in negative-offset timezones.
+function parseLocalDateKey(dateKey: string): Date {
+  const [year, month, day] = dateKey.split("-").map(Number);
+  return new Date(year, month - 1, day);
+}
+
+function getMondayOfWeek(d: Date): Date {
+  const offset = (d.getDay() + 6) % 7; // 0 for Monday, 6 for Sunday
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate() - offset);
+}
+
+/**
+ * Build a zero-filled sales-volume series aligned to the chart's local-date
+ * calendar. Short timeframes (<= 92 days) get one point per day from
+ * granularity='day' rows; longer timeframes get Monday-week-start buckets
+ * that prefer summed day rows and fall back to the TCGPlayer 'week' row
+ * (whose bucket_dates are Mondays). Volume is never forward-filled.
+ */
+export function buildVolumeSeries(
+  sales: SalesHistoryEntry[],
+  timeframe: ChartTimeframe,
+  referenceDate: Date = new Date()
+): VolumeSeriesPoint[] {
+  const days = getDaysForTimeframe(timeframe);
+  const today = new Date(
+    referenceDate.getFullYear(),
+    referenceDate.getMonth(),
+    referenceDate.getDate()
+  );
+  const startDate = new Date(
+    today.getFullYear(),
+    today.getMonth(),
+    today.getDate() - days + 1
+  );
+
+  if (days <= DAILY_VOLUME_MAX_DAYS) {
+    const startKey = toLocalDateKey(startDate);
+    const endKey = toLocalDateKey(today);
+
+    const volumeByDay = new Map<string, number>();
+    for (const entry of sales) {
+      if (entry.granularity !== "day") continue;
+      if (entry.bucket_date < startKey || entry.bucket_date > endKey) continue;
+      volumeByDay.set(
+        entry.bucket_date,
+        (volumeByDay.get(entry.bucket_date) ?? 0) + (entry.quantity_sold ?? 0)
+      );
+    }
+
+    const result: VolumeSeriesPoint[] = [];
+    const cursor = new Date(startDate);
+    while (cursor <= today) {
+      const key = toLocalDateKey(cursor);
+      result.push({
+        date: key,
+        volume: volumeByDay.get(key) ?? 0,
+        isWeekly: false,
+      });
+      cursor.setDate(cursor.getDate() + 1);
+    }
+    return result;
+  }
+
+  const firstMonday = getMondayOfWeek(startDate);
+  const lastMonday = getMondayOfWeek(today);
+  const firstMondayKey = toLocalDateKey(firstMonday);
+  const lastMondayKey = toLocalDateKey(lastMonday);
+
+  const daySumByWeek = new Map<string, number>();
+  const weekRowByWeek = new Map<string, number>();
+  for (const entry of sales) {
+    const weekKey = toLocalDateKey(
+      getMondayOfWeek(parseLocalDateKey(entry.bucket_date))
+    );
+    if (weekKey < firstMondayKey || weekKey > lastMondayKey) continue;
+    if (entry.granularity === "day") {
+      daySumByWeek.set(
+        weekKey,
+        (daySumByWeek.get(weekKey) ?? 0) + (entry.quantity_sold ?? 0)
+      );
+    } else if (!weekRowByWeek.has(weekKey)) {
+      weekRowByWeek.set(weekKey, entry.quantity_sold ?? 0);
+    }
+  }
+
+  const result: VolumeSeriesPoint[] = [];
+  const cursor = new Date(firstMonday);
+  while (cursor <= lastMonday) {
+    const key = toLocalDateKey(cursor);
+    const daySum = daySumByWeek.get(key);
+    const weekRow = weekRowByWeek.get(key);
+    // Day rows only cover ~30 trailing days, so the week at the edge of daily
+    // coverage has a partial day sum alongside a complete week row — take the
+    // larger of the two rather than letting a partial sum shadow the full week.
+    const volume =
+      daySum !== undefined && weekRow !== undefined
+        ? Math.max(daySum, weekRow)
+        : daySum ?? weekRow ?? 0;
+    result.push({
+      // The first Monday can precede the chart window; clamp it to the window
+      // start so the calendar merge in PriceChart doesn't drop the bucket.
+      date: cursor < startDate ? toLocalDateKey(startDate) : key,
+      volume,
+      isWeekly: true,
+    });
+    cursor.setDate(cursor.getDate() + 7);
+  }
+  return result;
 }
 
 export function buildProductReturnMetrics(

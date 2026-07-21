@@ -107,3 +107,41 @@ CREATE TABLE public.sets (
   CONSTRAINT sets_pkey PRIMARY KEY (id),
   CONSTRAINT sets_generation_id_fkey FOREIGN KEY (generation_id) REFERENCES public.generations(id)
 );
+-- Sales-volume + listings-depth tables (context only; created by
+-- migrations/0015_product_sales_and_listings_history.sql).
+CREATE TABLE public.product_sales_history (
+  id bigint GENERATED ALWAYS AS IDENTITY NOT NULL,
+  product_id bigint NOT NULL,
+  bucket_date date NOT NULL,
+  granularity text NOT NULL DEFAULT 'day'::text,
+  quantity_sold integer,
+  transaction_count integer,
+  low_sale_price double precision,
+  high_sale_price double precision,
+  market_price double precision,
+  recorded_at timestamp without time zone DEFAULT now(),
+  CONSTRAINT product_sales_history_pkey PRIMARY KEY (id),
+  CONSTRAINT product_sales_history_product_id_fkey FOREIGN KEY (product_id) REFERENCES public.products(id),
+  CONSTRAINT product_sales_history_granularity_sane CHECK (granularity = ANY (ARRAY['day'::text, 'week'::text])),
+  CONSTRAINT product_sales_history_quantity_sane CHECK (quantity_sold IS NULL OR (quantity_sold >= 0 AND quantity_sold <= 1000000)),
+  CONSTRAINT product_sales_history_tx_count_sane CHECK (transaction_count IS NULL OR (transaction_count >= 0 AND transaction_count <= 1000000)),
+  CONSTRAINT product_sales_history_low_price_sane CHECK (low_sale_price IS NULL OR low_sale_price > 0::double precision),
+  CONSTRAINT product_sales_history_high_price_sane CHECK (high_sale_price IS NULL OR high_sale_price > 0::double precision),
+  CONSTRAINT product_sales_history_market_price_sane CHECK (market_price IS NULL OR market_price > 0::double precision),
+  CONSTRAINT product_sales_history_product_bucket_uidx UNIQUE (product_id, bucket_date, granularity)
+);
+CREATE TABLE public.product_listings_history (
+  id bigint GENERATED ALWAYS AS IDENTITY NOT NULL,
+  product_id bigint NOT NULL,
+  snapshot_date date NOT NULL DEFAULT CURRENT_DATE,
+  active_listings integer,
+  total_quantity_available integer,
+  lowest_listing_price double precision,
+  recorded_at timestamp without time zone DEFAULT now(),
+  CONSTRAINT product_listings_history_pkey PRIMARY KEY (id),
+  CONSTRAINT product_listings_history_product_id_fkey FOREIGN KEY (product_id) REFERENCES public.products(id),
+  CONSTRAINT product_listings_history_active_listings_sane CHECK (active_listings IS NULL OR active_listings >= 0),
+  CONSTRAINT product_listings_history_total_quantity_sane CHECK (total_quantity_available IS NULL OR total_quantity_available >= 0),
+  CONSTRAINT product_listings_history_lowest_price_sane CHECK (lowest_listing_price IS NULL OR lowest_listing_price > 0::double precision),
+  CONSTRAINT product_listings_history_product_snapshot_uidx UNIQUE (product_id, snapshot_date)
+);

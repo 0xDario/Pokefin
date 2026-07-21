@@ -142,6 +142,13 @@ All probes should return the expected 401/403/429/redirect results.
   Advisor re-run confirms all critical issues resolved; remaining
   warnings are intentional (reference-table anon SELECT, definer
   functions with internal scoping, Pro+ leaked-password toggle).
+- **Migrations 0015–0016 applied** (2026-07-06, via Supabase MCP).
+  Adds `product_sales_history` / `product_listings_history` (public
+  read-only history tables, scraper-written) and the
+  `get_market_product_volume_metrics()` RPC (invoker, search_path
+  pinned). Advisor re-run: no new findings beyond the intentional
+  reference-table anon SELECT pattern. One-time volume backfill run
+  the same day (22,986 rows).
 - **Optional**: create a Sentry project, add `NEXT_PUBLIC_SENTRY_DSN`
   to Vercel (and `SENTRY_AUTH_TOKEN` + `SENTRY_ORG` + `SENTRY_PROJECT`
   if you want source-map upload). Sentry wiring is no-op until DSN is
