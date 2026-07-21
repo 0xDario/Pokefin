@@ -2,18 +2,24 @@
 
 import { useState } from "react";
 import PriceChart from "../../components/PriceChart";
-import { ChartTimeframe, PriceHistoryEntry } from "../../components/ProductPrices/types";
+import {
+  ChartTimeframe,
+  PriceHistoryEntry,
+  SalesHistoryEntry,
+} from "../../components/ProductPrices/types";
 
 const TIMEFRAMES: ChartTimeframe[] = ["7D", "1M", "3M", "6M", "1Y"];
 
 interface ProductDetailChartProps {
   history: PriceHistoryEntry[];
   releaseDate?: string;
+  salesHistory?: SalesHistoryEntry[];
 }
 
 export default function ProductDetailChart({
   history,
   releaseDate,
+  salesHistory,
 }: ProductDetailChartProps) {
   const [timeframe, setTimeframe] = useState<ChartTimeframe>("3M");
   const hasHistory = history.length > 1;
@@ -57,6 +63,7 @@ export default function ProductDetailChart({
           exchangeRate={1}
           height={320}
           releaseDate={releaseDate}
+          salesHistory={salesHistory}
         />
       ) : (
         <div className="flex h-[320px] items-center justify-center rounded-lg border border-dashed border-slate-300 bg-slate-50 text-sm text-slate-500">
