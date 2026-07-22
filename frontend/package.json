@@ -13,16 +13,16 @@
     "test:coverage": "jest --coverage"
   },
   "dependencies": {
-    "@marsidev/react-turnstile": "^1.5.2",
-    "@sentry/nextjs": "^10.55.0",
-    "@supabase/ssr": "^0.10.3",
-    "@supabase/supabase-js": "^2.106.2",
+    "@marsidev/react-turnstile": "^1.5.3",
+    "@sentry/nextjs": "^10.67.0",
+    "@supabase/ssr": "^0.12.3",
+    "@supabase/supabase-js": "^2.110.8",
     "@vercel/analytics": "^2.0.1",
     "@vercel/speed-insights": "^2.0.0",
-    "next": "^16.2.6",
-    "react": "^19.2.6",
-    "react-dom": "^19.2.6",
-    "recharts": "^3.8.1"
+    "next": "^16.2.11",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "recharts": "^3.10.0"
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3",
