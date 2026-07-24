@@ -314,6 +314,97 @@ class TestFetchListingsSnapshot:
         payload = session.post.call_args.kwargs["json"]
         assert "language" not in payload["filters"]["term"]
 
+    @pytest.mark.parametrize("language", ["all", "All", "ALL", "", "   "])
+    def test_non_language_values_are_not_forwarded_as_filters(self, language):
+        """'?Language=all' means "don't scope", not a language the API knows.
+        Forwarding it matches zero listings and persists a bogus
+        active_listings=0, so it (and blank values) must be skipped."""
+        from main import fetch_listings_snapshot
+
+        session = MagicMock()
+        session.post.return_value = _make_response(200, self._listings_payload())
+
+        snapshot = fetch_listings_snapshot(session, "12345", preferred_language=language)
+
+        payload = session.post.call_args.kwargs["json"]
+        assert "language" not in payload["filters"]["term"]
+        # The unfiltered request still produces a usable snapshot.
+        assert snapshot is not None
+        assert snapshot["active_listings"] == 48
+
+    def test_filtered_zero_retries_unfiltered_and_uses_it(self):
+        """A language filter the API can't match is indistinguishable by shape
+        from a sold-out product (both: totalResults 0, quantity agg []), so a
+        filtered zero must be retried unfiltered and the real data used."""
+        from main import fetch_listings_snapshot
+
+        session = MagicMock()
+        session.post.side_effect = [
+            _make_response(200, self._listings_payload(
+                total_results=0, quantity_agg=[], listings=[])),
+            _make_response(200, self._listings_payload(
+                total_results=48,
+                quantity_agg=[{"value": 1, "count": 30.0}, {"value": 2, "count": 9.0}],
+            )),
+        ]
+
+        snapshot = fetch_listings_snapshot(session, "12345", preferred_language="Japanese")
+
+        assert session.post.call_count == 2
+        # The retry must drop the language term entirely.
+        assert "language" not in session.post.call_args_list[1].kwargs["json"]["filters"]["term"]
+        assert snapshot["active_listings"] == 48
+        assert snapshot["total_quantity_available"] == 48
+
+    def test_genuinely_sold_out_records_zero(self):
+        """When the unfiltered retry is ALSO empty the product really is sold
+        out, and 0 active listings is the honest value to record."""
+        from main import fetch_listings_snapshot
+
+        session = MagicMock()
+        session.post.side_effect = [
+            _make_response(200, self._listings_payload(
+                total_results=0, quantity_agg=[], listings=[])),
+            _make_response(200, self._listings_payload(
+                total_results=0, quantity_agg=[], listings=[])),
+        ]
+
+        snapshot = fetch_listings_snapshot(session, "12345", preferred_language="English")
+
+        assert session.post.call_count == 2
+        assert snapshot is not None
+        assert snapshot["active_listings"] == 0
+
+    def test_unfiltered_zero_does_not_retry(self):
+        """With no language filter applied there is nothing to retry without."""
+        from main import fetch_listings_snapshot
+
+        session = MagicMock()
+        session.post.return_value = _make_response(200, self._listings_payload(
+            total_results=0, quantity_agg=[], listings=[]))
+
+        snapshot = fetch_listings_snapshot(session, "12345")
+
+        assert session.post.call_count == 1
+        assert snapshot["active_listings"] == 0
+
+    def test_zero_results_with_quantity_aggregation_is_a_real_sellout(self):
+        """A genuinely sold-out product returns totalResults 0 WITH the
+        quantity aggregation key present, so the snapshot is still recorded."""
+        from main import fetch_listings_snapshot
+
+        session = MagicMock()
+        session.post.return_value = _make_response(200, self._listings_payload(
+            total_results=0,
+            quantity_agg=[],  # key present, just empty
+            listings=[],
+        ))
+
+        snapshot = fetch_listings_snapshot(session, "12345")
+
+        assert snapshot is not None
+        assert snapshot["active_listings"] == 0
+
     def test_missing_quantity_aggregation_gives_none(self):
         """Missing quantity aggregation should give total_quantity_available=None"""
         from main import fetch_listings_snapshot
