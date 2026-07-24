@@ -5,18 +5,22 @@ import GroupHeader from "../ProductPrices/cards/GroupHeader";
 import ProductCard from "../ProductPrices/cards/ProductCard";
 import { useProductData } from "../ProductPrices/hooks/useProductData";
 import { useCurrencyConversion } from "../ProductPrices/hooks/useCurrencyConversion";
+import { useVolumeMetrics } from "../ProductPrices/hooks/useVolumeMetrics";
 import { groupProductsBySet } from "../ProductPrices/utils/filtering";
-import { Product } from "../ProductPrices/types";
+import { Product, ProductVolumeMetrics } from "../ProductPrices/types";
 
 interface RecentlyReleasedProps {
   initialProducts: Product[];
   initialExchangeRate: number;
+  initialVolumeMetrics?: Record<number, ProductVolumeMetrics> | null;
 }
 
 export default function RecentlyReleased({
   initialProducts,
   initialExchangeRate,
+  initialVolumeMetrics,
 }: RecentlyReleasedProps) {
+  const volumeMetrics = useVolumeMetrics(initialVolumeMetrics);
   const { priceHistory, loadingProductIds, ensureHistoryLoaded } =
     useProductData({ initialProducts });
   const { selectedCurrency, exchangeRate, formatPrice } = useCurrencyConversion(
@@ -53,6 +57,9 @@ export default function RecentlyReleased({
                   exchangeRate={exchangeRate}
                   formatPrice={formatPrice}
                   onLoadChart={ensureHistoryLoaded}
+                  unitsSold30d={
+                    volumeMetrics[product.id]?.units_sold_30d ?? null
+                  }
                 />
               </div>
             ))}

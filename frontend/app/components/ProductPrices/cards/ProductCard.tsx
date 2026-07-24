@@ -8,7 +8,6 @@ import VariantBadge from "../shared/VariantBadge";
 import ReturnMetrics from "../shared/ReturnMetrics";
 import LazyPriceChart from "../shared/LazyPriceChart";
 import MiniSparkline from "../../MarketView/MiniSparkline";
-import { useVolumeMetrics } from "../hooks/useVolumeMetrics";
 import { Product, PriceHistoryEntry, ChartTimeframe, Currency, ViewMode } from "../types";
 
 interface ProductCardProps {
@@ -18,6 +17,11 @@ interface ProductCardProps {
   chartTimeframe: ChartTimeframe;
   history?: PriceHistoryEntry[];
   historyLoading?: boolean;
+  /**
+   * Trailing 30-day units sold, resolved by the parent so this memo()'d card
+   * stays a pure function of its props. null means "no data" (chip hidden).
+   */
+  unitsSold30d?: number | null;
   selectedCurrency: Currency;
   exchangeRate: number;
   formatPrice: (price: number | null | undefined) => string;
@@ -54,6 +58,7 @@ const ProductCard = memo(function ProductCard({
   chartTimeframe,
   history,
   historyLoading = false,
+  unitsSold30d = null,
   selectedCurrency,
   exchangeRate,
   formatPrice,
@@ -62,9 +67,6 @@ const ProductCard = memo(function ProductCard({
   const [showFullChart, setShowFullChart] = useState(false);
   const cardRef = useRef<HTMLDivElement>(null);
   const hasTriggeredLoad = useRef(false);
-
-  const volumeMetrics = useVolumeMetrics();
-  const unitsSold30d = volumeMetrics[product.id]?.units_sold_30d ?? null;
 
   const setName = product.sets?.name || "Unknown Set";
   const productType = product.product_types?.label || product.product_types?.name || "Unknown Type";
@@ -131,6 +133,7 @@ const ProductCard = memo(function ProductCard({
             imageUrl={product.image_url}
             productName={`${setName} ${productType}`}
             className="w-full h-40 sm:h-48"
+            preferThumbnail
           />
         </Link>
 
@@ -233,6 +236,7 @@ const ProductCard = memo(function ProductCard({
             imageUrl={product.image_url}
             productName={`${setName} ${productType}`}
             className="w-full h-48 sm:w-32 sm:h-32"
+            preferThumbnail
           />
         </Link>
 
