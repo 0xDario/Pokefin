@@ -142,6 +142,12 @@ All probes should return the expected 401/403/429/redirect results.
   Advisor re-run confirms all critical issues resolved; remaining
   warnings are intentional (reference-table anon SELECT, definer
   functions with internal scoping, Pro+ leaked-password toggle).
+- **Migrations 0017–0018 applied** (2026-07-24, via Supabase MCP).
+  0017 replaces the prior-30d `GREATEST(day, week)` with a coverage test;
+  0018 adds the staleness guard so the volume RPC and the frontend agree
+  about what "no data" means. Both are `CREATE OR REPLACE` of
+  `get_market_product_volume_metrics()` with an unchanged RETURNS TABLE
+  shape, validated on a scratch Postgres 17 before application.
 - **Migrations 0015–0016 applied** (2026-07-06, via Supabase MCP).
   Adds `product_sales_history` / `product_listings_history` (public
   read-only history tables, scraper-written) and the
