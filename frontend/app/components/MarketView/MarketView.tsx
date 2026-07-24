@@ -1,6 +1,14 @@
 "use client";
 
-import { Fragment, useEffect, useMemo, useState } from "react";
+import dynamic from "next/dynamic";
+import {
+  Fragment,
+  useCallback,
+  useDeferredValue,
+  useEffect,
+  useMemo,
+  useState,
+} from "react";
 import ControlBar from "../ProductPrices/controls/ControlBar";
 import { useProductData } from "../ProductPrices/hooks/useProductData";
 import { useCurrencyConversion } from "../ProductPrices/hooks/useCurrencyConversion";
@@ -13,11 +21,22 @@ import {
 import {
   ChartTimeframe,
   Product,
+  ProductVolumeMetrics,
 } from "../ProductPrices/types";
 import ProductImage from "../ProductPrices/shared/ProductImage";
 import ExpansionTypeBadge from "../ProductPrices/shared/ExpansionTypeBadge";
 import VariantBadge from "../ProductPrices/shared/VariantBadge";
-import PriceChart from "../PriceChart";
+// Must import through ChartBundle (never "../PriceChart" directly) so Recharts
+// stays in the single shared async chunk instead of forking a second copy.
+const PriceChart = dynamic(
+  () => import("../charts/ChartBundle").then((m) => m.PriceChart),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="h-[200px] w-full animate-pulse rounded-md border border-slate-200 bg-slate-100" />
+    ),
+  }
+);
 import CardRinkPromo from "../CardRinkPromo";
 import MiniSparkline from "./MiniSparkline";
 import {
@@ -26,6 +45,12 @@ import {
   getReturnPercent,
   getVolatilityPercent,
 } from "./returns";
+import {
+  compareSortValues,
+  getDefaultSortDirection,
+  type SortDirection,
+  type SortValue,
+} from "./sorting";
 
 const RETURN_WINDOWS = [
   { label: "7D", days: 7 },
@@ -41,7 +66,6 @@ type ReturnWindowLabel = (typeof RETURN_WINDOWS)[number]["label"];
 
 type ReturnMap = Record<ReturnWindowLabel, number | null>;
 
-type SortDirection = "asc" | "desc";
 type SortKey =
   | "product"
   | "set"
@@ -77,7 +101,13 @@ type AgeFilterValue = (typeof AGE_FILTER_OPTIONS)[number]["value"];
 interface MarketViewProps {
   initialProducts?: Product[];
   initialExchangeRate?: number;
+  /** Server-rendered volume metrics (see getCachedVolumeMetrics). */
+  initialVolumeMetrics?: Record<number, ProductVolumeMetrics> | null;
 }
+
+// Module-level so the "no server data" default keeps a stable identity across
+// renders instead of handing useProductData a fresh array every time.
+const EMPTY_PRODUCTS: Product[] = [];
 
 function formatReleaseDate(releaseDate?: string | null) {
   if (!releaseDate) return "Unknown";
@@ -105,6 +135,57 @@ function renderReturnValue(value: number | null) {
   );
 }
 
+function formatRatio(value: number | null, currencySymbol: string) {
+  if (value === null || Number.isNaN(value)) return "--";
+  return `${currencySymbol}${value.toFixed(2)}`;
+}
+
+// Module-level (not closures) so the memoised table body below has no unstable
+// dependencies.
+function renderProductCell(product: Product) {
+  const productType =
+    product.product_types?.label ||
+    product.product_types?.name ||
+    "Unknown Type";
+  const setName = product.sets?.name || "Unknown Set";
+
+  return (
+    <div className="flex items-center gap-3">
+      <ProductImage
+        imageUrl={product.image_url}
+        productName={`${setName} ${productType}`}
+        className="w-14 h-14 rounded-lg border border-slate-200 bg-white"
+        preferThumbnail
+      />
+      <div>
+        <div className="text-sm font-semibold text-slate-900">
+          {productType}
+        </div>
+        <div className="text-xs text-slate-500">{setName}</div>
+        <div className="mt-1 flex flex-wrap gap-1">
+          <ExpansionTypeBadge type={product.sets?.expansion_type} />
+          {product.variant && <VariantBadge variant={product.variant} />}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function renderSetCell(product: Product) {
+  const setName = product.sets?.name || "Unknown Set";
+  const setCode = product.sets?.code || "N/A";
+  const generation = product.sets?.generations?.name || "Unknown";
+
+  return (
+    <div className="space-y-1">
+      <div className="text-sm font-medium text-slate-800">{setName}</div>
+      <div className="text-xs text-slate-500">
+        {generation} / {setCode}
+      </div>
+    </div>
+  );
+}
+
 function getReleaseMs(releaseDate?: string | null) {
   if (!releaseDate) return null;
   const dateKey = releaseDate.split("T")[0].split(" ")[0];
@@ -114,16 +195,10 @@ function getReleaseMs(releaseDate?: string | null) {
   return Date.UTC(year, month - 1, day);
 }
 
-function getDefaultSortDirection(key: SortKey): SortDirection {
-  if (key === "product" || key === "set") return "asc";
-  if (key === "days_since_release") return "asc";
-  if (key === "max_drawdown" || key === "volatility_30d") return "asc";
-  return "desc";
-}
-
 export default function MarketView({
-  initialProducts = [],
+  initialProducts = EMPTY_PRODUCTS,
   initialExchangeRate,
+  initialVolumeMetrics,
 }: MarketViewProps) {
   const [chartTimeframe, setChartTimeframe] =
     useState<ChartTimeframe>("1Y");
@@ -143,10 +218,19 @@ export default function MarketView({
     formatPrice,
   } = useCurrencyConversion(initialExchangeRate);
   // Session-cached, referentially stable Record keyed by product_id.
-  const volumeMetrics = useVolumeMetrics();
+  const volumeMetrics = useVolumeMetrics(initialVolumeMetrics);
 
   const [selectedGeneration, setSelectedGeneration] = useState("all");
   const [searchTerm, setSearchTerm] = useState("");
+  // The search field renders `searchTerm`, which updates at discrete priority,
+  // so every keystroke paints immediately and no characters are dropped.
+  // Filtering + sorting + rendering ~300 rows keys off the deferred copy and
+  // therefore runs at transition priority, where React can interrupt it for
+  // the next keystroke. useDeferredValue (rather than an explicit
+  // startTransition pair) is the right fit here because there is exactly one
+  // source of truth to defer and no imperative event to wrap.
+  const deferredSearchTerm = useDeferredValue(searchTerm);
+  const isSearchPending = deferredSearchTerm !== searchTerm;
   const [ageFilter, setAgeFilter] = useState<AgeFilterValue>("all");
   const [sortKey, setSortKey] = useState<SortKey>("release_date");
   const [sortDirection, setSortDirection] = useState<SortDirection>("desc");
@@ -173,7 +257,7 @@ export default function MarketView({
     const baseFiltered = filterProducts(products, {
       selectedGeneration,
       selectedProductType: "all",
-      searchTerm,
+      searchTerm: deferredSearchTerm,
     });
 
     if (ageFilterMinDays === 0) {
@@ -197,7 +281,7 @@ export default function MarketView({
       );
       return daysSinceRelease >= ageFilterMinDays;
     });
-  }, [products, selectedGeneration, searchTerm, ageFilterMinDays]);
+  }, [products, selectedGeneration, deferredSearchTerm, ageFilterMinDays]);
 
   const rows = useMemo(() => {
     const today = new Date();
@@ -266,7 +350,7 @@ export default function MarketView({
     const getSortValue = (
       row: (typeof rows)[number],
       key: SortKey
-    ): number | string | null => {
+    ): SortValue => {
       const productType =
         row.product.product_types?.label ||
         row.product.product_types?.name ||
@@ -312,38 +396,29 @@ export default function MarketView({
       }
     };
 
-    const compareValues = (
-      valueA: number | string | null,
-      valueB: number | string | null
-    ) => {
-      if (valueA === null && valueB === null) return 0;
-      if (valueA === null) return 1;
-      if (valueB === null) return -1;
-
-      if (typeof valueA === "string" || typeof valueB === "string") {
-        return String(valueA).localeCompare(String(valueB));
-      }
-
-      return valueA - valueB;
-    };
-
-    return [...rows].sort((rowA, rowB) => {
-      const valueA = getSortValue(rowA, sortKey);
-      const valueB = getSortValue(rowB, sortKey);
-      const base = compareValues(valueA, valueB);
-      return sortDirection === "asc" ? base : base * -1;
-    });
+    // compareSortValues resolves missing ("--") values BEFORE applying the
+    // direction flip, so they always sink to the bottom of the table.
+    return [...rows].sort((rowA, rowB) =>
+      compareSortValues(
+        getSortValue(rowA, sortKey),
+        getSortValue(rowB, sortKey),
+        sortDirection
+      )
+    );
   }, [rows, sortKey, sortDirection]);
 
-  const toggleExpanded = (productId: number) => {
-    setExpandedProductId((prev) => {
-      const next = prev === productId ? null : productId;
-      if (next !== null) {
-        void ensureHistoryLoaded(next, chartTimeframe);
-      }
-      return next;
-    });
-  };
+  const toggleExpanded = useCallback(
+    (productId: number) => {
+      setExpandedProductId((prev) => {
+        const next = prev === productId ? null : productId;
+        if (next !== null) {
+          void ensureHistoryLoaded(next, chartTimeframe);
+        }
+        return next;
+      });
+    },
+    [chartTimeframe, ensureHistoryLoaded]
+  );
 
   const handleSort = (key: SortKey) => {
     if (sortKey === key) {
@@ -360,54 +435,194 @@ export default function MarketView({
     return sortDirection === "asc" ? " ^" : " v";
   };
 
-  const renderProductCell = (product: Product) => {
-    const productType =
-      product.product_types?.label ||
-      product.product_types?.name ||
-      "Unknown Type";
-    const setName = product.sets?.name || "Unknown Set";
-
-    return (
-      <div className="flex items-center gap-3">
-        <ProductImage
-          imageUrl={product.image_url}
-          productName={`${setName} ${productType}`}
-          className="w-14 h-14 rounded-lg border border-slate-200 bg-white"
-        />
-        <div>
-          <div className="text-sm font-semibold text-slate-900">
-            {productType}
-          </div>
-          <div className="text-xs text-slate-500">{setName}</div>
-          <div className="mt-1 flex flex-wrap gap-1">
-            <ExpansionTypeBadge type={product.sets?.expansion_type} />
-            {product.variant && <VariantBadge variant={product.variant} />}
-          </div>
-        </div>
-      </div>
-    );
-  };
-
-  const renderSetCell = (product: Product) => {
-    const setName = product.sets?.name || "Unknown Set";
-    const setCode = product.sets?.code || "N/A";
-    const generation = product.sets?.generations?.name || "Unknown";
-
-    return (
-      <div className="space-y-1">
-        <div className="text-sm font-medium text-slate-800">{setName}</div>
-        <div className="text-xs text-slate-500">
-          {generation} / {setCode}
-        </div>
-      </div>
-    );
-  };
-
   const currencySymbol = selectedCurrency === "CAD" ? "C$" : "$";
-  const formatRatio = (value: number | null) => {
-    if (value === null || Number.isNaN(value)) return "--";
-    return `${currencySymbol}${value.toFixed(2)}`;
-  };
+
+  // The ~300 table rows are the expensive part of this component. Building them
+  // inside a useMemo means the *urgent* keystroke render (which only changes
+  // `searchTerm`, not `deferredSearchTerm`) reuses the exact same element
+  // objects, so React bails out of reconciling the whole body and the field
+  // stays responsive. Without this, useDeferredValue would just make React
+  // render all the rows twice.
+  const tableBody = useMemo(
+    () => (
+      <tbody>
+        {sortedRows.map((row, index) => {
+          const {
+            product,
+            history,
+            returns,
+            daysSinceRelease,
+            pricePerDay,
+            cagr,
+            maxDrawdown,
+            volatility30d,
+            unitsSold30d,
+            volumeTrend,
+          } = row;
+          const isExpanded = expandedProductId === product.id;
+
+          return (
+            <Fragment key={product.id}>
+              <tr className="group border-t border-slate-100 hover:bg-slate-50">
+                <td className="sticky left-0 z-10 w-14 bg-white px-3 py-4 text-slate-400 group-hover:bg-slate-50">
+                  {index + 1}
+                </td>
+                <td className="sticky left-14 z-10 bg-white px-3 py-4 group-hover:bg-slate-50">
+                  {renderProductCell(product)}
+                </td>
+                <td className="px-3 py-4">{renderSetCell(product)}</td>
+                <td className="px-3 py-4 text-right font-semibold text-slate-900">
+                  {formatPrice(product.usd_price)}
+                </td>
+                {showAllColumns && (
+                  <td className="px-3 py-4 text-right text-slate-600">
+                    {formatReleaseDate(product.sets?.release_date)}
+                  </td>
+                )}
+                {showAllColumns && (
+                  <td className="px-3 py-4 text-right text-slate-600">
+                    {daysSinceRelease ?? "--"}
+                  </td>
+                )}
+                {showAllColumns && (
+                  <td className="px-3 py-4 text-right text-slate-600">
+                    {formatRatio(pricePerDay, currencySymbol)}
+                  </td>
+                )}
+                {showAllColumns && (
+                  <td className="px-3 py-4 text-right">
+                    {renderReturnValue(cagr)}
+                  </td>
+                )}
+                {showAllColumns && (
+                  <td className="px-3 py-4 text-right">
+                    {renderReturnValue(
+                      maxDrawdown === null ? null : maxDrawdown * -1
+                    )}
+                  </td>
+                )}
+                {showAllColumns && (
+                  <td className="px-3 py-4 text-right">
+                    {renderReturnValue(volatility30d)}
+                  </td>
+                )}
+                {RETURN_WINDOWS.map((window) => {
+                  if (!showAllColumns && !KEY_RETURN_WINDOWS.has(window.label)) {
+                    return null;
+                  }
+                  return (
+                    <td key={window.label} className="px-3 py-4 text-right">
+                      {renderReturnValue(returns[window.label])}
+                    </td>
+                  );
+                })}
+                <td className="px-3 py-4 text-right">
+                  {unitsSold30d !== null ? (
+                    <span className="font-semibold text-slate-700 tabular-nums">
+                      {unitsSold30d}
+                    </span>
+                  ) : (
+                    <span className="text-slate-400">--</span>
+                  )}
+                </td>
+                <td className="px-3 py-4 text-right">
+                  {renderReturnValue(volumeTrend)}
+                </td>
+                {showAllColumns && (
+                  <td className="px-3 py-4">
+                    <div className="flex justify-end">
+                      {history && history.length > 1 ? (
+                        <MiniSparkline
+                          history={history}
+                          currency={selectedCurrency}
+                          exchangeRate={exchangeRate}
+                        />
+                      ) : loadingProductIds.includes(product.id) ? (
+                        <span className="text-xs text-slate-400">Loading...</span>
+                      ) : (
+                        <span className="text-xs text-slate-400">Open chart</span>
+                      )}
+                    </div>
+                  </td>
+                )}
+                <td className="px-3 py-4 text-right">
+                  <button
+                    type="button"
+                    onClick={() => toggleExpanded(product.id)}
+                    className="rounded-md border border-slate-200 px-3 py-1 text-xs font-semibold text-slate-600 hover:bg-slate-100"
+                    aria-expanded={isExpanded}
+                  >
+                    {isExpanded ? "Hide" : "Show"}
+                  </button>
+                </td>
+              </tr>
+              {isExpanded && (
+                <tr className="bg-slate-50">
+                  <td colSpan={visibleColumnCount} className="px-6 py-5">
+                    {loadingProductIds.includes(product.id) ? (
+                      <div className="rounded-lg border border-slate-200 bg-white p-4 text-sm text-slate-500">
+                        Loading price history...
+                      </div>
+                    ) : history && history.length > 1 ? (
+                      <div className="rounded-lg border border-slate-200 bg-white p-4">
+                        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                          <div>
+                            <div className="text-sm font-semibold text-slate-800">
+                              Price history
+                            </div>
+                            <div className="text-xs text-slate-500">
+                              Showing {chartTimeframe} range
+                            </div>
+                          </div>
+                          {product.url && (
+                            <a
+                              href={product.url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-xs font-semibold text-blue-600 hover:underline"
+                            >
+                              View on TCGPlayer &gt;
+                            </a>
+                          )}
+                        </div>
+                        <div className="mt-3">
+                          <PriceChart
+                            data={history}
+                            range={chartTimeframe}
+                            currency={selectedCurrency}
+                            exchangeRate={exchangeRate}
+                            height={220}
+                            releaseDate={product.sets?.release_date}
+                          />
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="rounded-lg border border-dashed border-slate-200 bg-white p-4 text-sm text-slate-500">
+                        Price history not available yet.
+                      </div>
+                    )}
+                  </td>
+                </tr>
+              )}
+            </Fragment>
+          );
+        })}
+      </tbody>
+    ),
+    [
+      sortedRows,
+      expandedProductId,
+      showAllColumns,
+      visibleColumnCount,
+      loadingProductIds,
+      selectedCurrency,
+      exchangeRate,
+      chartTimeframe,
+      currencySymbol,
+      formatPrice,
+      toggleExpanded,
+    ]
+  );
 
   return (
     <div className="p-3 md:p-6 bg-[var(--pf-bg)] min-h-screen">
@@ -443,7 +658,13 @@ export default function MarketView({
 
         <CardRinkPromo variant="banner" />
 
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between text-sm text-slate-600">
+        {/* The count and the table both read from the deferred search term, so
+            they always agree; aria-busy is the only signal that a transition is
+            still in flight (no visual flicker mid-transition). */}
+        <div
+          className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between text-sm text-slate-600"
+          aria-busy={isSearchPending}
+        >
           <div>Found {rows.length} products</div>
           <div className="flex items-center gap-3">
             <button
@@ -625,172 +846,7 @@ export default function MarketView({
                     <th className="px-3 py-3 text-right">Chart</th>
                   </tr>
                 </thead>
-                <tbody>
-                  {sortedRows.map((row, index) => {
-                    const {
-                      product,
-                      history,
-                      returns,
-                      daysSinceRelease,
-                      pricePerDay,
-                      cagr,
-                      maxDrawdown,
-                      volatility30d,
-                      unitsSold30d,
-                      volumeTrend,
-                    } = row;
-                    const isExpanded = expandedProductId === product.id;
-
-                    return (
-                      <Fragment key={product.id}>
-                        <tr className="group border-t border-slate-100 hover:bg-slate-50">
-                          <td className="sticky left-0 z-10 w-14 bg-white px-3 py-4 text-slate-400 group-hover:bg-slate-50">
-                            {index + 1}
-                          </td>
-                          <td className="sticky left-14 z-10 bg-white px-3 py-4 group-hover:bg-slate-50">
-                            {renderProductCell(product)}
-                          </td>
-                          <td className="px-3 py-4">{renderSetCell(product)}</td>
-                          <td className="px-3 py-4 text-right font-semibold text-slate-900">
-                            {formatPrice(product.usd_price)}
-                          </td>
-                          {showAllColumns && (
-                            <td className="px-3 py-4 text-right text-slate-600">
-                              {formatReleaseDate(product.sets?.release_date)}
-                            </td>
-                          )}
-                          {showAllColumns && (
-                            <td className="px-3 py-4 text-right text-slate-600">
-                              {daysSinceRelease ?? "--"}
-                            </td>
-                          )}
-                          {showAllColumns && (
-                            <td className="px-3 py-4 text-right text-slate-600">
-                              {formatRatio(pricePerDay)}
-                            </td>
-                          )}
-                          {showAllColumns && (
-                            <td className="px-3 py-4 text-right">
-                              {renderReturnValue(cagr)}
-                            </td>
-                          )}
-                          {showAllColumns && (
-                            <td className="px-3 py-4 text-right">
-                              {renderReturnValue(
-                                maxDrawdown === null ? null : maxDrawdown * -1
-                              )}
-                            </td>
-                          )}
-                          {showAllColumns && (
-                            <td className="px-3 py-4 text-right">
-                              {renderReturnValue(volatility30d)}
-                            </td>
-                          )}
-                          {RETURN_WINDOWS.map((window) => {
-                            if (!showAllColumns && !KEY_RETURN_WINDOWS.has(window.label)) {
-                              return null;
-                            }
-                            return (
-                              <td
-                                key={window.label}
-                                className="px-3 py-4 text-right"
-                              >
-                                {renderReturnValue(returns[window.label])}
-                              </td>
-                            );
-                          })}
-                          <td className="px-3 py-4 text-right">
-                            {unitsSold30d !== null ? (
-                              <span className="font-semibold text-slate-700 tabular-nums">
-                                {unitsSold30d}
-                              </span>
-                            ) : (
-                              <span className="text-slate-400">--</span>
-                            )}
-                          </td>
-                          <td className="px-3 py-4 text-right">
-                            {renderReturnValue(volumeTrend)}
-                          </td>
-                          {showAllColumns && (
-                            <td className="px-3 py-4">
-                              <div className="flex justify-end">
-                                {history && history.length > 1 ? (
-                                  <MiniSparkline
-                                    history={history}
-                                    currency={selectedCurrency}
-                                    exchangeRate={exchangeRate}
-                                  />
-                                ) : loadingProductIds.includes(product.id) ? (
-                                  <span className="text-xs text-slate-400">Loading...</span>
-                                ) : (
-                                  <span className="text-xs text-slate-400">Open chart</span>
-                                )}
-                              </div>
-                            </td>
-                          )}
-                          <td className="px-3 py-4 text-right">
-                            <button
-                              type="button"
-                              onClick={() => toggleExpanded(product.id)}
-                              className="rounded-md border border-slate-200 px-3 py-1 text-xs font-semibold text-slate-600 hover:bg-slate-100"
-                              aria-expanded={isExpanded}
-                            >
-                              {isExpanded ? "Hide" : "Show"}
-                            </button>
-                          </td>
-                        </tr>
-                        {isExpanded && (
-                          <tr className="bg-slate-50">
-                            <td colSpan={visibleColumnCount} className="px-6 py-5">
-                              {loadingProductIds.includes(product.id) ? (
-                                <div className="rounded-lg border border-slate-200 bg-white p-4 text-sm text-slate-500">
-                                  Loading price history...
-                                </div>
-                              ) : history && history.length > 1 ? (
-                                <div className="rounded-lg border border-slate-200 bg-white p-4">
-                                  <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                                    <div>
-                                      <div className="text-sm font-semibold text-slate-800">
-                                        Price history
-                                      </div>
-                                      <div className="text-xs text-slate-500">
-                                        Showing {chartTimeframe} range
-                                      </div>
-                                    </div>
-                                    {product.url && (
-                                      <a
-                                        href={product.url}
-                                        target="_blank"
-                                        rel="noopener noreferrer"
-                                        className="text-xs font-semibold text-blue-600 hover:underline"
-                                      >
-                                        View on TCGPlayer &gt;
-                                      </a>
-                                    )}
-                                  </div>
-                                  <div className="mt-3">
-                                    <PriceChart
-                                      data={history}
-                                      range={chartTimeframe}
-                                      currency={selectedCurrency}
-                                      exchangeRate={exchangeRate}
-                                      height={220}
-                                      releaseDate={product.sets?.release_date}
-                                    />
-                                  </div>
-                                </div>
-                              ) : (
-                                <div className="rounded-lg border border-dashed border-slate-200 bg-white p-4 text-sm text-slate-500">
-                                  Price history not available yet.
-                                </div>
-                              )}
-                            </td>
-                          </tr>
-                        )}
-                      </Fragment>
-                    );
-                  })}
-                </tbody>
+                {tableBody}
               </table>
             </div>
           </div>
