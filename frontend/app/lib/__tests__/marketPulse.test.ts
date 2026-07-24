@@ -99,15 +99,70 @@ describe("getUnitsSoldWindow", () => {
     ).toBeNull();
   });
 
-  it("returns 0 when day rows exist but none fall in the window", () => {
+  it("returns null (not 0) when day rows exist but none fall in the window", () => {
+    // An absent day bucket means "no data collected" — TCGPlayer writes
+    // explicit zero buckets — so this must never read as "nothing sold".
     const sales = [makeSale("2026-01-01", 8)];
-    expect(getUnitsSoldWindow(sales, 7, 0, REFERENCE_DATE)).toBe(0);
+    expect(getUnitsSoldWindow(sales, 7, 0, REFERENCE_DATE)).toBeNull();
+  });
+
+  it("returns null when daily collection stopped before the window ended", () => {
+    // Production state: the scraper's newest day bucket lags the window end by
+    // more than the 2-day tolerance, so the 7d sum would silently undercount.
+    const sales = [
+      makeSale("2026-06-30", 5),
+      makeSale("2026-07-01", 4),
+      makeSale("2026-07-02", 6),
+    ];
+
+    // 7D window is 2026-06-30..2026-07-06; newest bucket 2026-07-02 < 07-04.
+    expect(getUnitsSoldWindow(sales, 7, 0, REFERENCE_DATE)).toBeNull();
+  });
+
+  it("tolerates a bucket lagging today by up to two days", () => {
+    const sales = [makeSale("2026-07-01", 4), makeSale("2026-07-04", 6)];
+
+    expect(getUnitsSoldWindow(sales, 7, 0, REFERENCE_DATE)).toBe(10);
+  });
+
+  it("still reports a lifetime total for a product younger than the window", () => {
+    // Only three days of history: there is deliberately no "window start must
+    // be covered" condition, so this is a real 3-day total, not null.
+    const sales = [
+      makeSale("2026-07-04", 2),
+      makeSale("2026-07-05", 3),
+      makeSale("2026-07-06", 4),
+    ];
+
+    expect(getUnitsSoldWindow(sales, 30, 0, REFERENCE_DATE)).toBe(9);
+  });
+
+  it("measures staleness against the window end, not today", () => {
+    // Prior-30d window ends 2026-06-06. Day rows stop at 2026-07-06, which is
+    // fresh relative to that window end, so the sum is trustworthy.
+    const sales = [makeSale("2026-06-01", 7), makeSale("2026-07-06", 3)];
+
+    expect(getUnitsSoldWindow(sales, 30, 30, REFERENCE_DATE)).toBe(7);
   });
 });
 
 describe("getPriorUnitsSold30d", () => {
   // Prior-30d window for REFERENCE_DATE (2026-07-06): 2026-05-08..2026-06-06.
   // Weekly fallback window: bucket_date in 2026-05-04..2026-05-31.
+
+  /** Consecutive day rows ending 2026-06-06 (the prior-window end). */
+  function priorWindowDayRows(count: number, quantity: number) {
+    const rows: SalesHistoryEntry[] = [];
+    for (let back = count - 1; back >= 0; back -= 1) {
+      const d = new Date(2026, 5, 6 - back);
+      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(
+        2,
+        "0"
+      )}-${String(d.getDate()).padStart(2, "0")}`;
+      rows.push(makeSale(key, quantity));
+    }
+    return rows;
+  }
 
   it("falls back to scaled week rows when day rows don't cover the window", () => {
     const sales = [
@@ -125,21 +180,56 @@ describe("getPriorUnitsSold30d", () => {
       makeSale("2026-04-27", 100, "week"),
     ];
 
-    // Math.max(day sum 0, round(28 * 30/28)) = 30.
+    // No day coverage of the prior window -> round(28 * 30/28) = 30.
     expect(getPriorUnitsSold30d(sales, REFERENCE_DATE)).toBe(30);
   });
 
-  it("prefers the larger of day sum and week approximation", () => {
+  it("prefers the exact day sum once daily rows cover the whole window", () => {
     const sales = [
-      // Full day coverage of the prior window summing to 50.
-      makeSale("2026-05-20", 25),
-      makeSale("2026-06-01", 25),
-      // Week rows in the fallback window summing to 14 -> scaled 15.
-      makeSale("2026-05-11", 7, "week"),
-      makeSale("2026-05-18", 7, "week"),
+      // 30 of 30 prior-window days covered, summing to exactly 30.
+      ...priorWindowDayRows(30, 1),
+      // Week rows summing to 56 -> scaled 60. The old GREATEST rule would
+      // have returned 60 and inflated the trend denominator; coverage is
+      // complete, so the exact daily sum must win.
+      makeSale("2026-05-04", 14, "week"),
+      makeSale("2026-05-11", 14, "week"),
+      makeSale("2026-05-18", 14, "week"),
+      makeSale("2026-05-25", 14, "week"),
     ];
 
-    expect(getPriorUnitsSold30d(sales, REFERENCE_DATE)).toBe(50);
+    expect(getPriorUnitsSold30d(sales, REFERENCE_DATE)).toBe(30);
+  });
+
+  it("accepts 28 of 30 covered days as complete enough", () => {
+    const sales = [
+      ...priorWindowDayRows(28, 1),
+      makeSale("2026-05-04", 14, "week"),
+      makeSale("2026-05-11", 14, "week"),
+      makeSale("2026-05-18", 14, "week"),
+      makeSale("2026-05-25", 14, "week"),
+    ];
+
+    expect(getPriorUnitsSold30d(sales, REFERENCE_DATE)).toBe(28);
+  });
+
+  it("uses the weekly estimate when daily coverage is partial", () => {
+    const sales = [
+      // Only 10 of 30 days covered, but summing high (100). A partial daily
+      // sum must not beat the weekly estimate just because it is larger.
+      ...priorWindowDayRows(10, 10),
+      makeSale("2026-05-04", 7, "week"),
+      makeSale("2026-05-11", 7, "week"),
+      makeSale("2026-05-18", 7, "week"),
+      makeSale("2026-05-25", 7, "week"),
+    ];
+
+    expect(getPriorUnitsSold30d(sales, REFERENCE_DATE)).toBe(30);
+  });
+
+  it("uses the partial day sum when there are no week rows at all", () => {
+    const sales = priorWindowDayRows(10, 10);
+
+    expect(getPriorUnitsSold30d(sales, REFERENCE_DATE)).toBe(100);
   });
 
   it("returns null when neither source has data", () => {

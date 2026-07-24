@@ -120,11 +120,19 @@ function getMondayOfWeek(d: Date): Date {
 }
 
 /**
- * Build a zero-filled sales-volume series aligned to the chart's local-date
- * calendar. Short timeframes (<= 92 days) get one point per day from
+ * Build a sales-volume series aligned to the chart's local-date calendar.
+ * Short timeframes (<= DAILY_VOLUME_MAX_DAYS) get one point per day from
  * granularity='day' rows; longer timeframes get Monday-week-start buckets
  * that prefer summed day rows and fall back to the TCGPlayer 'week' row
  * (whose bucket_dates are Mondays). Volume is never forward-filled.
+ *
+ * Coverage handling: buckets BETWEEN covered buckets are zero-filled (a
+ * genuinely no-sales day inside the collected range is real — TCGPlayer writes
+ * explicit zero buckets). The series is TRIMMED at the newest covered bucket
+ * instead of being zero-filled up to today: an absent bucket past the end of
+ * collection means "no data", and rendering it as a 0 bar reads as a demand
+ * collapse. When nothing in the window is covered the series is empty and the
+ * caller renders the no-volume layout.
  */
 export function buildVolumeSeries(
   sales: SalesHistoryEntry[],
@@ -157,10 +165,24 @@ export function buildVolumeSeries(
       );
     }
 
+    // Trim to the covered span rather than zero-filling the window. Days
+    // before collection started and after it ends have no data, and a 0 bar
+    // there would claim "nothing sold" where nothing was ever recorded.
+    // Gaps *inside* the span stay zero-filled: TCGPlayer writes explicit
+    // zero buckets, so a missing day inside the span is a genuine no-sale.
+    let firstCoveredKey: string | null = null;
+    let lastCoveredKey: string | null = null;
+    for (const key of volumeByDay.keys()) {
+      if (lastCoveredKey === null || key > lastCoveredKey) lastCoveredKey = key;
+      if (firstCoveredKey === null || key < firstCoveredKey) firstCoveredKey = key;
+    }
+    if (lastCoveredKey === null || firstCoveredKey === null) return [];
+
     const result: VolumeSeriesPoint[] = [];
-    const cursor = new Date(startDate);
+    const cursor = parseLocalDateKey(firstCoveredKey);
     while (cursor <= today) {
       const key = toLocalDateKey(cursor);
+      if (key > lastCoveredKey) break;
       result.push({
         date: key,
         volume: volumeByDay.get(key) ?? 0,
@@ -193,10 +215,27 @@ export function buildVolumeSeries(
     }
   }
 
+  // Trim to the covered span at BOTH ends, same reasoning as the daily path:
+  // weeks before this product's first collected bucket never had data, and a
+  // run of 0 bars at the left edge reads as a demand collapse that never
+  // happened. Products whose history starts mid-window are the common case.
+  let firstCoveredWeekKey: string | null = null;
+  let lastCoveredWeekKey: string | null = null;
+  for (const key of [...daySumByWeek.keys(), ...weekRowByWeek.keys()]) {
+    if (lastCoveredWeekKey === null || key > lastCoveredWeekKey) {
+      lastCoveredWeekKey = key;
+    }
+    if (firstCoveredWeekKey === null || key < firstCoveredWeekKey) {
+      firstCoveredWeekKey = key;
+    }
+  }
+  if (lastCoveredWeekKey === null || firstCoveredWeekKey === null) return [];
+
   const result: VolumeSeriesPoint[] = [];
-  const cursor = new Date(firstMonday);
+  const cursor = parseLocalDateKey(firstCoveredWeekKey);
   while (cursor <= lastMonday) {
     const key = toLocalDateKey(cursor);
+    if (key > lastCoveredWeekKey) break;
     const daySum = daySumByWeek.get(key);
     const weekRow = weekRowByWeek.get(key);
     // Day rows only cover ~30 trailing days, so the week at the edge of daily

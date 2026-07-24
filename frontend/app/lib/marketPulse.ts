@@ -77,11 +77,37 @@ export function getDaysOfSupply(
   return totalQuantityAvailable / (unitsSold30d / 30);
 }
 
+// TCGPlayer writes explicit zero buckets, so a MISSING day row means "no data
+// collected", never "nothing sold". The current-day bucket is partial and the
+// scraper runs once a day, so the newest bucket normally trails today by a day
+// or two — anything beyond that tolerance means daily coverage has stopped and
+// a window sum would silently undercount.
+// Mirror of the staleness guard in migrations/0018_volume_staleness_guard.sql,
+// which applies the identical rule to the RPC that feeds /market and /prices —
+// otherwise those pages and /product/[id] contradict each other for the same
+// product. TCGPlayer's current-day bucket is partial and the scraper visits
+// each product about once a day, so a few days of lag is normal operation.
+// Keep both sides in sync.
+const DAILY_DATA_STALENESS_TOLERANCE_DAYS = 3;
+
+// Mirror of the prior_day_coverage rule in
+// migrations/0017_volume_prior_window_coverage.sql: the exact daily sum is only
+// preferred over the scaled weekly estimate once daily rows cover at least this
+// many of the 30 days in the prior window. Keep both sides in sync.
+const PRIOR_WINDOW_MIN_DAY_COVERAGE = 28;
+
 /**
  * Sum quantity_sold over granularity='day' rows inside the local-date window
- * [today - offsetDays - days + 1, today - offsetDays]. Returns null when the
- * sales array has no day rows at all (no daily data yet), and 0 when day rows
- * exist but none fall inside the window.
+ * [today - offsetDays - days + 1, today - offsetDays].
+ *
+ * Returns null — meaning "unknown", not "zero" — when the daily data does not
+ * actually cover the window:
+ *   (a) no day row falls inside the window, or
+ *   (b) the newest day bucket anywhere in the array is more than
+ *       DAILY_DATA_STALENESS_TOLERANCE_DAYS older than the window end, so the
+ *       window is only partially collected.
+ * A product younger than the window still reports its lifetime total: there is
+ * deliberately no "window start must be covered" condition.
  */
 export function getUnitsSoldWindow(
   sales: SalesHistoryEntry[],
@@ -106,27 +132,91 @@ export function getUnitsSoldWindow(
   const endKey = toLocalDateKey(endDate);
 
   let total = 0;
+  let rowsInWindow = 0;
+  let newestDayKey: string | null = null;
   for (const row of dayRows) {
+    if (newestDayKey === null || row.bucket_date > newestDayKey) {
+      newestDayKey = row.bucket_date;
+    }
     if (row.bucket_date >= startKey && row.bucket_date <= endKey) {
       total += row.quantity_sold ?? 0;
+      rowsInWindow += 1;
     }
   }
+
+  // (a) nothing collected inside the window at all.
+  if (rowsInWindow === 0) return null;
+
+  // (b) daily collection stopped before the window ended.
+  const freshestAllowedKey = toLocalDateKey(
+    new Date(
+      endDate.getFullYear(),
+      endDate.getMonth(),
+      endDate.getDate() - DAILY_DATA_STALENESS_TOLERANCE_DAYS
+    )
+  );
+  if (newestDayKey === null || newestDayKey < freshestAllowedKey) return null;
+
   return total;
+}
+
+/**
+ * Count distinct day buckets carrying an actual quantity inside the window.
+ * Rows are unique per (product, bucket_date, granularity) in the DB, so this
+ * matches the SQL COUNT(*) FILTER (... AND quantity_sold IS NOT NULL) used by
+ * the RPC. Counting null-quantity rows here would let an all-null window look
+ * fully covered on this side while the SQL sum came back NULL.
+ */
+function countDayCoverage(
+  sales: SalesHistoryEntry[],
+  days: number,
+  offsetDays: number,
+  referenceDate: Date
+): number {
+  const endDate = new Date(
+    referenceDate.getFullYear(),
+    referenceDate.getMonth(),
+    referenceDate.getDate() - offsetDays
+  );
+  const startKey = toLocalDateKey(
+    new Date(
+      endDate.getFullYear(),
+      endDate.getMonth(),
+      endDate.getDate() - days + 1
+    )
+  );
+  const endKey = toLocalDateKey(endDate);
+
+  const covered = new Set<string>();
+  for (const row of sales) {
+    if (row.granularity !== "day") continue;
+    if (row.quantity_sold === null) continue;
+    if (row.bucket_date >= startKey && row.bucket_date <= endKey) {
+      covered.add(row.bucket_date);
+    }
+  }
+  return covered.size;
 }
 
 /**
  * Units sold in the prior-30d window (days 30-59 back). Daily rows only
  * reach ~30 days back at launch, so when they don't cover that window this
  * falls back to the backfilled Monday-anchored week rows: the four buckets
- * spanning roughly days 36-63 back, scaled from 28 to 30 days. Mirrors the
- * same fallback in the get_market_product_volume_metrics() RPC; the larger
- * of the two estimates wins because each source can only undercount.
+ * spanning roughly days 36-63 back, scaled from 28 to 30 days.
+ *
+ * Source preference mirrors migrations/0017_volume_prior_window_coverage.sql
+ * exactly: the exact daily sum wins only when daily rows cover at least
+ * PRIOR_WINDOW_MIN_DAY_COVERAGE days of the window, otherwise the weekly
+ * estimate does. Taking the larger of the two (the old rule) inflated the
+ * denominator once daily coverage grew, because the 28->30 day scaling makes
+ * the weekly estimate exceed the exact sum for roughly half the catalog.
  */
 export function getPriorUnitsSold30d(
   sales: SalesHistoryEntry[],
   referenceDate: Date = new Date()
 ): number | null {
   const daySum = getUnitsSoldWindow(sales, 30, 30, referenceDate);
+  const dayCoverage = countDayCoverage(sales, 30, 30, referenceDate);
 
   const startKey = toLocalDateKey(
     new Date(
@@ -155,8 +245,11 @@ export function getPriorUnitsSold30d(
   const weekSum =
     weekRowsInWindow > 0 ? Math.round((weekTotal * 30) / 28) : null;
 
-  if (daySum !== null && weekSum !== null) return Math.max(daySum, weekSum);
-  return daySum ?? weekSum;
+  // Prefer the exact source over the larger one (see the CASE in 0017).
+  if (daySum !== null && dayCoverage >= PRIOR_WINDOW_MIN_DAY_COVERAGE) {
+    return daySum;
+  }
+  return weekSum ?? daySum;
 }
 
 /**
