@@ -28,9 +28,8 @@ export function useVolumeMetrics(
   // surface blank with no retry path.
   const hasInitial =
     initialMetrics != null && Object.keys(initialMetrics).length > 0;
-  const [metrics, setMetrics] = useState<Record<number, ProductVolumeMetrics>>(
-    initialMetrics ?? EMPTY_METRICS
-  );
+  const [clientMetrics, setClientMetrics] =
+    useState<Record<number, ProductVolumeMetrics>>(EMPTY_METRICS);
 
   useEffect(() => {
     if (hasInitial) return;
@@ -40,7 +39,7 @@ export function useVolumeMetrics(
     fetchVolumeMetrics()
       .then((result) => {
         if (!cancelled) {
-          setMetrics(result);
+          setClientMetrics(result);
         }
       })
       .catch((error) => {
@@ -53,5 +52,9 @@ export function useVolumeMetrics(
     };
   }, [hasInitial]);
 
-  return metrics;
+  // Read the server value straight from the prop rather than seeding state
+  // with it. A router.refresh() or a navigation that crosses the hourly
+  // server-cache boundary hands down a NEW object, and state initialised on
+  // first render would pin the stale one forever.
+  return hasInitial ? initialMetrics : clientMetrics;
 }

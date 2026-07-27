@@ -123,7 +123,18 @@ def build_thumbnail(image_bytes: bytes):
 
     try:
         with PILImage.open(io.BytesIO(image_bytes)) as img:
-            img = img.convert("RGB")
+            # PNG and WebP are accepted sources and may carry alpha. Going
+            # straight to RGB drops the alpha channel and leaves fully
+            # transparent pixels black, which would paint black boxes and
+            # halos onto the white product cards. Composite onto white first
+            # so transparency blends into the card background instead.
+            if img.mode in ("RGBA", "LA", "PA") or "transparency" in img.info:
+                rgba = img.convert("RGBA")
+                canvas = PILImage.new("RGB", rgba.size, (255, 255, 255))
+                canvas.paste(rgba, mask=rgba.split()[-1])
+                img = canvas
+            else:
+                img = img.convert("RGB")
             img.thumbnail((THUMBNAIL_MAX_EDGE, THUMBNAIL_MAX_EDGE))
             out = io.BytesIO()
             img.save(out, format="WEBP", quality=THUMBNAIL_QUALITY, method=6)

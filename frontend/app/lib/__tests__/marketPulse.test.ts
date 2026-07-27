@@ -60,10 +60,16 @@ describe("getDaysOfSupply", () => {
 
 describe("getUnitsSoldWindow", () => {
   it("sums day rows inside the trailing window", () => {
+    // Contiguous: TCGPlayer writes an explicit zero bucket on a no-sale day,
+    // so a fully-collected window has a row for every date.
     const sales = [
-      makeSale("2026-07-06", 3),
-      makeSale("2026-07-01", 2),
       makeSale("2026-06-30", 4),
+      makeSale("2026-07-01", 2),
+      makeSale("2026-07-02", 0),
+      makeSale("2026-07-03", 0),
+      makeSale("2026-07-04", 0),
+      makeSale("2026-07-05", 0),
+      makeSale("2026-07-06", 3),
       // Outside a 7-day window ending 2026-07-06 (starts 2026-06-30).
       makeSale("2026-06-29", 100),
     ];
@@ -72,17 +78,18 @@ describe("getUnitsSoldWindow", () => {
   });
 
   it("applies offsetDays to shift the window into the past", () => {
-    const sales = [
-      makeSale("2026-07-06", 3),
-      makeSale("2026-06-05", 7),
-      makeSale("2026-05-20", 5),
-    ];
+    // Prior 30d window: 2026-05-08 .. 2026-06-06. Fill it contiguously with
+    // 1/day, so the expected sum is exactly 30.
+    const sales = [makeSale("2026-07-06", 3)];
+    for (let d = new Date(2026, 4, 8); d <= new Date(2026, 5, 6); d.setDate(d.getDate() + 1)) {
+      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+      sales.push(makeSale(key, 1));
+    }
 
-    // Prior 30d window: 2026-05-08 .. 2026-06-06.
-    expect(getUnitsSoldWindow(sales, 30, 30, REFERENCE_DATE)).toBe(12);
+    expect(getUnitsSoldWindow(sales, 30, 30, REFERENCE_DATE)).toBe(30);
   });
 
-  it("ignores week rows and treats null quantities as zero", () => {
+  it("ignores week rows and does not count a null quantity as data", () => {
     const sales = [
       makeSale("2026-07-06", null),
       makeSale("2026-07-05", 2),
@@ -120,9 +127,40 @@ describe("getUnitsSoldWindow", () => {
   });
 
   it("tolerates a bucket lagging today by up to two days", () => {
-    const sales = [makeSale("2026-07-01", 4), makeSale("2026-07-04", 6)];
+    const sales = [
+      makeSale("2026-07-01", 4),
+      makeSale("2026-07-02", 0),
+      makeSale("2026-07-03", 0),
+      makeSale("2026-07-04", 6),
+    ];
 
     expect(getUnitsSoldWindow(sales, 7, 0, REFERENCE_DATE)).toBe(10);
+  });
+
+  it("returns null when a day is missing from the middle of the window", () => {
+    // A skipped API bucket or a partial upsert. Summing the rest would
+    // silently understate the window, so report unknown instead.
+    const sales = [
+      makeSale("2026-07-01", 4),
+      // 2026-07-02 never collected
+      makeSale("2026-07-03", 5),
+      makeSale("2026-07-04", 6),
+    ];
+
+    expect(getUnitsSoldWindow(sales, 7, 0, REFERENCE_DATE)).toBeNull();
+  });
+
+  it("treats a null quantity as a hole, not a zero", () => {
+    // parse_daily_sales_buckets writes NULL for a malformed/negative value.
+    // Counting it as 0 would understate the window while looking complete.
+    const sales = [
+      makeSale("2026-07-01", 4),
+      makeSale("2026-07-02", null),
+      makeSale("2026-07-03", 5),
+      makeSale("2026-07-04", 6),
+    ];
+
+    expect(getUnitsSoldWindow(sales, 7, 0, REFERENCE_DATE)).toBeNull();
   });
 
   it("still reports a lifetime total for a product younger than the window", () => {
