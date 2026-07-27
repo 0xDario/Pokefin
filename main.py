@@ -414,8 +414,10 @@ def _fetch_listings_snapshot_once(session, tcgplayer_product_id, referer=None,
         "sort": {"field": "price+shipping", "order": "asc"},
         "context": {"shippingCountry": "US"},
         # quantity must be requested explicitly — total_quantity_available
-        # is derived from its histogram below.
-        "aggregations": ["listingType", "quantity"],
+        # is derived from its histogram below. language lets the caller tell a
+        # genuine language-scoped sell-out apart from a filter the API did not
+        # honour (see fetch_listings_snapshot).
+        "aggregations": ["listingType", "quantity", "language"],
     }
 
     try:
@@ -470,10 +472,27 @@ def _fetch_listings_snapshot_once(session, tcgplayer_product_id, referer=None,
             except (TypeError, ValueError):
                 lowest_listing_price = None
 
+        # Which languages actually have live listings, e.g. {"English": 59}.
+        # Internal only — fetch_listings_snapshot strips this before returning.
+        languages_present = {}
+        language_agg = aggregations.get("language")
+        if isinstance(language_agg, list):
+            for entry in language_agg:
+                if not isinstance(entry, dict):
+                    continue
+                name = entry.get("value")
+                try:
+                    count = int(round(float(entry.get("count"))))
+                except (TypeError, ValueError):
+                    continue
+                if isinstance(name, str) and count > 0:
+                    languages_present[name.strip().lower()] = count
+
         return {
             "active_listings": active_listings,
             "total_quantity_available": total_quantity_available,
             "lowest_listing_price": lowest_listing_price,
+            "_languages_present": languages_present,
         }
     except Exception as e:
         logger.debug(f"Listings snapshot fetch failed for TCGPlayer product {tcgplayer_product_id}: {e}")
@@ -489,16 +508,21 @@ def fetch_listings_snapshot(session, tcgplayer_product_id, referer=None,
     pins one (?Language=...), so multi-language product ids don't mix markets.
     "all" is a TCGPlayer URL convention meaning "don't scope", not a language
     the API accepts — forwarding it matches zero listings, so it and any blank
-    value are skipped.
+    value are dropped before the request.
 
-    A filter the API cannot match is indistinguishable from a genuinely
-    sold-out product by response shape alone: both return totalResults 0 with
-    an empty `quantity` aggregation (verified live against product 630689 with
-    language=all and language=Japanese). So when a language filter was applied
-    AND it matched nothing, retry once unfiltered: if listings exist without
-    the filter the filter was the problem and the unfiltered snapshot is used;
-    if the unfiltered call is also empty the product really is sold out and 0
-    is recorded honestly.
+    A scoped request that matches nothing is ambiguous by response shape alone:
+    a genuine sell-out in that language and a filter the API did not honour
+    BOTH return totalResults 0 with an empty quantity aggregation (verified
+    live against product 630689 with language=all vs language=Japanese). The
+    unfiltered `language` aggregation resolves it, because it names every
+    language that does have live listings:
+
+      - our language is absent from it  -> that language really is sold out,
+        so the scoped zero is the honest answer and is kept. Falling back to
+        the unfiltered counts here would report another language's inventory.
+      - our language is present with a positive count -> the scoped request
+        contradicts the catalogue, so the filter is at fault and the
+        unfiltered snapshot is used instead.
     """
     if not tcgplayer_product_id:
         return None
@@ -513,16 +537,28 @@ def fetch_listings_snapshot(session, tcgplayer_product_id, referer=None,
     )
 
     if language_filter and snapshot is not None and snapshot.get("active_listings") == 0:
-        logger.debug(
-            f"Listings filter language={language_filter!r} matched nothing for "
-            f"TCGPlayer product {tcgplayer_product_id}; retrying unfiltered"
-        )
         unfiltered = _fetch_listings_snapshot_once(
             session, tcgplayer_product_id, referer=referer, language_filter=None,
         )
-        if unfiltered is not None and (unfiltered.get("active_listings") or 0) > 0:
-            return unfiltered
+        if unfiltered is not None:
+            present = unfiltered.get("_languages_present") or {}
+            if present.get(language_filter.lower(), 0) > 0:
+                logger.debug(
+                    f"Listings filter language={language_filter!r} returned 0 for "
+                    f"TCGPlayer product {tcgplayer_product_id} but the catalogue "
+                    f"reports {present[language_filter.lower()]} listings in it; "
+                    f"using the unfiltered snapshot"
+                )
+                snapshot = unfiltered
+            else:
+                logger.debug(
+                    f"TCGPlayer product {tcgplayer_product_id} has no live "
+                    f"{language_filter!r} listings (available: "
+                    f"{sorted(present) or 'none'}); recording a scoped zero"
+                )
 
+    if snapshot is not None:
+        snapshot.pop("_languages_present", None)
     return snapshot
 
 
