@@ -142,6 +142,13 @@ All probes should return the expected 401/403/429/redirect results.
   Advisor re-run confirms all critical issues resolved; remaining
   warnings are intentional (reference-table anon SELECT, definer
   functions with internal scoping, Pro+ leaked-password toggle).
+- **Migrations 0019–0020 applied** (2026-07-27, via Supabase MCP).
+  0019 rejects window totals containing an interior hole (a skipped bucket
+  or partial upsert would otherwise publish as a complete window); 0020
+  extends the same count-versus-span rule to the prior-30d window, which
+  is the volume-trend denominator. Both validated on a scratch Postgres 17
+  (healthy / gapped / young / NULL-quantity products) before application;
+  neither changed current output.
 - **Migrations 0017–0018 applied** (2026-07-24, via Supabase MCP).
   0017 replaces the prior-30d `GREATEST(day, week)` with a coverage test;
   0018 adds the staleness guard so the volume RPC and the frontend agree

@@ -161,7 +161,9 @@ Examples:
                 failed += 1
                 continue
 
-            if upload_thumbnail(product_id, original):
+            # Hand over the derivative we already built — upload_thumbnail
+            # would otherwise repeat the slow method=6 WebP encode.
+            if upload_thumbnail(product_id, image_bytes=original, thumb_bytes=thumb):
                 built += 1
                 saved_bytes += max(0, len(original) - len(thumb))
                 logger.info(
