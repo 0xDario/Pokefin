@@ -532,14 +532,18 @@ def fetch_listings_snapshot(session, tcgplayer_product_id, referer=None,
     BOTH return totalResults 0 with an empty quantity aggregation (verified
     live against product 630689 with language=all vs language=Japanese). The
     unfiltered `language` aggregation resolves it, because it names every
-    language that does have live listings:
+    language that has live listings and how many:
 
-      - our language is absent from it  -> that language really is sold out,
-        so the scoped zero is the honest answer and is kept. Falling back to
-        the unfiltered counts here would report another language's inventory.
-      - our language is present with a positive count -> the scoped request
-        contradicts the catalogue, so the filter is at fault and the
-        unfiltered snapshot is used instead.
+      - our language is absent -> that language really is sold out, so the
+        scoped zero is the honest answer and is kept. Falling back to the
+        unfiltered counts here would report another language's inventory.
+      - our language is the ONLY one present -> every live listing is already
+        in it, so the unfiltered snapshot IS the scoped snapshot; use it whole.
+      - our language is present alongside others -> the aggregation gives an
+        exact scoped listing COUNT, but the quantity histogram and the cheapest
+        price are computed across every language and cannot be attributed to
+        one. Record the count and leave depth and price unknown rather than
+        mixing markets.
     """
     if not tcgplayer_product_id:
         return None
@@ -559,20 +563,45 @@ def fetch_listings_snapshot(session, tcgplayer_product_id, referer=None,
         )
         if unfiltered is not None:
             present = unfiltered.get("_languages_present") or {}
-            if present.get(language_filter.lower(), 0) > 0:
-                logger.debug(
-                    f"Listings filter language={language_filter!r} returned 0 for "
-                    f"TCGPlayer product {tcgplayer_product_id} but the catalogue "
-                    f"reports {present[language_filter.lower()]} listings in it; "
-                    f"using the unfiltered snapshot"
-                )
-                snapshot = unfiltered
-            else:
+            key = language_filter.lower()
+            scoped_listings = present.get(key, 0)
+
+            if scoped_listings <= 0:
+                # Our language simply has no live listings. The scoped zero is
+                # the honest answer; the unfiltered counts describe a market
+                # this listing's buyer cannot purchase from.
                 logger.debug(
                     f"TCGPlayer product {tcgplayer_product_id} has no live "
                     f"{language_filter!r} listings (available: "
                     f"{sorted(present) or 'none'}); recording a scoped zero"
                 )
+            elif set(present) == {key}:
+                # Every live listing is already in our language, so the
+                # unfiltered snapshot IS the scoped snapshot.
+                logger.debug(
+                    f"Listings filter language={language_filter!r} returned 0 for "
+                    f"TCGPlayer product {tcgplayer_product_id} but it is the only "
+                    f"language present ({scoped_listings} listings); using the "
+                    f"unfiltered snapshot"
+                )
+                snapshot = unfiltered
+            else:
+                # Mixed languages. The aggregation gives an exact scoped listing
+                # COUNT, but quantity depth and the cheapest price are computed
+                # across every language and cannot be attributed — reporting them
+                # would mix markets. Take the count, leave the rest unknown.
+                logger.debug(
+                    f"Listings filter language={language_filter!r} returned 0 for "
+                    f"TCGPlayer product {tcgplayer_product_id}, but the catalogue "
+                    f"reports {scoped_listings} in it alongside "
+                    f"{sorted(set(present) - {key})}; recording the scoped count "
+                    f"only, with depth and price unknown"
+                )
+                snapshot = {
+                    "active_listings": scoped_listings,
+                    "total_quantity_available": None,
+                    "lowest_listing_price": None,
+                }
 
     if snapshot is not None:
         snapshot.pop("_languages_present", None)
