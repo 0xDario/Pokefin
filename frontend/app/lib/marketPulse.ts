@@ -103,6 +103,11 @@ const DAILY_DATA_STALENESS_TOLERANCE_DAYS = 3;
 // many of the 30 days in the prior window. Keep both sides in sync.
 const PRIOR_WINDOW_MIN_DAY_COVERAGE = 28;
 
+// The prior window's weekly fallback range (today-63 .. today-36) is 28 days,
+// i.e. exactly four Monday-anchored buckets. Mirrors the same requirement in
+// migrations/0021_volume_freshness_and_weekly_coverage.sql.
+const PRIOR_WINDOW_WEEK_BUCKETS = 4;
+
 /**
  * Sum quantity_sold over granularity='day' rows inside the local-date window
  * [today - offsetDays - days + 1, today - offsetDays].
@@ -149,10 +154,15 @@ export function getUnitsSoldWindow(
   // SUM(), which skips NULLs.
   const coveredDays = new Set<string>();
   for (const row of dayRows) {
+    // Freshness is measured from buckets that carry a real quantity. A row
+    // whose quantity failed to parse means the day was visited but its value
+    // is unknown, so letting its date advance newestDayKey would make a run
+    // of unusable trailing buckets look like fresh collection and let a stale
+    // partial sum publish as complete.
+    if (row.quantity_sold === null) continue;
     if (newestDayKey === null || row.bucket_date > newestDayKey) {
       newestDayKey = row.bucket_date;
     }
-    if (row.quantity_sold === null) continue;
     if (row.bucket_date >= startKey && row.bucket_date <= endKey) {
       total += row.quantity_sold;
       coveredDays.add(row.bucket_date);
@@ -263,16 +273,23 @@ export function getPriorUnitsSold30d(
   );
 
   let weekTotal = 0;
-  let weekRowsInWindow = 0;
+  const weekBuckets = new Set<string>();
   for (const row of sales) {
     if (row.granularity !== "week") continue;
+    if (row.quantity_sold === null) continue;
     if (row.bucket_date >= startKey && row.bucket_date <= endKey) {
-      weekTotal += row.quantity_sold ?? 0;
-      weekRowsInWindow += 1;
+      weekTotal += row.quantity_sold;
+      weekBuckets.add(row.bucket_date);
     }
   }
+  // The 28-day window spans exactly four Mondays, and the sum is scaled 30/28
+  // on that basis. With a bucket missing — an interrupted annual backfill, a
+  // failed upsert, a null quantity — scaling anyway would understate the
+  // trend denominator and inflate the trend. Require all four.
   const weekSum =
-    weekRowsInWindow > 0 ? Math.round((weekTotal * 30) / 28) : null;
+    weekBuckets.size === PRIOR_WINDOW_WEEK_BUCKETS
+      ? Math.round((weekTotal * 30) / 28)
+      : null;
 
   // Prefer the exact source over the larger one (see the CASE in 0017).
   if (daySum !== null && dayCoverage >= PRIOR_WINDOW_MIN_DAY_COVERAGE) {

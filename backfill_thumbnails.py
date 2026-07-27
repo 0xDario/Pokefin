@@ -69,18 +69,53 @@ def fetch_products_with_images(batch_size=500):
     return all_products
 
 
-def thumbnail_exists(product_id) -> bool:
-    """True when a derivative is already stored for this product."""
+# Supabase Storage paginates list(); the default page is far smaller than the
+# number of objects in products/ (one full image + one thumbnail per product,
+# so 600+). Listing per product would also be one API round trip each.
+STORAGE_LIST_PAGE_SIZE = 1000
+
+
+def list_existing_objects() -> set:
+    """Every object filename under products/, following pagination.
+
+    Includes both full images and thumbnails; callers look up the exact
+    derivative filename they care about.
+
+    Fetched once and reused for the whole run. Supabase Storage's default page
+    is 100 objects against 600+ here, so a single un-paginated listing reported
+    the other ~85% as missing and a resumed or repeated backfill re-downloaded
+    and re-encoded nearly the whole catalogue. Listing per product would also
+    be one API round trip each.
+
+    Returns an empty set on failure, which simply means nothing is skipped.
+    """
     from main import thumbnail_object_path
 
-    path = thumbnail_object_path(product_id)
-    prefix, _, name = path.rpartition("/")
+    prefix = thumbnail_object_path(0).rpartition("/")[0]
+    names = set()
+    offset = 0
     try:
-        listing = supabase.storage.from_(BUCKET).list(prefix)
-        return any(item.get("name") == name for item in (listing or []))
+        while True:
+            page = supabase.storage.from_(BUCKET).list(
+                prefix,
+                {"limit": STORAGE_LIST_PAGE_SIZE, "offset": offset},
+            ) or []
+            for item in page:
+                name = item.get("name")
+                if name:
+                    names.add(name)
+            if len(page) < STORAGE_LIST_PAGE_SIZE:
+                break
+            offset += STORAGE_LIST_PAGE_SIZE
     except Exception as e:
-        logger.debug(f"Could not list {prefix} for product {product_id}: {e}")
-        return False
+        logger.warning(
+            f"Could not list existing objects ({e}); "
+            f"proceeding without skip detection"
+        )
+        return set()
+
+    logger.info(f"Found {len(names)} existing objects under {prefix}/")
+    return names
 
 
 def main():
@@ -124,6 +159,8 @@ Examples:
         products = products[: args.limit]
     logger.info(f"Found {len(products)} products with images")
 
+    existing_objects = set() if args.force else list_existing_objects()
+
     session = requests.Session()
     built = skipped = failed = 0
     saved_bytes = 0
@@ -138,10 +175,14 @@ Examples:
                 skipped += 1
                 continue
 
-            if not args.force and thumbnail_exists(product_id):
-                logger.debug("   Thumbnail already present, skipping")
-                skipped += 1
-                continue
+            if not args.force:
+                from main import thumbnail_object_path
+
+                thumb_name = thumbnail_object_path(product_id).rpartition("/")[2]
+                if thumb_name in existing_objects:
+                    logger.debug("   Thumbnail already present, skipping")
+                    skipped += 1
+                    continue
 
             try:
                 response = session.get(image_url, timeout=REQUEST_TIMEOUT)

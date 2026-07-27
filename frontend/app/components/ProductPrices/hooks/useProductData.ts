@@ -145,11 +145,27 @@ export function useProductData(options: UseProductDataOptions = {}) {
           return EMPTY_HISTORY;
         } finally {
           inFlightRef.current.delete(inFlightKey);
-          setLoadingProductIds((prev) =>
-            prev.includes(productId)
-              ? prev.filter((id) => id !== productId)
-              : prev
-          );
+
+          // A product can have two ranges in flight at once — e.g. a viewport
+          // -triggered 3M request still pending when the user switches to 1Y.
+          // Each has its own key, so clearing the shared loading flag on the
+          // first completion would present the narrower history as a finished
+          // wider chart. Only clear once nothing is left for this product.
+          const productPrefix = `${productId}:`;
+          let stillLoading = false;
+          for (const key of inFlightRef.current.keys()) {
+            if (key.startsWith(productPrefix)) {
+              stillLoading = true;
+              break;
+            }
+          }
+          if (!stillLoading) {
+            setLoadingProductIds((prev) =>
+              prev.includes(productId)
+                ? prev.filter((id) => id !== productId)
+                : prev
+            );
+          }
         }
       })();
 
