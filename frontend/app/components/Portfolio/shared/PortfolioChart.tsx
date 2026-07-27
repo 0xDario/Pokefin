@@ -52,6 +52,25 @@ export default function PortfolioChart({
   exchangeRate = 1.36,
   height = DEFAULT_HEIGHT,
 }: PortfolioChartProps) {
+  // Same reasoning as AllocationChart: the impl derives chartData as a direct
+  // map of `data`, so an empty `data` can only ever render this text — no
+  // reason to pull the Recharts chunk down for it. Kept byte-identical to the
+  // impl's own empty state (which also omits the timeframe buttons).
+  if (data.length === 0) {
+    return (
+      <div className="bg-white rounded-lg shadow-lg p-4 md:p-6">
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-lg font-semibold text-slate-900">
+            Portfolio Value
+          </h2>
+        </div>
+        <div className="h-48 flex items-center justify-center text-slate-500">
+          No historical data available yet
+        </div>
+      </div>
+    );
+  }
+
   return (
     <PortfolioChartImpl
       data={data}

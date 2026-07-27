@@ -50,6 +50,23 @@ export default function AllocationChart({
   currency = "USD",
   exchangeRate = 1.36,
 }: AllocationChartProps) {
+  // Answer the empty case here rather than inside the dynamic impl: a brand
+  // new portfolio would otherwise download the ~109 KB Recharts chunk and show
+  // a skeleton purely to render this line of text. Kept byte-identical to the
+  // impl's own empty state so the two paths look the same.
+  if (holdings.length === 0) {
+    return (
+      <div className="bg-white rounded-lg shadow-lg p-4 md:p-6 h-full flex flex-col">
+        <h2 className="text-lg font-semibold text-slate-900 mb-4">
+          Allocation by {groupBy === "set" ? "Set" : "Product Type"}
+        </h2>
+        <div className="flex-1 flex items-center justify-center text-slate-500">
+          No holdings to display
+        </div>
+      </div>
+    );
+  }
+
   return (
     <AllocationChartImpl
       holdings={holdings}

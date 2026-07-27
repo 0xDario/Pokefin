@@ -163,6 +163,22 @@ describe("getUnitsSoldWindow", () => {
     expect(getUnitsSoldWindow(sales, 7, 0, REFERENCE_DATE)).toBeNull();
   });
 
+  it("does not let null-quantity buckets fake freshness", () => {
+    // Usable data ends 2026-06-28 (8 days before the reference date), but the
+    // trailing buckets were collected with an unparseable quantity. Letting
+    // those dates advance the freshness marker published a stale partial sum.
+    const sales = [
+      makeSale("2026-06-26", 3),
+      makeSale("2026-06-27", 3),
+      makeSale("2026-06-28", 3),
+      makeSale("2026-07-04", null),
+      makeSale("2026-07-05", null),
+      makeSale("2026-07-06", null),
+    ];
+
+    expect(getUnitsSoldWindow(sales, 30, 0, REFERENCE_DATE)).toBeNull();
+  });
+
   it("still reports a lifetime total for a product younger than the window", () => {
     // Only three days of history: there is deliberately no "window start must
     // be covered" condition, so this is a real 3-day total, not null.
@@ -268,6 +284,31 @@ describe("getPriorUnitsSold30d", () => {
     const sales = priorWindowDayRows(10, 10);
 
     expect(getPriorUnitsSold30d(sales, REFERENCE_DATE)).toBe(100);
+  });
+
+  it("requires all four weekly buckets before scaling the fallback", () => {
+    // The 28-day fallback range spans exactly four Mondays and the sum is
+    // scaled 30/28 on that basis; scaling three would understate the trend
+    // denominator and inflate the trend.
+    const threeOfFour = [
+      makeSale("2026-05-04", 7, "week"),
+      makeSale("2026-05-11", 7, "week"),
+      makeSale("2026-05-18", 7, "week"),
+    ];
+    expect(getPriorUnitsSold30d(threeOfFour, REFERENCE_DATE)).toBeNull();
+
+    const fourOfFour = [...threeOfFour, makeSale("2026-05-25", 7, "week")];
+    expect(getPriorUnitsSold30d(fourOfFour, REFERENCE_DATE)).toBe(30);
+  });
+
+  it("ignores a weekly bucket whose quantity failed to parse", () => {
+    const sales = [
+      makeSale("2026-05-04", 7, "week"),
+      makeSale("2026-05-11", 7, "week"),
+      makeSale("2026-05-18", 7, "week"),
+      makeSale("2026-05-25", null, "week"),
+    ];
+    expect(getPriorUnitsSold30d(sales, REFERENCE_DATE)).toBeNull();
   });
 
   it("returns null when neither source has data", () => {

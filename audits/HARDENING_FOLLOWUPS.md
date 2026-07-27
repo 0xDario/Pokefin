@@ -142,6 +142,13 @@ All probes should return the expected 401/403/429/redirect results.
   Advisor re-run confirms all critical issues resolved; remaining
   warnings are intentional (reference-table anon SELECT, definer
   functions with internal scoping, Pro+ leaked-password toggle).
+- **Migration 0021 applied** (2026-07-27, via Supabase MCP). Measures
+  daily freshness from buckets that carry a real quantity (a run of
+  NULL-quantity rows was faking freshness and publishing stale partial
+  sums), and requires all four weekly buckets before scaling the
+  prior-window fallback by 30/28. A/B'd on scratch Postgres against the
+  previous function: the stale case went 30d=66 -> NULL, the 3-of-4
+  weekly case went prior=225 -> NULL. No change to current output.
 - **Migrations 0019–0020 applied** (2026-07-27, via Supabase MCP).
   0019 rejects window totals containing an interior hole (a skipped bucket
   or partial upsert would otherwise publish as a complete window); 0020
