@@ -141,6 +141,15 @@ export default async function Home() {
     .slice(0, 2);
   const recentProducts = recentSets.flatMap((s) => s.products);
 
+  // RecentlyReleased is a client component, so whatever we hand it is
+  // serialised into the RSC payload. It only reads its own products' metrics,
+  // so send just those rather than the whole catalogue's.
+  const recentVolumeMetrics = Object.fromEntries(
+    recentProducts
+      .filter((p) => volumeMetrics[p.id])
+      .map((p) => [p.id, volumeMetrics[p.id]])
+  );
+
   // Quick Stats
   const oneMonthReturns = products
     .map((p) => p.returns?.["1M"])
@@ -267,7 +276,7 @@ export default async function Home() {
           <RecentlyReleased
             initialProducts={recentProducts}
             initialExchangeRate={exchangeRate.rate}
-            initialVolumeMetrics={volumeMetrics}
+            initialVolumeMetrics={recentVolumeMetrics}
           />
         </section>
       )}

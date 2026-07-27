@@ -40,6 +40,13 @@ export const PULSE_SIGNAL_META: Record<PulseSignal, PulseSignalMeta> = {
 const PRICE_THRESHOLD_PCT = 2;
 const VOLUME_THRESHOLD_PCT = 20;
 
+// Date-only strings must be parsed by splitting, never new Date("YYYY-MM-DD"),
+// which is UTC midnight and shifts a day in negative-offset timezones.
+function parseLocalDateKey(dateKey: string): Date {
+  const [year, month, day] = dateKey.split("-").map(Number);
+  return new Date(year, month - 1, day);
+}
+
 function toLocalDateKey(d: Date): string {
   const yyyy = d.getFullYear();
   const mm = String(d.getMonth() + 1).padStart(2, "0");
@@ -102,10 +109,12 @@ const PRIOR_WINDOW_MIN_DAY_COVERAGE = 28;
  *
  * Returns null — meaning "unknown", not "zero" — when the daily data does not
  * actually cover the window:
- *   (a) no day row falls inside the window, or
+ *   (a) no day row with a real quantity falls inside the window, or
  *   (b) the newest day bucket anywhere in the array is more than
  *       DAILY_DATA_STALENESS_TOLERANCE_DAYS older than the window end, so the
- *       window is only partially collected.
+ *       window is only partially collected, or
+ *   (c) there is a hole inside the collected span (a skipped bucket or a
+ *       partial upsert), which would otherwise pass as a complete window.
  * A product younger than the window still reports its lifetime total: there is
  * deliberately no "window start must be covered" condition.
  */
@@ -132,20 +141,26 @@ export function getUnitsSoldWindow(
   const endKey = toLocalDateKey(endDate);
 
   let total = 0;
-  let rowsInWindow = 0;
   let newestDayKey: string | null = null;
+  // Only buckets carrying an actual quantity count as collected. A NULL
+  // quantity is what parse_daily_sales_buckets writes for a malformed or
+  // negative value from TCGPlayer, i.e. "unknown" — treating it as 0 would
+  // understate the window while making it look fully covered. Mirrors SQL
+  // SUM(), which skips NULLs.
+  const coveredDays = new Set<string>();
   for (const row of dayRows) {
     if (newestDayKey === null || row.bucket_date > newestDayKey) {
       newestDayKey = row.bucket_date;
     }
+    if (row.quantity_sold === null) continue;
     if (row.bucket_date >= startKey && row.bucket_date <= endKey) {
-      total += row.quantity_sold ?? 0;
-      rowsInWindow += 1;
+      total += row.quantity_sold;
+      coveredDays.add(row.bucket_date);
     }
   }
 
-  // (a) nothing collected inside the window at all.
-  if (rowsInWindow === 0) return null;
+  // (a) nothing usable collected inside the window at all.
+  if (coveredDays.size === 0) return null;
 
   // (b) daily collection stopped before the window ended.
   const freshestAllowedKey = toLocalDateKey(
@@ -156,6 +171,20 @@ export function getUnitsSoldWindow(
     )
   );
   if (newestDayKey === null || newestDayKey < freshestAllowedKey) return null;
+
+  // (c) a hole inside the collected span — a skipped API bucket or a partial
+  // upsert would otherwise pass as a complete window and understate it. The
+  // span is measured between the window's own first and last collected day,
+  // not across the whole window, so a product younger than the window still
+  // reports its lifetime total (there is deliberately no start-coverage rule).
+  const keys = [...coveredDays].sort();
+  const spanDays =
+    Math.round(
+      (parseLocalDateKey(keys[keys.length - 1]).getTime() -
+        parseLocalDateKey(keys[0]).getTime()) /
+        86_400_000
+    ) + 1;
+  if (coveredDays.size !== spanDays) return null;
 
   return total;
 }
