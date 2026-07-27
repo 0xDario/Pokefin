@@ -335,10 +335,10 @@ class TestFetchListingsSnapshot:
         assert snapshot is not None
         assert snapshot["active_listings"] == 48
 
-    def test_filtered_zero_uses_unfiltered_when_catalogue_contradicts_it(self):
-        """If the catalogue says our language HAS live listings but the scoped
-        request returned none, the filter is at fault — use the unfiltered
-        snapshot rather than reporting a false sell-out."""
+    def test_filtered_zero_uses_unfiltered_when_it_is_single_language(self):
+        """If the catalogue says our language HAS live listings and it is the
+        ONLY language present, the unfiltered snapshot is the scoped snapshot
+        — the filter was at fault, so use it whole."""
         from main import fetch_listings_snapshot
 
         session = MagicMock()
@@ -358,6 +358,38 @@ class TestFetchListingsSnapshot:
         assert "language" not in session.post.call_args_list[1].kwargs["json"]["filters"]["term"]
         assert snapshot["active_listings"] == 48
         assert snapshot["total_quantity_available"] == 48
+        assert "_languages_present" not in snapshot
+
+    def test_mixed_languages_records_scoped_count_without_mixed_depth(self):
+        """With other languages in the unfiltered result, the quantity
+        histogram and cheapest price span every market and cannot be
+        attributed. Take the exact scoped listing count from the aggregation
+        and leave depth and price unknown rather than reporting another
+        language's inventory."""
+        from main import fetch_listings_snapshot
+
+        session = MagicMock()
+        session.post.side_effect = [
+            _make_response(200, self._listings_payload(
+                total_results=0, quantity_agg=[], listings=[])),
+            _make_response(200, self._listings_payload(
+                total_results=60,
+                quantity_agg=[{"value": 1, "count": 60.0}],
+                listings=[{"price": 5.0, "shippingPrice": 0.0, "quantity": 1.0}],
+                language_agg=[
+                    {"value": "English", "count": 12.0},
+                    {"value": "Japanese", "count": 48.0},
+                ],
+            )),
+        ]
+
+        snapshot = fetch_listings_snapshot(session, "12345", preferred_language="English")
+
+        assert session.post.call_count == 2
+        # The 12 English listings, not the 60 across both markets.
+        assert snapshot["active_listings"] == 12
+        assert snapshot["total_quantity_available"] is None
+        assert snapshot["lowest_listing_price"] is None
         assert "_languages_present" not in snapshot
 
     def test_language_scoped_sellout_is_preserved(self):
