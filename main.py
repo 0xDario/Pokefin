@@ -144,16 +144,22 @@ def build_thumbnail(image_bytes: bytes):
         return None
 
 
-def upload_thumbnail(product_id, image_bytes: bytes) -> bool:
+def upload_thumbnail(product_id, image_bytes: bytes = None, thumb_bytes: bytes = None) -> bool:
     """Generate and upload a product's thumbnail. Never raises.
+
+    Pass thumb_bytes when the caller has already built the derivative — the
+    WebP encode uses method=6, which is deliberately slow, so re-encoding it
+    here would double the CPU cost of a full-catalogue backfill. Otherwise
+    pass image_bytes and the derivative is built here.
 
     Returns True when a thumbnail was stored. The frontend falls back to the
     full-size image whenever the thumbnail is missing, so a failure here
     degrades bandwidth, never correctness.
     """
-    thumb = build_thumbnail(image_bytes)
+    thumb = thumb_bytes if thumb_bytes is not None else build_thumbnail(image_bytes)
     if not thumb:
         return False
+    source_size = len(image_bytes) if image_bytes is not None else len(thumb)
     try:
         supabase.storage.from_("product-images").upload(
             thumbnail_object_path(product_id),
@@ -166,7 +172,7 @@ def upload_thumbnail(product_id, image_bytes: bytes) -> bool:
         )
         logger.debug(
             f"Uploaded thumbnail for product {product_id} "
-            f"({len(image_bytes)} -> {len(thumb)} bytes)"
+            f"({source_size} -> {len(thumb)} bytes)"
         )
         return True
     except Exception as e:
