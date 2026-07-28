@@ -260,7 +260,8 @@ class TestFetchLatestMarketDataFromApi:
 class TestFetchListingsSnapshot:
     """Tests for fetch_listings_snapshot function"""
 
-    def _listings_payload(self, total_results=48, quantity_agg=None, listings=None):
+    def _listings_payload(self, total_results=48, quantity_agg=None, listings=None,
+                          language_agg=None):
         top = {
             "totalResults": total_results,
             "results": listings if listings is not None else [
@@ -270,6 +271,8 @@ class TestFetchListingsSnapshot:
         }
         if quantity_agg is not None:
             top["aggregations"]["quantity"] = quantity_agg
+        if language_agg is not None:
+            top["aggregations"]["language"] = language_agg
         return {"results": [top]}
 
     def test_parses_snapshot_with_quantity_aggregation(self):
@@ -313,6 +316,155 @@ class TestFetchListingsSnapshot:
         fetch_listings_snapshot(session, "12345")
         payload = session.post.call_args.kwargs["json"]
         assert "language" not in payload["filters"]["term"]
+
+    @pytest.mark.parametrize("language", ["all", "All", "ALL", "", "   "])
+    def test_non_language_values_are_not_forwarded_as_filters(self, language):
+        """'?Language=all' means "don't scope", not a language the API knows.
+        Forwarding it matches zero listings and persists a bogus
+        active_listings=0, so it (and blank values) must be skipped."""
+        from main import fetch_listings_snapshot
+
+        session = MagicMock()
+        session.post.return_value = _make_response(200, self._listings_payload())
+
+        snapshot = fetch_listings_snapshot(session, "12345", preferred_language=language)
+
+        payload = session.post.call_args.kwargs["json"]
+        assert "language" not in payload["filters"]["term"]
+        # The unfiltered request still produces a usable snapshot.
+        assert snapshot is not None
+        assert snapshot["active_listings"] == 48
+
+    def test_filtered_zero_uses_unfiltered_when_it_is_single_language(self):
+        """If the catalogue says our language HAS live listings and it is the
+        ONLY language present, the unfiltered snapshot is the scoped snapshot
+        — the filter was at fault, so use it whole."""
+        from main import fetch_listings_snapshot
+
+        session = MagicMock()
+        session.post.side_effect = [
+            _make_response(200, self._listings_payload(
+                total_results=0, quantity_agg=[], listings=[])),
+            _make_response(200, self._listings_payload(
+                total_results=48,
+                quantity_agg=[{"value": 1, "count": 30.0}, {"value": 2, "count": 9.0}],
+                language_agg=[{"value": "English", "count": 48.0}],
+            )),
+        ]
+
+        snapshot = fetch_listings_snapshot(session, "12345", preferred_language="English")
+
+        assert session.post.call_count == 2
+        assert "language" not in session.post.call_args_list[1].kwargs["json"]["filters"]["term"]
+        assert snapshot["active_listings"] == 48
+        assert snapshot["total_quantity_available"] == 48
+        assert "_languages_present" not in snapshot
+
+    def test_mixed_languages_records_scoped_count_without_mixed_depth(self):
+        """With other languages in the unfiltered result, the quantity
+        histogram and cheapest price span every market and cannot be
+        attributed. Take the exact scoped listing count from the aggregation
+        and leave depth and price unknown rather than reporting another
+        language's inventory."""
+        from main import fetch_listings_snapshot
+
+        session = MagicMock()
+        session.post.side_effect = [
+            _make_response(200, self._listings_payload(
+                total_results=0, quantity_agg=[], listings=[])),
+            _make_response(200, self._listings_payload(
+                total_results=60,
+                quantity_agg=[{"value": 1, "count": 60.0}],
+                listings=[{"price": 5.0, "shippingPrice": 0.0, "quantity": 1.0}],
+                language_agg=[
+                    {"value": "English", "count": 12.0},
+                    {"value": "Japanese", "count": 48.0},
+                ],
+            )),
+        ]
+
+        snapshot = fetch_listings_snapshot(session, "12345", preferred_language="English")
+
+        assert session.post.call_count == 2
+        # The 12 English listings, not the 60 across both markets.
+        assert snapshot["active_listings"] == 12
+        assert snapshot["total_quantity_available"] is None
+        assert snapshot["lowest_listing_price"] is None
+        assert "_languages_present" not in snapshot
+
+    def test_language_scoped_sellout_is_preserved(self):
+        """A product whose pinned language genuinely has no listings must keep
+        its scoped zero — falling back to the unfiltered counts would report a
+        DIFFERENT language market's inventory as if it were this one."""
+        from main import fetch_listings_snapshot
+
+        session = MagicMock()
+        session.post.side_effect = [
+            # Scoped to Japanese: nothing live.
+            _make_response(200, self._listings_payload(
+                total_results=0, quantity_agg=[], listings=[])),
+            # Unfiltered: plenty of stock, but all of it English.
+            _make_response(200, self._listings_payload(
+                total_results=52,
+                quantity_agg=[{"value": 4, "count": 13.0}],
+                language_agg=[{"value": "English", "count": 52.0}],
+            )),
+        ]
+
+        snapshot = fetch_listings_snapshot(session, "12345", preferred_language="Japanese")
+
+        assert session.post.call_count == 2
+        assert snapshot["active_listings"] == 0
+        assert snapshot["total_quantity_available"] is None
+        assert snapshot["lowest_listing_price"] is None
+
+    def test_genuinely_sold_out_records_zero(self):
+        """When nothing is live in any language, 0 is the honest value."""
+        from main import fetch_listings_snapshot
+
+        session = MagicMock()
+        session.post.side_effect = [
+            _make_response(200, self._listings_payload(
+                total_results=0, quantity_agg=[], listings=[])),
+            _make_response(200, self._listings_payload(
+                total_results=0, quantity_agg=[], listings=[], language_agg=[])),
+        ]
+
+        snapshot = fetch_listings_snapshot(session, "12345", preferred_language="English")
+
+        assert session.post.call_count == 2
+        assert snapshot is not None
+        assert snapshot["active_listings"] == 0
+
+    def test_unfiltered_zero_does_not_retry(self):
+        """With no language filter applied there is nothing to retry without."""
+        from main import fetch_listings_snapshot
+
+        session = MagicMock()
+        session.post.return_value = _make_response(200, self._listings_payload(
+            total_results=0, quantity_agg=[], listings=[]))
+
+        snapshot = fetch_listings_snapshot(session, "12345")
+
+        assert session.post.call_count == 1
+        assert snapshot["active_listings"] == 0
+
+    def test_zero_results_with_quantity_aggregation_is_a_real_sellout(self):
+        """A genuinely sold-out product returns totalResults 0 WITH the
+        quantity aggregation key present, so the snapshot is still recorded."""
+        from main import fetch_listings_snapshot
+
+        session = MagicMock()
+        session.post.return_value = _make_response(200, self._listings_payload(
+            total_results=0,
+            quantity_agg=[],  # key present, just empty
+            listings=[],
+        ))
+
+        snapshot = fetch_listings_snapshot(session, "12345")
+
+        assert snapshot is not None
+        assert snapshot["active_listings"] == 0
 
     def test_missing_quantity_aggregation_gives_none(self):
         """Missing quantity aggregation should give total_quantity_available=None"""

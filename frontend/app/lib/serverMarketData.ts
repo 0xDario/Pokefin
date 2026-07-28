@@ -5,6 +5,7 @@ import { createClient } from "@supabase/supabase-js";
 import {
   PriceHistoryEntry,
   Product,
+  ProductVolumeMetrics,
   SalesHistoryEntry,
 } from "../components/ProductPrices/types";
 import {
@@ -469,12 +470,43 @@ async function fetchProductDetail(
   startDate.setDate(startDate.getDate() - 367);
   const startDateStr = startDate.toISOString().split("T")[0];
 
-  const { data: historyRows, error } = await supabase
-    .from("product_price_history")
-    .select("product_id, usd_price, recorded_at")
-    .eq("product_id", productId)
-    .gte("recorded_at", startDateStr)
-    .order("recorded_at", { ascending: true });
+  // Sales-volume history (both 'day' and 'week' granularities). The tables
+  // may not exist yet pre-migration; errors degrade to an empty array.
+  const salesStartDate = new Date();
+  salesStartDate.setDate(salesStartDate.getDate() - 400);
+  const salesStartDateStr = salesStartDate.toISOString().split("T")[0];
+
+  // The three queries have no data dependency on each other, so they run
+  // concurrently: a cold product page otherwise pays three serial round trips
+  // before any HTML is emitted.
+  const [
+    { data: historyRows, error },
+    { data: salesRows, error: salesError },
+    { data: listingsRows, error: listingsError },
+  ] = await Promise.all([
+    supabase
+      .from("product_price_history")
+      .select("product_id, usd_price, recorded_at")
+      .eq("product_id", productId)
+      .gte("recorded_at", startDateStr)
+      .order("recorded_at", { ascending: true }),
+    supabase
+      .from("product_sales_history")
+      .select(
+        "bucket_date, granularity, quantity_sold, transaction_count, low_sale_price, high_sale_price, market_price"
+      )
+      .eq("product_id", productId)
+      .gte("bucket_date", salesStartDateStr)
+      .order("bucket_date", { ascending: true }),
+    supabase
+      .from("product_listings_history")
+      .select(
+        "active_listings, total_quantity_available, lowest_listing_price, snapshot_date"
+      )
+      .eq("product_id", productId)
+      .order("snapshot_date", { ascending: false })
+      .limit(1),
+  ]);
 
   if (error) {
     logSupabaseError("server_product_history_failed", error);
@@ -482,22 +514,7 @@ async function fetchProductDetail(
 
   const history = groupHistoryRowsByProduct(historyRows || [])[productId] || [];
 
-  // Sales-volume history (both 'day' and 'week' granularities). The tables
-  // may not exist yet pre-migration; errors degrade to an empty array.
-  const salesStartDate = new Date();
-  salesStartDate.setDate(salesStartDate.getDate() - 400);
-  const salesStartDateStr = salesStartDate.toISOString().split("T")[0];
-
   let salesHistory: SalesHistoryEntry[] = [];
-  const { data: salesRows, error: salesError } = await supabase
-    .from("product_sales_history")
-    .select(
-      "bucket_date, granularity, quantity_sold, transaction_count, low_sale_price, high_sale_price, market_price"
-    )
-    .eq("product_id", productId)
-    .gte("bucket_date", salesStartDateStr)
-    .order("bucket_date", { ascending: true });
-
   if (salesError) {
     logSupabaseError("server_product_sales_history_failed", salesError);
   } else {
@@ -506,15 +523,6 @@ async function fetchProductDetail(
 
   // Latest marketplace listings snapshot; null when missing.
   let listings: ProductListingsSnapshot | null = null;
-  const { data: listingsRows, error: listingsError } = await supabase
-    .from("product_listings_history")
-    .select(
-      "active_listings, total_quantity_available, lowest_listing_price, snapshot_date"
-    )
-    .eq("product_id", productId)
-    .order("snapshot_date", { ascending: false })
-    .limit(1);
-
   if (listingsError) {
     logSupabaseError("server_product_listings_failed", listingsError);
   } else {
@@ -652,6 +660,32 @@ async function fetchMarketProductSummaries(): Promise<Product[]> {
   return fetchProductsWithFallbackReturns();
 }
 
+/**
+ * Per-product sales-volume metrics keyed by product_id — the server-side twin
+ * of fetchVolumeMetrics in clientMarketData. Shipping this in the rendered HTML
+ * means market/catalog pages never have to round-trip for it after hydration.
+ * Errors — including the RPC not existing yet — degrade to an empty record.
+ */
+async function fetchVolumeMetrics(): Promise<
+  Record<number, ProductVolumeMetrics>
+> {
+  const supabase = createMarketDataSupabaseClient();
+  const { data, error } = await supabase.rpc(
+    "get_market_product_volume_metrics"
+  );
+
+  if (error) {
+    logSupabaseError("server_volume_metrics_failed", error);
+    return {};
+  }
+
+  const byProduct: Record<number, ProductVolumeMetrics> = {};
+  for (const row of (data || []) as ProductVolumeMetrics[]) {
+    byProduct[row.product_id] = row;
+  }
+  return byProduct;
+}
+
 async function fetchSetAnalytics(): Promise<SetAnalyticsRow[]> {
   const supabase = createMarketDataSupabaseClient();
   const { data, error } = await supabase.rpc("get_set_analytics");
@@ -696,6 +730,15 @@ export const getCachedExchangeRate = unstable_cache(fetchLatestExchangeRate, ["e
 export const getCachedMarketProductSummaries = unstable_cache(
   fetchMarketProductSummaries,
   ["market-product-summaries"],
+  {
+    revalidate: 3600,
+    tags: ["market-products"],
+  }
+);
+
+export const getCachedVolumeMetrics = unstable_cache(
+  fetchVolumeMetrics,
+  ["market-volume-metrics"],
   {
     revalidate: 3600,
     tags: ["market-products"],

@@ -142,6 +142,26 @@ All probes should return the expected 401/403/429/redirect results.
   Advisor re-run confirms all critical issues resolved; remaining
   warnings are intentional (reference-table anon SELECT, definer
   functions with internal scoping, Pro+ leaked-password toggle).
+- **Migration 0021 applied** (2026-07-27, via Supabase MCP). Measures
+  daily freshness from buckets that carry a real quantity (a run of
+  NULL-quantity rows was faking freshness and publishing stale partial
+  sums), and requires all four weekly buckets before scaling the
+  prior-window fallback by 30/28. A/B'd on scratch Postgres against the
+  previous function: the stale case went 30d=66 -> NULL, the 3-of-4
+  weekly case went prior=225 -> NULL. No change to current output.
+- **Migrations 0019–0020 applied** (2026-07-27, via Supabase MCP).
+  0019 rejects window totals containing an interior hole (a skipped bucket
+  or partial upsert would otherwise publish as a complete window); 0020
+  extends the same count-versus-span rule to the prior-30d window, which
+  is the volume-trend denominator. Both validated on a scratch Postgres 17
+  (healthy / gapped / young / NULL-quantity products) before application;
+  neither changed current output.
+- **Migrations 0017–0018 applied** (2026-07-24, via Supabase MCP).
+  0017 replaces the prior-30d `GREATEST(day, week)` with a coverage test;
+  0018 adds the staleness guard so the volume RPC and the frontend agree
+  about what "no data" means. Both are `CREATE OR REPLACE` of
+  `get_market_product_volume_metrics()` with an unchanged RETURNS TABLE
+  shape, validated on a scratch Postgres 17 before application.
 - **Migrations 0015–0016 applied** (2026-07-06, via Supabase MCP).
   Adds `product_sales_history` / `product_listings_history` (public
   read-only history tables, scraper-written) and the

@@ -81,6 +81,105 @@ def _ip_is_safe(host: str) -> bool:
     return True
 
 
+# Product images are content-stable per product id and the scraper only
+# rewrites one when the artwork actually changes, so they can be cached hard.
+# NOTE: storage3 does send this as `max-age=<n>`, but Supabase Storage on the
+# free plan overrides it and serves every object as `cache-control: no-cache`
+# (verified by uploading a fresh object with this value and reading the
+# response headers back). Objects do carry ETags, so repeat views still cost
+# only a 304 rather than a re-download. This value is correct and will take
+# effect if the project moves to a plan with CDN caching; until then the real
+# saving comes from the thumbnail derivatives below.
+IMAGE_CACHE_CONTROL_SECONDS = "604800"  # 7 days
+
+# List views paint these into 24-56px boxes, so a 256px longest side is ample
+# and lands around 8x smaller than the 743x1000 originals.
+THUMBNAIL_MAX_EDGE = 256
+THUMBNAIL_QUALITY = 78
+
+
+def thumbnail_object_path(product_id) -> str:
+    """Storage path of a product's thumbnail derivative.
+
+    Mirrored in frontend/app/components/ProductPrices/shared/ProductImage.tsx,
+    which derives this path from the full image URL. Keep both in sync.
+    """
+    return f"products/{product_id}_thumb.webp"
+
+
+def build_thumbnail(image_bytes: bytes):
+    """Resize image bytes into a small WebP thumbnail.
+
+    Returns WebP bytes, or None if Pillow is unavailable or the image cannot
+    be decoded — callers must treat the thumbnail as strictly optional.
+    """
+    try:
+        import io
+
+        from PIL import Image as PILImage
+    except ImportError:
+        logger.debug("Pillow not installed; skipping thumbnail generation")
+        return None
+
+    try:
+        with PILImage.open(io.BytesIO(image_bytes)) as img:
+            # PNG and WebP are accepted sources and may carry alpha. Going
+            # straight to RGB drops the alpha channel and leaves fully
+            # transparent pixels black, which would paint black boxes and
+            # halos onto the white product cards. Composite onto white first
+            # so transparency blends into the card background instead.
+            if img.mode in ("RGBA", "LA", "PA") or "transparency" in img.info:
+                rgba = img.convert("RGBA")
+                canvas = PILImage.new("RGB", rgba.size, (255, 255, 255))
+                canvas.paste(rgba, mask=rgba.split()[-1])
+                img = canvas
+            else:
+                img = img.convert("RGB")
+            img.thumbnail((THUMBNAIL_MAX_EDGE, THUMBNAIL_MAX_EDGE))
+            out = io.BytesIO()
+            img.save(out, format="WEBP", quality=THUMBNAIL_QUALITY, method=6)
+            return out.getvalue()
+    except Exception as e:
+        logger.debug(f"Thumbnail generation failed: {e}")
+        return None
+
+
+def upload_thumbnail(product_id, image_bytes: bytes = None, thumb_bytes: bytes = None) -> bool:
+    """Generate and upload a product's thumbnail. Never raises.
+
+    Pass thumb_bytes when the caller has already built the derivative — the
+    WebP encode uses method=6, which is deliberately slow, so re-encoding it
+    here would double the CPU cost of a full-catalogue backfill. Otherwise
+    pass image_bytes and the derivative is built here.
+
+    Returns True when a thumbnail was stored. The frontend falls back to the
+    full-size image whenever the thumbnail is missing, so a failure here
+    degrades bandwidth, never correctness.
+    """
+    thumb = thumb_bytes if thumb_bytes is not None else build_thumbnail(image_bytes)
+    if not thumb:
+        return False
+    source_size = len(image_bytes) if image_bytes is not None else len(thumb)
+    try:
+        supabase.storage.from_("product-images").upload(
+            thumbnail_object_path(product_id),
+            thumb,
+            {
+                "content-type": "image/webp",
+                "cache-control": IMAGE_CACHE_CONTROL_SECONDS,
+                "upsert": "true",
+            },
+        )
+        logger.debug(
+            f"Uploaded thumbnail for product {product_id} "
+            f"({source_size} -> {len(thumb)} bytes)"
+        )
+        return True
+    except Exception as e:
+        logger.debug(f"Thumbnail upload failed for product {product_id}: {e}")
+        return False
+
+
 def _detect_image_format(buf: bytes) -> str | None:
     if len(buf) < 12:
         return None
@@ -295,19 +394,14 @@ def parse_daily_sales_buckets(buckets, product_id):
     return rows
 
 
-def fetch_listings_snapshot(session, tcgplayer_product_id, referer=None,
-                            preferred_language=None):
+def _fetch_listings_snapshot_once(session, tcgplayer_product_id, referer=None,
+                                  language_filter=None):
     """
-    Fetch a snapshot of live listings depth from TCGPlayer's mp-search-api.
-    Returns dict with keys active_listings (int|None),
-    total_quantity_available (int|None), lowest_listing_price (float|None),
-    or None on any failure (non-200, parse error, ...).
-
-    preferred_language scopes the snapshot to one language when the product
-    URL pins one (?Language=...), so multi-language product ids don't mix
-    markets. Listings carry no variant dimension for sealed product (the
-    'printing' term uses Normal/Holofoil, not our display variants), so no
-    variant filter is applied.
+    Issue one mp-search-api listings request. Returns a dict with
+    active_listings (int|None), total_quantity_available (int|None) and
+    lowest_listing_price (float|None), or None on any failure (non-200,
+    parse error, ...). language_filter, when given, is applied verbatim as
+    the API's `language` term. Callers should use fetch_listings_snapshot.
     """
     if not tcgplayer_product_id:
         return None
@@ -323,8 +417,8 @@ def fetch_listings_snapshot(session, tcgplayer_product_id, referer=None,
         headers["Referer"] = referer
 
     term_filters = {"sellerStatus": "Live", "channelId": 0, "listingType": "standard"}
-    if preferred_language:
-        term_filters["language"] = [preferred_language]
+    if language_filter:
+        term_filters["language"] = [language_filter]
 
     payload = {
         "filters": {
@@ -337,8 +431,10 @@ def fetch_listings_snapshot(session, tcgplayer_product_id, referer=None,
         "sort": {"field": "price+shipping", "order": "asc"},
         "context": {"shippingCountry": "US"},
         # quantity must be requested explicitly — total_quantity_available
-        # is derived from its histogram below.
-        "aggregations": ["listingType", "quantity"],
+        # is derived from its histogram below. language lets the caller tell a
+        # genuine language-scoped sell-out apart from a filter the API did not
+        # honour (see fetch_listings_snapshot).
+        "aggregations": ["listingType", "quantity", "language"],
     }
 
     try:
@@ -393,14 +489,123 @@ def fetch_listings_snapshot(session, tcgplayer_product_id, referer=None,
             except (TypeError, ValueError):
                 lowest_listing_price = None
 
+        # Which languages actually have live listings, e.g. {"English": 59}.
+        # Internal only — fetch_listings_snapshot strips this before returning.
+        languages_present = {}
+        language_agg = aggregations.get("language")
+        if isinstance(language_agg, list):
+            for entry in language_agg:
+                if not isinstance(entry, dict):
+                    continue
+                name = entry.get("value")
+                try:
+                    count = int(round(float(entry.get("count"))))
+                except (TypeError, ValueError):
+                    continue
+                if isinstance(name, str) and count > 0:
+                    languages_present[name.strip().lower()] = count
+
         return {
             "active_listings": active_listings,
             "total_quantity_available": total_quantity_available,
             "lowest_listing_price": lowest_listing_price,
+            "_languages_present": languages_present,
         }
     except Exception as e:
         logger.debug(f"Listings snapshot fetch failed for TCGPlayer product {tcgplayer_product_id}: {e}")
         return None
+
+
+def fetch_listings_snapshot(session, tcgplayer_product_id, referer=None,
+                            preferred_language=None):
+    """
+    Snapshot live listings depth for a product.
+
+    preferred_language scopes the snapshot to one language when the product URL
+    pins one (?Language=...), so multi-language product ids don't mix markets.
+    "all" is a TCGPlayer URL convention meaning "don't scope", not a language
+    the API accepts — forwarding it matches zero listings, so it and any blank
+    value are dropped before the request.
+
+    A scoped request that matches nothing is ambiguous by response shape alone:
+    a genuine sell-out in that language and a filter the API did not honour
+    BOTH return totalResults 0 with an empty quantity aggregation (verified
+    live against product 630689 with language=all vs language=Japanese). The
+    unfiltered `language` aggregation resolves it, because it names every
+    language that has live listings and how many:
+
+      - our language is absent -> that language really is sold out, so the
+        scoped zero is the honest answer and is kept. Falling back to the
+        unfiltered counts here would report another language's inventory.
+      - our language is the ONLY one present -> every live listing is already
+        in it, so the unfiltered snapshot IS the scoped snapshot; use it whole.
+      - our language is present alongside others -> the aggregation gives an
+        exact scoped listing COUNT, but the quantity histogram and the cheapest
+        price are computed across every language and cannot be attributed to
+        one. Record the count and leave depth and price unknown rather than
+        mixing markets.
+    """
+    if not tcgplayer_product_id:
+        return None
+
+    language_filter = (preferred_language or "").strip()
+    if language_filter.lower() == "all":
+        language_filter = ""
+
+    snapshot = _fetch_listings_snapshot_once(
+        session, tcgplayer_product_id, referer=referer,
+        language_filter=language_filter or None,
+    )
+
+    if language_filter and snapshot is not None and snapshot.get("active_listings") == 0:
+        unfiltered = _fetch_listings_snapshot_once(
+            session, tcgplayer_product_id, referer=referer, language_filter=None,
+        )
+        if unfiltered is not None:
+            present = unfiltered.get("_languages_present") or {}
+            key = language_filter.lower()
+            scoped_listings = present.get(key, 0)
+
+            if scoped_listings <= 0:
+                # Our language simply has no live listings. The scoped zero is
+                # the honest answer; the unfiltered counts describe a market
+                # this listing's buyer cannot purchase from.
+                logger.debug(
+                    f"TCGPlayer product {tcgplayer_product_id} has no live "
+                    f"{language_filter!r} listings (available: "
+                    f"{sorted(present) or 'none'}); recording a scoped zero"
+                )
+            elif set(present) == {key}:
+                # Every live listing is already in our language, so the
+                # unfiltered snapshot IS the scoped snapshot.
+                logger.debug(
+                    f"Listings filter language={language_filter!r} returned 0 for "
+                    f"TCGPlayer product {tcgplayer_product_id} but it is the only "
+                    f"language present ({scoped_listings} listings); using the "
+                    f"unfiltered snapshot"
+                )
+                snapshot = unfiltered
+            else:
+                # Mixed languages. The aggregation gives an exact scoped listing
+                # COUNT, but quantity depth and the cheapest price are computed
+                # across every language and cannot be attributed — reporting them
+                # would mix markets. Take the count, leave the rest unknown.
+                logger.debug(
+                    f"Listings filter language={language_filter!r} returned 0 for "
+                    f"TCGPlayer product {tcgplayer_product_id}, but the catalogue "
+                    f"reports {scoped_listings} in it alongside "
+                    f"{sorted(set(present) - {key})}; recording the scoped count "
+                    f"only, with depth and price unknown"
+                )
+                snapshot = {
+                    "active_listings": scoped_listings,
+                    "total_quantity_available": None,
+                    "lowest_listing_price": None,
+                }
+
+    if snapshot is not None:
+        snapshot.pop("_languages_present", None)
+    return snapshot
 
 
 # === Logging Setup ===
@@ -574,10 +779,13 @@ def download_and_upload_image(image_url, product_id):
                 bytes(buf),
                 {
                     "content-type": content_type,
-                    "cache-control": "3600",
+                    "cache-control": IMAGE_CACHE_CONTROL_SECONDS,
                     "upsert": "true",
                 },
             )
+
+            # Best-effort thumbnail; never let it fail the real upload.
+            upload_thumbnail(product_id, bytes(buf))
 
             upload_success = False
             if hasattr(upload_response, 'data') and upload_response.data:

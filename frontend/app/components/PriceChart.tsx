@@ -197,12 +197,19 @@ const PriceChart = memo(function PriceChart({
     return buildVolumeSeries(salesHistory, range);
   }, [salesHistory, range]);
 
-  const hasVolume = volumeSeries !== null;
+  // buildVolumeSeries trims to the last covered bucket and returns an empty
+  // array when nothing in the window has data, so an empty series must render
+  // exactly like the no-volume path rather than as a row of zero bars.
+  const hasVolume = volumeSeries !== null && volumeSeries.length > 0;
 
-  // Merge volume into the same local-date calendar the chart iterates:
-  // days without a volume point get 0 (volume is never forward-filled).
+  // Merge volume into the same local-date calendar the chart iterates.
+  // Volume is never forward-filled. Dates the series doesn't cover (it is
+  // trimmed at the last collected bucket) get `undefined`, not 0, so no bar is
+  // drawn there — a 0 bar would claim "nothing sold" where we simply have no
+  // data. Genuine no-sales days inside the collected range are already 0 in
+  // the series itself.
   const slicedDataWithVolume = useMemo<ChartPoint[]>(() => {
-    if (!volumeSeries) {
+    if (!volumeSeries || volumeSeries.length === 0) {
       return slicedData.map((point) => ({ ...point, trend: null }));
     }
 
@@ -214,7 +221,7 @@ const PriceChart = memo(function PriceChart({
       return {
         ...point,
         trend: null,
-        volume: volumePoint ? volumePoint.volume : 0,
+        volume: volumePoint ? volumePoint.volume : undefined,
         volumeIsWeekly: volumePoint ? volumePoint.isWeekly : isWeeklySeries,
       };
     });
@@ -240,23 +247,32 @@ const PriceChart = memo(function PriceChart({
     const result: ChartPoint[] = [];
     let carriedVolume = 0;
     let carriedWeekly = false;
+    // Uncovered dates carry `undefined`, which must stay undefined rather than
+    // collapsing to a 0 bar, so track whether anything real was rolled up.
+    let carriedHasData = false;
 
     for (let index = 0; index < slicedDataWithVolume.length; index += 1) {
       const point = slicedDataWithVolume[index];
       const retained =
         index % step === 0 || index === slicedDataWithVolume.length - 1;
+      const hasOwnVolume = typeof point.volume === "number";
 
       if (retained) {
         result.push({
           ...point,
-          volume: (point.volume ?? 0) + carriedVolume,
+          volume:
+            hasOwnVolume || carriedHasData
+              ? (point.volume ?? 0) + carriedVolume
+              : undefined,
           volumeIsWeekly: Boolean(point.volumeIsWeekly) || carriedWeekly,
         });
         carriedVolume = 0;
         carriedWeekly = false;
+        carriedHasData = false;
       } else {
         carriedVolume += point.volume ?? 0;
         carriedWeekly = carriedWeekly || Boolean(point.volumeIsWeekly);
+        carriedHasData = carriedHasData || hasOwnVolume;
       }
     }
 
