@@ -12,9 +12,15 @@ const geistSans = Geist({
   subsets: ["latin"],
 });
 
+// preload: false - next/font would otherwise emit a high-priority <link
+// rel="preload"> for the mono subset on EVERY route, but only a handful of
+// components (e.g. GroupHeader on / and /prices) render monospace glyphs.
+// The family is still available through --font-geist-mono; the browser fetches
+// it on demand when a rule that uses it actually matches an element.
 const geistMono = Geist_Mono({
   variable: "--font-geist-mono",
   subsets: ["latin"],
+  preload: false,
 });
 
 export const metadata: Metadata = {

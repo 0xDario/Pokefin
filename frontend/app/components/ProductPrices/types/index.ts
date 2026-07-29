@@ -11,6 +11,28 @@ export interface PriceHistoryEntry {
   recorded_at: string;
 }
 
+export interface SalesHistoryEntry {
+  bucket_date: string;
+  granularity: "day" | "week";
+  quantity_sold: number | null;
+  transaction_count: number | null;
+  low_sale_price: number | null;
+  high_sale_price: number | null;
+  market_price: number | null;
+}
+
+export interface ProductVolumeMetrics {
+  product_id: number;
+  units_sold_7d: number | null;
+  units_sold_30d: number | null;
+  units_sold_prior_30d: number | null;
+  transaction_count_30d: number | null;
+  active_listings: number | null;
+  total_quantity_available: number | null;
+  lowest_listing_price: number | null;
+  listings_snapshot_date: string | null;
+}
+
 export interface ProductReturnMetrics {
   "1D": number | null;
   "7D": number | null;
