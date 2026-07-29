@@ -1,8 +1,21 @@
 "use client";
 
+import dynamic from "next/dynamic";
 import { useResponsive } from "../hooks/useResponsive";
-import PriceChart from "../../PriceChart";
 import { PriceHistoryEntry, Currency, ChartTimeframe } from "../types";
+
+// Recharts (~109 KB gzip) is fetched only when a chart actually mounts.
+// The import specifier must match the other chart wrappers so all of them
+// share a single async chunk - see app/components/charts/ChartBundle.tsx.
+const PriceChart = dynamic(
+  () => import("../../charts/ChartBundle").then((m) => m.PriceChart),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="h-[150px] md:h-[200px] w-full animate-pulse rounded-md border border-slate-200 bg-slate-100" />
+    ),
+  }
+);
 
 interface ResponsivePriceChartProps {
   data: PriceHistoryEntry[];

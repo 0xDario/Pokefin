@@ -2,6 +2,7 @@ import ipaddress
 import logging
 import os
 import platform
+import random
 import shutil
 import socket
 import tempfile
@@ -80,6 +81,105 @@ def _ip_is_safe(host: str) -> bool:
     return True
 
 
+# Product images are content-stable per product id and the scraper only
+# rewrites one when the artwork actually changes, so they can be cached hard.
+# NOTE: storage3 does send this as `max-age=<n>`, but Supabase Storage on the
+# free plan overrides it and serves every object as `cache-control: no-cache`
+# (verified by uploading a fresh object with this value and reading the
+# response headers back). Objects do carry ETags, so repeat views still cost
+# only a 304 rather than a re-download. This value is correct and will take
+# effect if the project moves to a plan with CDN caching; until then the real
+# saving comes from the thumbnail derivatives below.
+IMAGE_CACHE_CONTROL_SECONDS = "604800"  # 7 days
+
+# List views paint these into 24-56px boxes, so a 256px longest side is ample
+# and lands around 8x smaller than the 743x1000 originals.
+THUMBNAIL_MAX_EDGE = 256
+THUMBNAIL_QUALITY = 78
+
+
+def thumbnail_object_path(product_id) -> str:
+    """Storage path of a product's thumbnail derivative.
+
+    Mirrored in frontend/app/components/ProductPrices/shared/ProductImage.tsx,
+    which derives this path from the full image URL. Keep both in sync.
+    """
+    return f"products/{product_id}_thumb.webp"
+
+
+def build_thumbnail(image_bytes: bytes):
+    """Resize image bytes into a small WebP thumbnail.
+
+    Returns WebP bytes, or None if Pillow is unavailable or the image cannot
+    be decoded — callers must treat the thumbnail as strictly optional.
+    """
+    try:
+        import io
+
+        from PIL import Image as PILImage
+    except ImportError:
+        logger.debug("Pillow not installed; skipping thumbnail generation")
+        return None
+
+    try:
+        with PILImage.open(io.BytesIO(image_bytes)) as img:
+            # PNG and WebP are accepted sources and may carry alpha. Going
+            # straight to RGB drops the alpha channel and leaves fully
+            # transparent pixels black, which would paint black boxes and
+            # halos onto the white product cards. Composite onto white first
+            # so transparency blends into the card background instead.
+            if img.mode in ("RGBA", "LA", "PA") or "transparency" in img.info:
+                rgba = img.convert("RGBA")
+                canvas = PILImage.new("RGB", rgba.size, (255, 255, 255))
+                canvas.paste(rgba, mask=rgba.split()[-1])
+                img = canvas
+            else:
+                img = img.convert("RGB")
+            img.thumbnail((THUMBNAIL_MAX_EDGE, THUMBNAIL_MAX_EDGE))
+            out = io.BytesIO()
+            img.save(out, format="WEBP", quality=THUMBNAIL_QUALITY, method=6)
+            return out.getvalue()
+    except Exception as e:
+        logger.debug(f"Thumbnail generation failed: {e}")
+        return None
+
+
+def upload_thumbnail(product_id, image_bytes: bytes = None, thumb_bytes: bytes = None) -> bool:
+    """Generate and upload a product's thumbnail. Never raises.
+
+    Pass thumb_bytes when the caller has already built the derivative — the
+    WebP encode uses method=6, which is deliberately slow, so re-encoding it
+    here would double the CPU cost of a full-catalogue backfill. Otherwise
+    pass image_bytes and the derivative is built here.
+
+    Returns True when a thumbnail was stored. The frontend falls back to the
+    full-size image whenever the thumbnail is missing, so a failure here
+    degrades bandwidth, never correctness.
+    """
+    thumb = thumb_bytes if thumb_bytes is not None else build_thumbnail(image_bytes)
+    if not thumb:
+        return False
+    source_size = len(image_bytes) if image_bytes is not None else len(thumb)
+    try:
+        supabase.storage.from_("product-images").upload(
+            thumbnail_object_path(product_id),
+            thumb,
+            {
+                "content-type": "image/webp",
+                "cache-control": IMAGE_CACHE_CONTROL_SECONDS,
+                "upsert": "true",
+            },
+        )
+        logger.debug(
+            f"Uploaded thumbnail for product {product_id} "
+            f"({source_size} -> {len(thumb)} bytes)"
+        )
+        return True
+    except Exception as e:
+        logger.debug(f"Thumbnail upload failed for product {product_id}: {e}")
+        return False
+
+
 def _detect_image_format(buf: bytes) -> str | None:
     if len(buf) < 12:
         return None
@@ -156,14 +256,20 @@ def _select_api_result(data, preferred_variant=None, preferred_language=None):
     return filtered[0] if filtered else None
 
 
-def fetch_latest_market_price_from_api(session, product_id, referer=None,
-                                       preferred_variant=None, preferred_language=None):
+def fetch_latest_market_data_from_api(session, product_id, referer=None,
+                                      preferred_variant=None, preferred_language=None):
     """
-    Fetch latest market price from TCGPlayer's infinite-api endpoint.
-    Returns float price or None.
+    Fetch latest market data from TCGPlayer's infinite-api endpoint.
+    Returns a dict with:
+      - "price": float latest market price, or None if no range yielded one.
+      - "daily_buckets": the raw buckets list ONLY when the range that
+        produced the price was "month" (the only range with daily buckets;
+        quarter is 3-day, semi-annual/annual are weekly and must never be
+        stored as daily), else an empty list.
     """
+    empty = {"price": None, "daily_buckets": []}
     if not product_id:
-        return None
+        return empty
 
     headers = {
         "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -173,7 +279,9 @@ def fetch_latest_market_price_from_api(session, product_id, referer=None,
     if referer:
         headers["Referer"] = referer
 
-    range_keys = ["quarter", "month", "semi-annual", "annual"]
+    # "month" first: it carries the 30 daily buckets we need for sales
+    # volume, and its latest price is identical to the other ranges.
+    range_keys = ["month", "quarter", "semi-annual", "annual"]
 
     for key in range_keys:
         url = f"https://infinite-api.tcgplayer.com/price/history/{product_id}/detailed?range={key}"
@@ -216,9 +324,288 @@ def fetch_latest_market_price_from_api(session, product_id, referer=None,
                 latest_price = price
 
         if latest_price is not None:
-            return latest_price
+            return {
+                "price": latest_price,
+                "daily_buckets": buckets if key == "month" else [],
+            }
 
-    return None
+    return empty
+
+
+def _parse_bucket_count(value):
+    """Parse a count field ('3', '1,234', 3) to a non-negative int or None."""
+    if value is None:
+        return None
+    try:
+        count = int(float(str(value).replace(",", "")))
+    except (TypeError, ValueError):
+        return None
+    if count < 0:
+        return None
+    return count
+
+
+def _parse_bucket_price(value):
+    """Parse a price field ('147.24', '1,499.99') to a positive float or None."""
+    if value is None:
+        return None
+    try:
+        price = float(str(value).replace(",", ""))
+    except (TypeError, ValueError):
+        return None
+    if price <= 0:
+        return None
+    return price
+
+
+def parse_daily_sales_buckets(buckets, product_id):
+    """
+    Convert raw daily buckets from the infinite-api (range=month) into
+    upsert-ready product_sales_history rows (granularity='day').
+
+    Defensive parsing: API numeric values are strings, possibly with
+    commas. Buckets with a missing/invalid bucketStartDate are skipped;
+    negative counts and non-positive prices become None. Today's partial
+    bucket is included on purpose — the daily upsert self-corrects it on
+    later runs.
+    """
+    rows = []
+    for bucket in buckets or []:
+        if not isinstance(bucket, dict):
+            continue
+        date_str = bucket.get("bucketStartDate")
+        if not date_str:
+            continue
+        try:
+            bucket_date = datetime.strptime(str(date_str), "%Y-%m-%d").date()
+        except (TypeError, ValueError):
+            continue
+
+        rows.append({
+            "product_id": product_id,
+            "bucket_date": bucket_date.strftime("%Y-%m-%d"),
+            "granularity": "day",
+            "quantity_sold": _parse_bucket_count(bucket.get("quantitySold")),
+            "transaction_count": _parse_bucket_count(bucket.get("transactionCount")),
+            "low_sale_price": _parse_bucket_price(bucket.get("lowSalePrice")),
+            "high_sale_price": _parse_bucket_price(bucket.get("highSalePrice")),
+            "market_price": _parse_bucket_price(bucket.get("marketPrice")),
+        })
+    return rows
+
+
+def _fetch_listings_snapshot_once(session, tcgplayer_product_id, referer=None,
+                                  language_filter=None):
+    """
+    Issue one mp-search-api listings request. Returns a dict with
+    active_listings (int|None), total_quantity_available (int|None) and
+    lowest_listing_price (float|None), or None on any failure (non-200,
+    parse error, ...). language_filter, when given, is applied verbatim as
+    the API's `language` term. Callers should use fetch_listings_snapshot.
+    """
+    if not tcgplayer_product_id:
+        return None
+
+    url = f"https://mp-search-api.tcgplayer.com/v1/product/{tcgplayer_product_id}/listings"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "application/json, text/plain, */*",
+        "Content-Type": "application/json",
+        "Origin": "https://www.tcgplayer.com",
+    }
+    if referer:
+        headers["Referer"] = referer
+
+    term_filters = {"sellerStatus": "Live", "channelId": 0, "listingType": "standard"}
+    if language_filter:
+        term_filters["language"] = [language_filter]
+
+    payload = {
+        "filters": {
+            "term": term_filters,
+            "range": {"quantity": {"gte": 1}},
+            "exclude": {"channelExclusion": 0},
+        },
+        "from": 0,
+        "size": 1,
+        "sort": {"field": "price+shipping", "order": "asc"},
+        "context": {"shippingCountry": "US"},
+        # quantity must be requested explicitly — total_quantity_available
+        # is derived from its histogram below. language lets the caller tell a
+        # genuine language-scoped sell-out apart from a filter the API did not
+        # honour (see fetch_listings_snapshot).
+        "aggregations": ["listingType", "quantity", "language"],
+    }
+
+    try:
+        response = session.post(url, headers=headers, json=payload, timeout=15)
+        if response.status_code != 200:
+            logger.debug(f"Listings API response {response.status_code} for TCGPlayer product {tcgplayer_product_id}")
+            return None
+        data = response.json()
+
+        results = data.get("results") or []
+        if not results or not isinstance(results[0], dict):
+            logger.debug(f"Listings API returned no results for TCGPlayer product {tcgplayer_product_id}")
+            return None
+        top = results[0]
+
+        active_listings = None
+        try:
+            total_results = top.get("totalResults")
+            if total_results is not None:
+                candidate = int(round(float(total_results)))
+                if candidate >= 0:
+                    active_listings = candidate
+        except (TypeError, ValueError):
+            active_listings = None
+
+        # total available quantity = sum over the quantity aggregation of
+        # round(value) * round(count). Defensive: missing/invalid agg -> None.
+        total_quantity_available = None
+        aggregations = top.get("aggregations") or {}
+        quantity_agg = aggregations.get("quantity")
+        if isinstance(quantity_agg, list) and quantity_agg:
+            total = 0
+            parsed_any = False
+            for entry in quantity_agg:
+                if not isinstance(entry, dict):
+                    continue
+                try:
+                    total += int(round(float(entry.get("value")))) * int(round(float(entry.get("count"))))
+                    parsed_any = True
+                except (TypeError, ValueError):
+                    continue
+            if parsed_any and total >= 0:
+                total_quantity_available = total
+
+        lowest_listing_price = None
+        listings = top.get("results") or []
+        if listings and isinstance(listings[0], dict):
+            try:
+                price = float(listings[0].get("price"))
+                if price > 0:
+                    lowest_listing_price = price
+            except (TypeError, ValueError):
+                lowest_listing_price = None
+
+        # Which languages actually have live listings, e.g. {"English": 59}.
+        # Internal only — fetch_listings_snapshot strips this before returning.
+        languages_present = {}
+        language_agg = aggregations.get("language")
+        if isinstance(language_agg, list):
+            for entry in language_agg:
+                if not isinstance(entry, dict):
+                    continue
+                name = entry.get("value")
+                try:
+                    count = int(round(float(entry.get("count"))))
+                except (TypeError, ValueError):
+                    continue
+                if isinstance(name, str) and count > 0:
+                    languages_present[name.strip().lower()] = count
+
+        return {
+            "active_listings": active_listings,
+            "total_quantity_available": total_quantity_available,
+            "lowest_listing_price": lowest_listing_price,
+            "_languages_present": languages_present,
+        }
+    except Exception as e:
+        logger.debug(f"Listings snapshot fetch failed for TCGPlayer product {tcgplayer_product_id}: {e}")
+        return None
+
+
+def fetch_listings_snapshot(session, tcgplayer_product_id, referer=None,
+                            preferred_language=None):
+    """
+    Snapshot live listings depth for a product.
+
+    preferred_language scopes the snapshot to one language when the product URL
+    pins one (?Language=...), so multi-language product ids don't mix markets.
+    "all" is a TCGPlayer URL convention meaning "don't scope", not a language
+    the API accepts — forwarding it matches zero listings, so it and any blank
+    value are dropped before the request.
+
+    A scoped request that matches nothing is ambiguous by response shape alone:
+    a genuine sell-out in that language and a filter the API did not honour
+    BOTH return totalResults 0 with an empty quantity aggregation (verified
+    live against product 630689 with language=all vs language=Japanese). The
+    unfiltered `language` aggregation resolves it, because it names every
+    language that has live listings and how many:
+
+      - our language is absent -> that language really is sold out, so the
+        scoped zero is the honest answer and is kept. Falling back to the
+        unfiltered counts here would report another language's inventory.
+      - our language is the ONLY one present -> every live listing is already
+        in it, so the unfiltered snapshot IS the scoped snapshot; use it whole.
+      - our language is present alongside others -> the aggregation gives an
+        exact scoped listing COUNT, but the quantity histogram and the cheapest
+        price are computed across every language and cannot be attributed to
+        one. Record the count and leave depth and price unknown rather than
+        mixing markets.
+    """
+    if not tcgplayer_product_id:
+        return None
+
+    language_filter = (preferred_language or "").strip()
+    if language_filter.lower() == "all":
+        language_filter = ""
+
+    snapshot = _fetch_listings_snapshot_once(
+        session, tcgplayer_product_id, referer=referer,
+        language_filter=language_filter or None,
+    )
+
+    if language_filter and snapshot is not None and snapshot.get("active_listings") == 0:
+        unfiltered = _fetch_listings_snapshot_once(
+            session, tcgplayer_product_id, referer=referer, language_filter=None,
+        )
+        if unfiltered is not None:
+            present = unfiltered.get("_languages_present") or {}
+            key = language_filter.lower()
+            scoped_listings = present.get(key, 0)
+
+            if scoped_listings <= 0:
+                # Our language simply has no live listings. The scoped zero is
+                # the honest answer; the unfiltered counts describe a market
+                # this listing's buyer cannot purchase from.
+                logger.debug(
+                    f"TCGPlayer product {tcgplayer_product_id} has no live "
+                    f"{language_filter!r} listings (available: "
+                    f"{sorted(present) or 'none'}); recording a scoped zero"
+                )
+            elif set(present) == {key}:
+                # Every live listing is already in our language, so the
+                # unfiltered snapshot IS the scoped snapshot.
+                logger.debug(
+                    f"Listings filter language={language_filter!r} returned 0 for "
+                    f"TCGPlayer product {tcgplayer_product_id} but it is the only "
+                    f"language present ({scoped_listings} listings); using the "
+                    f"unfiltered snapshot"
+                )
+                snapshot = unfiltered
+            else:
+                # Mixed languages. The aggregation gives an exact scoped listing
+                # COUNT, but quantity depth and the cheapest price are computed
+                # across every language and cannot be attributed — reporting them
+                # would mix markets. Take the count, leave the rest unknown.
+                logger.debug(
+                    f"Listings filter language={language_filter!r} returned 0 for "
+                    f"TCGPlayer product {tcgplayer_product_id}, but the catalogue "
+                    f"reports {scoped_listings} in it alongside "
+                    f"{sorted(set(present) - {key})}; recording the scoped count "
+                    f"only, with depth and price unknown"
+                )
+                snapshot = {
+                    "active_listings": scoped_listings,
+                    "total_quantity_available": None,
+                    "lowest_listing_price": None,
+                }
+
+    if snapshot is not None:
+        snapshot.pop("_languages_present", None)
+    return snapshot
 
 
 # === Logging Setup ===
@@ -392,10 +779,13 @@ def download_and_upload_image(image_url, product_id):
                 bytes(buf),
                 {
                     "content-type": content_type,
-                    "cache-control": "3600",
+                    "cache-control": IMAGE_CACHE_CONTROL_SECONDS,
                     "upsert": "true",
                 },
             )
+
+            # Best-effort thumbnail; never let it fail the real upload.
+            upload_thumbnail(product_id, bytes(buf))
 
             upload_success = False
             if hasattr(upload_response, 'data') and upload_response.data:
@@ -438,26 +828,38 @@ def download_and_upload_image(image_url, product_id):
         return None
 
 # === Enhanced scraper with image extraction ===
-def get_price_and_image_from_url(driver, url, session=None, variant=None):
+def get_price_and_image_from_url(driver, url, session=None, variant=None, db_product_id=None):
     """
     Extract market price (API-only) and image URL from TCGPlayer product page.
-    Returns dict with 'price' and 'image_url' keys.
+    Returns dict with 'price', 'image_url', 'sales_buckets' (upsert-ready
+    product_sales_history rows when db_product_id is provided and daily
+    buckets were available) and 'tcgplayer_product_id' keys.
     """
     try:
-        result = {'price': None, 'image_url': None}
+        result = {'price': None, 'image_url': None, 'sales_buckets': [], 'tcgplayer_product_id': None}
 
         tcgplayer_product_id = extract_tcgplayer_product_id(url)
+        result['tcgplayer_product_id'] = tcgplayer_product_id
         preferred_language = extract_preferred_language(url)
         if session and tcgplayer_product_id:
-            api_price = fetch_latest_market_price_from_api(
+            api_data = fetch_latest_market_data_from_api(
                 session=session,
                 product_id=tcgplayer_product_id,
                 referer=url,
                 preferred_variant=variant,
                 preferred_language=preferred_language,
             )
+            api_price = api_data.get('price')
             if api_price is not None:
                 result['price'] = api_price
+
+            # Sales-volume capture must never break the price pipeline.
+            try:
+                daily_buckets = api_data.get('daily_buckets') or []
+                if daily_buckets and db_product_id is not None:
+                    result['sales_buckets'] = parse_daily_sales_buckets(daily_buckets, db_product_id)
+            except Exception as e:
+                logger.warning(f"Failed to parse daily sales buckets for {url}: {e}")
 
         driver.get(url)
 
@@ -537,7 +939,7 @@ def get_price_and_image_from_url(driver, url, session=None, variant=None):
 
     except Exception as e:
         logger.warning(f"Exception while scraping {url}: {e}")
-        return {'price': None, 'image_url': None}
+        return {'price': None, 'image_url': None, 'sales_buckets': [], 'tcgplayer_product_id': None}
 
 # === Helper function to parse timestamps safely ===
 def parse_timestamp(timestamp_str):
@@ -686,6 +1088,12 @@ def update_prices():
     api_session = requests.Session()
     updated_count = 0
     price_history_batch = []  # Collect price history entries for batch insert
+    sales_history_batch = []  # Collect daily sales-volume rows for batch upsert
+    listings_history_batch = []  # Collect listings-depth snapshots for batch upsert
+    sales_rows_written = 0
+    sales_rows_failed = 0
+    listings_rows_written = 0
+    listings_rows_failed = 0
 
     try:
         driver, user_data_dir = create_driver()
@@ -707,6 +1115,7 @@ def update_prices():
                 url,
                 session=api_session,
                 variant=variant,
+                db_product_id=product_id,
             )
             price = scraped_data.get('price')
             if price is not None and price <= 0:
@@ -736,6 +1145,54 @@ def update_prices():
                     "usd_price": price
                 })
                 logger.info(f"   Updated price: ${price:.2f}")
+
+            # === Sales volume + listings capture ===
+            # Not gated on needs_price_update: capture whenever API data is
+            # in hand. Wrapped so an exception can never break the price
+            # pipeline.
+            try:
+                sales_rows = scraped_data.get('sales_buckets') or []
+                if sales_rows:
+                    # Dedupe guard: PostgREST upsert fails if one batch
+                    # contains the same (product_id, bucket_date,
+                    # granularity) key twice.
+                    pending_keys = {
+                        (row.get("product_id"), row.get("bucket_date"), row.get("granularity"))
+                        for row in sales_history_batch
+                    }
+                    added = 0
+                    for row in sales_rows:
+                        key = (row.get("product_id"), row.get("bucket_date"), row.get("granularity"))
+                        if key in pending_keys:
+                            continue
+                        pending_keys.add(key)
+                        sales_history_batch.append(row)
+                        added += 1
+                    if added:
+                        logger.info(f"   Captured {added} daily sales-volume rows")
+            except Exception as e:
+                logger.warning(f"   Sales volume capture failed for product {product_id}: {e}")
+
+            try:
+                tcgplayer_product_id = scraped_data.get('tcgplayer_product_id')
+                if tcgplayer_product_id:
+                    # Extra politeness delay before hitting the listings endpoint
+                    time.sleep(0.5 + random.uniform(0, 0.5))
+                    snapshot = fetch_listings_snapshot(
+                        api_session, tcgplayer_product_id, referer=url,
+                        preferred_language=extract_preferred_language(url),
+                    )
+                    if snapshot is not None:
+                        listings_history_batch.append({
+                            "product_id": product_id,
+                            "snapshot_date": datetime.now(timezone.utc).date().isoformat(),
+                            "active_listings": snapshot.get("active_listings"),
+                            "total_quantity_available": snapshot.get("total_quantity_available"),
+                            "lowest_listing_price": snapshot.get("lowest_listing_price"),
+                        })
+                        logger.info(f"   Captured listings snapshot ({snapshot.get('active_listings')} active listings)")
+            except Exception as e:
+                logger.warning(f"   Listings snapshot capture failed for product {product_id}: {e}")
 
             # Handle image update
             needs_image_update = True
@@ -783,11 +1240,35 @@ def update_prices():
                 _flush_price_history_batch(price_history_batch)
                 price_history_batch = []
 
+            # Batch upsert sales/listings history every 100 entries
+            if len(sales_history_batch) >= 100:
+                flushed_ok, flushed_failed = _flush_sales_history_batch(sales_history_batch)
+                sales_rows_written += flushed_ok
+                sales_rows_failed += flushed_failed
+                sales_history_batch = []
+
+            if len(listings_history_batch) >= 100:
+                flushed_ok, flushed_failed = _flush_listings_history_batch(listings_history_batch)
+                listings_rows_written += flushed_ok
+                listings_rows_failed += flushed_failed
+                listings_history_batch = []
+
             time.sleep(1)  # polite delay between requests
 
         # Flush remaining price history entries
         if price_history_batch:
             _flush_price_history_batch(price_history_batch)
+
+        # Flush remaining sales/listings history entries
+        if sales_history_batch:
+            flushed_ok, flushed_failed = _flush_sales_history_batch(sales_history_batch)
+            sales_rows_written += flushed_ok
+            sales_rows_failed += flushed_failed
+
+        if listings_history_batch:
+            flushed_ok, flushed_failed = _flush_listings_history_batch(listings_history_batch)
+            listings_rows_written += flushed_ok
+            listings_rows_failed += flushed_failed
 
     finally:
         cleanup_driver(driver, user_data_dir)
@@ -797,6 +1278,10 @@ def update_prices():
             pass
 
     logger.info(f"Done! {updated_count} products updated out of {len(products_to_update)} checked.")
+    logger.info(
+        f"Sales history rows written: {sales_rows_written} (failed: {sales_rows_failed}); "
+        f"listings snapshots written: {listings_rows_written} (failed: {listings_rows_failed})"
+    )
 
 
 def _flush_price_history_batch(batch):
@@ -823,6 +1308,116 @@ def _flush_price_history_batch(batch):
                 success_count += 1
             except Exception as inner_e:
                 logger.error(f"Individual price history insert failed for product {entry.get('product_id')}: {inner_e}")
+                failed_count += 1
+
+    return success_count, failed_count
+
+
+# Set once a flush hits a missing-table error (migration 0015 not yet applied)
+# so later volume flushes in the same run skip doomed network calls. Both
+# volume tables come from the same migration, so one flag covers both.
+_volume_tables_missing = False
+
+
+def _is_missing_table_error(exc):
+    """True when the exception indicates the target table does not exist (42P01)."""
+    text = str(exc)
+    return "42P01" in text or "does not exist" in text.lower()
+
+
+def _flush_sales_history_batch(batch):
+    """
+    Upsert a batch of daily sales-volume entries (idempotent on
+    (product_id, bucket_date, granularity)).
+    Returns tuple of (success_count, failed_count). Never raises.
+    """
+    global _volume_tables_missing
+
+    if not batch:
+        return 0, 0
+    if _volume_tables_missing:
+        return 0, len(batch)
+
+    success_count = 0
+    failed_count = 0
+
+    try:
+        supabase.table("product_sales_history").upsert(
+            batch, on_conflict="product_id,bucket_date,granularity"
+        ).execute()
+        success_count = len(batch)
+        logger.debug(f"Batch upserted {len(batch)} sales history records")
+    except Exception as e:
+        if _is_missing_table_error(e):
+            _volume_tables_missing = True
+            logger.warning(
+                f"product_sales_history table missing — apply migration "
+                f"0015_product_sales_and_listings_history.sql; skipping "
+                f"volume writes for the rest of this run: {e}"
+            )
+            return 0, len(batch)
+        logger.warning(
+            f"Batch sales history upsert failed (has migration "
+            f"0015_product_sales_and_listings_history.sql been applied?): {e}"
+        )
+        # Fall back to individual upserts
+        for entry in batch:
+            try:
+                supabase.table("product_sales_history").upsert(
+                    entry, on_conflict="product_id,bucket_date,granularity"
+                ).execute()
+                success_count += 1
+            except Exception as inner_e:
+                logger.error(f"Individual sales history upsert failed for product {entry.get('product_id')}: {inner_e}")
+                failed_count += 1
+
+    return success_count, failed_count
+
+
+def _flush_listings_history_batch(batch):
+    """
+    Upsert a batch of listings-depth snapshots (idempotent on
+    (product_id, snapshot_date)).
+    Returns tuple of (success_count, failed_count). Never raises.
+    """
+    global _volume_tables_missing
+
+    if not batch:
+        return 0, 0
+    if _volume_tables_missing:
+        return 0, len(batch)
+
+    success_count = 0
+    failed_count = 0
+
+    try:
+        supabase.table("product_listings_history").upsert(
+            batch, on_conflict="product_id,snapshot_date"
+        ).execute()
+        success_count = len(batch)
+        logger.debug(f"Batch upserted {len(batch)} listings history records")
+    except Exception as e:
+        if _is_missing_table_error(e):
+            _volume_tables_missing = True
+            logger.warning(
+                f"product_listings_history table missing — apply migration "
+                f"0015_product_sales_and_listings_history.sql; skipping "
+                f"volume writes for the rest of this run: {e}"
+            )
+            return 0, len(batch)
+        logger.warning(
+            f"Batch listings history upsert failed (has migration "
+            f"0015_product_sales_and_listings_history.sql been applied?): {e}"
+        )
+        # Fall back to individual upserts
+        for entry in batch:
+            try:
+                supabase.table("product_listings_history").upsert(
+                    entry, on_conflict="product_id,snapshot_date"
+                ).execute()
+                success_count += 1
+            except Exception as inner_e:
+                logger.error(f"Individual listings history upsert failed for product {entry.get('product_id')}: {inner_e}")
                 failed_count += 1
 
     return success_count, failed_count
