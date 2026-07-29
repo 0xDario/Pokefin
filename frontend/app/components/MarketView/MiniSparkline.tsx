@@ -1,7 +1,7 @@
 "use client";
 
+import dynamic from "next/dynamic";
 import { useMemo } from "react";
-import { Line, LineChart, ResponsiveContainer } from "recharts";
 import { Currency, PriceHistoryEntry } from "../ProductPrices/types";
 
 interface MiniSparklineProps {
@@ -40,6 +40,18 @@ function SparklineSkeleton({ className = "" }: { className?: string }) {
   );
 }
 
+// Recharts (~109 KB gzip) is fetched only when a sparkline actually mounts.
+// The import specifier must match the other chart wrappers so all of them
+// share a single async chunk - see app/components/charts/ChartBundle.tsx.
+// While it loads we reuse the same skeleton, so the row height never shifts.
+const MiniSparklineImpl = dynamic(
+  () => import("../charts/ChartBundle").then((m) => m.MiniSparklineImpl),
+  {
+    ssr: false,
+    loading: () => <SparklineSkeleton />,
+  }
+);
+
 export default function MiniSparkline({
   history,
   currency,
@@ -77,18 +89,7 @@ export default function MiniSparkline({
 
   return (
     <div className={`h-10 w-24 ${className}`}>
-      <ResponsiveContainer width="100%" height="100%">
-        <LineChart data={data}>
-          <Line
-            type="monotone"
-            dataKey="price"
-            stroke={stroke}
-            strokeWidth={2}
-            dot={false}
-            isAnimationActive={false}
-          />
-        </LineChart>
-      </ResponsiveContainer>
+      <MiniSparklineImpl data={data} stroke={stroke} />
     </div>
   );
 }

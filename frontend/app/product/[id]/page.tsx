@@ -10,6 +10,15 @@ import {
   getMaxDrawdownPercent,
   getVolatilityPercent,
 } from "../../components/MarketView/returns";
+import {
+  getDaysOfSupply,
+  getPriorUnitsSold30d,
+  getPulseSignal,
+  getUnitsSoldWindow,
+  getVolumeTrendPercent,
+  PULSE_SIGNAL_META,
+  PulseTone,
+} from "../../lib/marketPulse";
 import { getCachedProductDetail } from "../../lib/serverMarketData";
 import { Product } from "../../components/ProductPrices/types";
 import ProductDetailChart from "./ProductDetailChart";
@@ -73,6 +82,22 @@ function ReturnValue({
   );
 }
 
+const PULSE_TONE_CLASSES: Record<PulseTone, string> = {
+  gain: "bg-emerald-50 text-emerald-700 ring-emerald-200",
+  loss: "bg-rose-50 text-rose-700 ring-rose-200",
+  warn: "bg-amber-50 text-amber-800 ring-amber-200",
+  neutral: "bg-slate-100 text-slate-700 ring-slate-200",
+};
+
+function formatCount(value: number | null): React.ReactNode {
+  if (value === null || Number.isNaN(value)) {
+    return <span className="text-slate-400">--</span>;
+  }
+  return (
+    <span className="font-semibold text-slate-900 tabular-nums">{value}</span>
+  );
+}
+
 function MetricTile({
   label,
   children,
@@ -127,6 +152,10 @@ export default async function ProductPage({
   if (!detail) notFound();
 
   const { product, history, siblings } = detail;
+  // Coalesce: a ProductDetail cached by unstable_cache before this feature
+  // shipped won't have the new fields yet.
+  const salesHistory = detail.salesHistory ?? [];
+  const listings = detail.listings ?? null;
 
   const setName = product.sets?.name ?? "Unknown Set";
   const setCode = product.sets?.code ?? "N/A";
@@ -152,6 +181,23 @@ export default async function ProductPage({
   const cagr = getCagrPercent(history, identity);
   const maxDrawdown = getMaxDrawdownPercent(history, identity);
   const volatility = getVolatilityPercent(history, identity, 30);
+
+  // Market Pulse: sales volume vs price over the trailing 30 days.
+  const unitsSold7d = getUnitsSoldWindow(salesHistory, 7);
+  const unitsSold30d = getUnitsSoldWindow(salesHistory, 30);
+  const unitsSoldPrior30d = getPriorUnitsSold30d(salesHistory);
+  const volumeTrend = getVolumeTrendPercent(unitsSold30d, unitsSoldPrior30d);
+  const daysOfSupply = getDaysOfSupply(
+    listings?.total_quantity_available ?? null,
+    unitsSold30d
+  );
+  const priceReturn30d = product.returns?.["1M"] ?? null;
+  const pulseSignal = getPulseSignal(priceReturn30d, volumeTrend);
+  const pulseMeta = pulseSignal ? PULSE_SIGNAL_META[pulseSignal] : null;
+  // A null signal means "below thresholds" only when both inputs exist;
+  // with either input missing there is no basis for a verdict, and showing
+  // "Stable" would misread as a neutral market signal.
+  const hasPulseInputs = priceReturn30d !== null && volumeTrend !== null;
 
   return (
     <main className="p-3 md:p-6">
@@ -259,11 +305,59 @@ export default async function ProductPage({
         </div>
       </section>
 
+      {/* Market Pulse */}
+      <section className="mt-6 rounded-xl border border-slate-200 bg-white p-4 md:p-5 shadow-sm">
+        <div className="mb-3 flex flex-wrap items-center gap-2">
+          <h2 className="text-sm font-semibold text-slate-900">Market Pulse</h2>
+          <span
+            className={`inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold ring-1 ring-inset ${
+              pulseMeta
+                ? PULSE_TONE_CLASSES[pulseMeta.tone]
+                : PULSE_TONE_CLASSES.neutral
+            }`}
+          >
+            {pulseMeta ? pulseMeta.label : hasPulseInputs ? "Stable" : "No signal"}
+          </span>
+          {pulseMeta ? (
+            <span className="text-xs text-slate-500">{pulseMeta.description}</span>
+          ) : (
+            !hasPulseInputs && (
+              <span className="text-xs text-slate-500">
+                Not enough volume history yet
+              </span>
+            )
+          )}
+        </div>
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
+          <MetricTile label="Units sold (7d)">{formatCount(unitsSold7d)}</MetricTile>
+          <MetricTile label="Units sold (30d)">{formatCount(unitsSold30d)}</MetricTile>
+          <MetricTile label="Volume trend">
+            <ReturnValue value={volumeTrend} />
+          </MetricTile>
+          <MetricTile label="Active listings">
+            {formatCount(listings?.active_listings ?? null)}
+          </MetricTile>
+          <MetricTile label="Units on market">
+            {formatCount(listings?.total_quantity_available ?? null)}
+          </MetricTile>
+          <MetricTile label="Days of supply">
+            {daysOfSupply !== null ? (
+              <span className="font-semibold text-slate-900 tabular-nums">
+                {daysOfSupply.toFixed(1)}
+              </span>
+            ) : (
+              <span className="text-slate-400">--</span>
+            )}
+          </MetricTile>
+        </div>
+      </section>
+
       {/* Price chart */}
       <section className="mt-6 rounded-xl border border-slate-200 bg-white p-4 md:p-5 shadow-sm">
         <ProductDetailChart
           history={history}
           releaseDate={product.sets?.release_date}
+          salesHistory={salesHistory}
         />
       </section>
 

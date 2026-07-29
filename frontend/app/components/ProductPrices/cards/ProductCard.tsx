@@ -17,6 +17,11 @@ interface ProductCardProps {
   chartTimeframe: ChartTimeframe;
   history?: PriceHistoryEntry[];
   historyLoading?: boolean;
+  /**
+   * Trailing 30-day units sold, resolved by the parent so this memo()'d card
+   * stays a pure function of its props. null means "no data" (chip hidden).
+   */
+  unitsSold30d?: number | null;
   selectedCurrency: Currency;
   exchangeRate: number;
   formatPrice: (price: number | null | undefined) => string;
@@ -34,6 +39,18 @@ function getAccentClass(oneMonthReturn: number | null | undefined): string {
   return "border-l-4 border-l-transparent";
 }
 
+// Quiet slate chip showing trailing 30-day sales volume. Hidden entirely
+// when volume metrics for the product are missing or null.
+function VolumeChip({ unitsSold30d }: { unitsSold30d: number | null }) {
+  if (unitsSold30d === null) return null;
+
+  return (
+    <span className="inline-flex w-fit items-center px-2 py-0.5 rounded-full text-[11px] font-semibold bg-slate-100 text-slate-600 ring-1 ring-slate-200 tabular-nums">
+      {unitsSold30d} sold/30d
+    </span>
+  );
+}
+
 const ProductCard = memo(function ProductCard({
   product,
   viewMode,
@@ -41,6 +58,7 @@ const ProductCard = memo(function ProductCard({
   chartTimeframe,
   history,
   historyLoading = false,
+  unitsSold30d = null,
   selectedCurrency,
   exchangeRate,
   formatPrice,
@@ -115,6 +133,7 @@ const ProductCard = memo(function ProductCard({
             imageUrl={product.image_url}
             productName={`${setName} ${productType}`}
             className="w-full h-40 sm:h-48"
+            preferThumbnail
           />
         </Link>
 
@@ -160,6 +179,12 @@ const ProductCard = memo(function ProductCard({
             history={history}
             layout="vertical"
           />
+
+          {unitsSold30d !== null && (
+            <div className="mt-2">
+              <VolumeChip unitsSold30d={unitsSold30d} />
+            </div>
+          )}
 
           <div className="mt-3 space-y-2">
             {hasHistory && (
@@ -211,6 +236,7 @@ const ProductCard = memo(function ProductCard({
             imageUrl={product.image_url}
             productName={`${setName} ${productType}`}
             className="w-full h-48 sm:w-32 sm:h-32"
+            preferThumbnail
           />
         </Link>
 
@@ -269,6 +295,12 @@ const ProductCard = memo(function ProductCard({
                 layout="horizontal"
                 className="text-[10px] md:text-xs mt-1"
               />
+
+              {unitsSold30d !== null && (
+                <div className="mt-1 flex sm:justify-end">
+                  <VolumeChip unitsSold30d={unitsSold30d} />
+                </div>
+              )}
             </div>
           </div>
 

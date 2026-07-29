@@ -3,12 +3,14 @@ import CardRinkPromo from "../components/CardRinkPromo";
 import {
   getCachedExchangeRate,
   getCachedMarketProductSummaries,
+  getCachedVolumeMetrics,
 } from "../lib/serverMarketData";
 
 export default async function MarketPage() {
-  const [products, exchangeRate] = await Promise.all([
+  const [products, exchangeRate, volumeMetrics] = await Promise.all([
     getCachedMarketProductSummaries(),
     getCachedExchangeRate(),
+    getCachedVolumeMetrics(),
   ]);
 
   return (
@@ -27,6 +29,7 @@ export default async function MarketPage() {
       <MarketView
         initialProducts={products}
         initialExchangeRate={exchangeRate.rate}
+        initialVolumeMetrics={volumeMetrics}
       />
       <CardRinkPromo variant="footer" />
     </main>

@@ -91,3 +91,35 @@ The script inserts into `product_price_history`:
 - `product_id` - Foreign key to products table
 - `usd_price` - The market price for that day
 - `created_at` - The date/time (set to noon UTC for each historical date)
+
+## Sales-Volume Backfill (`backfill_sales_volume.py`)
+
+One-time backfill of sales-volume history into `product_sales_history`.
+For every product it fetches TCGPlayer's infinite-api twice:
+
+- `range=annual` → 52 weekly buckets (Monday-anchored) stored as `granularity='week'` rows (~1 year of coverage)
+- `range=month` → 30 daily buckets stored as `granularity='day'` rows (the same rows `main.py` maintains going forward)
+
+Rows are upserted on `(product_id, bucket_date, granularity)`, so re-runs are
+idempotent, and buckets older than the product's set release date are dropped.
+
+**Prerequisite**: apply `migrations/0015_product_sales_and_listings_history.sql`
+first (paste it into the Supabase SQL editor or apply via the Supabase MCP, per
+`audits/HARDENING_FOLLOWUPS.md`). Without it the upserts fail because the
+tables don't exist. The script needs the service-role key (same as
+`main.py` / `backfill_historical_prices.py`) since RLS blocks anon writes.
+
+```bash
+# Standard run (all products):
+python backfill_sales_volume.py
+
+# Two-terminal parallel run:
+python backfill_sales_volume.py --forward    # first half
+python backfill_sales_volume.py --reverse    # second half
+
+# Resume after interruption (each run writes backfill_sales_checkpoint_<timestamp>.json):
+python backfill_sales_volume.py --resume backfill_sales_checkpoint_<timestamp>.json
+
+# Debug logging:
+python backfill_sales_volume.py --debug
+```

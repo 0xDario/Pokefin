@@ -12,6 +12,7 @@ import CardRinkPromo from "../CardRinkPromo";
 import ScrollToTop from "./shared/ScrollToTop";
 import { useProductData } from "./hooks/useProductData";
 import { useCurrencyConversion } from "./hooks/useCurrencyConversion";
+import { useVolumeMetrics } from "./hooks/useVolumeMetrics";
 import {
   filterProducts,
   getAvailableGenerations,
@@ -20,11 +21,24 @@ import {
   groupProductsByType,
 } from "./utils/filtering";
 import { sortProducts } from "./utils/sorting";
-import { ChartTimeframe, Currency, Product, SortBy, SortDirection, ViewMode } from "./types";
+import {
+  ChartTimeframe,
+  Currency,
+  Product,
+  ProductVolumeMetrics,
+  SortBy,
+  SortDirection,
+  ViewMode,
+} from "./types";
 
 interface ProductPricesProps {
   initialProducts?: Product[];
   initialExchangeRate?: number;
+  /**
+   * Server-rendered sales-volume metrics keyed by product_id. When supplied the
+   * volume chips are correct on first paint and no client fetch happens.
+   */
+  initialVolumeMetrics?: Record<number, ProductVolumeMetrics>;
 }
 
 // Filter defaults — values matching these are omitted from the URL to keep it clean
@@ -56,6 +70,7 @@ function pickEnum<T extends string>(value: string | null, allowed: T[], fallback
 export default function ProductPrices({
   initialProducts = [],
   initialExchangeRate,
+  initialVolumeMetrics,
 }: ProductPricesProps) {
   const router = useRouter();
   const pathname = usePathname();
@@ -93,6 +108,9 @@ export default function ProductPrices({
     setSelectedCurrency,
     formatPrice,
   } = useCurrencyConversion(initialExchangeRate, initialFromUrl.currency);
+  // Resolved once here rather than per card: ~300 cards would otherwise each own
+  // a useState/useEffect whose resolution re-renders through ProductCard's memo.
+  const volumeMetrics = useVolumeMetrics(initialVolumeMetrics);
 
   // Filter state
   const [selectedGeneration, setSelectedGeneration] = useState(initialFromUrl.gen);
@@ -236,6 +254,7 @@ export default function ProductPrices({
                   chartTimeframe={chartTimeframe}
                   history={priceHistory[product.id]}
                   historyLoading={loadingProductIds.includes(product.id)}
+                  unitsSold30d={volumeMetrics[product.id]?.units_sold_30d ?? null}
                   selectedCurrency={selectedCurrency}
                   exchangeRate={exchangeRate}
                   formatPrice={formatPrice}
@@ -267,6 +286,7 @@ export default function ProductPrices({
                       chartTimeframe={chartTimeframe}
                       history={priceHistory[product.id]}
                       historyLoading={loadingProductIds.includes(product.id)}
+                      unitsSold30d={volumeMetrics[product.id]?.units_sold_30d ?? null}
                       selectedCurrency={selectedCurrency}
                       exchangeRate={exchangeRate}
                       formatPrice={formatPrice}
@@ -301,6 +321,7 @@ export default function ProductPrices({
                         chartTimeframe={chartTimeframe}
                         history={priceHistory[product.id]}
                         historyLoading={loadingProductIds.includes(product.id)}
+                        unitsSold30d={volumeMetrics[product.id]?.units_sold_30d ?? null}
                         selectedCurrency={selectedCurrency}
                         exchangeRate={exchangeRate}
                         formatPrice={formatPrice}

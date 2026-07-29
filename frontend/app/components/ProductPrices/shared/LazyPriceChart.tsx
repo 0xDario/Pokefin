@@ -4,6 +4,11 @@ import { useEffect, useRef, useState } from "react";
 import ResponsivePriceChart from "./ResponsivePriceChart";
 import { ChartTimeframe, Currency, PriceHistoryEntry } from "../types";
 
+// Defers mounting the chart until it scrolls near the viewport. Because
+// ResponsivePriceChart pulls PriceChart in through next/dynamic, this now
+// defers the recharts *download* too, not just the render. The placeholder
+// below must keep a non-zero height or the observer would never fire.
+
 interface LazyPriceChartProps {
   data: PriceHistoryEntry[];
   range: ChartTimeframe;
