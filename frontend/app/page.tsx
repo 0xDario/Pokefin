@@ -5,6 +5,7 @@ import RecentlyReleased from "./components/dashboard/RecentlyReleased";
 import {
   getCachedExchangeRate,
   getCachedMarketProductSummaries,
+  getCachedVolumeMetrics,
 } from "./lib/serverMarketData";
 import { Product } from "./components/ProductPrices/types";
 
@@ -51,6 +52,7 @@ function MoverCard({ product }: { product: Product }) {
         imageUrl={product.image_url}
         productName={`${setName} ${label}`}
         className="w-full h-28"
+        preferThumbnail
       />
       <div className="mt-2 text-xs font-semibold text-slate-900 leading-tight line-clamp-2 group-hover:text-[var(--pf-pokeball)] transition-colors">
         {label}
@@ -101,9 +103,10 @@ function StatCard({
 }
 
 export default async function Home() {
-  const [products, exchangeRate] = await Promise.all([
+  const [products, exchangeRate, volumeMetrics] = await Promise.all([
     getCachedMarketProductSummaries(),
     getCachedExchangeRate(),
+    getCachedVolumeMetrics(),
   ]);
 
   // Top Movers (7D) — biggest gainers and losers, excluding low-value packs
@@ -137,6 +140,15 @@ export default async function Home() {
     .sort((a, b) => b.releaseDate.localeCompare(a.releaseDate))
     .slice(0, 2);
   const recentProducts = recentSets.flatMap((s) => s.products);
+
+  // RecentlyReleased is a client component, so whatever we hand it is
+  // serialised into the RSC payload. It only reads its own products' metrics,
+  // so send just those rather than the whole catalogue's.
+  const recentVolumeMetrics = Object.fromEntries(
+    recentProducts
+      .filter((p) => volumeMetrics[p.id])
+      .map((p) => [p.id, volumeMetrics[p.id]])
+  );
 
   // Quick Stats
   const oneMonthReturns = products
@@ -264,6 +276,7 @@ export default async function Home() {
           <RecentlyReleased
             initialProducts={recentProducts}
             initialExchangeRate={exchangeRate.rate}
+            initialVolumeMetrics={recentVolumeMetrics}
           />
         </section>
       )}
