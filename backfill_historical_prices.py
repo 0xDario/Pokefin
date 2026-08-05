@@ -139,11 +139,16 @@ def _create_session():
 
 # API ranges for the infinite-api endpoint (shortest -> longest)
 # We try multiple keys per range to handle naming variations.
+# Ordered FINEST FIRST: the merge in extract_historical_prices_api is
+# first-wins, so real daily prices from `month` must land before the weekly
+# `annual` buckets, which only flat-fill one price across seven days.
+# covers_days is how far back each range reaches, used by ranges_covering()
+# to skip requests that cannot contain a date we still need.
 API_RANGE_CONFIG = [
-    {"label": "1M", "keys": ["month", "monthly", "1m"]},
-    {"label": "3M", "keys": ["quarter", "3m"]},
-    {"label": "6M", "keys": ["semi-annual", "semiannual", "6m"]},
-    {"label": "1Y", "keys": ["annual", "year", "1y"]},
+    {"label": "1M", "keys": ["month", "monthly", "1m"], "covers_days": 30},
+    {"label": "3M", "keys": ["quarter", "3m"], "covers_days": 90},
+    {"label": "6M", "keys": ["semi-annual", "semiannual", "6m"], "covers_days": 182},
+    {"label": "1Y", "keys": ["annual", "year", "1y"], "covers_days": 365},
 ]
 
 # === Checkpoint Management ===
@@ -382,11 +387,37 @@ def expand_buckets_to_daily(buckets, target_start_date=None, target_end_date=Non
     return expanded
 
 
+def ranges_covering(oldest_missing_date, today=None):
+    """The smallest prefix of API_RANGE_CONFIG that reaches back far enough.
+
+    Each range costs one request against a bot-sensitive endpoint, and the
+    ranges are nested (month is inside quarter is inside annual), so pulling
+    all four to patch a two-day hole from last week is three wasted requests.
+    Returns the full list when the date is unknown or too old to bound.
+    """
+    if oldest_missing_date is None:
+        return API_RANGE_CONFIG
+
+    today = today or datetime.now(timezone.utc).date()
+    age_days = (today - oldest_missing_date).days
+
+    for idx, cfg in enumerate(API_RANGE_CONFIG):
+        if age_days <= cfg["covers_days"]:
+            return API_RANGE_CONFIG[: idx + 1]
+    return API_RANGE_CONFIG
+
+
 def extract_historical_prices_api(product_id, referer=None, preferred_variant=None, preferred_language=None,
-                                  target_start_date=None, target_end_date=None, session=None):
+                                  target_start_date=None, target_end_date=None, session=None,
+                                  ranges=None):
     """
     Fetch historical prices from TCGPlayer's infinite-api and expand bucketed data to daily prices.
     Returns list of dicts with {date, price}.
+
+    ranges defaults to every entry in API_RANGE_CONFIG. Pass a shorter prefix
+    (see ranges_covering) to skip requests that cannot contain any date you
+    still need — order must be preserved, since the merge below is first-wins
+    and relies on finer granularity arriving first.
     """
     if not product_id:
         return []
@@ -395,7 +426,7 @@ def extract_historical_prices_api(product_id, referer=None, preferred_variant=No
 
     deduped = {}
 
-    for range_config in API_RANGE_CONFIG:
+    for range_config in (ranges if ranges is not None else API_RANGE_CONFIG):
         data = None
         used_key = None
         for key in range_config["keys"]:
@@ -534,7 +565,8 @@ def batch_insert_price_history(entries, batch_size=100):
     return inserted_count, failed_count
 
 
-def backfill_prices(start_idx=None, end_idx=None, reverse=False, days=365, checkpoint_file=None):
+def backfill_prices(start_idx=None, end_idx=None, reverse=False, days=365, checkpoint_file=None,
+                    gaps_only=False):
     """
     Main function to backfill historical prices for all products with robust error handling
     Checks for last N days of data, accounting for product release dates
@@ -667,6 +699,7 @@ def backfill_prices(start_idx=None, end_idx=None, reverse=False, days=365, check
                     logger.warning(f"   Could not parse release_date '{release_date_str}': {e}")
 
             # === Check if this product already has COMPLETE data for ALL days in expected range ===
+            oldest_missing = None
             try:
                 # Use paginated query to handle products with many price records
                 existing_dates = fetch_existing_price_dates(product_id, product_start_date, target_end_date)
@@ -684,6 +717,15 @@ def backfill_prices(start_idx=None, end_idx=None, reverse=False, days=365, check
                     continue
                 elif len(existing_dates) > 0:
                     logger.info(f"   Has partial data ({len(existing_dates)}/{expected_days} days) - will fill missing dates")
+
+                # Oldest date we actually still need, so we can skip API
+                # ranges that cannot possibly contain it.
+                cursor_d = start_dt
+                while cursor_d <= end_dt:
+                    if cursor_d.strftime("%Y-%m-%d") not in existing_dates:
+                        oldest_missing = cursor_d
+                        break
+                    cursor_d += timedelta(days=1)
             except Exception as e:
                 logger.warning(f"   Error checking existing data: {e}")
                 existing_dates = set()
@@ -700,7 +742,16 @@ def backfill_prices(start_idx=None, end_idx=None, reverse=False, days=365, check
                         f"   Fetching historical prices via API (attempt {attempt}/{RATE_LIMIT_CONFIG['max_retries']})..."
                     )
 
+                    fetch_ranges = ranges_covering(oldest_missing) if gaps_only else None
+                    if gaps_only and fetch_ranges is not None and len(fetch_ranges) < len(API_RANGE_CONFIG):
+                        logger.info(
+                            f"   Gap-only: oldest missing {oldest_missing}, "
+                            f"fetching {[r['label'] for r in fetch_ranges]} "
+                            f"instead of all {len(API_RANGE_CONFIG)} ranges"
+                        )
+
                     historical_data = extract_historical_prices_api(
+                        ranges=fetch_ranges,
                         product_id=tcgplayer_product_id,
                         referer=url,
                         preferred_variant=variant,
@@ -835,6 +886,10 @@ Examples:
                         help="Process second half of products in reverse order")
     parser.add_argument("--resume", type=str, default=None,
                         help="Resume from checkpoint file")
+    parser.add_argument("--gaps-only", action="store_true",
+                        help="Only request the API ranges needed to reach each "
+                             "product's oldest missing date (far fewer requests "
+                             "when filling recent holes)")
     parser.add_argument("--debug", action="store_true",
                         help="Enable debug logging")
 
@@ -878,5 +933,6 @@ Examples:
         end_idx=end_idx,
         reverse=reverse,
         days=days,
-        checkpoint_file=args.resume
+        checkpoint_file=args.resume,
+        gaps_only=args.gaps_only,
     )

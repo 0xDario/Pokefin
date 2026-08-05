@@ -618,5 +618,89 @@ class TestExchangeRateParsing:
         assert rate_date.day == 15
 
 
+class TestNoScrapeTimeDrift:
+    """The price gate must not let a product's scrape time drift.
+
+    A flat 24h window meant a product scraped at 08:03 was not *strictly*
+    older than 24h at the next day's 08:00 run, so it slipped to 12:00, then
+    16:00, 20:00, 00:00 ... +4h every day. Every ~6 days that wrapped past
+    midnight and the product skipped a calendar day, which cost 3,053
+    product-days of price history before it was noticed.
+    """
+
+    SCHEDULER_INTERVAL_HOURS = 4
+
+    def _qualifies(self, last_updated, now, interval_hours):
+        """Mirror of the gate: last_updated < now - interval."""
+        return last_updated < now - timedelta(hours=interval_hours)
+
+    def test_interval_is_inside_the_no_drift_window(self):
+        """Must be >= 24 - scheduler_interval (never twice a day) and < 24
+        (always qualifies at the same slot the next day)."""
+        from main import update_prices  # noqa: F401  (import guard)
+        import main
+        import inspect
+
+        src = inspect.getsource(main.update_prices)
+        # The constant lives inside update_prices; read it back from source.
+        interval = None
+        for line in src.splitlines():
+            if "price_update_interval_hours" in line and "=" in line:
+                interval = int(line.split("=")[1].strip())
+                break
+
+        assert interval is not None, "price_update_interval_hours not found"
+        assert 24 - self.SCHEDULER_INTERVAL_HOURS <= interval < 24, (
+            f"price_update_interval_hours={interval} reintroduces scrape-time "
+            f"drift; must be in [{24 - self.SCHEDULER_INTERVAL_HOURS}, 24)"
+        )
+
+    def test_22h_window_locks_to_a_stable_daily_slot(self):
+        """Simulate 10 days of 4-hourly runs: the product should be scraped
+        exactly once per day, at the same slot, never skipping a date."""
+        interval = 22
+        start = datetime(2026, 8, 1, 8, 3, tzinfo=timezone.utc)
+        last_updated = start
+        scrape_days = []
+
+        # Every 4h run for 10 days, beginning 4h after the initial scrape.
+        cursor = start.replace(minute=0) + timedelta(hours=4)
+        for _ in range(10 * 6):
+            if self._qualifies(last_updated, cursor, interval):
+                last_updated = cursor
+                scrape_days.append(cursor.date())
+            cursor += timedelta(hours=4)
+
+        # One scrape per calendar day, no skipped days, always the same hour.
+        assert len(scrape_days) == len(set(scrape_days)), "scraped twice in a day"
+        assert scrape_days == sorted(scrape_days)
+        gaps = [
+            (b - a).days
+            for a, b in zip(scrape_days, scrape_days[1:])
+        ]
+        assert all(g == 1 for g in gaps), f"skipped a calendar day: {scrape_days}"
+        assert len({d.hour for d in [last_updated]}) == 1
+
+    def test_24h_window_reproduces_the_original_drift(self):
+        """Regression witness: the old value skips calendar days."""
+        interval = 24
+        start = datetime(2026, 8, 1, 8, 3, tzinfo=timezone.utc)
+        last_updated = start
+        scrape_days = []
+
+        cursor = start.replace(minute=0) + timedelta(hours=4)
+        for _ in range(10 * 6):
+            if self._qualifies(last_updated, cursor, interval):
+                last_updated = cursor
+                scrape_days.append(cursor.date())
+            cursor += timedelta(hours=4)
+
+        gaps = [(b - a).days for a, b in zip(scrape_days, scrape_days[1:])]
+        assert any(g > 1 for g in gaps), (
+            "expected the 24h window to skip a calendar day — if this fails "
+            "the drift model itself is wrong and the fix needs rethinking"
+        )
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
