@@ -1064,11 +1064,21 @@ def update_prices():
     # outright. That silently cost 3,053 product-days of price history across
     # the catalogue before it was spotted.
     #
-    # The window must satisfy (24h - scheduler_interval) <= X < 24h so a
-    # product qualifies at the SAME slot each day but never twice in one day.
-    # The scheduler runs every 4h, so the valid range is [20, 24); 22 sits in
-    # the middle with margin at both ends. Revisit if the run cadence changes.
-    price_update_interval_hours = 22
+    # The window must satisfy (24h - run_interval) <= X < 24h so a product
+    # qualifies at the SAME slot each day but never twice in one day.
+    #
+    # X is deliberately NOT tuned to one cadence. run_scraper.sh invokes
+    # --run-now, so the interval is set by whatever cron on the host uses, and
+    # the code cannot see it: README documents hourly while the observed
+    # production drift (+4h/day under the old gate) shows the live cron is
+    # actually 4-hourly. 23 is the only value that is safe either way —
+    # hourly needs X >= 23, 4-hourly needs X >= 20, and both need X < 24.
+    #
+    # Picking 22 would work for a 4-hourly cron but double-scrape on an hourly
+    # one (a product updated 00:30 would re-qualify at 23:00 the SAME day),
+    # churning last_updated and colliding with the unique
+    # (product_id, recorded_at::date) index from migration 0003.
+    price_update_interval_hours = 23
     price_interval_ago = datetime.now(timezone.utc) - timedelta(hours=price_update_interval_hours)
     twenty_four_hours_ago = datetime.now(timezone.utc) - timedelta(hours=24)
 
