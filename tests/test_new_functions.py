@@ -110,36 +110,10 @@ class TestCleanupDriverMain:
         assert not os.path.exists(temp_dir)
 
 
-class TestCleanupDriverBackfill:
-    """Tests for cleanup_driver function in backfill_historical_prices.py"""
-
-    def test_cleanup_driver_quits_driver_and_removes_directory(self):
-        """Should quit driver and remove temp directory"""
-        from backfill_historical_prices import cleanup_driver
-
-        mock_driver = MagicMock()
-        temp_dir = tempfile.mkdtemp(prefix="test_chrome_")
-
-        cleanup_driver(mock_driver, temp_dir)
-
-        mock_driver.quit.assert_called_once()
-        assert not os.path.exists(temp_dir)
-
-    def test_cleanup_driver_handles_none_driver(self):
-        """Should handle None driver gracefully"""
-        from backfill_historical_prices import cleanup_driver
-
-        temp_dir = tempfile.mkdtemp(prefix="test_chrome_")
-        cleanup_driver(None, temp_dir)
-        assert not os.path.exists(temp_dir)
-
-    def test_cleanup_driver_handles_none_user_data_dir(self):
-        """Should handle None user_data_dir gracefully"""
-        from backfill_historical_prices import cleanup_driver
-
-        mock_driver = MagicMock()
-        cleanup_driver(mock_driver, None)
-        mock_driver.quit.assert_called_once()
+# TestCleanupDriverBackfill was removed: backfill_historical_prices no longer
+# drives Selenium (it reads TCGPlayer's infinite-api directly), so there is no
+# driver or temp user-data dir left to clean up. main.py's own cleanup_driver
+# is still covered by TestCleanupDriver above.
 
 
 class TestFetchProductsPaginated:

@@ -1054,9 +1054,21 @@ def fetch_products_needing_update(price_interval_ago, twenty_four_hours_ago, bat
 
 def update_prices():
     """Main function to update product prices and images."""
-    # Calculate timestamps in UTC
-    # Update prices once per day (run at UTC midnight)
-    price_update_interval_hours = 24
+    # Calculate timestamps in UTC.
+    #
+    # Deliberately UNDER 24h. With a flat 24h gate a product scraped at 08:03
+    # is not *strictly* older than 24h at the next day's 08:00 run, so it slips
+    # to the 12:00 run — and then 16:00, 20:00, 00:00... Each product's scrape
+    # time drifted +4h per day (one scheduler interval), and every ~6 days that
+    # drift wrapped past midnight and the product skipped a calendar day
+    # outright. That silently cost 3,053 product-days of price history across
+    # the catalogue before it was spotted.
+    #
+    # The window must satisfy (24h - scheduler_interval) <= X < 24h so a
+    # product qualifies at the SAME slot each day but never twice in one day.
+    # The scheduler runs every 4h, so the valid range is [20, 24); 22 sits in
+    # the middle with margin at both ends. Revisit if the run cadence changes.
+    price_update_interval_hours = 22
     price_interval_ago = datetime.now(timezone.utc) - timedelta(hours=price_update_interval_hours)
     twenty_four_hours_ago = datetime.now(timezone.utc) - timedelta(hours=24)
 
