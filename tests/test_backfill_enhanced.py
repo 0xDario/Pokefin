@@ -160,12 +160,24 @@ class TestRateLimiter:
 class TestMultiTimeframeExtraction:
     """Tests for multi-timeframe historical data extraction"""
 
-    def test_timeframe_buttons_list(self):
-        """Should have correct timeframe buttons"""
-        from backfill_historical_prices import TIMEFRAME_BUTTONS
+    def test_api_range_labels(self):
+        """Should pull the same four timeframes the old Selenium buttons did.
 
-        assert TIMEFRAME_BUTTONS == ['1M', '3M', '6M', '1Y']
-        assert len(TIMEFRAME_BUTTONS) == 4
+        Retargeted from TIMEFRAME_BUTTONS when the backfill moved from
+        clicking chart buttons to the infinite-api ranges.
+        """
+        from backfill_historical_prices import API_RANGE_CONFIG
+
+        labels = [r["label"] for r in API_RANGE_CONFIG]
+        assert labels == ['1M', '3M', '6M', '1Y']
+
+    def test_api_ranges_are_ordered_finest_first(self):
+        """Dedupe is first-wins, so the finest granularity must come first or
+        weekly prices would overwrite real daily ones."""
+        from backfill_historical_prices import API_RANGE_CONFIG
+
+        assert API_RANGE_CONFIG[0]["keys"][0] == "month"
+        assert API_RANGE_CONFIG[-1]["keys"][0] == "annual"
 
     def test_is_date_range_detection(self):
         """Should correctly identify which timeframes use date ranges"""
@@ -206,35 +218,29 @@ class TestMultiTimeframeExtraction:
         assert entry_0101['price'] == 105.0  # From 1M (shortest/most granular)
 
 
-# === Parse Short Date Tests ===
-class TestParseShortDate:
-    """Tests for parse_short_date function with 7-day future tolerance"""
+# === Date Parsing Tests ===
+class TestToDate:
+    """Tests for _to_date.
 
-    def test_parse_date_within_7_days_future_uses_current_year(self):
-        """Dates within 7 days in future should use current year"""
-        from backfill_historical_prices import parse_short_date
+    Replaces TestParseShortDate: parse_short_date existed to recover a year
+    from an "M/D" string scraped out of the chart tooltip. The infinite-api
+    returns unambiguous ISO dates, so that heuristic — and its 7-day future
+    tolerance — no longer has anything to parse.
+    """
 
-        now = datetime.now(timezone.utc)
-        future_date = now + timedelta(days=5)
-        date_str = f"{future_date.month}/{future_date.day}"
+    def test_parses_iso_date(self):
+        from backfill_historical_prices import _to_date
 
-        result = parse_short_date(date_str)
+        result = _to_date("2026-07-04")
 
-        assert result.year == now.year
-        assert result.month == future_date.month
-        assert result.day == future_date.day
+        assert (result.year, result.month, result.day) == (2026, 7, 4)
 
-    def test_parse_date_more_than_7_days_future_uses_previous_year(self):
-        """Dates more than 7 days in future should use previous year"""
-        from backfill_historical_prices import parse_short_date
+    def test_rejects_malformed_dates(self):
+        from backfill_historical_prices import _to_date
 
-        now = datetime.now(timezone.utc)
-        future_date = now + timedelta(days=30)
-        date_str = f"{future_date.month}/{future_date.day}"
-
-        result = parse_short_date(date_str)
-
-        assert result.year == now.year - 1
+        assert _to_date("07/04/2026") is None
+        assert _to_date("not-a-date") is None
+        assert _to_date("") is None
 
 
 # === CLI Argument Tests ===
@@ -368,12 +374,16 @@ class TestSessionRecycling:
 
         assert should_recycle is True
 
-    def test_user_agent_rotation(self):
-        """Should have multiple user agents available"""
-        from backfill_historical_prices import USER_AGENTS
+    def test_browser_profile_rotation(self):
+        """Should have multiple browser fingerprints available.
 
-        assert len(USER_AGENTS) == 5
-        assert all('Mozilla/5.0' in ua for ua in USER_AGENTS)
+        Retargeted from USER_AGENTS, which became BROWSER_PROFILES when the
+        rewrite started rotating full fingerprints rather than bare UA strings.
+        """
+        from backfill_historical_prices import BROWSER_PROFILES
+
+        assert len(BROWSER_PROFILES) >= 2
+        assert all('Mozilla/5.0' in p["User-Agent"] for p in BROWSER_PROFILES)
 
 
 # === Data Filtering Tests ===
@@ -528,22 +538,93 @@ class TestIntegration:
         # Complete coverage
         assert len(forward_indices | reverse_indices) == total_count
 
-    def test_multi_timeframe_comprehensive_coverage(self):
-        """Multi-timeframe extraction should provide comprehensive date coverage"""
-        # Simulate data from different timeframes
-        timeframe_data = {
-            '1M': [{'date': f'2025-01-{d:02d}', 'price': 100 + d} for d in range(1, 31)],  # 30 days daily
-            '3M': [{'date': f'2024-12-{d:02d}', 'price': 90 + d} for d in range(1, 31, 3)],  # Every 3 days
-            '6M': [{'date': f'2024-11-{d:02d}', 'price': 80 + d} for d in range(1, 30, 7)],  # Weekly
-            '1Y': [{'date': f'2024-10-{d:02d}', 'price': 70 + d} for d in range(1, 31, 7)],  # Weekly
-        }
+    def test_finer_granularity_wins_when_ranges_overlap(self):
+        """The real multi-range property: ranges are merged first-wins in
+        API_RANGE_CONFIG order, so a real daily price from `month` must beat
+        the flat-filled value the weekly `annual` bucket expands to for the
+        same date.
 
-        all_data = []
-        for timeframe, data in timeframe_data.items():
-            all_data.extend(data)
+        Replaces test_multi_timeframe_comprehensive_coverage, which built
+        throwaway dicts and asserted len(...) > 50 on a list it had just
+        constructed with exactly 50 entries — it never imported the module.
+        """
+        from backfill_historical_prices import expand_buckets_to_daily
 
-        # Should have comprehensive date coverage across all timeframes
-        assert len(all_data) > 50  # Significant amount of data points
+        # A weekly bucket flat-fills 7 days at one price...
+        weekly = expand_buckets_to_daily([
+            {"bucketStartDate": "2026-06-01", "marketPrice": "100.00"},
+            {"bucketStartDate": "2026-06-08", "marketPrice": "110.00"},
+        ])
+        weekly_by_date = {e["date"]: e["price"] for e in weekly}
+        assert weekly_by_date["2026-06-01"] == 100.0
+        assert weekly_by_date["2026-06-07"] == 100.0, "week should flat-fill"
+
+        # ...while daily buckets carry the true per-day price.
+        daily = expand_buckets_to_daily([
+            {"bucketStartDate": "2026-06-05", "marketPrice": "103.50"},
+            {"bucketStartDate": "2026-06-06", "marketPrice": "104.25"},
+        ])
+        daily_by_date = {e["date"]: e["price"] for e in daily}
+        assert daily_by_date["2026-06-05"] == 103.5
+
+        # Merged first-wins with the finer range first (as API_RANGE_CONFIG
+        # orders them), the daily price must survive for the shared date.
+        merged = {}
+        for entry in daily + weekly:
+            merged.setdefault(entry["date"], entry["price"])
+        assert merged["2026-06-05"] == 103.5, "daily must beat flat-filled weekly"
+        assert merged["2026-06-02"] == 100.0, "weekly still fills what daily lacks"
+
+    def test_expand_skips_non_positive_and_malformed_prices(self):
+        from backfill_historical_prices import expand_buckets_to_daily
+
+        out = expand_buckets_to_daily([
+            {"bucketStartDate": "2026-06-01", "marketPrice": "0"},
+            {"bucketStartDate": "2026-06-02", "marketPrice": "n/a"},
+            {"bucketStartDate": "2026-06-03", "marketPrice": "1,234.50"},
+        ])
+
+        by_date = {e["date"]: e["price"] for e in out}
+        assert "2026-06-01" not in by_date
+        assert "2026-06-02" not in by_date
+        assert by_date["2026-06-03"] == 1234.50
+
+
+class TestRangesCovering:
+    """Tests for ranges_covering: each API range is one request against a
+    bot-sensitive endpoint, and the ranges nest, so patching a recent hole
+    should not pull the annual range as well."""
+
+    def test_recent_gap_needs_only_the_month_range(self):
+        from backfill_historical_prices import ranges_covering
+        from datetime import date
+
+        picked = ranges_covering(date(2026, 8, 1), today=date(2026, 8, 5))
+
+        assert [r["label"] for r in picked] == ["1M"]
+
+    def test_older_gap_widens_to_the_range_that_reaches_it(self):
+        from backfill_historical_prices import ranges_covering
+        from datetime import date
+
+        assert [r["label"] for r in ranges_covering(date(2026, 6, 20), today=date(2026, 8, 5))] == ["1M", "3M"]
+        assert [r["label"] for r in ranges_covering(date(2026, 4, 1), today=date(2026, 8, 5))] == ["1M", "3M", "6M"]
+
+    def test_unknown_or_ancient_gap_falls_back_to_all_ranges(self):
+        from backfill_historical_prices import ranges_covering, API_RANGE_CONFIG
+        from datetime import date
+
+        assert ranges_covering(None) == API_RANGE_CONFIG
+        assert ranges_covering(date(2020, 1, 1), today=date(2026, 8, 5)) == API_RANGE_CONFIG
+
+    def test_prefix_order_is_preserved(self):
+        """The merge is first-wins, so a narrowed list must still start with
+        the finest range or weekly prices would win over daily ones."""
+        from backfill_historical_prices import ranges_covering, API_RANGE_CONFIG
+        from datetime import date
+
+        picked = ranges_covering(date(2026, 5, 1), today=date(2026, 8, 5))
+        assert picked == API_RANGE_CONFIG[: len(picked)]
 
 
 # === Error Handling Tests ===

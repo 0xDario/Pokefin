@@ -618,5 +618,119 @@ class TestExchangeRateParsing:
         assert rate_date.day == 15
 
 
+class TestNoScrapeTimeDrift:
+    """The price gate must not let a product's scrape time drift.
+
+    A flat 24h window meant a product scraped at 08:03 was not *strictly*
+    older than 24h at the next day's 08:00 run, so it slipped to 12:00, then
+    16:00, 20:00, 00:00 ... +4h every day. Every ~6 days that wrapped past
+    midnight and the product skipped a calendar day, which cost 3,053
+    product-days of price history before it was noticed.
+    """
+
+    # run_scraper.sh calls --run-now, so cadence comes from the host's cron
+    # and the code cannot observe it. README documents hourly; the observed
+    # production drift showed 4-hourly. The gate must hold for BOTH.
+    CANDIDATE_RUN_INTERVALS_HOURS = (1, 2, 3, 4)
+
+    def _qualifies(self, last_updated, now, interval_hours):
+        """Mirror of the gate: last_updated < now - interval."""
+        return last_updated < now - timedelta(hours=interval_hours)
+
+    def _simulate(self, gate_hours, run_interval_hours, start, days=10):
+        """Run the gate over `days` of runs, returning the dates scraped.
+
+        The seed scrape at `start` counts: the double-scrape a too-small gate
+        causes happens between that initial write and the first re-qualifying
+        run later the SAME day, so omitting it hides the bug.
+        """
+        last_updated = start
+        scraped = [start.date()]
+        cursor = start.replace(minute=0) + timedelta(hours=run_interval_hours)
+        end = start + timedelta(days=days)
+        while cursor <= end:
+            if self._qualifies(last_updated, cursor, gate_hours):
+                last_updated = cursor
+                scraped.append(cursor.date())
+            cursor += timedelta(hours=run_interval_hours)
+        return scraped
+
+    def test_interval_is_safe_for_every_plausible_cadence(self):
+        """Must be >= 24 - run_interval for the FASTEST cadence we might run
+        (never twice a day) and < 24 (always qualifies the next day)."""
+        from main import update_prices  # noqa: F401  (import guard)
+        import main
+        import inspect
+
+        src = inspect.getsource(main.update_prices)
+        # The constant lives inside update_prices; read it back from source.
+        interval = None
+        for line in src.splitlines():
+            if "price_update_interval_hours" in line and "=" in line:
+                interval = int(line.split("=")[1].strip())
+                break
+
+        assert interval is not None, "price_update_interval_hours not found"
+        fastest = min(self.CANDIDATE_RUN_INTERVALS_HOURS)
+        assert 24 - fastest <= interval < 24, (
+            f"price_update_interval_hours={interval} is unsafe: it must be in "
+            f"[{24 - fastest}, 24) to hold for every cadence in "
+            f"{self.CANDIDATE_RUN_INTERVALS_HOURS}. Below that bound an hourly "
+            f"cron double-scrapes the same calendar day."
+        )
+
+    def test_no_double_scrape_or_skip_at_any_cadence(self):
+        """The configured gate must give exactly one scrape per calendar day
+        whether cron fires hourly, 2-, 3- or 4-hourly."""
+        import main
+        import inspect
+
+        interval = None
+        for line in inspect.getsource(main.update_prices).splitlines():
+            if "price_update_interval_hours" in line and "=" in line:
+                interval = int(line.split("=")[1].strip())
+                break
+
+        # 00:30 start is the case that breaks a 22h gate on hourly cron.
+        for start in (datetime(2026, 8, 1, 0, 30, tzinfo=timezone.utc),
+                      datetime(2026, 8, 1, 8, 3, tzinfo=timezone.utc)):
+            for run_every in self.CANDIDATE_RUN_INTERVALS_HOURS:
+                scraped = self._simulate(interval, run_every, start)
+                assert len(scraped) == len(set(scraped)), (
+                    f"gate={interval}h with {run_every}h cron scraped twice in "
+                    f"one day starting {start:%H:%M}: {scraped}"
+                )
+                gaps = [(b - a).days for a, b in zip(scraped, scraped[1:])]
+                assert all(g == 1 for g in gaps), (
+                    f"gate={interval}h with {run_every}h cron skipped a day "
+                    f"starting {start:%H:%M}: {scraped}"
+                )
+
+    def test_22h_gate_would_double_scrape_on_hourly_cron(self):
+        """Witness for why the gate is 23 and not 22: 22 is safe on the live
+        4-hourly cron but breaks on the hourly cadence the README documents."""
+        start = datetime(2026, 8, 1, 0, 30, tzinfo=timezone.utc)
+
+        four_hourly = self._simulate(22, 4, start)
+        assert len(four_hourly) == len(set(four_hourly)), "22h is fine at 4h cadence"
+
+        hourly = self._simulate(22, 1, start)
+        assert len(hourly) != len(set(hourly)), (
+            "expected 22h to double-scrape on hourly cron; if this fails the "
+            "cadence-safety argument for choosing 23 needs revisiting"
+        )
+
+    def test_24h_window_reproduces_the_original_drift(self):
+        """Regression witness: the old value skips calendar days."""
+        start = datetime(2026, 8, 1, 8, 3, tzinfo=timezone.utc)
+        scrape_days = self._simulate(24, 4, start)
+
+        gaps = [(b - a).days for a, b in zip(scrape_days, scrape_days[1:])]
+        assert any(g > 1 for g in gaps), (
+            "expected the 24h window to skip a calendar day — if this fails "
+            "the drift model itself is wrong and the fix needs rethinking"
+        )
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
