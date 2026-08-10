@@ -12,6 +12,7 @@ import {
 } from "../../components/MarketView/returns";
 import {
   getDaysOfSupply,
+  isListingsSnapshotFresh,
   getPriorUnitsSold30d,
   getPulseSignal,
   getUnitsSoldWindow,
@@ -187,10 +188,17 @@ export default async function ProductPage({
   const unitsSold30d = getUnitsSoldWindow(salesHistory, 30);
   const unitsSoldPrior30d = getPriorUnitsSold30d(salesHistory);
   const volumeTrend = getVolumeTrendPercent(unitsSold30d, unitsSoldPrior30d);
-  const daysOfSupply = getDaysOfSupply(
-    listings?.total_quantity_available ?? null,
-    unitsSold30d
-  );
+  // A stale snapshot describes a market that no longer exists, so treat it as
+  // no data rather than presenting old depth as current (and deriving
+  // days-of-supply from it). Mirrors the guard in the volume RPC.
+  const supplyIsFresh = isListingsSnapshotFresh(listings?.snapshot_date);
+  const activeListings = supplyIsFresh
+    ? listings?.active_listings ?? null
+    : null;
+  const unitsOnMarket = supplyIsFresh
+    ? listings?.total_quantity_available ?? null
+    : null;
+  const daysOfSupply = getDaysOfSupply(unitsOnMarket, unitsSold30d);
   const priceReturn30d = product.returns?.["1M"] ?? null;
   const pulseSignal = getPulseSignal(priceReturn30d, volumeTrend);
   const pulseMeta = pulseSignal ? PULSE_SIGNAL_META[pulseSignal] : null;
@@ -335,10 +343,10 @@ export default async function ProductPage({
             <ReturnValue value={volumeTrend} />
           </MetricTile>
           <MetricTile label="Active listings">
-            {formatCount(listings?.active_listings ?? null)}
+            {formatCount(activeListings)}
           </MetricTile>
           <MetricTile label="Units on market">
-            {formatCount(listings?.total_quantity_available ?? null)}
+            {formatCount(unitsOnMarket)}
           </MetricTile>
           <MetricTile label="Days of supply">
             {daysOfSupply !== null ? (

@@ -1,5 +1,6 @@
 import {
   getDaysOfSupply,
+  isListingsSnapshotFresh,
   getPriorUnitsSold30d,
   getPulseSignal,
   getUnitsSoldWindow,
@@ -40,6 +41,25 @@ describe("getVolumeTrendPercent", () => {
 
   it("returns null when current is null", () => {
     expect(getVolumeTrendPercent(null, 20)).toBeNull();
+  });
+});
+
+describe("isListingsSnapshotFresh", () => {
+  it("accepts today and the recent past", () => {
+    expect(isListingsSnapshotFresh("2026-07-06", REFERENCE_DATE)).toBe(true);
+    expect(isListingsSnapshotFresh("2026-07-03", REFERENCE_DATE)).toBe(true);
+  });
+
+  it("rejects a snapshot past the tolerance", () => {
+    // 4 days old: collection has clearly stalled, so the depth on screen is
+    // describing a market that no longer exists.
+    expect(isListingsSnapshotFresh("2026-07-02", REFERENCE_DATE)).toBe(false);
+    expect(isListingsSnapshotFresh("2026-06-20", REFERENCE_DATE)).toBe(false);
+  });
+
+  it("treats a missing snapshot as not fresh", () => {
+    expect(isListingsSnapshotFresh(null, REFERENCE_DATE)).toBe(false);
+    expect(isListingsSnapshotFresh(undefined, REFERENCE_DATE)).toBe(false);
   });
 });
 

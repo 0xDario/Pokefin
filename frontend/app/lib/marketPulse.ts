@@ -55,6 +55,35 @@ function toLocalDateKey(d: Date): string {
 }
 
 /**
+ * Whether a listings snapshot is recent enough to describe the market now.
+ *
+ * Supply metrics have no equivalent of the sales-window hole/staleness checks
+ * — there is exactly one row to look at — so without this a stalled scraper
+ * would keep presenting the last snapshot as current, and days-of-supply
+ * would be derived from it.
+ */
+export function isListingsSnapshotFresh(
+  snapshotDate: string | null | undefined,
+  referenceDate: Date = new Date()
+): boolean {
+  if (!snapshotDate) return false;
+
+  const today = new Date(
+    referenceDate.getFullYear(),
+    referenceDate.getMonth(),
+    referenceDate.getDate()
+  );
+  const oldestAllowed = toLocalDateKey(
+    new Date(
+      today.getFullYear(),
+      today.getMonth(),
+      today.getDate() - LISTINGS_STALENESS_TOLERANCE_DAYS
+    )
+  );
+  return snapshotDate >= oldestAllowed;
+}
+
+/**
  * Percent change of the current window vs the prior window.
  * Null when either input is null or the prior window is 0 (no baseline).
  */
@@ -102,6 +131,12 @@ const DAILY_DATA_STALENESS_TOLERANCE_DAYS = 3;
 // preferred over the scaled weekly estimate once daily rows cover at least this
 // many of the 30 days in the prior window. Keep both sides in sync.
 const PRIOR_WINDOW_MIN_DAY_COVERAGE = 28;
+
+// Listings are snapshotted once per product per day, so the newest snapshot
+// normally trails today by a day at most. Beyond this the depth on screen is
+// no longer describing the market a buyer would see. Mirrors the guard in
+// migrations/0022_listings_freshness_guard.sql — keep both sides in sync.
+const LISTINGS_STALENESS_TOLERANCE_DAYS = 3;
 
 // The prior window's weekly fallback range (today-63 .. today-36) is 28 days,
 // i.e. exactly four Monday-anchored buckets. Mirrors the same requirement in
