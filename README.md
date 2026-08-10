@@ -11,11 +11,16 @@ A live price and market-activity dashboard for sealed Pokémon TCG products (Boo
 - 🇺🇸→🇨🇦 **Live USD to CAD conversion** (Bank of Canada API)
 
 ### Market Pulse
-- 📦 **Sales volume history** — units sold and transaction counts per day, charted under the price line
+- 📦 **Sales volume history** — units sold per day, charted as bars under the price line (transaction counts are collected and stored, but not currently surfaced in the UI)
 - 📊 **Volume trend** — trailing 30 days vs the prior 30
 - 🏬 **Supply depth** — active listings, total units on market, and days of supply
 - 🚦 **Price/volume divergence signals** — *Demand surge*, *Thin supply*, *Distribution*, *Cooling off*
-- ➖ Metrics report `--` rather than a number whenever the underlying data doesn't cover the window, so a scraper gap never reads as "zero sold"
+- ➖ Metrics report `--` rather than a number when collection has gone stale,
+  has a hole in it, or never happened — so a scraper gap never reads as
+  "zero sold". Note the one deliberate exception: a window that simply
+  *starts* before collection began reports the partial total rather than
+  `--`, so a newly tracked product shows its lifetime figure instead of
+  nothing
 
 ### Browsing
 - 🔎 **Advanced filtering**: generation, set code, product type, search
@@ -112,7 +117,9 @@ set -a && source ~/.config/pokefin/env && set +a
 # One pass and exit
 python main.py --run-now
 
-# Or the self-scheduling loop (runs, then sleeps to the next interval)
+# Or the self-scheduling loop. NOTE: it sleeps to the next 4-hour UTC
+# boundary FIRST and only then scrapes, so starting it at 00:05 means
+# nothing happens until 04:00. Run --run-now first if you want data now.
 python main.py
 
 # In production, cron invokes the wrapper, which sources the env file first
@@ -153,8 +160,11 @@ python backfill_thumbnails.py                      # generate image thumbnails
 
 Schema reference lives in `schema.sql` (context only — not meant to be run).
 
-Migrations are hand-written, idempotent SQL in `migrations/`, applied via the
-Supabase SQL editor or MCP, and tracked in `audits/HARDENING_FOLLOWUPS.md`.
+Migrations are hand-written SQL in `migrations/`, applied via the Supabase SQL
+editor or MCP, and tracked in `audits/HARDENING_FOLLOWUPS.md`. The numbered
+hardening series (`0001`+) is idempotent and safe to re-run;
+`create_box_recipes.sql` is **not** — it uses bare `CREATE TABLE` / `CREATE
+INDEX` / `CREATE POLICY`, so re-applying it errors on an existing database.
 
 They are a **hardening and feature series applied to an existing project, not a
 fresh-project bootstrap** — nothing in `migrations/` creates the core tables
@@ -165,9 +175,12 @@ Order, if you are reconstructing a project:
 
 1. `create_box_recipes.sql` — unnumbered, but must run **before** `0002`,
    which does `ALTER TABLE public.box_recipes`.
-2. `0001` … `0021` in numeric order.
-3. `20260506_market_performance_functions.sql` — date-prefixed and independent
-   of the numbered series; needs the price tables to exist.
+2. `20260506_market_performance_functions.sql` — despite the date prefix this
+   is **not** independent: it creates `get_market_product_metrics()`,
+   `get_market_product_summaries()` and `get_set_analytics()`, which `0007`
+   then `ALTER`s to pin `search_path`. It needs the core price tables, so run
+   it after those exist and before `0007`.
+3. `0001` … `0021` in numeric order.
 
 All history tables are readable by `anon`/`authenticated` under RLS and written
 only by the scraper's secret key.
