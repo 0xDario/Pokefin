@@ -8,10 +8,12 @@ const csp = [
   // stays eval-free.
   `script-src 'self' 'unsafe-inline'${
     process.env.NODE_ENV === "development" ? " 'unsafe-eval'" : ""
-  } https://challenges.cloudflare.com`,
+  } https://challenges.cloudflare.com https://va.vercel-scripts.com`,
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' data: blob: https://*.tcgplayer.com https://tcgplayer.com https://*.supabase.co",
   "font-src 'self' data:",
+  // Analytics and Speed Insights beacon to same-origin /_vercel/* paths, so
+  // 'self' covers the POSTs; only the script host needs allowing above.
   "connect-src 'self' https://*.supabase.co https://challenges.cloudflare.com",
   "frame-src https://challenges.cloudflare.com",
   "frame-ancestors 'none'",
