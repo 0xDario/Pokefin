@@ -26,8 +26,8 @@ A live price and market-activity dashboard for sealed Pokémon TCG products (Boo
   partial total, so a newly tracked product shows its lifetime figure instead
   of nothing.
   The **supply metrics** (active listings, units on market, days of supply)
-  carry no such guard — they render the most recent snapshot whatever its age,
-  so if listings collection stalls they will show stale depth as current
+  are guarded the same way: a listings snapshot more than three days old is
+  treated as no data rather than presented as current depth
 
 ### Browsing
 - 🔎 **Advanced filtering**: generation, set code, product type, search
@@ -190,10 +190,9 @@ from-scratch bootstrap and cannot rebuild the database on its own:
   `0006` revokes privileges on `handle_new_profile_portfolio()` and `0007`
   alters `get_price_history_deduplicated(bigint[], text)`. Both exist only in
   the live database.
-- Not every file is re-runnable. Most of the numbered series is idempotent, but
-  `0003_integrity_constraints.sql` uses bare `ALTER TABLE ... ADD CONSTRAINT`
-  and `create_box_recipes.sql` uses bare `CREATE TABLE` / `CREATE INDEX` /
-  `CREATE POLICY`, so both error on a second run.
+- Not every file is re-runnable: `0003_integrity_constraints.sql` uses bare
+  `ALTER TABLE ... ADD CONSTRAINT` and errors on a second run. The rest,
+  including `create_box_recipes.sql`, is idempotent.
 
 The ordering constraints that matter when applying a *new* migration, or
 replaying a subset:
