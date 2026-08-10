@@ -15,6 +15,14 @@ updates:
       # function"). Stay on eslint 9 until eslint-config-next supports 10.
       - dependency-name: "eslint"
         versions: [">=10"]
+      # TypeScript 7 is the native Go rewrite and deliberately drops the
+      # JavaScript compiler API. Next.js refuses it ("TypeScript 7.0.2 does
+      # not provide the compiler API required by Next.js") and typescript-
+      # eslint errors with "does not support TS 7.0", so a grouped dev-deps
+      # bump to 7 broke the production Vercel build once already. Stay on 6
+      # until Next.js and typescript-eslint support the new API.
+      - dependency-name: "typescript"
+        versions: [">=7"]
     groups:
       types-deps:
         patterns:
