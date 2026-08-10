@@ -11,16 +11,23 @@ A live price and market-activity dashboard for sealed Pokémon TCG products (Boo
 - 🇺🇸→🇨🇦 **Live USD to CAD conversion** (Bank of Canada API)
 
 ### Market Pulse
-- 📦 **Sales volume history** — units sold per day, charted as bars under the price line (transaction counts are collected and stored, but not currently surfaced in the UI)
+- 📦 **Sales volume history** — units sold, charted as bars under the price
+  line. Bars are **per day** on the 7D and 1M ranges and **per week**
+  (Monday-start) on 3M / 6M / 1Y, where daily rows are aggregated and the
+  backfilled weekly rows fill in earlier history. Transaction counts are
+  collected and stored but not currently surfaced in the UI
 - 📊 **Volume trend** — trailing 30 days vs the prior 30
 - 🏬 **Supply depth** — active listings, total units on market, and days of supply
 - 🚦 **Price/volume divergence signals** — *Demand surge*, *Thin supply*, *Distribution*, *Cooling off*
-- ➖ Metrics report `--` rather than a number when collection has gone stale,
-  has a hole in it, or never happened — so a scraper gap never reads as
-  "zero sold". Note the one deliberate exception: a window that simply
-  *starts* before collection began reports the partial total rather than
-  `--`, so a newly tracked product shows its lifetime figure instead of
-  nothing
+- ➖ **Sales-window metrics** (units sold 7d/30d, volume trend) report `--`
+  rather than a number when collection has gone stale, has a hole in it, or
+  never happened — so a scraper gap never reads as "zero sold". One deliberate
+  exception: a window that simply *starts* before collection began reports the
+  partial total, so a newly tracked product shows its lifetime figure instead
+  of nothing.
+  The **supply metrics** (active listings, units on market, days of supply)
+  carry no such guard — they render the most recent snapshot whatever its age,
+  so if listings collection stalls they will show stale depth as current
 
 ### Browsing
 - 🔎 **Advanced filtering**: generation, set code, product type, search
@@ -78,10 +85,17 @@ pnpm dev
 ```
 
 Browsing prices and charts only needs the two Supabase values. **Login and
-signup additionally need a Turnstile site key** — both pages mount the widget
-and keep the submit button disabled until it returns a token, so leaving the
-placeholder in place makes auth untestable locally. Cloudflare publishes
-always-passing test keys; `1x00000000000000000000AA` works for local dev.
+signup additionally need Turnstile configured on both sides** — both pages
+mount the widget and keep the submit button disabled until it returns a token,
+so leaving the placeholder in place makes auth untestable locally.
+
+The site key alone is not sufficient: whichever Supabase project you point at
+validates the token server-side, so its CAPTCHA setting must match. Either
+disable CAPTCHA protection on your own dev project, or set Cloudflare's
+matching always-passing **test secret** under Supabase → Authentication →
+Attack Protection and use the paired test site key
+(`1x00000000000000000000AA`) here. Pointing a local build at a project
+configured with a production secret will reject the test token.
 
 ```bash
 # Scraper (separate terminal, from the repo root)
