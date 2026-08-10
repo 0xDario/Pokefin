@@ -28,7 +28,7 @@ A live price and market-activity dashboard for sealed Pokémon TCG products (Boo
 ## 🛠 Tech Stack
 
 - **Frontend**: Next.js (React, TypeScript) + Tailwind CSS + Recharts
-- **Backend**: Supabase (PostgreSQL + Storage). The frontend queries PostgREST directly — there is no custom API layer
+- **Backend**: Supabase (PostgreSQL + Storage). Market and catalog data is read straight from PostgREST — there is no custom API layer for it. Auth and account actions do have Next.js route handlers under `frontend/app/api/` (`/api/auth/*`, `/api/account/export`, `/api/account/delete`)
 - **Data Scraper**: Python. Prices and sales volume come from TCGPlayer's `infinite-api`; Selenium is used only to extract product images
 - **Exchange Rate**: Bank of Canada API integration
 - **Deployment**: Vercel
@@ -64,12 +64,19 @@ pnpm install
 
 # Create environment file
 cp .env.example .env.local
-# Then fill in your Supabase credentials in .env.local:
+# Then fill in .env.local:
 #   NEXT_PUBLIC_SUPABASE_URL=your-supabase-url
 #   NEXT_PUBLIC_SUPABASE_KEY=your-supabase-publishable-key
+#   NEXT_PUBLIC_TURNSTILE_SITE_KEY=your-turnstile-site-key
 
 pnpm dev
 ```
+
+Browsing prices and charts only needs the two Supabase values. **Login and
+signup additionally need a Turnstile site key** — both pages mount the widget
+and keep the submit button disabled until it returns a token, so leaving the
+placeholder in place makes auth untestable locally. Cloudflare publishes
+always-passing test keys; `1x00000000000000000000AA` works for local dev.
 
 ```bash
 # Scraper (separate terminal, from the repo root)
@@ -94,7 +101,14 @@ chmod 600 ~/.config/pokefin/env
 cp secretsFileTemplate.py secretsFile.py   # then edit it
 ```
 
+`secrets_loader` reads `os.environ` and falls back to `secretsFile.py`. It does
+**not** read the env file itself — `run_scraper.sh` is what sources it. So if
+you went the env-file route, export it yourself before invoking the scraper or
+a backfill directly (with `secretsFile.py` this is unnecessary):
+
 ```bash
+set -a && source ~/.config/pokefin/env && set +a
+
 # One pass and exit
 python main.py --run-now
 
@@ -106,6 +120,8 @@ python main.py
 ```
 
 ### One-time backfills
+
+Same environment requirement as above — `set -a && source ~/.config/pokefin/env && set +a` first.
 
 ```bash
 python backfill_historical_prices.py --gaps-only   # fill holes in price history
@@ -136,9 +152,22 @@ python backfill_thumbnails.py                      # generate image thumbnails
 ## 🗄 Database
 
 Schema reference lives in `schema.sql` (context only — not meant to be run).
-Migrations are hand-written, idempotent SQL in `migrations/`, applied in
-numeric order via the Supabase SQL editor or MCP. `audits/HARDENING_FOLLOWUPS.md`
-tracks what has been applied.
+
+Migrations are hand-written, idempotent SQL in `migrations/`, applied via the
+Supabase SQL editor or MCP, and tracked in `audits/HARDENING_FOLLOWUPS.md`.
+
+They are a **hardening and feature series applied to an existing project, not a
+fresh-project bootstrap** — nothing in `migrations/` creates the core tables
+(`products`, `sets`, `product_types`, `generations`, `product_price_history`);
+those predate the directory and are documented in `schema.sql`.
+
+Order, if you are reconstructing a project:
+
+1. `create_box_recipes.sql` — unnumbered, but must run **before** `0002`,
+   which does `ALTER TABLE public.box_recipes`.
+2. `0001` … `0021` in numeric order.
+3. `20260506_market_performance_functions.sql` — date-prefixed and independent
+   of the numbered series; needs the price tables to exist.
 
 All history tables are readable by `anon`/`authenticated` under RLS and written
 only by the scraper's secret key.
