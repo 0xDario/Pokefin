@@ -142,6 +142,15 @@ All probes should return the expected 401/403/429/redirect results.
   Advisor re-run confirms all critical issues resolved; remaining
   warnings are intentional (reference-table anon SELECT, definer
   functions with internal scoping, Pro+ leaked-password toggle).
+- **Migration 0022 applied** (2026-08-10, via Supabase MCP). Extends the
+  staleness guard to the supply metrics: active_listings,
+  total_quantity_available and lowest_listing_price go NULL when the newest
+  listings snapshot is more than 3 days old, while listings_snapshot_date is
+  kept so callers can still report when data was last collected. Mirrored by
+  isListingsSnapshotFresh() in frontend/app/lib/marketPulse.ts, which guards
+  the /product/[id] path (it queries product_listings_history directly rather
+  than through the RPC). Validated on scratch Postgres; no change to current
+  output (306/306 products same-day fresh).
 - **Migration 0021 applied** (2026-07-27, via Supabase MCP). Measures
   daily freshness from buckets that carry a real quantity (a run of
   NULL-quantity rows was faking freshness and publishing stale partial
