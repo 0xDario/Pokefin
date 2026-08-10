@@ -3,17 +3,25 @@ import { withSentryConfig } from "@sentry/nextjs";
 
 const csp = [
   "default-src 'self'",
-  // React/Next dev mode needs eval() for debugging features (reconstructing
-  // callstacks etc.); production builds never use eval, so the shipped CSP
-  // stays eval-free.
+  // Two dev-only allowances, both absent from the shipped CSP:
+  //  - React/Next dev mode needs eval() for debugging features.
+  //  - @vercel/analytics and @vercel/speed-insights load script.debug.js from
+  //    va.vercel-scripts.com ONLY when isDevelopment(); in production their
+  //    getScriptSrc() falls through to same-origin /_vercel/insights/script.js
+  //    and /_vercel/speed-insights/script.js, which 'self' already covers.
+  //    Allowing the third-party origin in production would widen the CSP for
+  //    no benefit. (It would be needed if a `dsn` or `scriptSrc` prop were
+  //    ever passed to SpeedInsights — layout.tsx passes neither.)
   `script-src 'self' 'unsafe-inline'${
-    process.env.NODE_ENV === "development" ? " 'unsafe-eval'" : ""
-  } https://challenges.cloudflare.com https://va.vercel-scripts.com`,
+    process.env.NODE_ENV === "development"
+      ? " 'unsafe-eval' https://va.vercel-scripts.com"
+      : ""
+  } https://challenges.cloudflare.com`,
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' data: blob: https://*.tcgplayer.com https://tcgplayer.com https://*.supabase.co",
   "font-src 'self' data:",
   // Analytics and Speed Insights beacon to same-origin /_vercel/* paths, so
-  // 'self' covers the POSTs; only the script host needs allowing above.
+  // 'self' already covers the POSTs.
   "connect-src 'self' https://*.supabase.co https://challenges.cloudflare.com",
   "frame-src https://challenges.cloudflare.com",
   "frame-ancestors 'none'",
