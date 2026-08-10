@@ -142,9 +142,12 @@ python backfill_thumbnails.py                      # generate image thumbnails
    product is refreshed roughly once per day — the staleness gate is 23h,
    deliberately just under 24h so a product locks to a stable daily slot
    instead of drifting later each run and skipping calendar days.
-2. **Prices and sales volume** come from TCGPlayer's `infinite-api` in a single
-   request per product: the latest market price plus 30 days of daily buckets
-   carrying units sold and transaction counts.
+2. **Prices and sales volume** come from TCGPlayer's `infinite-api`. In the
+   normal case that is one request per product — `range=month` returns the
+   latest market price *and* 30 days of daily buckets together. If that
+   response is unusable the scraper falls through `quarter`, `semi-annual`
+   and `annual` (up to four requests), and those coarser ranges yield a price
+   but **no** daily volume buckets, since only `month` is daily.
 3. **Listing depth** is snapshotted per product per day from TCGPlayer's
    marketplace search API (active listings, units available, lowest ask).
 4. **Selenium** extracts product images, which are uploaded to Supabase Storage
@@ -161,26 +164,31 @@ python backfill_thumbnails.py                      # generate image thumbnails
 Schema reference lives in `schema.sql` (context only — not meant to be run).
 
 Migrations are hand-written SQL in `migrations/`, applied via the Supabase SQL
-editor or MCP, and tracked in `audits/HARDENING_FOLLOWUPS.md`. The numbered
-hardening series (`0001`+) is idempotent and safe to re-run;
-`create_box_recipes.sql` is **not** — it uses bare `CREATE TABLE` / `CREATE
-INDEX` / `CREATE POLICY`, so re-applying it errors on an existing database.
+editor or MCP, and tracked in `audits/HARDENING_FOLLOWUPS.md`.
 
-They are a **hardening and feature series applied to an existing project, not a
-fresh-project bootstrap** — nothing in `migrations/` creates the core tables
-(`products`, `sets`, `product_types`, `generations`, `product_price_history`);
-those predate the directory and are documented in `schema.sql`.
+They are applied **incrementally to the live project**. This directory is not a
+from-scratch bootstrap and cannot rebuild the database on its own:
 
-Order, if you are reconstructing a project:
+- Nothing here creates the core tables (`products`, `sets`, `product_types`,
+  `generations`, `product_price_history`) — they predate the directory and are
+  described in `schema.sql`.
+- Two functions the migrations operate on are not defined anywhere in the repo:
+  `0006` revokes privileges on `handle_new_profile_portfolio()` and `0007`
+  alters `get_price_history_deduplicated(bigint[], text)`. Both exist only in
+  the live database.
+- Not every file is re-runnable. Most of the numbered series is idempotent, but
+  `0003_integrity_constraints.sql` uses bare `ALTER TABLE ... ADD CONSTRAINT`
+  and `create_box_recipes.sql` uses bare `CREATE TABLE` / `CREATE INDEX` /
+  `CREATE POLICY`, so both error on a second run.
 
-1. `create_box_recipes.sql` — unnumbered, but must run **before** `0002`,
-   which does `ALTER TABLE public.box_recipes`.
-2. `20260506_market_performance_functions.sql` — despite the date prefix this
-   is **not** independent: it creates `get_market_product_metrics()`,
-   `get_market_product_summaries()` and `get_set_analytics()`, which `0007`
-   then `ALTER`s to pin `search_path`. It needs the core price tables, so run
-   it after those exist and before `0007`.
-3. `0001` … `0021` in numeric order.
+The ordering constraints that matter when applying a *new* migration, or
+replaying a subset:
+
+- `create_box_recipes.sql` must precede `0002`, which does
+  `ALTER TABLE public.box_recipes`.
+- `20260506_market_performance_functions.sql` must precede `0007`, which pins
+  `search_path` on the three functions it creates (`0009` also consumes them).
+- Otherwise apply numbered files in numeric order.
 
 All history tables are readable by `anon`/`authenticated` under RLS and written
 only by the scraper's secret key.
