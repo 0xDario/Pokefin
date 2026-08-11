@@ -1068,11 +1068,12 @@ def update_prices():
     # qualifies at the SAME slot each day but never twice in one day.
     #
     # X is deliberately NOT tuned to one cadence. run_scraper.sh invokes
-    # --run-now, so the interval is set by whatever cron on the host uses, and
-    # the code cannot see it: README documents hourly while the observed
-    # production drift (+4h/day under the old gate) shows the live cron is
-    # actually 4-hourly. 23 is the only value that is safe either way —
-    # hourly needs X >= 23, 4-hourly needs X >= 20, and both need X < 24.
+    # --run-now, so the interval is whatever cron on the host uses and the code
+    # cannot see it. Production is currently `0 */4 * * *` (4-hourly), which
+    # matches the +4h/day march observed under the old gate, but the host's
+    # schedule can change without this file changing. 23 is the only value
+    # safe across the plausible range — hourly needs X >= 23, 4-hourly needs
+    # X >= 20, and every cadence needs X < 24.
     #
     # Picking 22 would work for a 4-hourly cron but double-scrape on an hourly
     # one (a product updated 00:30 would re-qualify at 23:00 the SAME day),

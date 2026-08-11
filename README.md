@@ -150,6 +150,34 @@ python backfill_sales_volume.py                    # seed a year of volume histo
 python backfill_thumbnails.py                      # generate image thumbnails
 ```
 
+### 📰 The Pokéfin Weekly
+
+`generate_weekly_report.py` renders a newspaper-style PDF of the week's market
+action — returns by product category across 7D/1M/6M/1Y, best and worst movers,
+and a derived narrative headline. It reads Supabase and writes to `reports/`;
+it never writes to the database.
+
+```bash
+python generate_weekly_report.py   # writes reports/pokefin_weekly_<date>.{html,pdf}
+```
+
+Two things it needs:
+
+- **Chrome or Chromium on PATH.** The PDF is produced by `--headless
+  --print-to-pdf`; without a browser the generator exits non-zero rather than
+  leaving last week's file in place.
+- **Enough price history to be meaningful.** Products with fewer than 3
+  distinct prices in the trailing year are treated as illiquid and excluded
+  from every ranking, so a product whose price never moved cannot manufacture
+  a headline. The run prints how many it dropped.
+
+`run_weekly_report.sh` is the scheduler wrapper: it sources the credentials
+file, runs the generator, verifies *this* run produced a PDF, and posts a
+desktop notification. It derives the repo location from its own path, so the
+same script works from a macOS checkout and from the Linux scraper host. On
+macOS it is scheduled by `~/Library/LaunchAgents/com.pokefin.weekly.plist`
+(Fridays 17:00); on Linux, add it to cron.
+
 ## 📊 How It Works
 
 1. **Cron runs the Python scraper** on the host (via `run_scraper.sh`). Each
