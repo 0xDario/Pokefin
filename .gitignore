@@ -26,3 +26,7 @@ checkpoint_*.json
 
 # macOS
 .DS_Store
+
+# Generated weekly report PDFs/HTML
+reports/
+pokefin_report.*
