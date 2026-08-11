@@ -1,11 +1,16 @@
-#!/bin/zsh
-# The Pokefin Weekly — launchd wrapper.
-# Runs the report generator and posts a macOS notification on completion.
-# Scheduled via ~/Library/LaunchAgents/com.pokefin.weekly.plist (Fridays 17:00).
+#!/usr/bin/env bash
+# The Pokefin Weekly — scheduler wrapper.
+# Runs the report generator and announces the result.
+# Scheduled on macOS via ~/Library/LaunchAgents/com.pokefin.weekly.plist
+# (Fridays 17:00), or on the Linux scraper host via cron.
 
 set -u
 
-REPO="/Users/darioturchi/repos/Pokefin"
+# Derive the repo from this script's own location rather than hardcoding it —
+# the same file runs from ~/repos/Pokefin on macOS and ~/pokefin on the Linux
+# scraper host, and a hardcoded path silently `cd`-failed on the latter.
+SCRIPT_PATH="${BASH_SOURCE[0]:-$0}"
+REPO="$(cd "$(dirname "$SCRIPT_PATH")" && pwd)"
 PY="$REPO/venv/bin/python"
 LOG="$REPO/reports/weekly_report.log"
 
@@ -36,13 +41,24 @@ echo "$OUTPUT" >> "$LOG"
 # exited 0 when Chrome was missing, the success branch fired.
 PDF=$(printf '%s\n' "$OUTPUT" | sed -n 's/^REPORT_PDF=//p' | tail -1)
 
+# Desktop notification where one exists; the log is the record everywhere else.
+# The Linux scraper host has neither osascript nor a session bus under cron, so
+# both branches degrade to the log rather than erroring.
+notify() {  # notify <subtitle> <message> <macos-sound>
+  if command -v osascript >/dev/null 2>&1; then
+    osascript -e "display notification \"$2\" with title \"The Pokéfin Weekly 📰\" subtitle \"$1\" sound name \"$3\"" 2>/dev/null
+  elif command -v notify-send >/dev/null 2>&1; then
+    notify-send "The Pokéfin Weekly 📰" "$1 — $2" 2>/dev/null
+  fi
+}
+
 if [ $STATUS -eq 0 ] && [ -n "$PDF" ] && [ -f "$PDF" ]; then
   NAME=$(basename "$PDF")
   echo "OK -> $NAME" >> "$LOG"
-  osascript -e "display notification \"$NAME is ready in reports/\" with title \"The Pokéfin Weekly 📰\" subtitle \"New investment report generated\" sound name \"Glass\""
+  notify "New investment report generated" "$NAME is ready in reports/" "Glass"
 else
   echo "FAILED (status $STATUS, pdf='${PDF:-none}')" >> "$LOG"
-  osascript -e "display notification \"Generation failed — see reports/weekly_report.log\" with title \"The Pokéfin Weekly 📰\" subtitle \"Error\" sound name \"Basso\""
+  notify "Error" "Generation failed — see reports/weekly_report.log" "Basso"
 fi
 
 # launchd should see the failure too.
