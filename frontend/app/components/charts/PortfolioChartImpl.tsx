@@ -47,13 +47,20 @@ export default function PortfolioChartImpl({
         day: "numeric",
         timeZone: "UTC",
       }),
-      value: currency === "CAD" ? point.value * exchangeRate : point.value,
+      value:
+        point.value === null
+          ? null
+          : currency === "CAD"
+            ? point.value * exchangeRate
+            : point.value,
       timestamp: point.date,
     }));
   }, [data, currency, exchangeRate]);
 
   const priceStats = useMemo(() => {
-    const values = chartData.map((d) => d.value).filter((v) => v > 0);
+    const values = chartData
+      .map((d) => d.value)
+      .filter((value): value is number => value !== null && value > 0);
     if (values.length === 0) return { min: 0, max: 100 };
 
     const min = Math.min(...values);

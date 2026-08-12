@@ -1,8 +1,8 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
-import { supabase } from "../../../lib/supabase";
-import { logSupabaseError } from "../../../lib/logger";
+import { fetchMarketProductsClient } from "../../../lib/clientMarketData";
+import { logCaughtError } from "../../../lib/logger";
 import { BoosterPackPrice, SetOption } from "../types";
 
 export function useBoosterPackPrices() {
@@ -12,36 +12,29 @@ export function useBoosterPackPrices() {
 
   useEffect(() => {
     async function fetchData() {
-      // Fetch all booster pack products with their set info
-      const { data: products, error: productsError } = await supabase
-        .from("products")
-        .select(
-          `id, usd_price, variant,
-           sets!inner ( id, name, code, release_date ),
-           product_types!inner ( name )`
-        )
-        .eq("product_types.name", "booster_pack")
-        .order("usd_price", { ascending: false });
-
-      if (productsError) {
-        logSupabaseError("booster_pack_prices_failed", productsError);
-        setLoading(false);
-        return;
-      }
-
-      if (products) {
+      try {
+        // Use the guarded summaries instead of products.usd_price directly.
+        // A pack whose upstream history stops updating must not keep
+        // contributing an old price to a box NAV calculation.
+        const products = await fetchMarketProductsClient();
         const prices: BoosterPackPrice[] = [];
         const setMap = new Map<number, SetOption>();
 
-        for (const item of products as any[]) {
-          const set = Array.isArray(item.sets) ? item.sets[0] : item.sets;
-          if (!set) continue;
+        for (const item of products) {
+          const set = item.sets;
+          if (
+            item.product_types?.name !== "booster_pack" ||
+            item.usd_price === null ||
+            !set?.id
+          ) {
+            continue;
+          }
 
           prices.push({
             setId: set.id,
             setName: set.name,
             usdPrice: item.usd_price,
-            variant: item.variant,
+            variant: item.variant ?? null,
           });
 
           if (!setMap.has(set.id)) {
@@ -61,9 +54,11 @@ export function useBoosterPackPrices() {
             (a, b) => new Date(b.releaseDate).getTime() - new Date(a.releaseDate).getTime()
           )
         );
+      } catch (error) {
+        logCaughtError("booster_pack_prices_failed", error);
+      } finally {
+        setLoading(false);
       }
-
-      setLoading(false);
     }
 
     fetchData();

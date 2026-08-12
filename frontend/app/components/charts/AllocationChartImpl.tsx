@@ -37,12 +37,20 @@ export default function AllocationChartImpl({
   exchangeRate = 1.36,
 }: AllocationChartImplProps) {
   const currencySymbol = currency === "CAD" ? "C$" : "$";
+  const hasUnknownPrice = useMemo(
+    () =>
+      holdings.some(
+        (holding) => calculateHoldingPerformance(holding).current_value === null
+      ),
+    [holdings]
+  );
 
   const allocationData = useMemo(() => {
     const groupMap = new Map<string, number>();
 
     for (const holding of holdings) {
       const perf = calculateHoldingPerformance(holding);
+      if (perf.current_value === null) continue;
       const value = currency === "CAD" ? perf.current_value * exchangeRate : perf.current_value;
 
       let groupName: string;
@@ -92,14 +100,22 @@ export default function AllocationChartImpl({
     return null;
   };
 
-  if (holdings.length === 0) {
+  if (
+    holdings.length === 0 ||
+    allocationData.length === 0 ||
+    hasUnknownPrice
+  ) {
     return (
       <div className="bg-white rounded-lg shadow-lg p-4 md:p-6 h-full flex flex-col">
         <h2 className="text-lg font-semibold text-slate-900 mb-4">
           Allocation by {groupBy === "set" ? "Set" : "Product Type"}
         </h2>
         <div className="flex-1 flex items-center justify-center text-slate-500">
-          No holdings to display
+          {holdings.length === 0
+            ? "No holdings to display"
+            : hasUnknownPrice
+              ? "Allocation unavailable while a holding has no current price"
+              : "No current prices available"}
         </div>
       </div>
     );

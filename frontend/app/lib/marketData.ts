@@ -5,11 +5,16 @@ import {
   ProductReturnMetrics,
   SalesHistoryEntry,
 } from "../components/ProductPrices/types";
+import { getFreshUsdPrice } from "./marketPulse";
 
 export type MarketSummaryRow = {
   id: number;
   usd_price: number | null;
   url: string | null;
+  // max(product_price_history.recorded_at) for the product. Optional because
+  // a deployment can reach a database that has not run migration 0023 yet;
+  // see mapMarketSummaryRowToProduct for what happens then.
+  price_recorded_at?: string | null;
   last_updated: string | null;
   variant: string | null;
   image_url: string | null;
@@ -278,10 +283,29 @@ export function buildProductReturnMetrics(
   };
 }
 
+/**
+ * Withhold a price the summaries RPC reported as stale.
+ *
+ * 0023 already nulls usd_price on its side, so post-migration this is the
+ * agreeing mirror rather than the enforcing guard — it is what makes the
+ * frontend independent of a future revert of the SQL. When price_recorded_at
+ * is absent entirely (the RPC predates 0023) there is no freshness signal to
+ * judge by, and the price passes through: blanking the whole catalog on a
+ * database that is merely behind on migrations would be a worse failure than
+ * the stale prices this guards. /product/[id] does not share that gap — it
+ * derives freshness from the price history it already fetches.
+ */
+function applySummaryPriceFreshness(row: MarketSummaryRow): number | null {
+  const price = typeof row.usd_price === "number" ? row.usd_price : null;
+  if (row.price_recorded_at === undefined) return price;
+  return getFreshUsdPrice(price, row.price_recorded_at);
+}
+
 export function mapMarketSummaryRowToProduct(row: MarketSummaryRow): Product {
   return {
     id: row.id,
-    usd_price: typeof row.usd_price === "number" ? row.usd_price : 0,
+    usd_price: applySummaryPriceFreshness(row),
+    price_recorded_at: row.price_recorded_at ?? null,
     url: row.url ?? "",
     last_updated: row.last_updated ?? "",
     variant: row.variant,

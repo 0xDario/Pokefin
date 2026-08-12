@@ -17,10 +17,16 @@ import type { HoldingWithProduct } from "../types";
 jest.mock("../../../lib/portfolio", () => ({
   calculateHoldingPerformance: jest.fn((holding) => {
     const costBasis = holding.quantity * holding.purchase_price_usd;
-    const currentPrice = holding.products?.usd_price ?? 0;
-    const currentValue = holding.quantity * currentPrice;
-    const gainLoss = currentValue - costBasis;
-    const gainLossPercent = costBasis > 0 ? (gainLoss / costBasis) * 100 : 0;
+    const currentPrice = holding.products?.usd_price ?? null;
+    const currentValue = currentPrice === null
+      ? null
+      : holding.quantity * currentPrice;
+    const gainLoss = currentValue === null ? null : currentValue - costBasis;
+    const gainLossPercent = gainLoss === null
+      ? null
+      : costBasis > 0
+        ? (gainLoss / costBasis) * 100
+        : 0;
     return {
       holding_id: holding.id,
       cost_basis: costBasis,
@@ -392,7 +398,7 @@ describe("HoldingCard", () => {
   });
 
   describe("Edge cases", () => {
-    it("should handle null current price (worthless)", () => {
+    it("should render a missing current price as unknown, not worthless", () => {
       render(
         <HoldingCard
           holding={createMockHolding({
@@ -405,10 +411,9 @@ describe("HoldingCard", () => {
         />
       );
 
-      // Market value should be 0
-      expect(screen.getAllByText("$0.00").length).toBeGreaterThan(0);
-      // Loss should be full cost basis (formatted as $-200.00)
-      expect(screen.getByText("$-200.00")).toBeInTheDocument();
+      expect(screen.getAllByText("--")).toHaveLength(2);
+      expect(screen.queryByText("$0.00")).not.toBeInTheDocument();
+      expect(screen.queryByText("$-200.00")).not.toBeInTheDocument();
     });
 
     it("should handle missing set name gracefully", () => {

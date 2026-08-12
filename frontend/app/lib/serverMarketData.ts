@@ -17,6 +17,7 @@ import {
   MarketSummaryRow,
   SetAnalyticsRow,
 } from "./marketData";
+import { getFreshUsdPrice, getLatestPriceRecordedAt } from "./marketPulse";
 import { logSupabaseError } from "./logger";
 const supabaseUrl =
   process.env.NEXT_PUBLIC_SUPABASE_URL || "https://placeholder.supabase.invalid";
@@ -305,11 +306,15 @@ async function fetchSetAnalyticsFallback(): Promise<SetAnalyticsRow[]> {
     if (trend365 !== null) entry.trend365.push(trend365);
 
     const releaseMs = getReleaseMs(set.release_date);
-    if (
-      releaseMs !== null &&
-      typeof product.usd_price === "number" &&
-      product.usd_price > 0
-    ) {
+    // Non-nullness alone was never enough here: a product whose SKU has gone
+    // dead keeps its last successful price forever, and averaging that into
+    // the set's price/day presents a months-old number as today's. The history
+    // for every product is already in hand above, so freshness costs nothing.
+    const freshPrice = getFreshUsdPrice(
+      product.usd_price,
+      getLatestPriceRecordedAt(history)
+    );
+    if (releaseMs !== null && freshPrice !== null && freshPrice > 0) {
       const today = new Date();
       const todayUtcMs = Date.UTC(
         today.getUTCFullYear(),
@@ -321,7 +326,7 @@ async function fetchSetAnalyticsFallback(): Promise<SetAnalyticsRow[]> {
         Math.floor((todayUtcMs - releaseMs) / DAY_MS)
       );
       if (daysSinceRelease > 0) {
-        entry.pricePerDay.push(product.usd_price / daysSinceRelease);
+        entry.pricePerDay.push(freshPrice / daysSinceRelease);
       }
     }
   }
@@ -462,8 +467,8 @@ async function fetchProductDetail(
   productId: number
 ): Promise<ProductDetail | null> {
   const allProducts = await getCachedMarketProductSummaries();
-  const product = allProducts.find((p) => p.id === productId);
-  if (!product) return null;
+  const summary = allProducts.find((p) => p.id === productId);
+  if (!summary) return null;
 
   const supabase = createMarketDataSupabaseClient();
   const startDate = new Date();
@@ -513,6 +518,20 @@ async function fetchProductDetail(
   }
 
   const history = groupHistoryRowsByProduct(historyRows || [])[productId] || [];
+
+  // This page has the product's own price history in hand, so it decides
+  // freshness from the newest recorded_at directly rather than trusting the
+  // summaries RPC to have been migrated — the same reason isListingsSnapshotFresh
+  // guards the listings query below instead of relying on the volume RPC.
+  // History is fetched 367 days back, so a product last priced before that
+  // window has an empty history and is correctly treated as unpriced.
+  const priceRecordedAt =
+    getLatestPriceRecordedAt(history) ?? summary.price_recorded_at ?? null;
+  const product: Product = {
+    ...summary,
+    usd_price: getFreshUsdPrice(summary.usd_price, priceRecordedAt),
+    price_recorded_at: priceRecordedAt,
+  };
 
   let salesHistory: SalesHistoryEntry[] = [];
   if (salesError) {
@@ -636,17 +655,26 @@ async function fetchProductsWithFallbackReturns(): Promise<Product[]> {
 
   const historyByProduct = groupHistoryRowsByProduct(allRows);
 
-  return products.map((product) => ({
-    ...product,
-    returns: {
-      "1D": getReturnPercent(historyByProduct[product.id], 1),
-      "7D": getReturnPercent(historyByProduct[product.id], 7),
-      "1M": getReturnPercent(historyByProduct[product.id], 30),
-      "3M": getReturnPercent(historyByProduct[product.id], 90),
-      "6M": getReturnPercent(historyByProduct[product.id], 180),
-      "1Y": getReturnPercent(historyByProduct[product.id], 365),
-    },
-  }));
+  return products.map((product) => {
+    // The products table has no freshness column, so this path derives it the
+    // same way /product/[id] does — from the history it has already paged in.
+    const priceRecordedAt = getLatestPriceRecordedAt(
+      historyByProduct[product.id]
+    );
+    return {
+      ...product,
+      usd_price: getFreshUsdPrice(product.usd_price, priceRecordedAt),
+      price_recorded_at: priceRecordedAt,
+      returns: {
+        "1D": getReturnPercent(historyByProduct[product.id], 1),
+        "7D": getReturnPercent(historyByProduct[product.id], 7),
+        "1M": getReturnPercent(historyByProduct[product.id], 30),
+        "3M": getReturnPercent(historyByProduct[product.id], 90),
+        "6M": getReturnPercent(historyByProduct[product.id], 180),
+        "1Y": getReturnPercent(historyByProduct[product.id], 365),
+      },
+    };
+  });
 }
 
 async function fetchMarketProductSummaries(): Promise<Product[]> {

@@ -34,6 +34,7 @@ export interface PortfolioLot {
 export interface HoldingProduct {
   id: number;
   usd_price: number | null;
+  price_recorded_at?: string | null;
   image_url: string | null;
   variant: string | null;
   url: string;
@@ -82,9 +83,9 @@ export interface UpdateHolding {
 // Portfolio summary metrics
 export interface PortfolioSummary {
   total_cost_basis: number;
-  total_current_value: number;
-  total_gain_loss: number;
-  total_gain_loss_percent: number;
+  total_current_value: number | null;
+  total_gain_loss: number | null;
+  total_gain_loss_percent: number | null;
   holdings_count: number;
   unique_products_count: number;
 }
@@ -93,17 +94,17 @@ export interface PortfolioSummary {
 export interface HoldingPerformance {
   holding_id: number;
   cost_basis: number;
-  current_value: number;
-  gain_loss: number;
-  gain_loss_percent: number;
+  current_value: number | null;
+  gain_loss: number | null;
+  gain_loss_percent: number | null;
   purchase_price: number;
-  current_price: number;
+  current_price: number | null;
 }
 
 // Historical portfolio value point
 export interface PortfolioHistoryPoint {
   date: string;
-  value: number;
+  value: number | null;
 }
 
 // Allocation breakdown
@@ -125,6 +126,7 @@ export type HoldingSortDirection = "asc" | "desc";
 export interface ProductSearchResult {
   id: number;
   usd_price: number | null;
+  price_recorded_at?: string | null;
   image_url: string | null;
   variant: string | null;
   sets: {

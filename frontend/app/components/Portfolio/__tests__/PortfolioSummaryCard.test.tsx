@@ -238,6 +238,22 @@ describe("PortfolioSummaryCard", () => {
   });
 
   describe("Edge cases", () => {
+    it("should render an unknown valuation as dashes, not as a total loss", () => {
+      render(
+        <PortfolioSummaryCard
+          summary={createMockSummary({
+            total_current_value: null,
+            total_gain_loss: null,
+            total_gain_loss_percent: null,
+          })}
+        />
+      );
+
+      expect(screen.getAllByText("--")).toHaveLength(3);
+      expect(screen.queryByText("$0.00")).not.toBeInTheDocument();
+      expect(screen.queryByText("-100.00%")).not.toBeInTheDocument();
+    });
+
     it("should handle zero values for all fields", () => {
       render(
         <PortfolioSummaryCard

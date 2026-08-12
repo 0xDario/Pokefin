@@ -159,8 +159,13 @@ export default async function Home() {
       ? oneMonthReturns.reduce((sum, v) => sum + v, 0) / oneMonthReturns.length
       : null;
 
+  // Only products with a current price can hold this title. A product whose
+  // price is stale (or absent) has no number to compare, and letting a
+  // months-old figure win would put a price nobody can buy at on the
+  // dashboard's headline stat.
   const mostExpensive = products.reduce<Product | null>(
-    (max, p) => (p.usd_price > (max?.usd_price ?? -1) ? p : max),
+    (max, p) =>
+      p.usd_price !== null && p.usd_price > (max?.usd_price ?? -1) ? p : max,
     null
   );
 

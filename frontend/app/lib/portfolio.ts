@@ -1,5 +1,7 @@
 import { supabase } from "./supabase";
-import { logSupabaseError } from "./logger";
+import { fetchMarketProductsClient } from "./clientMarketData";
+import { isPriceFresh } from "./marketPulse";
+import { logCaughtError, logSupabaseError } from "./logger";
 import type {
   Portfolio,
   Holding,
@@ -11,6 +13,55 @@ import type {
   PortfolioHistoryPoint,
   ProductSearchResult,
 } from "../components/Portfolio/types";
+
+type ProductWithPrice = {
+  id: number;
+  usd_price: number | null;
+  price_recorded_at?: string | null;
+};
+
+async function getFreshProductsById(): Promise<Map<number, ProductWithPrice>> {
+  try {
+    const products = await fetchMarketProductsClient();
+    return new Map(products.map((product) => [product.id, product]));
+  } catch (error) {
+    // Fail closed: an unavailable freshness source means the price is unknown,
+    // not that products.usd_price is safe to present as current.
+    logCaughtError("portfolio_fresh_prices_failed", error);
+    return new Map();
+  }
+}
+
+function applyFreshPricesToHoldings(
+  holdings: HoldingWithProduct[],
+  productsById: Map<number, ProductWithPrice>
+): HoldingWithProduct[] {
+  return holdings.map((holding) => {
+    const guarded = productsById.get(holding.product_id);
+    return {
+      ...holding,
+      products: {
+        ...holding.products,
+        usd_price: guarded?.usd_price ?? null,
+        price_recorded_at: guarded?.price_recorded_at ?? null,
+      },
+    };
+  });
+}
+
+function applyFreshPricesToSearchResults(
+  products: ProductSearchResult[],
+  productsById: Map<number, ProductWithPrice>
+): ProductSearchResult[] {
+  return products.map((product) => {
+    const guarded = productsById.get(product.id);
+    return {
+      ...product,
+      usd_price: guarded?.usd_price ?? null,
+      price_recorded_at: guarded?.price_recorded_at ?? null,
+    };
+  });
+}
 
 // ============================================
 // Portfolio CRUD Operations
@@ -128,7 +179,8 @@ export async function getHoldings(portfolioId: number): Promise<HoldingWithProdu
     return [];
   }
 
-  return (data || []) as unknown as HoldingWithProduct[];
+  const holdings = (data || []) as unknown as HoldingWithProduct[];
+  return applyFreshPricesToHoldings(holdings, await getFreshProductsById());
 }
 
 /**
@@ -178,7 +230,12 @@ export async function getHoldingById(
     return null;
   }
 
-  return data as unknown as HoldingWithProduct | null;
+  if (!data) return null;
+  const [holding] = applyFreshPricesToHoldings(
+    [data as unknown as HoldingWithProduct],
+    await getFreshProductsById()
+  );
+  return holding;
 }
 
 /**
@@ -272,26 +329,35 @@ export async function deleteHolding(
 export function calculatePortfolioSummary(holdings: HoldingWithProduct[]): PortfolioSummary {
   let totalCostBasis = 0;
   let totalCurrentValue = 0;
+  let hasUnknownPrice = false;
   const productIds = new Set<number>();
 
   for (const holding of holdings) {
     const costBasis = holding.quantity * holding.purchase_price_usd;
-    const currentPrice = holding.products?.usd_price ?? 0;
-    const currentValue = holding.quantity * currentPrice;
+    const currentPrice = holding.products?.usd_price ?? null;
 
     totalCostBasis += costBasis;
-    totalCurrentValue += currentValue;
+    if (currentPrice === null) {
+      hasUnknownPrice = true;
+    } else {
+      totalCurrentValue += holding.quantity * currentPrice;
+    }
     productIds.add(holding.product_id);
   }
 
-  const totalGainLoss = totalCurrentValue - totalCostBasis;
-  const totalGainLossPercent = totalCostBasis > 0
-    ? (totalGainLoss / totalCostBasis) * 100
-    : 0;
+  const currentValue = hasUnknownPrice ? null : totalCurrentValue;
+  const totalGainLoss =
+    currentValue === null ? null : currentValue - totalCostBasis;
+  const totalGainLossPercent =
+    totalGainLoss === null
+      ? null
+      : totalCostBasis > 0
+        ? (totalGainLoss / totalCostBasis) * 100
+        : 0;
 
   return {
     total_cost_basis: totalCostBasis,
-    total_current_value: totalCurrentValue,
+    total_current_value: currentValue,
     total_gain_loss: totalGainLoss,
     total_gain_loss_percent: totalGainLossPercent,
     holdings_count: holdings.length,
@@ -304,10 +370,12 @@ export function calculatePortfolioSummary(holdings: HoldingWithProduct[]): Portf
  */
 export function calculateHoldingPerformance(holding: HoldingWithProduct): HoldingPerformance {
   const costBasis = holding.quantity * holding.purchase_price_usd;
-  const currentPrice = holding.products?.usd_price ?? 0;
-  const currentValue = holding.quantity * currentPrice;
-  const gainLoss = currentValue - costBasis;
-  const gainLossPercent = costBasis > 0 ? (gainLoss / costBasis) * 100 : 0;
+  const currentPrice = holding.products?.usd_price ?? null;
+  const currentValue =
+    currentPrice === null ? null : holding.quantity * currentPrice;
+  const gainLoss = currentValue === null ? null : currentValue - costBasis;
+  const gainLossPercent =
+    gainLoss === null ? null : costBasis > 0 ? (gainLoss / costBasis) * 100 : 0;
 
   return {
     holding_id: holding.id,
@@ -356,12 +424,14 @@ export async function getPortfolioHistory(
   // Get price history for all products
   const startDate = new Date();
   startDate.setDate(startDate.getDate() - days);
+  const priceHistoryStartDate = new Date(startDate);
+  priceHistoryStartDate.setUTCDate(priceHistoryStartDate.getUTCDate() - 14);
 
   const { data: priceHistory, error } = await supabase
     .from("product_price_history")
     .select("product_id, usd_price, recorded_at")
     .in("product_id", productIds)
-    .gte("recorded_at", startDate.toISOString())
+    .gte("recorded_at", priceHistoryStartDate.toISOString())
     .order("recorded_at", { ascending: true });
 
   if (error || !priceHistory) {
@@ -371,7 +441,12 @@ export async function getPortfolioHistory(
 
   const priceHistoryByProduct = new Map<
     number,
-    { entries: Array<{ date: string; price: number }>; index: number; price: number }
+    {
+      entries: Array<{ date: string; price: number; recordedAt: string }>;
+      index: number;
+      price: number | null;
+      recordedAt: string | null;
+    }
   >();
 
   for (const holding of holdings) {
@@ -379,7 +454,8 @@ export async function getPortfolioHistory(
       priceHistoryByProduct.set(holding.product_id, {
         entries: [],
         index: 0,
-        price: holding.products?.usd_price ?? 0,
+        price: null,
+        recordedAt: null,
       });
     }
   }
@@ -388,7 +464,11 @@ export async function getPortfolioHistory(
     const date = entry.recorded_at.split("T")[0];
     const productHistory = priceHistoryByProduct.get(entry.product_id);
     if (productHistory) {
-      productHistory.entries.push({ date, price: entry.usd_price });
+      productHistory.entries.push({
+        date,
+        price: entry.usd_price,
+        recordedAt: entry.recorded_at,
+      });
     }
   }
 
@@ -399,6 +479,7 @@ export async function getPortfolioHistory(
   for (let d = new Date(startDate); d <= today; d.setDate(d.getDate() + 1)) {
     const dateStr = d.toISOString().split("T")[0];
     let dailyValue = 0;
+    let hasUnknownPrice = false;
 
     for (const productId of productIds) {
       const holdingData = holdingsByProduct.get(productId);
@@ -423,13 +504,23 @@ export async function getPortfolioHistory(
         priceData.entries[priceData.index].date <= dateStr
       ) {
         priceData.price = priceData.entries[priceData.index].price;
+        priceData.recordedAt = priceData.entries[priceData.index].recordedAt;
         priceData.index += 1;
+      }
+
+      const referenceDate = new Date(`${dateStr}T12:00:00Z`);
+      if (
+        priceData.price === null ||
+        !isPriceFresh(priceData.recordedAt, referenceDate)
+      ) {
+        hasUnknownPrice = true;
+        continue;
       }
 
       dailyValue += holdingData.quantity * priceData.price;
     }
 
-    history.push({ date: dateStr, value: dailyValue });
+    history.push({ date: dateStr, value: hasUnknownPrice ? null : dailyValue });
   }
 
   return history;
@@ -469,7 +560,11 @@ export async function searchProducts(query: string): Promise<ProductSearchResult
     return [];
   }
 
-  return (data || []) as unknown as ProductSearchResult[];
+  const products = (data || []) as unknown as ProductSearchResult[];
+  return applyFreshPricesToSearchResults(
+    products,
+    await getFreshProductsById()
+  );
 }
 
 /**
@@ -504,7 +599,11 @@ export async function searchProductsBySet(setName: string): Promise<ProductSearc
     return [];
   }
 
-  return (data || []) as unknown as ProductSearchResult[];
+  const products = (data || []) as unknown as ProductSearchResult[];
+  return applyFreshPricesToSearchResults(
+    products,
+    await getFreshProductsById()
+  );
 }
 
 /**
@@ -525,5 +624,9 @@ export async function getAllProducts(): Promise<ProductSearchResult[]> {
     return [];
   }
 
-  return (data || []) as unknown as ProductSearchResult[];
+  const products = (data || []) as unknown as ProductSearchResult[];
+  return applyFreshPricesToSearchResults(
+    products,
+    await getFreshProductsById()
+  );
 }

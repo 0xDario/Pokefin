@@ -49,6 +49,10 @@ function formatDate(releaseDate?: string | null): string {
     year: "numeric",
     month: "short",
     day: "numeric",
+    // getReleaseMs builds this from Date.UTC, so it must be read back in UTC.
+    // Formatting in the viewer's zone printed the day before for every visitor
+    // west of Greenwich — a 2026-05-08 price row rendered as "May 7, 2026".
+    timeZone: "UTC",
   });
 }
 
@@ -173,8 +177,14 @@ export default async function ProductPage({
     releaseMs === null
       ? null
       : Math.max(0, Math.floor((todayUtcMs - releaseMs) / DAY_MS));
+  // usd_price is already null when the newest recorded price is past the
+  // staleness tolerance (see fetchProductDetail), so this derives nothing
+  // from a price the page itself refuses to show.
   const pricePerDay =
-    product.usd_price > 0 && daysSinceRelease && daysSinceRelease > 0
+    product.usd_price !== null &&
+    product.usd_price > 0 &&
+    daysSinceRelease &&
+    daysSinceRelease > 0
       ? product.usd_price / daysSinceRelease
       : null;
 
@@ -248,6 +258,18 @@ export default async function ProductPage({
             </span>
             <span className="ml-1.5 text-sm font-semibold text-slate-400">USD</span>
           </div>
+          {/* A withheld price leaves a bare "--", which reads as a rendering
+              fault. Say why, and when the product was last priced — the same
+              reason the listings guard keeps its snapshot date. */}
+          {product.usd_price === null && (
+            <p className="mt-1 text-xs text-slate-500">
+              {product.price_recorded_at
+                ? `No current price — last recorded ${formatDate(
+                    product.price_recorded_at
+                  )}`
+                : "No current price — this product has never been priced"}
+            </p>
+          )}
 
           <div className="mt-4 grid grid-cols-2 sm:grid-cols-3 gap-2">
             <MetricTile label="Release Date">
