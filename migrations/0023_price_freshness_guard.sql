@@ -83,6 +83,20 @@
 --      AND num_nulls(return_1d, return_7d, return_30d,
 --                    return_90d, return_180d, return_365d) < 6;
 --
+--   -- No published price may disagree with the history row that dates it
+--   -- (expect 0 rows). This is what catches a products update that failed
+--   -- after its history row was already queued:
+--   WITH latest AS (
+--     SELECT DISTINCT ON (h.product_id) h.product_id, h.usd_price
+--       FROM public.product_price_history h
+--      ORDER BY h.product_id, h.recorded_at DESC
+--   )
+--   SELECT s.id, s.usd_price AS published, l.usd_price AS newest_recorded
+--     FROM public.get_market_product_summaries() s
+--     JOIN latest l ON l.product_id = s.id
+--    WHERE s.usd_price IS NOT NULL
+--      AND s.usd_price IS DISTINCT FROM l.usd_price;
+--
 --   -- The latest-price scan must be index-ordered, not a sort over the whole
 --   -- history table (expect an Index Only Scan using
 --   -- idx_price_history_product_recorded, and no Sort node):
@@ -158,7 +172,10 @@ AS $$
 WITH latest_price AS (
   SELECT DISTINCT ON (h.product_id)
     h.product_id,
-    h.recorded_at
+    h.recorded_at,
+    -- Carried so the gate can check that products.usd_price still agrees with
+    -- the row that dates it. See the CASE below.
+    h.usd_price
   FROM public.product_price_history h
   JOIN public.products ap ON ap.id = h.product_id AND ap.active = true
   ORDER BY h.product_id, h.recorded_at DESC
@@ -171,7 +188,16 @@ SELECT
   -- successfully and would publish it as the current one. Freshness comes from
   -- the price history, never from products.last_updated: the history row is
   -- the auditable evidence that this exact price was recorded.
+  --
+  -- The value and its date must come from the same event. main.py appends the
+  -- history row to a batch BEFORE updating products, and that update's except
+  -- clause only logs — so a failed update leaves a fresh history row carrying
+  -- the new price while products.usd_price still holds the old one. Dating the
+  -- old value with the new row's timestamp is precisely the fabricated
+  -- confidence this migration exists to remove, so a disagreement withholds.
+  -- IS DISTINCT FROM, not <>, or a NULL on either side would pass the gate.
   CASE WHEN lp.recorded_at >= current_date - 14
+        AND p.usd_price IS NOT DISTINCT FROM lp.usd_price
        THEN p.usd_price END AS usd_price,
   p.url,
   p.last_updated,
@@ -195,16 +221,22 @@ SELECT
   -- with six, and these feed the homepage average and — through
   -- get_set_analytics — set momentum and the investment ranking.
   CASE WHEN lp.recorded_at >= current_date - 14
+        AND p.usd_price IS NOT DISTINCT FROM lp.usd_price
        THEN metrics.return_1d END AS return_1d,
   CASE WHEN lp.recorded_at >= current_date - 14
+        AND p.usd_price IS NOT DISTINCT FROM lp.usd_price
        THEN metrics.return_7d END AS return_7d,
   CASE WHEN lp.recorded_at >= current_date - 14
+        AND p.usd_price IS NOT DISTINCT FROM lp.usd_price
        THEN metrics.return_30d END AS return_30d,
   CASE WHEN lp.recorded_at >= current_date - 14
+        AND p.usd_price IS NOT DISTINCT FROM lp.usd_price
        THEN metrics.return_90d END AS return_90d,
   CASE WHEN lp.recorded_at >= current_date - 14
+        AND p.usd_price IS NOT DISTINCT FROM lp.usd_price
        THEN metrics.return_180d END AS return_180d,
   CASE WHEN lp.recorded_at >= current_date - 14
+        AND p.usd_price IS NOT DISTINCT FROM lp.usd_price
        THEN metrics.return_365d END AS return_365d,
   -- Deliberately NOT gated: a caller that got no price can still report when
   -- the product was last priced. Mirrors listings_snapshot_date in 0022.
@@ -263,10 +295,24 @@ AS $$
 -- 14 = PRICE_STALENESS_TOLERANCE_DAYS in frontend/app/lib/marketPulse.ts.
 -- Products with a price row inside the tolerance. One index-ordered pass,
 -- reused by both gates below, instead of a correlated EXISTS per column.
+-- Products with a price row inside the tolerance WHOSE VALUE the products
+-- table still agrees with. The match matters for the same reason it does in
+-- get_market_product_summaries: main.py writes the history row and the
+-- products row as two independent statements, so a failed update leaves the
+-- cached price behind its own timestamp. Withholding on a disagreement keeps
+-- both functions from publishing a value whose date belongs to a different
+-- one, and keeps them agreeing with each other.
 WITH fresh_price AS (
-  SELECT DISTINCT h.product_id
-  FROM public.product_price_history h
-  WHERE h.recorded_at >= current_date - 14
+  SELECT lp.product_id
+  FROM (
+    SELECT DISTINCT ON (h.product_id)
+      h.product_id, h.recorded_at, h.usd_price
+    FROM public.product_price_history h
+    ORDER BY h.product_id, h.recorded_at DESC
+  ) lp
+  JOIN public.products fp ON fp.id = lp.product_id
+  WHERE lp.recorded_at >= current_date - 14
+    AND fp.usd_price IS NOT DISTINCT FROM lp.usd_price
 ),
 product_stats AS (
   SELECT
