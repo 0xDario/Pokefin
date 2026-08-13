@@ -97,14 +97,19 @@ function mockSupabase(longWindow: HistoryRow[], recentWindow: HistoryRow[]) {
         select: () => ({
           in: () => ({
             gte: (_column: string, bound: string) => ({
+              // Two order() calls: recorded_at, then id as the page-stable
+              // tiebreaker.
               order: () => ({
-                range: (from: number) => {
-                  const rows = bound >= toleranceBound ? recentWindow : longWindow;
-                  return Promise.resolve({
-                    data: from === 0 ? rows : [],
-                    error: null,
-                  });
-                },
+                order: () => ({
+                  range: (from: number) => {
+                    const rows =
+                      bound >= toleranceBound ? recentWindow : longWindow;
+                    return Promise.resolve({
+                      data: from === 0 ? rows : [],
+                      error: null,
+                    });
+                  },
+                }),
               }),
             }),
           }),

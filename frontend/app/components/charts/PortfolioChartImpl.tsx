@@ -54,8 +54,25 @@ export default function PortfolioChartImpl({
             ? point.value * exchangeRate
             : point.value,
       timestamp: point.date,
+      pricedProducts: point.priced_products,
+      heldProducts: point.held_products,
+      // A day valued from only some of the holdings is not comparable to a day
+      // valued from all of them: a product going stale drops the line by its
+      // whole value and reads as a loss that never happened. The point is
+      // still plotted — dropping it would blank stretches where most holdings
+      // are priced perfectly well — but it is marked, so the chart never
+      // silently passes partial coverage off as the portfolio total.
+      isPartial:
+        point.priced_products !== undefined &&
+        point.held_products !== undefined &&
+        point.priced_products < point.held_products,
     }));
   }, [data, currency, exchangeRate]);
+
+  const partialDays = useMemo(
+    () => chartData.filter((point) => point.isPartial).length,
+    [chartData]
+  );
 
   const priceStats = useMemo(() => {
     const values = chartData
@@ -75,6 +92,7 @@ export default function PortfolioChartImpl({
 
   const CustomTooltip = ({ active, payload, label }: any) => {
     if (active && payload && payload.length && payload[0].value !== null) {
+      const point = payload[0].payload;
       return (
         <div className="bg-slate-900 text-white px-4 py-3 rounded-lg shadow-xl border-2 border-emerald-500">
           <p className="text-xs font-semibold text-slate-300 mb-1">{label}</p>
@@ -88,6 +106,12 @@ export default function PortfolioChartImpl({
             </span>
             <span className="text-xs text-slate-400 ml-1">{currency}</span>
           </p>
+          {point?.isPartial && (
+            <p className="text-xs text-amber-300 mt-1">
+              {point.pricedProducts} of {point.heldProducts} products priced —
+              not comparable to fully priced days
+            </p>
+          )}
         </div>
       );
     }
@@ -205,6 +229,14 @@ export default function PortfolioChartImpl({
           />
         </ComposedChart>
       </ResponsiveContainer>
+
+      {partialDays > 0 && (
+        <p className="mt-2 text-xs text-slate-500">
+          {partialDays} {partialDays === 1 ? "day is" : "days are"} valued from
+          only part of the portfolio — hover for the coverage. Movement across
+          those points reflects what could be priced, not a change in holdings.
+        </p>
+      )}
     </div>
   );
 }

@@ -94,6 +94,12 @@ async function fetchPriceHistoryPages(
       .in("product_id", productIds)
       .gte("recorded_at", startDateStr)
       .order("recorded_at", { ascending: true })
+      // recorded_at alone is not a total order — the scraper writes a batch of
+      // rows per tick and they can share a timestamp — so offset paging could
+      // repeat or skip a row at a page boundary. A skipped row in
+      // fetchNewestPricedAt reads as "this product has no recent history" and
+      // withholds a current price.
+      .order("id", { ascending: true })
       .range(from, to);
 
     if (error) {
