@@ -8,11 +8,12 @@
  */
 
 const rpcMock = jest.fn();
+const fromMock = jest.fn();
 
 jest.mock("../supabase", () => ({
   supabase: {
     rpc: (...args: unknown[]) => rpcMock(...args),
-    from: jest.fn(),
+    from: (...args: unknown[]) => fromMock(...args),
   },
 }));
 
@@ -108,5 +109,38 @@ describe("fetchMarketProductsClient cache lifetime", () => {
 
     jest.advanceTimersByTime(61 * 60 * 1000);
     expect((await fetchMarketProductsClient())[0].usd_price).toBeNull();
+  });
+
+  it("expires cached price history on the same clock as the products cache", async () => {
+    // Giving only the products cache a TTL made the two disagree: after the
+    // hour the card showed a refreshed price while the chart still forward-
+    // filled the history loaded on first visit.
+    jest.useFakeTimers();
+    const { fetchProductHistoryClient } = await import("../clientMarketData");
+
+    const history = (price: number) => ({
+      data: [{ product_id: 1, usd_price: price, recorded_at: "2026-08-12T09:00:00" }],
+      error: null,
+    });
+
+    let current = history(100);
+    fromMock.mockImplementation(() => ({
+      select: () => ({
+        eq: () => ({
+          gte: () => ({ order: () => Promise.resolve(current) }),
+        }),
+      }),
+    }));
+
+    expect((await fetchProductHistoryClient(1, "1M"))[0].usd_price).toBe(100);
+
+    // The scraper has since re-priced it.
+    current = history(142);
+
+    jest.advanceTimersByTime(59 * 60 * 1000);
+    expect((await fetchProductHistoryClient(1, "1M"))[0].usd_price).toBe(100);
+
+    jest.advanceTimersByTime(2 * 60 * 1000);
+    expect((await fetchProductHistoryClient(1, "1M"))[0].usd_price).toBe(142);
   });
 });

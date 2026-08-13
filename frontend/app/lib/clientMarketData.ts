@@ -38,17 +38,36 @@ import { supabase } from "./supabase";
  */
 const MARKET_PRODUCTS_TTL_MS = 60 * 60 * 1000;
 
+/**
+ * Every other session cache ages on the same clock.
+ *
+ * Giving only the products cache a TTL made the caches disagree: after the
+ * hour, a remount fetched the refreshed price while the price history behind
+ * the chart was still whatever had been loaded on first visit. The card would
+ * show the new price and the chart would forward-fill an older endpoint, with
+ * no way to tell which was current. They refresh together or the page
+ * contradicts itself.
+ */
+const CLIENT_CACHE_TTL_MS = MARKET_PRODUCTS_TTL_MS;
+
 let marketProductsCache: Product[] | null = null;
 let marketProductsCachedAt = 0;
 let marketProductsPromise: Promise<Product[]> | null = null;
 
-const productHistoryCache = new Map<number, { daysLoaded: number; history: PriceHistoryEntry[] }>();
+const productHistoryCache = new Map<
+  number,
+  { daysLoaded: number; history: PriceHistoryEntry[]; fetchedAt: number }
+>();
 const productHistoryPromiseCache = new Map<string, Promise<PriceHistoryEntry[]>>();
 
 let volumeMetricsCache: Record<number, ProductVolumeMetrics> | null = null;
+let volumeMetricsCachedAt = 0;
 let volumeMetricsPromise: Promise<Record<number, ProductVolumeMetrics>> | null = null;
 
-const salesHistoryCache = new Map<number, { daysLoaded: number; sales: SalesHistoryEntry[] }>();
+const salesHistoryCache = new Map<
+  number,
+  { daysLoaded: number; sales: SalesHistoryEntry[]; fetchedAt: number }
+>();
 const salesHistoryPromiseCache = new Map<string, Promise<SalesHistoryEntry[]>>();
 
 function isMissingRpc(error: { code?: string; message?: string } | null) {
@@ -232,7 +251,11 @@ export async function fetchProductHistoryClient(
 ): Promise<PriceHistoryEntry[]> {
   const requestedDays = getDaysForTimeframe(timeframe);
   const cached = productHistoryCache.get(productId);
-  if (cached && cached.daysLoaded >= requestedDays) {
+  if (
+    cached &&
+    cached.daysLoaded >= requestedDays &&
+    Date.now() - cached.fetchedAt < CLIENT_CACHE_TTL_MS
+  ) {
     return cached.history;
   }
 
@@ -257,8 +280,16 @@ export async function fetchProductHistoryClient(
 
     const history = groupHistoryRowsByProduct(data || [])[productId] || [];
     const currentCache = productHistoryCache.get(productId);
-    if (!currentCache || currentCache.daysLoaded < requestedDays) {
-      productHistoryCache.set(productId, { daysLoaded: requestedDays, history });
+    if (
+      !currentCache ||
+      currentCache.daysLoaded < requestedDays ||
+      Date.now() - currentCache.fetchedAt >= CLIENT_CACHE_TTL_MS
+    ) {
+      productHistoryCache.set(productId, {
+        daysLoaded: requestedDays,
+        history,
+        fetchedAt: Date.now(),
+      });
     }
     return history;
   })();
@@ -279,7 +310,10 @@ export async function fetchProductHistoryClient(
  * RPC not existing yet — degrade to an empty record.
  */
 export async function fetchVolumeMetrics(): Promise<Record<number, ProductVolumeMetrics>> {
-  if (volumeMetricsCache) {
+  if (
+    volumeMetricsCache &&
+    Date.now() - volumeMetricsCachedAt < CLIENT_CACHE_TTL_MS
+  ) {
     return volumeMetricsCache;
   }
 
@@ -295,6 +329,7 @@ export async function fetchVolumeMetrics(): Promise<Record<number, ProductVolume
       if (error) {
         logSupabaseError("volume_metrics_load_failed", error);
         volumeMetricsCache = {};
+        volumeMetricsCachedAt = Date.now();
         return volumeMetricsCache;
       }
 
@@ -303,10 +338,12 @@ export async function fetchVolumeMetrics(): Promise<Record<number, ProductVolume
         byProduct[row.product_id] = row;
       }
       volumeMetricsCache = byProduct;
+      volumeMetricsCachedAt = Date.now();
       return byProduct;
     } catch (error) {
       logCaughtError("volume_metrics_load_failed", error);
       volumeMetricsCache = {};
+      volumeMetricsCachedAt = Date.now();
       return volumeMetricsCache;
     } finally {
       volumeMetricsPromise = null;
@@ -327,7 +364,11 @@ export async function fetchSalesHistory(
   days: number
 ): Promise<SalesHistoryEntry[]> {
   const cached = salesHistoryCache.get(productId);
-  if (cached && cached.daysLoaded >= days) {
+  if (
+    cached &&
+    cached.daysLoaded >= days &&
+    Date.now() - cached.fetchedAt < CLIENT_CACHE_TTL_MS
+  ) {
     return cached.sales;
   }
 
@@ -366,8 +407,16 @@ export async function fetchSalesHistory(
     }
 
     const currentCache = salesHistoryCache.get(productId);
-    if (!currentCache || currentCache.daysLoaded < days) {
-      salesHistoryCache.set(productId, { daysLoaded: days, sales });
+    if (
+      !currentCache ||
+      currentCache.daysLoaded < days ||
+      Date.now() - currentCache.fetchedAt >= CLIENT_CACHE_TTL_MS
+    ) {
+      salesHistoryCache.set(productId, {
+        daysLoaded: days,
+        sales,
+        fetchedAt: Date.now(),
+      });
     }
     return sales;
   })();

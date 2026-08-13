@@ -433,9 +433,12 @@ type PortfolioPriceHistoryRow = {
 };
 
 const PRICE_HISTORY_PAGE_SIZE = 1000;
-// 50,000 rows is far past any real portfolio (23 held products over a year is
-// ~8k) and still bounds a runaway.
-const PRICE_HISTORY_MAX_PAGES = 50;
+// A 1Y chart asks for days+14 rows per held product, so 50 pages covered only
+// ~132 daily-priced products — reachable, since nothing caps how many holdings
+// a portfolio may have. 300 pages covers ~790, past any plausible portfolio,
+// and hitting it now FAILS rather than returning the oldest rows as if they
+// were all of them.
+const PRICE_HISTORY_MAX_PAGES = 300;
 
 /**
  * Every price-history row for these products since `startIso`, paged.
@@ -475,11 +478,15 @@ async function fetchPortfolioPriceHistory(
     if (data.length < PRICE_HISTORY_PAGE_SIZE) return { rows, error: null };
   }
 
-  logCaughtError(
-    "portfolio_price_history_page_cap_reached",
-    new Error(`Stopped at ${rows.length} rows; the newest history is missing.`)
+  // Fail closed. Ordered ascending, a truncated read is missing exactly the
+  // NEWEST rows, so every carried-forward price expires and the recent chart
+  // reads as unpriced — a wrong chart presented as a complete one. An empty
+  // chart is the honest answer to "we could not read your history".
+  const capError = new Error(
+    `Stopped at ${rows.length} rows; the newest history is missing.`
   );
-  return { rows, error: null };
+  logCaughtError("portfolio_price_history_page_cap_reached", capError);
+  return { rows: null, error: capError };
 }
 
 /**

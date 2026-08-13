@@ -652,9 +652,28 @@ async function fetchProductDetail(
   // guards the listings query below instead of relying on the volume RPC.
   // History is fetched 367 days back, so a product last priced before that
   // window has an empty history and is correctly treated as unpriced.
+  const newestRecordedAt = getLatestPriceRecordedAt(history);
   const priceRecordedAt =
-    getLatestPriceRecordedAt(history) ?? summary.price_recorded_at ?? null;
-  const freshPrice = getFreshUsdPrice(summary.usd_price, priceRecordedAt);
+    newestRecordedAt ?? summary.price_recorded_at ?? null;
+
+  // When this page has the history in hand it can make the same value check
+  // the SQL and the fallbacks now make: the summary's price must still equal
+  // the row that dates it. Against a pre-0023 RPC — a case this file
+  // explicitly supports — the summary carries an ungated price, so a products
+  // update that failed after its history row was queued would otherwise be
+  // published here with the newer row's date. With no history there is nothing
+  // to compare against and the RPC's own verdict stands.
+  const newestEntry =
+    newestRecordedAt === null
+      ? null
+      : history.find((entry) => entry.recorded_at === newestRecordedAt) ?? null;
+  const valueAgrees =
+    newestEntry === null ||
+    Object.is(summary.usd_price ?? null, newestEntry.usd_price ?? null);
+
+  const freshPrice = valueAgrees
+    ? getFreshUsdPrice(summary.usd_price, priceRecordedAt)
+    : null;
   const product: Product = {
     ...summary,
     usd_price: freshPrice,
