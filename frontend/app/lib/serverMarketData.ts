@@ -489,6 +489,15 @@ async function fetchSetAnalyticsFallback(): Promise<SetAnalyticsRow[]> {
 
   const scored = setStats
     .map((set) => {
+      // Mirrors the guard 0023 puts on invest_score: with every return
+      // average withheld, computeZScore turns each of them into a 0 —
+      // "exactly market average" — and the set would be scored and ranked on
+      // the two ungated series metrics alone, landing in the stats page's top
+      // sets with no current price behind it.
+      if (set.avg30 === null && set.avg90 === null && set.avg365 === null) {
+        return { ...set, investScore: null };
+      }
+
       const investScore =
         computeZScore(set.avg30, metrics.avg30.mean, metrics.avg30.std) * 0.2 +
         computeZScore(set.avg90, metrics.avg90.mean, metrics.avg90.std) * 0.4 +
@@ -521,11 +530,21 @@ async function fetchSetAnalyticsFallback(): Promise<SetAnalyticsRow[]> {
         investScore,
       };
     })
-    .sort((a, b) => b.investScore - a.investScore)
-    .map((set, index) => ({
-      ...set,
-      rank: index + 1,
-    }));
+    // Unscored sets sort last and are left unranked, so "no rank" stays a
+    // statement the output actually makes rather than position 64.
+    .sort((a, b) => {
+      if (a.investScore === null && b.investScore === null) return 0;
+      if (a.investScore === null) return 1;
+      if (b.investScore === null) return -1;
+      return b.investScore - a.investScore;
+    })
+    .reduce<Array<SetAnalyticsRow>>((rows, set) => {
+      rows.push({
+        ...set,
+        rank: set.investScore === null ? null : rows.length + 1,
+      });
+      return rows;
+    }, []);
 
   return scored;
 }

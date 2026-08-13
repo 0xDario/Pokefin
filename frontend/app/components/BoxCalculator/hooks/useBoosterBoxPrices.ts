@@ -39,10 +39,11 @@ export function useBoosterPackPrices() {
             });
           }
 
-          if (item.usd_price === null) {
-            continue;
-          }
-
+          // Unpriced packs are listed with a null price rather than dropped.
+          // Dropping them made getPackPrice unable to see that a set's
+          // standard pack exists at all, so it fell through to the
+          // cheapest-variant branch and priced an ordinary-pack recipe off a
+          // different SKU.
           prices.push({
             setId: set.id,
             setName: set.name,
@@ -68,7 +69,11 @@ export function useBoosterPackPrices() {
     fetchData();
   }, []);
 
-  // Get the standard (non-variant) booster pack price for a set, fall back to cheapest
+  // The standard (non-variant) booster pack price for a set, falling back to
+  // the cheapest variant only when the set genuinely has no standard pack.
+  // A standard pack that exists but has no current price returns null: a
+  // recipe names only the set, so substituting a variant's price would value
+  // ordinary packs off a different SKU without saying so.
   const getPackPrice = useCallback(
     (setId: number): number | null => {
       const matches = boosterPackPrices.filter((p) => p.setId === setId);
@@ -77,7 +82,15 @@ export function useBoosterPackPrices() {
       const standard = matches.find((p) => !p.variant);
       if (standard) return standard.usdPrice;
 
-      return matches.reduce((min, p) => (p.usdPrice < min ? p.usdPrice : min), matches[0].usdPrice);
+      const priced = matches.filter(
+        (p): p is typeof p & { usdPrice: number } => p.usdPrice !== null
+      );
+      if (priced.length === 0) return null;
+
+      return priced.reduce(
+        (min, p) => (p.usdPrice < min ? p.usdPrice : min),
+        priced[0].usdPrice
+      );
     },
     [boosterPackPrices]
   );

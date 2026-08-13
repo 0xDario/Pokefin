@@ -3,7 +3,12 @@ import {
   fetchMarketProductsClient,
   fetchNewestPricedAtClient,
 } from "./clientMarketData";
-import { getFreshUsdPrice, isPriceFresh } from "./marketPulse";
+import {
+  getFreshUsdPrice,
+  isPriceFresh,
+  PRICE_STALENESS_TOLERANCE_DAYS,
+  utcMidnightMs,
+} from "./marketPulse";
 import { logCaughtError, logSupabaseError } from "./logger";
 import type {
   Portfolio,
@@ -589,8 +594,14 @@ export async function getPortfolioHistory(
   // Get price history for all products
   const startDate = new Date();
   startDate.setDate(startDate.getDate() - days);
-  const priceHistoryStartDate = new Date(startDate);
-  priceHistoryStartDate.setUTCDate(priceHistoryStartDate.getUTCDate() - 14);
+  // Anchored to UTC midnight, not to now-minus-N-days. isPriceFresh judges by
+  // calendar date, so a bound carrying the current time of day would exclude
+  // rows recorded earlier on the oldest allowed date — the scraper writes
+  // around 04:00 UTC, so a chart built in the afternoon would miss them and
+  // report that holding unpriced on the first day it covers.
+  const priceHistoryStartDate = new Date(
+    utcMidnightMs(startDate) - PRICE_STALENESS_TOLERANCE_DAYS * 24 * 60 * 60 * 1000
+  );
 
   const { rows: priceHistory, error } = await fetchPortfolioPriceHistory(
     productIds,

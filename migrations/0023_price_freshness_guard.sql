@@ -374,8 +374,9 @@ scored AS (
     -- terms then COALESCEs to 0 — "exactly market average" — and the set is
     -- scored and ranked on the strength of the two ungated series metrics
     -- alone. Score it NULL instead, on the same condition momentum_score
-    -- already uses, so it sorts NULLS LAST and reads as unranked rather than
-    -- as an average investment.
+    -- already uses. NULLS LAST only moves it to the bottom of the ordering —
+    -- the rank itself is nulled below, or the set still gets a number and
+    -- "unranked" remains a claim the output does not make.
     CASE WHEN ss.avg30 IS NULL AND ss.avg90 IS NULL AND ss.avg365 IS NULL
          THEN NULL
     ELSE (
@@ -395,7 +396,14 @@ scored AS (
 ranked AS (
   SELECT
     scored.*,
-    row_number() OVER (ORDER BY scored.invest_score DESC NULLS LAST, scored.name ASC) AS rank
+    -- No score, no rank. row_number() numbers every row it sees, so without
+    -- this an unscored set still lands with a rank the stats page prints —
+    -- and its "top sets" slice would include it whenever fewer than ten sets
+    -- are scored. The frontend already renders a null rank as "--".
+    CASE WHEN scored.invest_score IS NULL THEN NULL
+         ELSE row_number() OVER (ORDER BY scored.invest_score DESC NULLS LAST,
+                                          scored.name ASC)
+    END AS rank
   FROM scored
 )
 SELECT
