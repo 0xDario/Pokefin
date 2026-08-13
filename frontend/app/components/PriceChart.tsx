@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useMemo, memo } from "react";
-import { PRICE_STALENESS_TOLERANCE_DAYS } from "../lib/marketPulse";
+import { isPriceFresh } from "../lib/marketPulse";
 import {
   ResponsiveContainer,
   Area,
@@ -116,7 +116,7 @@ const PriceChart = memo(function PriceChart({
     }
 
     // Convert to array and sort by date in ascending order (oldest to newest for chart display)
-    const result: Array<{ date: string; price: number | null; timestamp: string }> = Array.from(map.entries())
+    const result: Array<{ date: string; price: number | null; timestamp: string; recordedAt?: string }> = Array.from(map.entries())
       .map(([dateStr]) => {
         const entry = map.get(dateStr)!;
         // Parse date parts directly to avoid timezone issues with Date constructor
@@ -129,6 +129,10 @@ const PriceChart = memo(function PriceChart({
           date: displayDate,
           price: currency === "CAD" ? entry.usd_price * exchangeRate : entry.usd_price,
           timestamp: dateStr,
+          // The raw value, kept because `timestamp` above is a LOCAL date key.
+          // Freshness is a UTC-date question, and judging it from the local
+          // bucket shifts it by a day for anyone west of UTC.
+          recordedAt: entry.recorded_at,
         };
       })
       .sort((a, b) => a.timestamp.localeCompare(b.timestamp)); // Sort by date ascending
@@ -157,7 +161,10 @@ const PriceChart = memo(function PriceChart({
     const endKey = toKey(endDate);
 
     // Build a lookup of actual data points within the range
-    const dataByDate = new Map<string, { date: string; price: number | null; timestamp: string }>();
+    const dataByDate = new Map<
+      string,
+      { date: string; price: number | null; timestamp: string; recordedAt?: string }
+    >();
     for (const entry of groupedDaily) {
       if (entry.timestamp >= startKey && entry.timestamp <= endKey) {
         dataByDate.set(entry.timestamp, entry);
@@ -168,32 +175,39 @@ const PriceChart = memo(function PriceChart({
     // - Before first data point: insert null (no line drawn)
     // - Between/after data points: forward-fill the last known price
     //   so the line extends smoothly to the end of the range
-    const result: Array<{ date: string; price: number | null; timestamp: string }> = [];
+    const result: Array<{ date: string; price: number | null; timestamp: string; recordedAt?: string }> = [];
     let lastKnownPrice: number | null = null;
-    let daysSinceLastReading = 0;
+    let lastRecordedAt: string | null = null;
     const cursor = new Date(startDate);
     while (cursor <= endDate) {
       const key = toKey(cursor);
       const displayDate = cursor.toLocaleDateString(undefined, { month: "short", day: "numeric" });
       const existing = dataByDate.get(key);
+
+      // Expiry is asked of isPriceFresh, the same helper the price itself is
+      // judged by, rather than counted in chart rows. Rows are bucketed by
+      // LOCAL date, so a 04:00 UTC reading falls into the previous day west of
+      // UTC and a row-counter expires a day early — the chart would say "No
+      // recent prices" while the card beside it still showed one. The cursor's
+      // calendar day is passed as a UTC instant so both sides compare UTC date
+      // keys.
+      const referenceDate = new Date(
+        Date.UTC(cursor.getFullYear(), cursor.getMonth(), cursor.getDate())
+      );
+
       if (existing) {
         lastKnownPrice = existing.price;
-        daysSinceLastReading = 0;
+        lastRecordedAt = existing.recordedAt ?? null;
         result.push(existing);
-      } else if (
-        lastKnownPrice !== null &&
-        daysSinceLastReading < PRICE_STALENESS_TOLERANCE_DAYS
-      ) {
+      } else if (lastKnownPrice !== null && isPriceFresh(lastRecordedAt, referenceDate)) {
         // Forward-fill across short gaps only. Single missed scrapes are
         // routine and a continuous line is the honest read of them, but the
         // fill expires at the same tolerance the price guard uses: past it
         // the line stops rather than drawing a flat, hoverable price for
         // days on which nothing was recorded and nobody can buy.
-        daysSinceLastReading += 1;
         result.push({ date: displayDate, price: lastKnownPrice, timestamp: key });
       } else {
         // Before any data exists, or past the fill's expiry: null (no line)
-        if (lastKnownPrice !== null) daysSinceLastReading += 1;
         result.push({ date: displayDate, price: null, timestamp: key });
       }
       cursor.setDate(cursor.getDate() + 1);
@@ -385,9 +399,21 @@ const PriceChart = memo(function PriceChart({
       return { returnPct: null, cagr: null, maxDrawdown: null };
     }
 
+    // ROI and CAGR measure from a start point TO an endpoint, so a range whose
+    // tail expired has no endpoint to measure to: filtering the nulls out just
+    // silently promotes the last stale reading into that role, and the chips
+    // would report a return beside a card that withholds the price and a badge
+    // that says "No recent prices". Max drawdown is genuinely historical — it
+    // describes the series that exists — so it survives, the same split the
+    // SQL and the product page use.
+    const endpointExpired =
+      chartDataWithTrend.length > 0 &&
+      chartDataWithTrend[chartDataWithTrend.length - 1].price === null;
+
     const first = prices[0];
     const last = prices[prices.length - 1];
-    const returnPct = first > 0 ? ((last - first) / first) * 100 : null;
+    const returnPct =
+      endpointExpired || first <= 0 ? null : ((last - first) / first) * 100;
 
     let peak = first;
     let maxDrawdown = 0;
@@ -410,7 +436,7 @@ const PriceChart = memo(function PriceChart({
       .find((point) => point.price !== null)?.timestamp;
 
     let cagr: number | null = null;
-    if (start && end) {
+    if (start && end && !endpointExpired) {
       const startMs = new Date(start).getTime();
       const endMs = new Date(end).getTime();
       const years = (endMs - startMs) / (365 * 24 * 60 * 60 * 1000);
