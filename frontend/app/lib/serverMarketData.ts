@@ -656,24 +656,21 @@ async function fetchProductDetail(
   const priceRecordedAt =
     newestRecordedAt ?? summary.price_recorded_at ?? null;
 
-  // When this page has the history in hand it can make the same value check
-  // the SQL and the fallbacks now make: the summary's price must still equal
-  // the row that dates it. Against a pre-0023 RPC — a case this file
-  // explicitly supports — the summary carries an ungated price, so a products
-  // update that failed after its history row was queued would otherwise be
-  // published here with the newer row's date. With no history there is nothing
-  // to compare against and the RPC's own verdict stands.
-  const newestEntry =
-    newestRecordedAt === null
-      ? null
-      : history.find((entry) => entry.recorded_at === newestRecordedAt) ?? null;
-  const valueAgrees =
-    newestEntry === null ||
-    Object.is(summary.usd_price ?? null, newestEntry.usd_price ?? null);
-
-  const freshPrice = valueAgrees
-    ? getFreshUsdPrice(summary.usd_price, priceRecordedAt)
-    : null;
+  // Deliberately NOT compared against the newest history row's VALUE here,
+  // though the SQL and the fallbacks both do that. The two numbers come from
+  // different moments: `summary` is served by getCachedMarketProductSummaries
+  // (revalidate 3600) while the history above is queried live, so after any
+  // ordinary scraper update the cached summary lags the history by up to an
+  // hour. Comparing them would then withhold the price AND every return for a
+  // perfectly healthy product, and getCachedProductDetail would cache that
+  // verdict for another hour.
+  //
+  // The check belongs where both values are read in one snapshot, which is
+  // migration 0023 — post-0023 the RPC has already made it, so repeating it
+  // here buys nothing and costs the steady state. The timestamp check below is
+  // safe across the skew: a fresher recorded_at only makes it more permissive,
+  // and a price an hour old is well inside a 14-day tolerance.
+  const freshPrice = getFreshUsdPrice(summary.usd_price, priceRecordedAt);
   const product: Product = {
     ...summary,
     usd_price: freshPrice,
