@@ -96,7 +96,13 @@ export default function PortfolioChartImpl({
 
   const timeframes: PortfolioTimeframe[] = ["7D", "1M", "3M", "6M", "1Y", "ALL"];
 
-  if (chartData.length === 0) {
+  // A series of points that are all null is not an empty series: it plots a
+  // blank canvas against the synthetic 0-100 fallback axis, which reads as a
+  // rendering fault rather than as "nothing here could be valued". Checked
+  // separately from length so a genuine zero still charts.
+  const hasAnyValue = chartData.some((point) => point.value !== null);
+
+  if (chartData.length === 0 || !hasAnyValue) {
     return (
       <div className="bg-white rounded-lg shadow-lg p-4 md:p-6">
         <div className="flex items-center justify-between mb-4">
@@ -105,7 +111,9 @@ export default function PortfolioChartImpl({
           </h2>
         </div>
         <div className="h-48 flex items-center justify-center text-slate-500">
-          No historical data available yet
+          {chartData.length === 0
+            ? "No historical data available yet"
+            : "No current prices for this period"}
         </div>
       </div>
     );

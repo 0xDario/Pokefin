@@ -36,6 +36,17 @@
 -- page reads product_price_history directly rather than through this RPC).
 -- Keep the tolerance in sync on both sides.
 --
+-- The returns are gated on the same test as the price, in both functions.
+-- get_market_product_metrics anchors every return on products.usd_price, so a
+-- product whose SKU has gone dead compares its own frozen price against past
+-- history rows — and once the window reaches back past the last real
+-- recording, the anchor is that same frozen value and the function reports a
+-- flat 0.00%. Left ungated, withholding one stale price would publish six
+-- stale numbers derived from it, and those zeros are averaged into the
+-- homepage 1M return, set momentum and the investment ranking. Volatility,
+-- drawdown and trend stay ungated: they are computed from the recorded daily
+-- series and remain true descriptions of it however old its last point is.
+--
 -- get_market_product_summaries gains a column, so CREATE OR REPLACE cannot be
 -- used — the return type changes and Postgres rejects it. Nothing depends on
 -- the function (get_set_analytics builds on get_market_product_metrics
@@ -64,6 +75,22 @@
 --     FROM public.get_market_product_summaries()
 --    WHERE id IN (42, 415);
 --
+--   -- No product may publish a return it has no current price to anchor on
+--   -- (expect 0 rows):
+--   SELECT id, price_recorded_at, return_30d, return_365d
+--     FROM public.get_market_product_summaries()
+--    WHERE usd_price IS NULL
+--      AND num_nulls(return_1d, return_7d, return_30d,
+--                    return_90d, return_180d, return_365d) < 6;
+--
+--   -- The latest-price scan must be index-ordered, not a sort over the whole
+--   -- history table (expect an Index Only Scan using
+--   -- idx_price_history_product_recorded, and no Sort node):
+--   EXPLAIN ANALYZE SELECT DISTINCT ON (h.product_id) h.product_id, h.recorded_at
+--     FROM public.product_price_history h
+--     JOIN public.products ap ON ap.id = h.product_id AND ap.active = true
+--    ORDER BY h.product_id, h.recorded_at DESC;
+--
 --   -- A set whose only priced products are stale must report no price/day
 --   -- rather than an average of prices nobody can buy at (expect 0 rows):
 --   WITH fresh_sets AS (
@@ -80,6 +107,17 @@
 --     JOIN public.sets s ON s.code = sa.code
 --    WHERE s.id NOT IN (SELECT set_id FROM fresh_sets)
 --      AND sa.price_per_day IS NOT NULL;
+
+-- The latest-price scan below needs (product_id, recorded_at DESC) to be an
+-- index-ordered read instead of a scan-and-sort over the whole history table.
+-- 20260506_market_performance_functions.sql created exactly that index, and
+-- 0014_rls_perf_and_dedupe.sql dropped it again; the unique index that remains
+-- is on (product_id, recorded_at::date), whose cast cannot satisfy the sort.
+-- Production does still carry a matching index under a different name, created
+-- outside these files, so this is stated in the shape that repairs a database
+-- rebuilt from the migrations alone without touching the one that is live.
+CREATE INDEX IF NOT EXISTS idx_price_history_product_recorded
+  ON public.product_price_history (product_id, recorded_at DESC);
 
 DROP FUNCTION IF EXISTS public.get_market_product_summaries();
 
@@ -114,9 +152,9 @@ LANGUAGE sql
 STABLE
 AS $$
 -- Newest recorded price per active product. DISTINCT ON walks the
--- (product_id, recorded_at DESC) index from
--- 20260506_market_performance_functions.sql, so this is an index-ordered scan
--- rather than an aggregate over the whole table.
+-- (product_id, recorded_at DESC) index created at the top of this migration,
+-- so this is an index-ordered scan rather than an aggregate over the whole
+-- table.
 WITH latest_price AS (
   SELECT DISTINCT ON (h.product_id)
     h.product_id,
@@ -150,12 +188,24 @@ SELECT
   pt.id AS product_type_id,
   pt.name AS product_type_name,
   pt.label AS product_type_label,
-  metrics.return_1d,
-  metrics.return_7d,
-  metrics.return_30d,
-  metrics.return_90d,
-  metrics.return_180d,
-  metrics.return_365d,
+  -- Gated on the same freshness test as the price, because every one of these
+  -- is anchored on the current price: get_market_product_metrics measures the
+  -- move from a past history row to today's value. Withholding usd_price while
+  -- still publishing "+12% 30D" derived from it would replace one stale number
+  -- with six, and these feed the homepage average and — through
+  -- get_set_analytics — set momentum and the investment ranking.
+  CASE WHEN lp.recorded_at >= current_date - 14
+       THEN metrics.return_1d END AS return_1d,
+  CASE WHEN lp.recorded_at >= current_date - 14
+       THEN metrics.return_7d END AS return_7d,
+  CASE WHEN lp.recorded_at >= current_date - 14
+       THEN metrics.return_30d END AS return_30d,
+  CASE WHEN lp.recorded_at >= current_date - 14
+       THEN metrics.return_90d END AS return_90d,
+  CASE WHEN lp.recorded_at >= current_date - 14
+       THEN metrics.return_180d END AS return_180d,
+  CASE WHEN lp.recorded_at >= current_date - 14
+       THEN metrics.return_365d END AS return_365d,
   -- Deliberately NOT gated: a caller that got no price can still report when
   -- the product was last priced. Mirrors listings_snapshot_date in 0022.
   lp.recorded_at AS price_recorded_at
@@ -210,16 +260,32 @@ RETURNS TABLE (
 LANGUAGE sql
 STABLE
 AS $$
-WITH product_stats AS (
+-- 14 = PRICE_STALENESS_TOLERANCE_DAYS in frontend/app/lib/marketPulse.ts.
+-- Products with a price row inside the tolerance. One index-ordered pass,
+-- reused by both gates below, instead of a correlated EXISTS per column.
+WITH fresh_price AS (
+  SELECT DISTINCT h.product_id
+  FROM public.product_price_history h
+  WHERE h.recorded_at >= current_date - 14
+),
+product_stats AS (
   SELECT
     p.id,
     s.name,
     s.code,
     g.name AS generation,
     s.release_date,
-    metrics.return_30d,
-    metrics.return_90d,
-    metrics.return_365d,
+    -- Returns are gated on freshness because get_market_product_metrics
+    -- anchors every one of them on products.usd_price, which is
+    -- last-write-wins and never cleared. For a product whose SKU has gone
+    -- dead, that frozen value also becomes its own 30/90/365-day anchor, so
+    -- the function reports a flat 0.00% — and averaging a fabricated zero into
+    -- set momentum and the investment ranking is what this migration exists to
+    -- stop. Volatility, drawdown and trend are NOT gated: those are computed
+    -- from the recorded daily series alone and stay true descriptions of it.
+    CASE WHEN fp.product_id IS NOT NULL THEN metrics.return_30d END AS return_30d,
+    CASE WHEN fp.product_id IS NOT NULL THEN metrics.return_90d END AS return_90d,
+    CASE WHEN fp.product_id IS NOT NULL THEN metrics.return_365d END AS return_365d,
     metrics.volatility_90d,
     metrics.max_drawdown_365d,
     metrics.trend_90d,
@@ -229,17 +295,10 @@ WITH product_stats AS (
         AND p.usd_price IS NOT NULL
         AND p.usd_price > 0
         AND current_date > s.release_date
-        -- 14 = PRICE_STALENESS_TOLERANCE_DAYS in frontend/app/lib/marketPulse.ts.
         -- A product whose SKU stops returning history keeps its last price
         -- forever; averaging that into the set's price/day publishes a
-        -- months-old number as today's. EXISTS rather than max(recorded_at)
-        -- because only the yes/no matters here, and it index-scans.
-        AND EXISTS (
-          SELECT 1
-          FROM public.product_price_history h
-          WHERE h.product_id = p.id
-            AND h.recorded_at >= current_date - 14
-        )
+        -- months-old number as today's.
+        AND fp.product_id IS NOT NULL
       THEN p.usd_price / GREATEST((current_date - s.release_date), 1)
       ELSE NULL
     END AS price_per_day
@@ -247,6 +306,7 @@ WITH product_stats AS (
   JOIN public.sets s ON s.id = p.set_id
   LEFT JOIN public.generations g ON g.id = s.generation_id
   LEFT JOIN public.get_market_product_metrics() metrics ON metrics.product_id = p.id
+  LEFT JOIN fresh_price fp ON fp.product_id = p.id
   WHERE p.active = true
 ),
 set_stats AS (

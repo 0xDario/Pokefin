@@ -369,6 +369,62 @@ export async function deleteHolding(
 // Analytics & Calculations
 // ============================================
 
+type PortfolioPriceHistoryRow = {
+  product_id: number;
+  usd_price: number;
+  recorded_at: string;
+};
+
+const PRICE_HISTORY_PAGE_SIZE = 1000;
+// 50,000 rows is far past any real portfolio (23 held products over a year is
+// ~8k) and still bounds a runaway.
+const PRICE_HISTORY_MAX_PAGES = 50;
+
+/**
+ * Every price-history row for these products since `startIso`, paged.
+ *
+ * PostgREST caps a response at 1000 rows, and this query asks for one row per
+ * product per day: 23 held products over a 1Y chart is ~8,200 rows, so a
+ * single request returns the oldest 1,000 and silently drops the rest. Ordered
+ * ascending, what gets dropped is the recent end — the carried-forward price
+ * then fails the freshness check from the truncation point onward and most of
+ * the chart reads as unpriced. Ordering breaks ties on id so a row cannot be
+ * repeated or skipped across a page boundary.
+ */
+async function fetchPortfolioPriceHistory(
+  productIds: number[],
+  startIso: string
+): Promise<{
+  rows: PortfolioPriceHistoryRow[] | null;
+  error: Parameters<typeof logSupabaseError>[1];
+}> {
+  const rows: PortfolioPriceHistoryRow[] = [];
+
+  for (let page = 0; page < PRICE_HISTORY_MAX_PAGES; page++) {
+    const from = page * PRICE_HISTORY_PAGE_SIZE;
+    const { data, error } = await supabase
+      .from("product_price_history")
+      .select("product_id, usd_price, recorded_at")
+      .in("product_id", productIds)
+      .gte("recorded_at", startIso)
+      .order("recorded_at", { ascending: true })
+      .order("id", { ascending: true })
+      .range(from, from + PRICE_HISTORY_PAGE_SIZE - 1);
+
+    if (error) return { rows: null, error };
+    if (!data || data.length === 0) return { rows, error: null };
+
+    rows.push(...(data as PortfolioPriceHistoryRow[]));
+    if (data.length < PRICE_HISTORY_PAGE_SIZE) return { rows, error: null };
+  }
+
+  logCaughtError(
+    "portfolio_price_history_page_cap_reached",
+    new Error(`Stopped at ${rows.length} rows; the newest history is missing.`)
+  );
+  return { rows, error: null };
+}
+
 /**
  * Calculate portfolio summary metrics.
  *
@@ -490,12 +546,10 @@ export async function getPortfolioHistory(
   const priceHistoryStartDate = new Date(startDate);
   priceHistoryStartDate.setUTCDate(priceHistoryStartDate.getUTCDate() - 14);
 
-  const { data: priceHistory, error } = await supabase
-    .from("product_price_history")
-    .select("product_id, usd_price, recorded_at")
-    .in("product_id", productIds)
-    .gte("recorded_at", priceHistoryStartDate.toISOString())
-    .order("recorded_at", { ascending: true });
+  const { rows: priceHistory, error } = await fetchPortfolioPriceHistory(
+    productIds,
+    priceHistoryStartDate.toISOString()
+  );
 
   if (error || !priceHistory) {
     logSupabaseError("price_history_fetch_failed", error);

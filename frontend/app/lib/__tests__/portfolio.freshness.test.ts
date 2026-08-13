@@ -88,6 +88,11 @@ function dateKeyDaysAgo(offset: number): string {
     .split("T")[0];
 }
 
+/**
+ * Serve price-history rows through the paged call shape the loader uses.
+ * `.range(from, to)` slices, so a test can hand over more than one page and
+ * check that every page is stitched back together.
+ */
 function mockPriceHistoryRows(
   rows: Array<{ product_id: number; usd_price: number; recorded_at: string }>
 ) {
@@ -99,7 +104,15 @@ function mockPriceHistoryRows(
       select: () => ({
         in: () => ({
           gte: () => ({
-            order: () => Promise.resolve({ data: rows, error: null }),
+            order: () => ({
+              order: () => ({
+                range: (from: number, to: number) =>
+                  Promise.resolve({
+                    data: rows.slice(from, to + 1),
+                    error: null,
+                  }),
+              }),
+            }),
           }),
         }),
       }),
@@ -233,6 +246,35 @@ describe("getPortfolioHistory coverage", () => {
       expect(point.value).toBe(20);
       expect(point.priced_products).toBe(1);
       expect(point.held_products).toBe(2);
+    }
+  });
+
+  it("pages past the 1000-row response cap to reach the newest history", async () => {
+    // PostgREST returns at most 1000 rows per request and this query is
+    // ordered oldest-first, so a single page stops well short of today: 23
+    // held products over a 1Y chart is ~8,200 rows. Everything after the cut
+    // would fail the freshness check and the recent chart would read as
+    // unpriced. Here the newest row sits past the first page boundary.
+    const holdings = [makeHolding({ id: 1, product_id: 1, quantity: 2 })];
+
+    const filler = Array.from({ length: 1200 }, () => ({
+      product_id: 999,
+      usd_price: 1,
+      recorded_at: `${dateKeyDaysAgo(300)}T09:00:00`,
+    }));
+    const recent = [4, 3, 2, 1, 0].map((offset) => ({
+      product_id: 1,
+      usd_price: 10,
+      recorded_at: `${dateKeyDaysAgo(offset)}T09:00:00`,
+    }));
+    mockPriceHistoryRows([...filler, ...recent]);
+
+    const history = await getPortfolioHistory(1, 3, holdings);
+
+    expect(history.length).toBeGreaterThan(0);
+    for (const point of history) {
+      expect(point.value).toBe(20);
+      expect(point.priced_products).toBe(1);
     }
   });
 
