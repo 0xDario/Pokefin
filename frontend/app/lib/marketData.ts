@@ -5,7 +5,7 @@ import {
   ProductReturnMetrics,
   SalesHistoryEntry,
 } from "../components/ProductPrices/types";
-import { getFreshUsdPrice } from "./marketPulse";
+import { derivedFromPrice, resolvePrice } from "./priceGuard";
 
 export type MarketSummaryRow = {
   id: number;
@@ -295,17 +295,22 @@ export function buildProductReturnMetrics(
  * the stale prices this guards. /product/[id] does not share that gap — it
  * derives freshness from the price history it already fetches.
  */
-function applySummaryPriceFreshness(row: MarketSummaryRow): number | null {
-  const price = typeof row.usd_price === "number" ? row.usd_price : null;
-  if (row.price_recorded_at === undefined) return price;
-  return getFreshUsdPrice(price, row.price_recorded_at);
+function applySummaryPriceFreshness(row: MarketSummaryRow) {
+  // A column that is absent entirely — not null, absent — means the RPC
+  // predates 0023 and offers no freshness signal at all.
+  return resolvePrice(
+    row.usd_price,
+    row.price_recorded_at === undefined
+      ? { kind: "none" }
+      : { kind: "timestamp", recordedAt: row.price_recorded_at }
+  );
 }
 
 export function mapMarketSummaryRowToProduct(row: MarketSummaryRow): Product {
-  const freshPrice = applySummaryPriceFreshness(row);
+  const guarded = applySummaryPriceFreshness(row);
   return {
     id: row.id,
-    usd_price: freshPrice,
+    usd_price: guarded.usdPrice,
     price_recorded_at: row.price_recorded_at ?? null,
     url: row.url ?? "",
     last_updated: row.last_updated ?? "",
@@ -339,7 +344,7 @@ export function mapMarketSummaryRowToProduct(row: MarketSummaryRow): Product {
     // so a row that has none has nothing to measure from — and this mapper is
     // the layer that has to hold the line if the SQL gate is ever absent
     // (a database behind on 0023 sends the returns through ungated).
-    returns: freshPrice === null ? null : buildProductReturnMetrics(row),
+    returns: derivedFromPrice(guarded, () => buildProductReturnMetrics(row)),
   } as Product;
 }
 

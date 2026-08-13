@@ -15,11 +15,8 @@ import {
   mapProductsQueryResultToProducts,
   MarketSummaryRow,
 } from "./marketData";
-import {
-  getFreshUsdPrice,
-  PRICE_STALENESS_TOLERANCE_DAYS,
-  utcMidnightMs,
-} from "./marketPulse";
+import { PRICE_STALENESS_TOLERANCE_DAYS, utcMidnightMs } from "./marketPulse";
+import { resolvePrice } from "./priceGuard";
 import { logCaughtError, logSupabaseError } from "./logger";
 import { supabase } from "./supabase";
 
@@ -190,18 +187,23 @@ async function fetchProductsFallback(): Promise<Product[]> {
   }
 
   return mapProductsQueryResultToProducts(data || []).map((product) => {
-    const newest = newestPricedAt.get(product.id) ?? null;
-    const priceRecordedAt = newest?.recordedAt ?? null;
-    // The cached value must still agree with the row that dates it, matching
-    // the gate in migration 0023. Object.is, so a NULL on either side does not
-    // slip through the way == would.
-    const agrees = newest !== null && Object.is(product.usd_price, newest.usdPrice);
+    const newest = newestPricedAt.get(product.id);
+    // Both halves come from the same tolerance-window read, so the value can
+    // be compared as well as the date.
+    const guarded = resolvePrice(
+      product.usd_price,
+      newest === undefined
+        ? { kind: "timestamp", recordedAt: null }
+        : {
+            kind: "snapshot",
+            recordedAt: newest.recordedAt,
+            recordedPrice: newest.usdPrice,
+          }
+    );
     return {
       ...product,
-      usd_price: agrees
-        ? getFreshUsdPrice(product.usd_price, priceRecordedAt)
-        : null,
-      price_recorded_at: priceRecordedAt,
+      usd_price: guarded.usdPrice,
+      price_recorded_at: guarded.priceRecordedAt,
     };
   });
 }

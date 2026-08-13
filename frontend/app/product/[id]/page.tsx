@@ -23,6 +23,7 @@ import {
 } from "../../lib/marketPulse";
 import { getCachedProductDetail } from "../../lib/serverMarketData";
 import { Product } from "../../components/ProductPrices/types";
+import { derivedFromPrice, hasCurrentPrice } from "../../lib/priceGuard";
 import ProductDetailChart from "./ProductDetailChart";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -177,13 +178,14 @@ export default async function ProductPage({
   // usd_price is already null when the newest recorded price is past the
   // staleness tolerance (see fetchProductDetail), so this derives nothing
   // from a price the page itself refuses to show.
-  const pricePerDay =
-    product.usd_price !== null &&
-    product.usd_price > 0 &&
-    daysSinceRelease &&
-    daysSinceRelease > 0
-      ? product.usd_price / daysSinceRelease
+  // derivedFromPrice has already established there IS a current price, so
+  // this only has to decide whether a per-day figure is meaningful.
+  const pricePerDay = derivedFromPrice(product, () => {
+    const price = product.usd_price as number;
+    return price > 0 && daysSinceRelease && daysSinceRelease > 0
+      ? price / daysSinceRelease
       : null;
+  });
 
   const identity = (usd: number) => usd;
   // Gated like the seven return tiles beside it. CAGR's end point is the
@@ -191,7 +193,7 @@ export default async function ProductPage({
   // computing it here would put the withheld price back on screen as a rate.
   // Max drawdown and volatility are not gated: those describe the recorded
   // series instead of measuring from it to today, the same split 0023 uses.
-  const cagr = product.usd_price === null ? null : getCagrPercent(history, identity);
+  const cagr = derivedFromPrice(product, () => getCagrPercent(history, identity));
   const maxDrawdown = getMaxDrawdownPercent(history, identity);
   const volatility = getVolatilityPercent(history, identity, 30);
 
@@ -263,7 +265,7 @@ export default async function ProductPage({
           {/* A withheld price leaves a bare "--", which reads as a rendering
               fault. Say why, and when the product was last priced — the same
               reason the listings guard keeps its snapshot date. */}
-          {product.usd_price === null && (
+          {!hasCurrentPrice(product) && (
             <p className="mt-1 text-xs text-slate-500">
               {product.price_recorded_at
                 ? `No current price — last recorded ${formatDate(

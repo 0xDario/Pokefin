@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useMemo, memo } from "react";
-import { isPriceFresh } from "../lib/marketPulse";
+import { resolvePrice } from "../lib/priceGuard";
 import {
   ResponsiveContainer,
   Area,
@@ -207,7 +207,13 @@ const PriceChart = memo(function PriceChart({
         lastKnownPrice = existing.price;
         lastRecordedAt = existing.recordedAt ?? null;
         result.push(existing);
-      } else if (lastKnownPrice !== null && isPriceFresh(lastRecordedAt, referenceDate)) {
+      } else if (
+        resolvePrice(
+          lastKnownPrice,
+          { kind: "timestamp", recordedAt: lastRecordedAt },
+          referenceDate
+        ).hasCurrentPrice
+      ) {
         // Forward-fill across short gaps only. Single missed scrapes are
         // routine and a continuous line is the honest read of them, but the
         // fill expires at the same tolerance the price guard uses: past it

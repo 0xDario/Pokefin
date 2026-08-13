@@ -1,4 +1,5 @@
 import React from "react";
+import { hasCurrentPrice } from "../../../lib/priceGuard";
 import {
   ChartTimeframe,
   Currency,
@@ -90,7 +91,7 @@ export default function ReturnMetrics({
 
       // Only fill a gap in the supplied metrics, never override a withheld
       // one: with no current price there is nothing to measure a return to.
-      if (value === null && usdPrice !== null) {
+      if (value === null && hasCurrentPrice({ usd_price: usdPrice })) {
         const days =
           label === "1D"
             ? 1
