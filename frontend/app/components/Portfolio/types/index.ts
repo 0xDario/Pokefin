@@ -83,10 +83,19 @@ export interface UpdateHolding {
 // Portfolio summary metrics
 export interface PortfolioSummary {
   total_cost_basis: number;
+  // Cost basis of the priced holdings only — the denominator gain/loss is
+  // measured against, so that excluding an unpriced holding from the value
+  // does not also read as a loss the size of what it cost.
+  priced_cost_basis: number;
+  // Value of the holdings that could be priced. Null only when none could be;
+  // see calculatePortfolioSummary.
   total_current_value: number | null;
   total_gain_loss: number | null;
   total_gain_loss_percent: number | null;
   holdings_count: number;
+  // How many of holdings_count have no current price. Non-zero means the
+  // valuation above covers only part of the portfolio and must say so.
+  unpriced_holdings_count: number;
   unique_products_count: number;
 }
 
@@ -104,7 +113,12 @@ export interface HoldingPerformance {
 // Historical portfolio value point
 export interface PortfolioHistoryPoint {
   date: string;
+  // Value of the products that could be priced on this date; null when none
+  // could be. Read it with priced_products/held_products, which say how much
+  // of the portfolio the number actually covers.
   value: number | null;
+  priced_products?: number;
+  held_products?: number;
 }
 
 // Allocation breakdown

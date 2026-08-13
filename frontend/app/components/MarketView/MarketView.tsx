@@ -13,7 +13,7 @@ import ControlBar from "../ProductPrices/controls/ControlBar";
 import { useProductData } from "../ProductPrices/hooks/useProductData";
 import { useCurrencyConversion } from "../ProductPrices/hooks/useCurrencyConversion";
 import { useVolumeMetrics } from "../ProductPrices/hooks/useVolumeMetrics";
-import { getVolumeTrendPercent } from "../../lib/marketPulse";
+import { getVolumeTrendPercent, utcMidnightMs } from "../../lib/marketPulse";
 import {
   filterProducts,
   getAvailableGenerations,
@@ -264,12 +264,7 @@ export default function MarketView({
       return baseFiltered;
     }
 
-    const today = new Date();
-    const todayUtcMs = Date.UTC(
-      today.getUTCFullYear(),
-      today.getUTCMonth(),
-      today.getUTCDate()
-    );
+    const todayUtcMs = utcMidnightMs();
 
     return baseFiltered.filter((product) => {
       const releaseMs = getReleaseMs(product.sets?.release_date ?? null);
@@ -284,12 +279,7 @@ export default function MarketView({
   }, [products, selectedGeneration, deferredSearchTerm, ageFilterMinDays]);
 
   const rows = useMemo(() => {
-    const today = new Date();
-    const todayUtcMs = Date.UTC(
-      today.getUTCFullYear(),
-      today.getUTCMonth(),
-      today.getUTCDate()
-    );
+    const todayUtcMs = utcMidnightMs();
 
     return filteredProducts.map((product) => {
       const history = priceHistory[product.id];

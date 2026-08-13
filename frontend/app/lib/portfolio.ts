@@ -20,7 +20,18 @@ type ProductWithPrice = {
   price_recorded_at?: string | null;
 };
 
-async function getFreshProductsById(): Promise<Map<number, ProductWithPrice>> {
+/**
+ * The guarded prices, or null when the freshness source itself is unavailable.
+ *
+ * Null and an empty map mean different things and callers must not conflate
+ * them: null is "no verdict was reached", which fails closed onto "--", while
+ * a map that simply lacks a product is a verdict about that product — see
+ * pickGuardedPrice.
+ */
+async function getFreshProductsById(): Promise<Map<
+  number,
+  ProductWithPrice
+> | null> {
   try {
     const products = await fetchMarketProductsClient();
     return new Map(products.map((product) => [product.id, product]));
@@ -28,39 +39,65 @@ async function getFreshProductsById(): Promise<Map<number, ProductWithPrice>> {
     // Fail closed: an unavailable freshness source means the price is unknown,
     // not that products.usd_price is safe to present as current.
     logCaughtError("portfolio_fresh_prices_failed", error);
-    return new Map();
+    return null;
   }
+}
+
+/**
+ * Resolve one product's price against the freshness map.
+ *
+ * A product missing from a map that loaded successfully is not a stale
+ * product — the market summaries only cover active products, so a holding of
+ * a deactivated one lands here with a price that may be perfectly current.
+ * There is no freshness signal for it either way, so its own price stands,
+ * exactly as applySummaryPriceFreshness passes a price through when the RPC
+ * predates migration 0023. Only an absent map (the fetch failed) withholds.
+ */
+function pickGuardedPrice(
+  productsById: Map<number, ProductWithPrice> | null,
+  productId: number,
+  ownPrice: number | null | undefined
+): { usd_price: number | null; price_recorded_at: string | null } {
+  if (productsById === null) {
+    return { usd_price: null, price_recorded_at: null };
+  }
+
+  const guarded = productsById.get(productId);
+  if (guarded === undefined) {
+    return { usd_price: ownPrice ?? null, price_recorded_at: null };
+  }
+
+  return {
+    usd_price: guarded.usd_price ?? null,
+    price_recorded_at: guarded.price_recorded_at ?? null,
+  };
 }
 
 function applyFreshPricesToHoldings(
   holdings: HoldingWithProduct[],
-  productsById: Map<number, ProductWithPrice>
+  productsById: Map<number, ProductWithPrice> | null
 ): HoldingWithProduct[] {
-  return holdings.map((holding) => {
-    const guarded = productsById.get(holding.product_id);
-    return {
-      ...holding,
-      products: {
-        ...holding.products,
-        usd_price: guarded?.usd_price ?? null,
-        price_recorded_at: guarded?.price_recorded_at ?? null,
-      },
-    };
-  });
+  return holdings.map((holding) => ({
+    ...holding,
+    products: {
+      ...holding.products,
+      ...pickGuardedPrice(
+        productsById,
+        holding.product_id,
+        holding.products?.usd_price
+      ),
+    },
+  }));
 }
 
 function applyFreshPricesToSearchResults(
   products: ProductSearchResult[],
-  productsById: Map<number, ProductWithPrice>
+  productsById: Map<number, ProductWithPrice> | null
 ): ProductSearchResult[] {
-  return products.map((product) => {
-    const guarded = productsById.get(product.id);
-    return {
-      ...product,
-      usd_price: guarded?.usd_price ?? null,
-      price_recorded_at: guarded?.price_recorded_at ?? null,
-    };
-  });
+  return products.map((product) => ({
+    ...product,
+    ...pickGuardedPrice(productsById, product.id, product.usd_price),
+  }));
 }
 
 // ============================================
@@ -161,18 +198,24 @@ export async function updatePortfolioName(
  * Get all holdings for a portfolio with product data
  */
 export async function getHoldings(portfolioId: number): Promise<HoldingWithProduct[]> {
-  const { data, error } = await supabase
-    .from("portfolio_holdings")
-    .select(`
-      id, portfolio_id, product_id, quantity, purchase_price_usd, purchase_date, notes, created_at, updated_at,
-      products (
-        id, usd_price, image_url, variant, url,
-        sets ( id, name, code, release_date, expansion_type, generations ( id, name ) ),
-        product_types ( id, name, label )
-      )
-    `)
-    .eq("portfolio_id", portfolioId)
-    .order("created_at", { ascending: false });
+  // Both requests are independent, so they go out together — awaiting the
+  // freshness map after the holdings query would put a second full round trip
+  // in front of first paint.
+  const [{ data, error }, productsById] = await Promise.all([
+    supabase
+      .from("portfolio_holdings")
+      .select(`
+        id, portfolio_id, product_id, quantity, purchase_price_usd, purchase_date, notes, created_at, updated_at,
+        products (
+          id, usd_price, image_url, variant, url,
+          sets ( id, name, code, release_date, expansion_type, generations ( id, name ) ),
+          product_types ( id, name, label )
+        )
+      `)
+      .eq("portfolio_id", portfolioId)
+      .order("created_at", { ascending: false }),
+    getFreshProductsById(),
+  ]);
 
   if (error) {
     logSupabaseError("holdings_fetch_failed", error);
@@ -180,7 +223,7 @@ export async function getHoldings(portfolioId: number): Promise<HoldingWithProdu
   }
 
   const holdings = (data || []) as unknown as HoldingWithProduct[];
-  return applyFreshPricesToHoldings(holdings, await getFreshProductsById());
+  return applyFreshPricesToHoldings(holdings, productsById);
 }
 
 /**
@@ -210,20 +253,23 @@ export async function getHoldingById(
   holdingId: number,
   userId: string
 ): Promise<HoldingWithProduct | null> {
-  const { data, error } = await supabase
-    .from("portfolio_holdings")
-    .select(`
-      id, portfolio_id, product_id, quantity, purchase_price_usd, purchase_date, notes, created_at, updated_at,
-      portfolios!inner ( user_id ),
-      products (
-        id, usd_price, image_url, variant, url,
-        sets ( id, name, code, release_date, expansion_type, generations ( id, name ) ),
-        product_types ( id, name, label )
-      )
-    `)
-    .eq("id", holdingId)
-    .eq("portfolios.user_id", userId)
-    .maybeSingle();
+  const [{ data, error }, productsById] = await Promise.all([
+    supabase
+      .from("portfolio_holdings")
+      .select(`
+        id, portfolio_id, product_id, quantity, purchase_price_usd, purchase_date, notes, created_at, updated_at,
+        portfolios!inner ( user_id ),
+        products (
+          id, usd_price, image_url, variant, url,
+          sets ( id, name, code, release_date, expansion_type, generations ( id, name ) ),
+          product_types ( id, name, label )
+        )
+      `)
+      .eq("id", holdingId)
+      .eq("portfolios.user_id", userId)
+      .maybeSingle(),
+    getFreshProductsById(),
+  ]);
 
   if (error) {
     console.error("holding_fetch_failed", { code: error.code });
@@ -233,7 +279,7 @@ export async function getHoldingById(
   if (!data) return null;
   const [holding] = applyFreshPricesToHoldings(
     [data as unknown as HoldingWithProduct],
-    await getFreshProductsById()
+    productsById
   );
   return holding;
 }
@@ -324,12 +370,24 @@ export async function deleteHolding(
 // ============================================
 
 /**
- * Calculate portfolio summary metrics
+ * Calculate portfolio summary metrics.
+ *
+ * Unpriced holdings are excluded from the valuation and counted, rather than
+ * collapsing the whole portfolio to "unknown": one dead SKU out of twenty-odd
+ * holdings should not erase every number on the screen. This is the same
+ * degrade-precisely rule the listings guard follows — withhold the part that
+ * is unknown, keep reporting the part that is not, and say which is which via
+ * unpriced_holdings_count.
+ *
+ * Gain/loss is deliberately measured against priced_cost_basis, not
+ * total_cost_basis: comparing the value of the priced holdings to the cost of
+ * all of them would read as a loss the size of the unpriced ones.
  */
 export function calculatePortfolioSummary(holdings: HoldingWithProduct[]): PortfolioSummary {
   let totalCostBasis = 0;
-  let totalCurrentValue = 0;
-  let hasUnknownPrice = false;
+  let pricedCostBasis = 0;
+  let pricedCurrentValue = 0;
+  let pricedHoldings = 0;
   const productIds = new Set<number>();
 
   for (const holding of holdings) {
@@ -337,30 +395,35 @@ export function calculatePortfolioSummary(holdings: HoldingWithProduct[]): Portf
     const currentPrice = holding.products?.usd_price ?? null;
 
     totalCostBasis += costBasis;
-    if (currentPrice === null) {
-      hasUnknownPrice = true;
-    } else {
-      totalCurrentValue += holding.quantity * currentPrice;
+    if (currentPrice !== null) {
+      pricedHoldings += 1;
+      pricedCostBasis += costBasis;
+      pricedCurrentValue += holding.quantity * currentPrice;
     }
     productIds.add(holding.product_id);
   }
 
-  const currentValue = hasUnknownPrice ? null : totalCurrentValue;
+  // Null when holdings exist but none could be valued — "$0.00" would read as
+  // a portfolio that lost everything. An empty portfolio really is worth zero.
+  const currentValue =
+    holdings.length > 0 && pricedHoldings === 0 ? null : pricedCurrentValue;
   const totalGainLoss =
-    currentValue === null ? null : currentValue - totalCostBasis;
+    currentValue === null ? null : currentValue - pricedCostBasis;
   const totalGainLossPercent =
     totalGainLoss === null
       ? null
-      : totalCostBasis > 0
-        ? (totalGainLoss / totalCostBasis) * 100
+      : pricedCostBasis > 0
+        ? (totalGainLoss / pricedCostBasis) * 100
         : 0;
 
   return {
     total_cost_basis: totalCostBasis,
+    priced_cost_basis: pricedCostBasis,
     total_current_value: currentValue,
     total_gain_loss: totalGainLoss,
     total_gain_loss_percent: totalGainLossPercent,
     holdings_count: holdings.length,
+    unpriced_holdings_count: holdings.length - pricedHoldings,
     unique_products_count: productIds.size,
   };
 }
@@ -479,7 +542,8 @@ export async function getPortfolioHistory(
   for (let d = new Date(startDate); d <= today; d.setDate(d.getDate() + 1)) {
     const dateStr = d.toISOString().split("T")[0];
     let dailyValue = 0;
-    let hasUnknownPrice = false;
+    let heldProducts = 0;
+    let pricedProducts = 0;
 
     for (const productId of productIds) {
       const holdingData = holdingsByProduct.get(productId);
@@ -499,6 +563,8 @@ export async function getPortfolioHistory(
         continue;
       }
 
+      heldProducts += 1;
+
       while (
         priceData.index < priceData.entries.length &&
         priceData.entries[priceData.index].date <= dateStr
@@ -513,14 +579,26 @@ export async function getPortfolioHistory(
         priceData.price === null ||
         !isPriceFresh(priceData.recordedAt, referenceDate)
       ) {
-        hasUnknownPrice = true;
         continue;
       }
 
+      pricedProducts += 1;
       dailyValue += holdingData.quantity * priceData.price;
     }
 
-    history.push({ date: dateStr, value: hasUnknownPrice ? null : dailyValue });
+    // Chart what is known and record the coverage, rather than blanking the
+    // whole portfolio because one product has no price on this day. Products
+    // are tracked from the day they are added, so a holding bought before its
+    // first history row leaves a legitimate gap — holdings 316/318/319 are 56
+    // days short — and nulling the day for everyone hides twenty other
+    // holdings that were priced perfectly well. Null only when nothing on this
+    // day could be valued; zero would read as a portfolio worth nothing.
+    history.push({
+      date: dateStr,
+      value: pricedProducts === 0 ? null : dailyValue,
+      priced_products: pricedProducts,
+      held_products: heldProducts,
+    });
   }
 
   return history;
@@ -545,15 +623,18 @@ function escapeLike(input: string): string {
 export async function searchProducts(query: string): Promise<ProductSearchResult[]> {
   if (!query || query.length < 2) return [];
 
-  const { data, error } = await supabase
-    .from("products")
-    .select(`
-      id, usd_price, image_url, variant,
-      sets ( name, code ),
-      product_types ( name, label )
-    `)
-    .ilike("variant", `%${escapeLike(query)}%`)
-    .limit(20);
+  const [{ data, error }, productsById] = await Promise.all([
+    supabase
+      .from("products")
+      .select(`
+        id, usd_price, image_url, variant,
+        sets ( name, code ),
+        product_types ( name, label )
+      `)
+      .ilike("variant", `%${escapeLike(query)}%`)
+      .limit(20),
+    getFreshProductsById(),
+  ]);
 
   if (error) {
     console.error("product_search_failed", { code: error.code });
@@ -561,10 +642,7 @@ export async function searchProducts(query: string): Promise<ProductSearchResult
   }
 
   const products = (data || []) as unknown as ProductSearchResult[];
-  return applyFreshPricesToSearchResults(
-    products,
-    await getFreshProductsById()
-  );
+  return applyFreshPricesToSearchResults(products, productsById);
 }
 
 /**
@@ -584,15 +662,18 @@ export async function searchProductsBySet(setName: string): Promise<ProductSearc
 
   const setIds = setsData.map((s) => s.id);
 
-  const { data, error } = await supabase
-    .from("products")
-    .select(`
-      id, usd_price, image_url, variant,
-      sets ( name, code ),
-      product_types ( name, label )
-    `)
-    .in("set_id", setIds)
-    .limit(50);
+  const [{ data, error }, productsById] = await Promise.all([
+    supabase
+      .from("products")
+      .select(`
+        id, usd_price, image_url, variant,
+        sets ( name, code ),
+        product_types ( name, label )
+      `)
+      .in("set_id", setIds)
+      .limit(50),
+    getFreshProductsById(),
+  ]);
 
   if (error) {
     logSupabaseError("products_by_set_search_failed", error);
@@ -600,24 +681,24 @@ export async function searchProductsBySet(setName: string): Promise<ProductSearc
   }
 
   const products = (data || []) as unknown as ProductSearchResult[];
-  return applyFreshPricesToSearchResults(
-    products,
-    await getFreshProductsById()
-  );
+  return applyFreshPricesToSearchResults(products, productsById);
 }
 
 /**
  * Get all products (for initial load or dropdown)
  */
 export async function getAllProducts(): Promise<ProductSearchResult[]> {
-  const { data, error } = await supabase
-    .from("products")
-    .select(`
-      id, usd_price, image_url, variant,
-      sets ( name, code ),
-      product_types ( name, label )
-    `)
-    .order("id", { ascending: true });
+  const [{ data, error }, productsById] = await Promise.all([
+    supabase
+      .from("products")
+      .select(`
+        id, usd_price, image_url, variant,
+        sets ( name, code ),
+        product_types ( name, label )
+      `)
+      .order("id", { ascending: true }),
+    getFreshProductsById(),
+  ]);
 
   if (error) {
     logSupabaseError("all_products_fetch_failed", error);
@@ -625,8 +706,5 @@ export async function getAllProducts(): Promise<ProductSearchResult[]> {
   }
 
   const products = (data || []) as unknown as ProductSearchResult[];
-  return applyFreshPricesToSearchResults(
-    products,
-    await getFreshProductsById()
-  );
+  return applyFreshPricesToSearchResults(products, productsById);
 }

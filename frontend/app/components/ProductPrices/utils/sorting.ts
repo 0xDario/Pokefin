@@ -111,8 +111,14 @@ export function sortProducts(
       const orderB = getProductSortOrder(b);
       return orderA - orderB;
     } else if (sortKey === "price") {
-      const priceA = a.usd_price ?? 0;
-      const priceB = b.usd_price ?? 0;
+      // Unknown prices sort last in either direction, matching HoldingsTable.
+      // Coercing them to 0 would file every stale and never-priced product in
+      // among the genuinely cheap ones at the top of an ascending sort.
+      const priceA = a.usd_price;
+      const priceB = b.usd_price;
+      if (priceA === null && priceB === null) return 0;
+      if (priceA === null) return 1;
+      if (priceB === null) return -1;
       return sortDirection === "asc" ? priceA - priceB : priceB - priceA;
     }
 

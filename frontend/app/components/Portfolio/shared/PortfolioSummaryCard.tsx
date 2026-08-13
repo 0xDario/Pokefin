@@ -47,6 +47,14 @@ export default function PortfolioSummaryCard({
           <p className="text-xl font-bold text-slate-900">
             {formatCurrency(summary.total_current_value)}
           </p>
+          {/* The valuation covers only part of the portfolio, so it says so
+              rather than passing a partial sum off as the total. */}
+          {summary.unpriced_holdings_count > 0 && (
+            <p className="mt-1 text-xs text-slate-500">
+              {summary.holdings_count - summary.unpriced_holdings_count} of{" "}
+              {summary.holdings_count} priced
+            </p>
+          )}
         </div>
 
         {/* Cost Basis */}

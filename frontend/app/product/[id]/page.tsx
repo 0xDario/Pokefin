@@ -19,6 +19,7 @@ import {
   getVolumeTrendPercent,
   PULSE_SIGNAL_META,
   PulseTone,
+  utcMidnightMs,
 } from "../../lib/marketPulse";
 import { getCachedProductDetail } from "../../lib/serverMarketData";
 import { Product } from "../../components/ProductPrices/types";
@@ -168,11 +169,7 @@ export default async function ProductPage({
   const label = getProductLabel(product);
 
   const releaseMs = getReleaseMs(product.sets?.release_date);
-  const todayUtcMs = Date.UTC(
-    new Date().getUTCFullYear(),
-    new Date().getUTCMonth(),
-    new Date().getUTCDate()
-  );
+  const todayUtcMs = utcMidnightMs();
   const daysSinceRelease =
     releaseMs === null
       ? null

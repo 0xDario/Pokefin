@@ -65,6 +65,19 @@ function toUtcDateKey(d: Date): string {
 }
 
 /**
+ * Midnight UTC of the given instant, in epoch milliseconds.
+ *
+ * The one place this idiom lives. Every open-coded
+ * Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()) is another
+ * chance to build a date in UTC and read it back in the viewer's zone — the
+ * drift that made /product/[id] print the day before for every visitor west
+ * of Greenwich.
+ */
+export function utcMidnightMs(d: Date = new Date()): number {
+  return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
+}
+
+/**
  * The date part of a product_price_history.recorded_at value.
  *
  * recorded_at is `timestamp without time zone` written by the scraper from
@@ -77,6 +90,18 @@ function toRecordedDateKey(recordedAt: string | null | undefined): string | null
   if (!recordedAt) return null;
   const dateKey = recordedAt.split("T")[0].split(" ")[0];
   return /^\d{4}-\d{2}-\d{2}$/.test(dateKey) ? dateKey : null;
+}
+
+/**
+ * A recorded_at normalised so that two of them can be ordered by plain string
+ * comparison. toRecordedDateKey accepts three spellings of the same instant
+ * ("T", a space, and date-only), and a space (0x20) sorts before "T" (0x54) —
+ * so comparing the raw values would rank "2026-08-11 23:00:00" below
+ * "2026-08-11T04:00:00". Only the separator needs fixing; the rest of an ISO
+ * timestamp already compares correctly as text.
+ */
+function toComparableRecordedAt(recordedAt: string): string {
+  return recordedAt.replace(" ", "T");
 }
 
 /**
@@ -124,11 +149,14 @@ export function getLatestPriceRecordedAt(
   if (!history || history.length === 0) return null;
 
   let newest: string | null = null;
+  let newestComparable = "";
   for (const entry of history) {
     const dateKey = toRecordedDateKey(entry.recorded_at);
     if (dateKey === null) continue;
-    if (newest === null || entry.recorded_at > newest) {
+    const comparable = toComparableRecordedAt(entry.recorded_at);
+    if (newest === null || comparable > newestComparable) {
       newest = entry.recorded_at;
+      newestComparable = comparable;
     }
   }
   return newest;
@@ -253,7 +281,7 @@ const LISTINGS_STALENESS_TOLERANCE_DAYS = 3;
 // Mirror of the guard in migrations/0023_price_freshness_guard.sql, which
 // applies the identical rule to get_market_product_summaries and to the
 // price_per_day input of get_set_analytics. Keep both sides in sync.
-const PRICE_STALENESS_TOLERANCE_DAYS = 14;
+export const PRICE_STALENESS_TOLERANCE_DAYS = 14;
 
 // The prior window's weekly fallback range (today-63 .. today-36) is 28 days,
 // i.e. exactly four Monday-anchored buckets. Mirrors the same requirement in

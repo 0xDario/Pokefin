@@ -1,0 +1,260 @@
+/**
+ * Tests for the price-freshness guard where it meets real portfolio data.
+ *
+ * The pure helpers (isPriceFresh, getFreshUsdPrice) are covered in
+ * marketPulse.test.ts. What is covered here is the integration points those
+ * tests cannot reach: what the guard does to a portfolio that is only
+ * partially priced, and what it does to a holding the market summaries do not
+ * describe at all.
+ */
+
+jest.mock("../supabase", () => ({
+  supabase: {
+    from: jest.fn(),
+  },
+}));
+
+jest.mock("../clientMarketData", () => ({
+  fetchMarketProductsClient: jest.fn(),
+}));
+
+jest.mock("../logger", () => ({
+  logCaughtError: jest.fn(),
+  logSupabaseError: jest.fn(),
+}));
+
+import { supabase } from "../supabase";
+import { fetchMarketProductsClient } from "../clientMarketData";
+import {
+  calculatePortfolioSummary,
+  getHoldings,
+  getPortfolioHistory,
+} from "../portfolio";
+import type { HoldingWithProduct } from "../../components/Portfolio/types";
+
+const fromMock = supabase.from as jest.Mock;
+const fetchProductsMock = fetchMarketProductsClient as jest.MockedFunction<
+  typeof fetchMarketProductsClient
+>;
+
+function makeHolding(
+  overrides: Partial<{
+    id: number;
+    product_id: number;
+    quantity: number;
+    purchase_price_usd: number;
+    purchase_date: string;
+    usd_price: number | null;
+  }> = {}
+): HoldingWithProduct {
+  const usdPrice =
+    overrides.usd_price !== undefined ? overrides.usd_price : 100;
+  return {
+    id: overrides.id ?? 1,
+    portfolio_id: 1,
+    product_id: overrides.product_id ?? 100,
+    quantity: overrides.quantity ?? 1,
+    purchase_price_usd: overrides.purchase_price_usd ?? 50,
+    purchase_date: overrides.purchase_date ?? "2020-01-01",
+    notes: null,
+    created_at: "2020-01-01T00:00:00Z",
+    updated_at: "2020-01-01T00:00:00Z",
+    products: {
+      id: overrides.product_id ?? 100,
+      usd_price: usdPrice,
+      image_url: null,
+      variant: null,
+      url: "https://example.com/product",
+      sets: {
+        id: 1,
+        name: "Test Set",
+        code: "TST",
+        release_date: "2020-01-01",
+        expansion_type: "Expansion",
+        generations: { id: 1, name: "Generation 1" },
+      },
+      product_types: { id: 1, name: "booster_box", label: "Booster Box" },
+    },
+  } as HoldingWithProduct;
+}
+
+/** UTC date key `offset` days from today, matching the chart's date series. */
+function dateKeyDaysAgo(offset: number): string {
+  const now = new Date();
+  return new Date(
+    Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - offset)
+  )
+    .toISOString()
+    .split("T")[0];
+}
+
+function mockPriceHistoryRows(
+  rows: Array<{ product_id: number; usd_price: number; recorded_at: string }>
+) {
+  fromMock.mockImplementation((table: string) => {
+    if (table !== "product_price_history") {
+      throw new Error(`unexpected table in this test: ${table}`);
+    }
+    return {
+      select: () => ({
+        in: () => ({
+          gte: () => ({
+            order: () => Promise.resolve({ data: rows, error: null }),
+          }),
+        }),
+      }),
+    };
+  });
+}
+
+beforeEach(() => {
+  jest.clearAllMocks();
+});
+
+describe("calculatePortfolioSummary with a partially priced portfolio", () => {
+  it("values the priced holdings and counts the rest instead of blanking everything", () => {
+    const holdings = [
+      makeHolding({
+        id: 1,
+        product_id: 1,
+        quantity: 2,
+        purchase_price_usd: 100,
+        usd_price: 150,
+      }),
+      makeHolding({
+        id: 2,
+        product_id: 2,
+        quantity: 1,
+        purchase_price_usd: 80,
+        usd_price: null,
+      }),
+    ];
+
+    const result = calculatePortfolioSummary(holdings);
+
+    // 2 x 150 valued; the unpriced holding contributes nothing but is counted.
+    expect(result.total_current_value).toBe(300);
+    expect(result.unpriced_holdings_count).toBe(1);
+    expect(result.holdings_count).toBe(2);
+    // Cost basis still covers everything the user paid...
+    expect(result.total_cost_basis).toBe(280);
+    // ...but gain/loss is measured only against what could be valued, or the
+    // unpriced holding's $80 would show up as an $80 loss.
+    expect(result.priced_cost_basis).toBe(200);
+    expect(result.total_gain_loss).toBe(100);
+    expect(result.total_gain_loss_percent).toBe(50);
+  });
+
+  it("reports an unknown valuation only when nothing at all could be priced", () => {
+    const result = calculatePortfolioSummary([
+      makeHolding({ id: 1, product_id: 1, usd_price: null }),
+      makeHolding({ id: 2, product_id: 2, usd_price: null }),
+    ]);
+
+    expect(result.total_current_value).toBeNull();
+    expect(result.total_gain_loss).toBeNull();
+    expect(result.total_gain_loss_percent).toBeNull();
+    expect(result.unpriced_holdings_count).toBe(2);
+  });
+});
+
+describe("getHoldings freshness map", () => {
+  function mockHoldingsQuery(rows: unknown[]) {
+    fromMock.mockImplementation((table: string) => {
+      if (table !== "portfolio_holdings") {
+        throw new Error(`unexpected table in this test: ${table}`);
+      }
+      return {
+        select: () => ({
+          eq: () => ({
+            order: () => Promise.resolve({ data: rows, error: null }),
+          }),
+        }),
+      };
+    });
+  }
+
+  it("keeps a holding's own price when the product is absent from the summaries", async () => {
+    // get_market_product_summaries only covers active products, so a holding
+    // of a deactivated one is simply missing — that is not evidence its price
+    // is stale, and blanking it would take the whole portfolio with it.
+    mockHoldingsQuery([makeHolding({ product_id: 42, usd_price: 449.95 })]);
+    fetchProductsMock.mockResolvedValue([]);
+
+    const [holding] = await getHoldings(1);
+
+    expect(holding.products?.usd_price).toBe(449.95);
+  });
+
+  it("takes the guarded price when the product is present", async () => {
+    mockHoldingsQuery([makeHolding({ product_id: 42, usd_price: 449.95 })]);
+    fetchProductsMock.mockResolvedValue([
+      { id: 42, usd_price: null, price_recorded_at: "2026-05-08T04:07:55" },
+    ] as never);
+
+    const [holding] = await getHoldings(1);
+
+    expect(holding.products?.usd_price).toBeNull();
+    expect(holding.products?.price_recorded_at).toBe("2026-05-08T04:07:55");
+  });
+
+  it("withholds every price when the freshness source itself fails", async () => {
+    mockHoldingsQuery([makeHolding({ product_id: 42, usd_price: 449.95 })]);
+    fetchProductsMock.mockRejectedValue(new Error("summaries unavailable"));
+
+    const [holding] = await getHoldings(1);
+
+    expect(holding.products?.usd_price).toBeNull();
+  });
+});
+
+describe("getPortfolioHistory coverage", () => {
+  it("charts the priced holdings on a day when another has no price yet", async () => {
+    const holdings = [
+      makeHolding({ id: 1, product_id: 1, quantity: 2 }),
+      makeHolding({ id: 2, product_id: 2, quantity: 1 }),
+    ];
+
+    // Product 1 is priced daily; product 2 has no history at all, the shape of
+    // a holding bought before the scraper started tracking it.
+    // Oldest first, as the real query orders them.
+    mockPriceHistoryRows(
+      [4, 3, 2, 1, 0].map((offset) => ({
+        product_id: 1,
+        usd_price: 10,
+        recorded_at: `${dateKeyDaysAgo(offset)}T09:00:00`,
+      }))
+    );
+
+    const history = await getPortfolioHistory(1, 3, holdings);
+
+    expect(history.length).toBeGreaterThan(0);
+    for (const point of history) {
+      expect(point.value).toBe(20);
+      expect(point.priced_products).toBe(1);
+      expect(point.held_products).toBe(2);
+    }
+  });
+
+  it("returns null for a day on which nothing could be priced", async () => {
+    const holdings = [makeHolding({ id: 1, product_id: 1, quantity: 2 })];
+
+    // A price far past the staleness tolerance is not a current price.
+    mockPriceHistoryRows([
+      {
+        product_id: 1,
+        usd_price: 10,
+        recorded_at: `${dateKeyDaysAgo(400)}T09:00:00`,
+      },
+    ]);
+
+    const history = await getPortfolioHistory(1, 3, holdings);
+
+    expect(history.length).toBeGreaterThan(0);
+    for (const point of history) {
+      expect(point.value).toBeNull();
+      expect(point.priced_products).toBe(0);
+      expect(point.held_products).toBe(1);
+    }
+  });
+});

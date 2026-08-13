@@ -22,11 +22,24 @@ export function useBoosterPackPrices() {
 
         for (const item of products) {
           const set = item.sets;
-          if (
-            item.product_types?.name !== "booster_pack" ||
-            item.usd_price === null ||
-            !set?.id
-          ) {
+          if (item.product_types?.name !== "booster_pack" || !set?.id) {
+            continue;
+          }
+
+          // The set stays selectable even with no current price — the picker
+          // and the pack rows both already render a "No price" state, and
+          // dropping it here would make it vanish with no explanation. Only
+          // the price itself is withheld, by leaving it out of `prices`.
+          if (!setMap.has(set.id)) {
+            setMap.set(set.id, {
+              id: set.id,
+              name: set.name,
+              code: set.code,
+              releaseDate: set.release_date,
+            });
+          }
+
+          if (item.usd_price === null) {
             continue;
           }
 
@@ -36,15 +49,6 @@ export function useBoosterPackPrices() {
             usdPrice: item.usd_price,
             variant: item.variant ?? null,
           });
-
-          if (!setMap.has(set.id)) {
-            setMap.set(set.id, {
-              id: set.id,
-              name: set.name,
-              code: set.code,
-              releaseDate: set.release_date,
-            });
-          }
         }
 
         setBoosterPackPrices(prices);

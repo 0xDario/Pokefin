@@ -17,10 +17,12 @@ import type { PortfolioSummary } from "../types";
 function createMockSummary(overrides: Partial<PortfolioSummary> = {}): PortfolioSummary {
   return {
     total_cost_basis: 1000,
+    priced_cost_basis: 1000,
     total_current_value: 1200,
     total_gain_loss: 200,
     total_gain_loss_percent: 20,
     holdings_count: 5,
+    unpriced_holdings_count: 0,
     unique_products_count: 3,
     ...overrides,
   };

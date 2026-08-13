@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { fetchLatestExchangeRateClient } from "../lib/exchangeRate";
 import { fetchMarketProductsClient } from "../lib/clientMarketData";
+import { utcMidnightMs } from "../lib/marketPulse";
 
 type ShopifyProduct = {
   sku: string;
@@ -229,8 +230,7 @@ function formatReleaseDate(releaseDate: string | null | undefined): string {
 }
 
 function getTodayUtcStartMs() {
-  const now = new Date();
-  return Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+  return utcMidnightMs();
 }
 
 function calculateProfit(price: number | null, cost: number | null): number | null {

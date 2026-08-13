@@ -17,8 +17,13 @@ import {
   MarketSummaryRow,
   SetAnalyticsRow,
 } from "./marketData";
-import { getFreshUsdPrice, getLatestPriceRecordedAt } from "./marketPulse";
-import { logSupabaseError } from "./logger";
+import {
+  getFreshUsdPrice,
+  getLatestPriceRecordedAt,
+  PRICE_STALENESS_TOLERANCE_DAYS,
+  utcMidnightMs,
+} from "./marketPulse";
+import { logCaughtError, logSupabaseError } from "./logger";
 const supabaseUrl =
   process.env.NEXT_PUBLIC_SUPABASE_URL || "https://placeholder.supabase.invalid";
 const supabaseAnonKey =
@@ -46,6 +51,108 @@ function createMarketDataSupabaseClient() {
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 type FallbackSetStats = Omit<SetAnalyticsRow, "investScore" | "rank">;
+
+type PriceHistoryRow = {
+  product_id: number;
+  usd_price: number;
+  recorded_at: string;
+};
+
+type MarketDataSupabaseClient = ReturnType<
+  typeof createMarketDataSupabaseClient
+>;
+
+const HISTORY_PAGE_SIZE = 1000;
+// Bounded loop - MAX_PAGES * PAGE_SIZE caps the worst-case fetch so a runaway
+// query can't tie up a serverless function indefinitely.
+const HISTORY_MAX_PAGES = 50;
+
+/**
+ * Page through product_price_history for a set of products.
+ *
+ * The cap is a real ceiling, not a formality: a full year across every active
+ * product is comfortably over 100k rows, so the 367-day callers come back
+ * short and the rows they do get are the oldest ones. That is survivable for
+ * the returns built from them and fatal for a freshness verdict, which is why
+ * freshness has its own narrow window — see fetchNewestPricedAt. Truncation is
+ * logged either way; silently returning half a history is how this went
+ * unnoticed.
+ */
+async function fetchPriceHistoryPages(
+  supabase: MarketDataSupabaseClient,
+  productIds: number[],
+  startDateStr: string
+): Promise<PriceHistoryRow[]> {
+  const rows: PriceHistoryRow[] = [];
+  let from = 0;
+
+  for (let page = 0; page < HISTORY_MAX_PAGES; page++) {
+    const to = from + HISTORY_PAGE_SIZE - 1;
+    const { data, error } = await supabase
+      .from("product_price_history")
+      .select("product_id, usd_price, recorded_at")
+      .in("product_id", productIds)
+      .gte("recorded_at", startDateStr)
+      .order("recorded_at", { ascending: true })
+      .range(from, to);
+
+    if (error) {
+      throw error;
+    }
+
+    if (!data || data.length === 0) {
+      return rows;
+    }
+
+    rows.push(...data);
+    if (data.length < HISTORY_PAGE_SIZE) {
+      return rows;
+    }
+
+    from += HISTORY_PAGE_SIZE;
+  }
+
+  logCaughtError(
+    "price_history_page_cap_reached",
+    new Error(
+      `Stopped at ${rows.length} rows from ${startDateStr}; the tail is missing.`
+    )
+  );
+  return rows;
+}
+
+/**
+ * product_id -> newest recorded_at, for products priced inside the staleness
+ * tolerance. Products absent from the map have no recent price row.
+ *
+ * Its own query rather than a max() over the paged history above, because that
+ * fetch is ordered oldest-first and gets cut off by the page cap: the newest
+ * row it can show is months old, which would read as "every product is stale"
+ * and blank every price on the site. This window is only
+ * PRICE_STALENESS_TOLERANCE_DAYS wide, so it is a few thousand rows and always
+ * complete.
+ */
+async function fetchNewestPricedAt(
+  supabase: MarketDataSupabaseClient,
+  productIds: number[]
+): Promise<Map<number, string>> {
+  const windowStart = new Date(
+    utcMidnightMs() - PRICE_STALENESS_TOLERANCE_DAYS * DAY_MS
+  )
+    .toISOString()
+    .split("T")[0];
+
+  const rows = await fetchPriceHistoryPages(supabase, productIds, windowStart);
+
+  const newestByProduct = new Map<number, string>();
+  for (const row of rows) {
+    const current = newestByProduct.get(row.product_id);
+    if (current === undefined || row.recorded_at > current) {
+      newestByProduct.set(row.product_id, row.recorded_at);
+    }
+  }
+  return newestByProduct;
+}
 
 function getReleaseMs(releaseDate?: string | null) {
   if (!releaseDate) return null;
@@ -202,42 +309,10 @@ async function fetchSetAnalyticsFallback(): Promise<SetAnalyticsRow[]> {
   startDate.setDate(startDate.getDate() - 367);
   const startDateStr = startDate.toISOString().split("T")[0];
 
-  const PAGE_SIZE = 1000;
-  const allRows: Array<{
-    product_id: number;
-    usd_price: number;
-    recorded_at: string;
-  }> = [];
-
-  // Bounded loop - MAX_PAGES * PAGE_SIZE caps the worst-case fetch
-  // so a runaway query can't tie up a serverless function indefinitely.
-  const MAX_PAGES = 50;
-  let from = 0;
-  for (let page = 0; page < MAX_PAGES; page++) {
-    const to = from + PAGE_SIZE - 1;
-    const { data, error } = await supabase
-      .from("product_price_history")
-      .select("product_id, usd_price, recorded_at")
-      .in("product_id", productIds)
-      .gte("recorded_at", startDateStr)
-      .order("recorded_at", { ascending: true })
-      .range(from, to);
-
-    if (error) {
-      throw error;
-    }
-
-    if (!data || data.length === 0) {
-      break;
-    }
-
-    allRows.push(...data);
-    if (data.length < PAGE_SIZE) {
-      break;
-    }
-
-    from += PAGE_SIZE;
-  }
+  const [allRows, newestPricedAt] = await Promise.all([
+    fetchPriceHistoryPages(supabase, productIds, startDateStr),
+    fetchNewestPricedAt(supabase, productIds),
+  ]);
 
   const priceHistory = groupHistoryRowsByProduct(allRows);
   const setMap = new Map<
@@ -308,22 +383,18 @@ async function fetchSetAnalyticsFallback(): Promise<SetAnalyticsRow[]> {
     const releaseMs = getReleaseMs(set.release_date);
     // Non-nullness alone was never enough here: a product whose SKU has gone
     // dead keeps its last successful price forever, and averaging that into
-    // the set's price/day presents a months-old number as today's. The history
-    // for every product is already in hand above, so freshness costs nothing.
+    // the set's price/day presents a months-old number as today's. Freshness
+    // comes from the tolerance-window query, not from `history` — that one is
+    // page-capped, and reading its truncation as staleness would empty
+    // price/day for every set on the board.
     const freshPrice = getFreshUsdPrice(
       product.usd_price,
-      getLatestPriceRecordedAt(history)
+      newestPricedAt.get(product.id) ?? null
     );
     if (releaseMs !== null && freshPrice !== null && freshPrice > 0) {
-      const today = new Date();
-      const todayUtcMs = Date.UTC(
-        today.getUTCFullYear(),
-        today.getUTCMonth(),
-        today.getUTCDate()
-      );
       const daysSinceRelease = Math.max(
         0,
-        Math.floor((todayUtcMs - releaseMs) / DAY_MS)
+        Math.floor((utcMidnightMs() - releaseMs) / DAY_MS)
       );
       if (daysSinceRelease > 0) {
         entry.pricePerDay.push(freshPrice / daysSinceRelease);
@@ -331,12 +402,7 @@ async function fetchSetAnalyticsFallback(): Promise<SetAnalyticsRow[]> {
     }
   }
 
-  const today = new Date();
-  const todayUtcMs = Date.UTC(
-    today.getUTCFullYear(),
-    today.getUTCMonth(),
-    today.getUTCDate()
-  );
+  const todayUtcMs = utcMidnightMs();
 
   const setStats: FallbackSetStats[] = Array.from(setMap.entries()).map(
     ([key, entry]) => {
@@ -616,51 +682,22 @@ async function fetchProductsWithFallbackReturns(): Promise<Product[]> {
   startDate.setDate(startDate.getDate() - 367);
   const startDateStr = startDate.toISOString().split("T")[0];
 
-  const PAGE_SIZE = 1000;
-  const allRows: Array<{
-    product_id: number;
-    usd_price: number;
-    recorded_at: string;
-  }> = [];
-
-  // Bounded loop - MAX_PAGES * PAGE_SIZE caps the worst-case fetch
-  // so a runaway query can't tie up a serverless function indefinitely.
-  const MAX_PAGES = 50;
-  let from = 0;
-  for (let page = 0; page < MAX_PAGES; page++) {
-    const to = from + PAGE_SIZE - 1;
-    const { data, error } = await supabase
-      .from("product_price_history")
-      .select("product_id, usd_price, recorded_at")
-      .in("product_id", productIds)
-      .gte("recorded_at", startDateStr)
-      .order("recorded_at", { ascending: true })
-      .range(from, to);
-
-    if (error) {
-      throw error;
-    }
-
-    if (!data || data.length === 0) {
-      break;
-    }
-
-    allRows.push(...data);
-    if (data.length < PAGE_SIZE) {
-      break;
-    }
-
-    from += PAGE_SIZE;
-  }
+  const [allRows, newestPricedAt] = await Promise.all([
+    fetchPriceHistoryPages(supabase, productIds, startDateStr),
+    fetchNewestPricedAt(supabase, productIds),
+  ]);
 
   const historyByProduct = groupHistoryRowsByProduct(allRows);
 
   return products.map((product) => {
-    // The products table has no freshness column, so this path derives it the
-    // same way /product/[id] does — from the history it has already paged in.
-    const priceRecordedAt = getLatestPriceRecordedAt(
-      historyByProduct[product.id]
-    );
+    // The products table has no freshness column, so this path derives it from
+    // the tolerance-window query. Not from the year of history paged in above:
+    // that fetch is ordered oldest-first and the page cap truncates it well
+    // short of today, so every product would look months stale and the whole
+    // catalog would render "--".
+    const priceRecordedAt =
+      newestPricedAt.get(product.id) ??
+      getLatestPriceRecordedAt(historyByProduct[product.id]);
     return {
       ...product,
       usd_price: getFreshUsdPrice(product.usd_price, priceRecordedAt),

@@ -77,10 +77,12 @@ describe("portfolio library functions", () => {
 
       expect(result).toEqual({
         total_cost_basis: 0,
+        priced_cost_basis: 0,
         total_current_value: 0,
         total_gain_loss: 0,
         total_gain_loss_percent: 0,
         holdings_count: 0,
+        unpriced_holdings_count: 0,
         unique_products_count: 0,
       });
     });
