@@ -141,12 +141,19 @@ def compute_returns(product_types, sets, products, history):
         readings.sort()
         end_day, end_price = readings[-1]
 
-        # A product whose newest reading trails the anchor by more than the
-        # tolerance has no current price, so it has no end price to report and
-        # nothing to measure a return to. Dropping it here keeps it out of the
-        # spotlight tables and out of the category and set medians, rather than
-        # letting a months-old figure count as today's.
-        if (anchor - end_day).days > PRICE_STALENESS_TOLERANCE_DAYS:
+        # A product whose newest reading is older than the tolerance has no
+        # current price, so it has no end price to report and nothing to
+        # measure a return to. Dropping it here keeps it out of the spotlight
+        # tables and out of the category and set medians, rather than letting a
+        # months-old figure count as today's.
+        #
+        # Measured from the publication date, not from `anchor`. The anchor is
+        # the newest reading in the whole catalogue and is allowed to trail
+        # today by up to ANCHOR_STALE_AFTER_DAYS, so anchoring here would admit
+        # a product that is tolerance + 3 days old at publication — 17 days,
+        # against the 14 the site enforces. The two guards then disagree about
+        # the same product on the same day.
+        if (date.today() - end_day).days > PRICE_STALENESS_TOLERANCE_DAYS:
             continue
 
         rec = {

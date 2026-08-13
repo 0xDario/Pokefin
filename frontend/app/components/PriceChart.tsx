@@ -315,6 +315,12 @@ const PriceChart = memo(function PriceChart({
   const dataAvailability = useMemo(() => {
     const daysNeeded = range === "7D" ? 7 : range === "1M" ? 30 : range === "3M" ? 90 : range === "6M" ? 180 : 365;
     const firstDataIndex = slicedData.findIndex(d => d.price !== null);
+    // Nothing usable anywhere in the window — a short range on a product whose
+    // last reading predates it. Both gap checks below key off a real data
+    // point, so without this the range reads as complete and the chart draws
+    // an empty grid against the synthetic $0-$100 fallback axis, which looks
+    // like a price range rather than an absence of one.
+    const hasNoData = firstDataIndex === -1;
     const hasLeadingGap = firstDataIndex > 0;
     // A trailing gap is what staleness looks like on a chart, and it was the
     // one shape this badge could not see: the fill used to run to the right
@@ -328,7 +334,8 @@ const PriceChart = memo(function PriceChart({
       firstDataIndex >= 0 ? lastDataIndex - firstDataIndex + 1 : 0;
 
     return {
-      isIncomplete: hasLeadingGap || hasTrailingGap,
+      isIncomplete: hasNoData || hasLeadingGap || hasTrailingGap,
+      hasNoData,
       hasTrailingGap,
       actualDays: daysCovered,
       requestedDays: daysNeeded,
@@ -499,6 +506,20 @@ const PriceChart = memo(function PriceChart({
 
     return match ? match.date : null;
   }, [releaseDate, chartDataWithTrend]);
+
+  // Nothing to plot in this window. Rendering the axes anyway would put a
+  // $0-$100 scale on screen for a product that has no price at all, so say so
+  // instead — the same treatment PortfolioChartImpl gives an all-null series.
+  if (dataAvailability.hasNoData) {
+    return (
+      <div
+        className="w-full flex items-center justify-center text-sm text-slate-500"
+        style={{ height }}
+      >
+        No prices recorded in this period
+      </div>
+    );
+  }
 
   return (
     <div className="w-full relative">
