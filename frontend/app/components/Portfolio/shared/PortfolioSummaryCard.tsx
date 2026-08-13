@@ -62,9 +62,22 @@ export default function PortfolioSummaryCard({
           <p className="text-xs text-slate-500 uppercase tracking-wider mb-1">
             Cost Basis
           </p>
+          {/* The priced subset, not every holding: Total Value, Unrealized G/L
+              and ROI beside it are all scoped that way, and mixing the two
+              made the four tiles impossible to reconcile — value minus a
+              larger basis does not equal the G/L shown next to it. */}
           <p className="text-xl font-bold text-slate-900">
-            {formatCurrency(summary.total_cost_basis)}
+            {formatCurrency(
+              summary.unpriced_holdings_count > 0
+                ? summary.priced_cost_basis
+                : summary.total_cost_basis
+            )}
           </p>
+          {summary.unpriced_holdings_count > 0 && (
+            <p className="mt-1 text-xs text-slate-500">
+              of {formatCurrency(summary.total_cost_basis)} total
+            </p>
+          )}
         </div>
 
         {/* Gain/Loss */}

@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useMemo, memo } from "react";
+import { PRICE_STALENESS_TOLERANCE_DAYS } from "../lib/marketPulse";
 import {
   ResponsiveContainer,
   Area,
@@ -169,6 +170,7 @@ const PriceChart = memo(function PriceChart({
     //   so the line extends smoothly to the end of the range
     const result: Array<{ date: string; price: number | null; timestamp: string }> = [];
     let lastKnownPrice: number | null = null;
+    let daysSinceLastReading = 0;
     const cursor = new Date(startDate);
     while (cursor <= endDate) {
       const key = toKey(cursor);
@@ -176,12 +178,22 @@ const PriceChart = memo(function PriceChart({
       const existing = dataByDate.get(key);
       if (existing) {
         lastKnownPrice = existing.price;
+        daysSinceLastReading = 0;
         result.push(existing);
-      } else if (lastKnownPrice !== null) {
-        // Forward-fill: carry the last known price through gaps and to the end
+      } else if (
+        lastKnownPrice !== null &&
+        daysSinceLastReading < PRICE_STALENESS_TOLERANCE_DAYS
+      ) {
+        // Forward-fill across short gaps only. Single missed scrapes are
+        // routine and a continuous line is the honest read of them, but the
+        // fill expires at the same tolerance the price guard uses: past it
+        // the line stops rather than drawing a flat, hoverable price for
+        // days on which nothing was recorded and nobody can buy.
+        daysSinceLastReading += 1;
         result.push({ date: displayDate, price: lastKnownPrice, timestamp: key });
       } else {
-        // Before any data exists: null (no line)
+        // Before any data exists, or past the fill's expiry: null (no line)
+        if (lastKnownPrice !== null) daysSinceLastReading += 1;
         result.push({ date: displayDate, price: null, timestamp: key });
       }
       cursor.setDate(cursor.getDate() + 1);
@@ -304,10 +316,20 @@ const PriceChart = memo(function PriceChart({
     const daysNeeded = range === "7D" ? 7 : range === "1M" ? 30 : range === "3M" ? 90 : range === "6M" ? 180 : 365;
     const firstDataIndex = slicedData.findIndex(d => d.price !== null);
     const hasLeadingGap = firstDataIndex > 0;
-    const daysCovered = firstDataIndex >= 0 ? slicedData.length - firstDataIndex : 0;
+    // A trailing gap is what staleness looks like on a chart, and it was the
+    // one shape this badge could not see: the fill used to run to the right
+    // edge, so the series always ended in data. Now that the fill expires,
+    // check both ends.
+    const lastDataIndex = slicedData.length - 1 - [...slicedData].reverse()
+      .findIndex(d => d.price !== null);
+    const hasTrailingGap =
+      firstDataIndex >= 0 && lastDataIndex < slicedData.length - 1;
+    const daysCovered =
+      firstDataIndex >= 0 ? lastDataIndex - firstDataIndex + 1 : 0;
 
     return {
-      isIncomplete: hasLeadingGap,
+      isIncomplete: hasLeadingGap || hasTrailingGap,
+      hasTrailingGap,
       actualDays: daysCovered,
       requestedDays: daysNeeded,
       percentComplete: Math.round((daysCovered / daysNeeded) * 100),
@@ -487,7 +509,9 @@ const PriceChart = memo(function PriceChart({
             <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
           </svg>
           <span className="font-medium">
-            Only {dataAvailability.actualDays}d of data
+            {dataAvailability.hasTrailingGap
+              ? "No recent prices"
+              : `Only ${dataAvailability.actualDays}d of data`}
           </span>
         </div>
       )}

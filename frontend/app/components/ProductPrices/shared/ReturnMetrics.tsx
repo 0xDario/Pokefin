@@ -12,6 +12,13 @@ interface ReturnMetricsProps {
   exchangeRate: number;
   returnMetrics?: ProductReturnMetrics | null;
   history?: PriceHistoryEntry[];
+  /**
+   * The product's guarded price. Null means the freshness guard withheld it,
+   * which also disqualifies every return derived from it — without this the
+   * local recompute below cannot tell "withheld" from "not supplied" and
+   * quietly puts the numbers back.
+   */
+  usdPrice?: number | null;
   layout?: "vertical" | "horizontal";
   className?: string;
 }
@@ -27,9 +34,17 @@ function getHistoricalReturn(
 ): ReturnData | null {
   if (!history || history.length < 2) return null;
 
-  const currentPrice = convertPrice(history[history.length - 1].usd_price);
+  const latestEntry = history[history.length - 1];
+  const currentPrice = convertPrice(latestEntry.usd_price);
   const targetDate = new Date();
   targetDate.setDate(targetDate.getDate() - days);
+
+  // The newest reading must fall inside the window, or there is no "now" to
+  // measure to: without this the loop's first match is that same newest row
+  // and the function returns a flat 0.00%, reading as a stable product rather
+  // than an unpriced one. Mirrors the identical bail in
+  // MarketView/returns.ts, which this helper was otherwise a copy of.
+  if (new Date(latestEntry.recorded_at) <= targetDate) return null;
 
   for (let i = history.length - 1; i >= 0; i -= 1) {
     const entryDate = new Date(history[i].recorded_at);
@@ -59,6 +74,7 @@ export default function ReturnMetrics({
   exchangeRate,
   returnMetrics,
   history,
+  usdPrice,
   layout = "vertical",
   className = "",
 }: ReturnMetricsProps) {
@@ -72,7 +88,9 @@ export default function ReturnMetrics({
       const fromSummary = returnMetrics?.[label];
       let value = fromSummary ?? null;
 
-      if (value === null) {
+      // Only fill a gap in the supplied metrics, never override a withheld
+      // one: with no current price there is nothing to measure a return to.
+      if (value === null && usdPrice !== null) {
         const days =
           label === "1D"
             ? 1

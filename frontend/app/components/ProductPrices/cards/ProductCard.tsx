@@ -177,6 +177,7 @@ const ProductCard = memo(function ProductCard({
             exchangeRate={exchangeRate}
             returnMetrics={product.returns}
             history={history}
+            usdPrice={product.usd_price}
             layout="vertical"
           />
 
@@ -292,6 +293,7 @@ const ProductCard = memo(function ProductCard({
                 exchangeRate={exchangeRate}
                 returnMetrics={product.returns}
                 history={history}
+                usdPrice={product.usd_price}
                 layout="horizontal"
                 className="text-[10px] md:text-xs mt-1"
               />

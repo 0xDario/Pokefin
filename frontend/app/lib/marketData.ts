@@ -302,9 +302,10 @@ function applySummaryPriceFreshness(row: MarketSummaryRow): number | null {
 }
 
 export function mapMarketSummaryRowToProduct(row: MarketSummaryRow): Product {
+  const freshPrice = applySummaryPriceFreshness(row);
   return {
     id: row.id,
-    usd_price: applySummaryPriceFreshness(row),
+    usd_price: freshPrice,
     price_recorded_at: row.price_recorded_at ?? null,
     url: row.url ?? "",
     last_updated: row.last_updated ?? "",
@@ -334,7 +335,11 @@ export function mapMarketSummaryRowToProduct(row: MarketSummaryRow): Product {
           label: row.product_type_label ?? undefined,
         }
       : null,
-    returns: buildProductReturnMetrics(row),
+    // Withheld with the price. Every return is anchored on the current price,
+    // so a row that has none has nothing to measure from — and this mapper is
+    // the layer that has to hold the line if the SQL gate is ever absent
+    // (a database behind on 0023 sends the returns through ungated).
+    returns: freshPrice === null ? null : buildProductReturnMetrics(row),
   } as Product;
 }
 

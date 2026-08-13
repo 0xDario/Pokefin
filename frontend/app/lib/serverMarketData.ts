@@ -609,10 +609,17 @@ async function fetchProductDetail(
   // window has an empty history and is correctly treated as unpriced.
   const priceRecordedAt =
     getLatestPriceRecordedAt(history) ?? summary.price_recorded_at ?? null;
+  const freshPrice = getFreshUsdPrice(summary.usd_price, priceRecordedAt);
   const product: Product = {
     ...summary,
-    usd_price: getFreshUsdPrice(summary.usd_price, priceRecordedAt),
+    usd_price: freshPrice,
     price_recorded_at: priceRecordedAt,
+    // The verdict reached here is stricter than the RPC's, so the returns
+    // that came with the summary have to be re-judged against it too.
+    // Otherwise this page prints "No current price" above six numeric
+    // returns — and priceReturn30d feeds the Market Pulse signal, which
+    // could still award "Demand surge" to a product nobody can price.
+    returns: freshPrice === null ? null : summary.returns,
   };
 
   let salesHistory: SalesHistoryEntry[] = [];

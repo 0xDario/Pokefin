@@ -283,13 +283,22 @@ export default function MarketView({
 
     return filteredProducts.map((product) => {
       const history = priceHistory[product.id];
-      const returns: ReturnMap = {
-        "7D": product.returns?.["7D"] ?? getReturnPercent(history, 7, convertPrice),
-        "1M": product.returns?.["1M"] ?? getReturnPercent(history, 30, convertPrice),
-        "3M": product.returns?.["3M"] ?? getReturnPercent(history, 90, convertPrice),
-        "6M": product.returns?.["6M"] ?? getReturnPercent(history, 180, convertPrice),
-        "1Y": product.returns?.["1Y"] ?? getReturnPercent(history, 365, convertPrice),
-      };
+      // `??` cannot tell "withheld" from "not supplied", so recomputing from
+      // raw history here would resurrect every return the guard nulled — and
+      // now that the producers null the whole returns object when the price
+      // is withheld, all five windows would fall through at once. A product
+      // with no current price has nothing to measure a return from, so the
+      // recompute is skipped entirely rather than per-window.
+      const hasCurrentPrice = typeof product.usd_price === "number";
+      const returns: ReturnMap = hasCurrentPrice
+        ? {
+            "7D": product.returns?.["7D"] ?? getReturnPercent(history, 7, convertPrice),
+            "1M": product.returns?.["1M"] ?? getReturnPercent(history, 30, convertPrice),
+            "3M": product.returns?.["3M"] ?? getReturnPercent(history, 90, convertPrice),
+            "6M": product.returns?.["6M"] ?? getReturnPercent(history, 180, convertPrice),
+            "1Y": product.returns?.["1Y"] ?? getReturnPercent(history, 365, convertPrice),
+          }
+        : { "7D": null, "1M": null, "3M": null, "6M": null, "1Y": null };
       const releaseMs = getReleaseMs(product.sets?.release_date ?? null);
       const daysSinceRelease =
         releaseMs === null
@@ -303,7 +312,11 @@ export default function MarketView({
         price !== null && daysSinceRelease && daysSinceRelease > 0
           ? price / daysSinceRelease
           : null;
-      const cagr = getCagrPercent(history, convertPrice);
+      // CAGR is a return like any other — its end point is the newest history
+      // row, which for a stale product is the price this row renders as "--".
+      // Max drawdown and volatility stay ungated: they describe the recorded
+      // series rather than measuring from it to today.
+      const cagr = hasCurrentPrice ? getCagrPercent(history, convertPrice) : null;
       const maxDrawdown = getMaxDrawdownPercent(history, convertPrice);
       const volatility30d = getVolatilityPercent(history, convertPrice, 30);
       const productVolume = volumeMetrics[product.id];

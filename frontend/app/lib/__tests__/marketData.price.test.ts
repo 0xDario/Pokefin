@@ -94,6 +94,32 @@ describe("mapMarketSummaryRowToProduct price freshness", () => {
     expect(product.usd_price).toBeNull();
   });
 
+  it("withholds the returns along with the price", () => {
+    // Every return is anchored on the current price, so a row with none has
+    // nothing to measure from. Without this the guard would replace one stale
+    // number with six derived from it.
+    const product = mapMarketSummaryRowToProduct(
+      makeRow({
+        price_recorded_at: recordedDaysAgo(95),
+        return_1d: 0,
+        return_30d: 0,
+        return_365d: 12.5,
+      })
+    );
+
+    expect(product.usd_price).toBeNull();
+    expect(product.returns).toBeNull();
+  });
+
+  it("keeps the returns when the price is current", () => {
+    const product = mapMarketSummaryRowToProduct(
+      makeRow({ price_recorded_at: recordedDaysAgo(1), return_30d: 12.5 })
+    );
+
+    expect(product.usd_price).toBe(449.95);
+    expect(product.returns?.["1M"]).toBe(12.5);
+  });
+
   it("passes the price through when the RPC predates migration 0023", () => {
     // No price_recorded_at column at all: there is no freshness signal to
     // judge by, and blanking every price because the database is behind on

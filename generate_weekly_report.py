@@ -59,6 +59,16 @@ LIQUIDITY_WINDOW_DAYS = 365
 # scraper's roughly-daily cadence.
 ANCHOR_STALE_AFTER_DAYS = 3
 
+# How far a single product's newest price row may trail the anchor before that
+# product is dropped from the edition entirely. ANCHOR_STALE_AFTER_DAYS above
+# is a whole-report check and cannot fire while any one product is current, so
+# without this a dead SKU keeps contributing its last successful price as an
+# "end price" and anchors every window return on it — the same
+# fabricated-confidence bug migrations/0023 and the frontend guard exist to
+# stop. 14 = PRICE_STALENESS_TOLERANCE_DAYS in frontend/app/lib/marketPulse.ts;
+# keep the three in sync.
+PRICE_STALENESS_TOLERANCE_DAYS = 14
+
 
 # --------------------------------------------------------------------------- #
 # Data access
@@ -130,6 +140,14 @@ def compute_returns(product_types, sets, products, history):
             continue
         readings.sort()
         end_day, end_price = readings[-1]
+
+        # A product whose newest reading trails the anchor by more than the
+        # tolerance has no current price, so it has no end price to report and
+        # nothing to measure a return to. Dropping it here keeps it out of the
+        # spotlight tables and out of the category and set medians, rather than
+        # letting a months-old figure count as today's.
+        if (anchor - end_day).days > PRICE_STALENESS_TOLERANCE_DAYS:
+            continue
 
         rec = {
             "pid": pid,

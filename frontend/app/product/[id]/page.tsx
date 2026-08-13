@@ -186,7 +186,12 @@ export default async function ProductPage({
       : null;
 
   const identity = (usd: number) => usd;
-  const cagr = getCagrPercent(history, identity);
+  // Gated like the seven return tiles beside it. CAGR's end point is the
+  // newest history row — the exact value the hero above renders as "--" — so
+  // computing it here would put the withheld price back on screen as a rate.
+  // Max drawdown and volatility are not gated: those describe the recorded
+  // series instead of measuring from it to today, the same split 0023 uses.
+  const cagr = product.usd_price === null ? null : getCagrPercent(history, identity);
   const maxDrawdown = getMaxDrawdownPercent(history, identity);
   const volatility = getVolatilityPercent(history, identity, 30);
 

@@ -369,7 +369,16 @@ metric_stats AS (
 scored AS (
   SELECT
     ss.*,
-    (
+    -- A set with no current prices at all has no return, consistency or
+    -- momentum data left after the gate above. Every one of those z-score
+    -- terms then COALESCEs to 0 — "exactly market average" — and the set is
+    -- scored and ranked on the strength of the two ungated series metrics
+    -- alone. Score it NULL instead, on the same condition momentum_score
+    -- already uses, so it sorts NULLS LAST and reads as unranked rather than
+    -- as an average investment.
+    CASE WHEN ss.avg30 IS NULL AND ss.avg90 IS NULL AND ss.avg365 IS NULL
+         THEN NULL
+    ELSE (
       COALESCE(CASE WHEN ms.avg30_std IS NULL OR ms.avg30_std = 0 OR ss.avg30 IS NULL THEN 0 ELSE ((ss.avg30 - ms.avg30_mean) / ms.avg30_std) * 0.2 END, 0)
       + COALESCE(CASE WHEN ms.avg90_std IS NULL OR ms.avg90_std = 0 OR ss.avg90 IS NULL THEN 0 ELSE ((ss.avg90 - ms.avg90_mean) / ms.avg90_std) * 0.4 END, 0)
       + COALESCE(CASE WHEN ms.avg365_std IS NULL OR ms.avg365_std = 0 OR ss.avg365 IS NULL THEN 0 ELSE ((ss.avg365 - ms.avg365_mean) / ms.avg365_std) * 0.2 END, 0)
@@ -379,7 +388,7 @@ scored AS (
       + COALESCE(CASE WHEN ms.trend365_std IS NULL OR ms.trend365_std = 0 OR ss.trend365 IS NULL THEN 0 ELSE ((ss.trend365 - ms.trend365_mean) / ms.trend365_std) * 0.05 END, 0)
       + COALESCE(CASE WHEN ms.volatility90_std IS NULL OR ms.volatility90_std = 0 OR ss.volatility90 IS NULL THEN 0 ELSE ((ss.volatility90 - ms.volatility90_mean) / ms.volatility90_std) * -0.2 END, 0)
       + COALESCE(CASE WHEN ms.max_drawdown365_std IS NULL OR ms.max_drawdown365_std = 0 OR ss.max_drawdown365 IS NULL THEN 0 ELSE ((ss.max_drawdown365 - ms.max_drawdown365_mean) / ms.max_drawdown365_std) * -0.15 END, 0)
-    ) AS invest_score
+    ) END AS invest_score
   FROM set_stats ss
   CROSS JOIN metric_stats ms
 ),
