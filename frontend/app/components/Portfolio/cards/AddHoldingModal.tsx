@@ -3,6 +3,7 @@
 import { useState, useEffect } from "react";
 import ProductSearchSelect from "../shared/ProductSearchSelect";
 import { addHolding } from "../../../lib/portfolio";
+import { hasCurrentPrice } from "../../../lib/priceGuard";
 import type { ProductSearchResult, NewHolding } from "../types";
 import {
   QUANTITY_MAX,
@@ -57,8 +58,8 @@ export default function AddHoldingModal({
   // portfolio is worse than an empty field the user has to fill in.
   useEffect(() => {
     if (!selectedProduct) return;
-    if (selectedProduct.usd_price !== null && selectedProduct.usd_price !== undefined) {
-      setPurchasePrice(selectedProduct.usd_price.toFixed(2));
+    if (hasCurrentPrice(selectedProduct)) {
+      setPurchasePrice((selectedProduct.usd_price as number).toFixed(2));
     } else {
       setPurchasePrice("");
     }

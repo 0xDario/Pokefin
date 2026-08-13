@@ -14,6 +14,7 @@ import { useProductData } from "../ProductPrices/hooks/useProductData";
 import { useCurrencyConversion } from "../ProductPrices/hooks/useCurrencyConversion";
 import { useVolumeMetrics } from "../ProductPrices/hooks/useVolumeMetrics";
 import { getVolumeTrendPercent, utcMidnightMs } from "../../lib/marketPulse";
+import { derivedFromPrice, hasCurrentPrice } from "../../lib/priceGuard";
 import {
   filterProducts,
   getAvailableGenerations,
@@ -289,8 +290,8 @@ export default function MarketView({
       // is withheld, all five windows would fall through at once. A product
       // with no current price has nothing to measure a return from, so the
       // recompute is skipped entirely rather than per-window.
-      const hasCurrentPrice = typeof product.usd_price === "number";
-      const returns: ReturnMap = hasCurrentPrice
+      const priced = hasCurrentPrice(product);
+      const returns: ReturnMap = priced
         ? {
             "7D": product.returns?.["7D"] ?? getReturnPercent(history, 7, convertPrice),
             "1M": product.returns?.["1M"] ?? getReturnPercent(history, 30, convertPrice),
@@ -304,10 +305,9 @@ export default function MarketView({
         releaseMs === null
           ? null
           : Math.max(0, Math.floor((todayUtcMs - releaseMs) / DAY_MS));
-      const price =
-        typeof product.usd_price === "number"
-          ? convertPrice(product.usd_price)
-          : null;
+      const price = derivedFromPrice(product, () =>
+        convertPrice(product.usd_price as number)
+      );
       const pricePerDay =
         price !== null && daysSinceRelease && daysSinceRelease > 0
           ? price / daysSinceRelease
@@ -316,7 +316,9 @@ export default function MarketView({
       // row, which for a stale product is the price this row renders as "--".
       // Max drawdown and volatility stay ungated: they describe the recorded
       // series rather than measuring from it to today.
-      const cagr = hasCurrentPrice ? getCagrPercent(history, convertPrice) : null;
+      const cagr = derivedFromPrice(product, () =>
+        getCagrPercent(history, convertPrice)
+      );
       const maxDrawdown = getMaxDrawdownPercent(history, convertPrice);
       const volatility30d = getVolatilityPercent(history, convertPrice, 30);
       const productVolume = volumeMetrics[product.id];
