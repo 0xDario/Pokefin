@@ -229,6 +229,14 @@ replaying a subset:
   `ALTER TABLE public.box_recipes`.
 - `20260506_market_performance_functions.sql` must precede `0007`, which pins
   `search_path` on the three functions it creates (`0009` also consumes them).
+- `20260506_market_performance_functions.sql` must also precede `0022` and
+  `0023`, which re-define two of those same three functions to add their
+  freshness guards. **It sorts last by filename**, so "apply everything in
+  filename order" is wrong and actively harmful: replaying it after `0023`
+  restores the unguarded `get_set_analytics` silently (same signature, so
+  `CREATE OR REPLACE` succeeds) and hard-errors on `get_market_product_summaries`
+  (`0023` widens its return type, which `CREATE OR REPLACE` cannot do). Treat
+  it as the earliest file, not the latest.
 - Otherwise apply numbered files in numeric order.
 
 All history tables are readable by `anon`/`authenticated` under RLS and written

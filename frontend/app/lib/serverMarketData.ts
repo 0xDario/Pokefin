@@ -367,13 +367,27 @@ async function fetchSetAnalyticsFallback(): Promise<SetAnalyticsRow[]> {
     entry.productCount += 1;
 
     const history = priceHistory[product.id];
-    const ret30 = getReturnPercent(history, 30);
-    const ret90 = getReturnPercent(history, 90);
-    const ret365 = getReturnPercent(history, 365);
-    if (ret30 !== null) entry.returns30.push(ret30);
-    if (ret90 !== null) entry.returns90.push(ret90);
-    if (ret365 !== null) entry.returns365.push(ret365);
 
+    // Resolved before the returns, not after: a product with no current price
+    // must not contribute one to the set's averages either. Mirrors the gate
+    // 0023 puts on get_set_analytics, which this path stands in for.
+    const freshPrice = getFreshUsdPrice(
+      product.usd_price,
+      newestPricedAt.get(product.id) ?? null
+    );
+
+    if (freshPrice !== null) {
+      const ret30 = getReturnPercent(history, 30);
+      const ret90 = getReturnPercent(history, 90);
+      const ret365 = getReturnPercent(history, 365);
+      if (ret30 !== null) entry.returns30.push(ret30);
+      if (ret90 !== null) entry.returns90.push(ret90);
+      if (ret365 !== null) entry.returns365.push(ret365);
+    }
+
+    // Volatility, drawdown and trend stay ungated — they come from the
+    // recorded daily series and remain true descriptions of it however old
+    // its last point is. Same split as the SQL.
     const series90 = buildDailySeries(history, 90);
     const series365 = buildDailySeries(history, 365);
     const volatility90 = getVolatility(series90);
@@ -386,17 +400,13 @@ async function fetchSetAnalyticsFallback(): Promise<SetAnalyticsRow[]> {
     if (trend90 !== null) entry.trend90.push(trend90);
     if (trend365 !== null) entry.trend365.push(trend365);
 
-    const releaseMs = getReleaseMs(set.release_date);
     // Non-nullness alone was never enough here: a product whose SKU has gone
     // dead keeps its last successful price forever, and averaging that into
-    // the set's price/day presents a months-old number as today's. Freshness
-    // comes from the tolerance-window query, not from `history` — that one is
-    // page-capped, and reading its truncation as staleness would empty
+    // the set's price/day presents a months-old number as today's. freshPrice
+    // comes from the tolerance-window query above, not from `history` — that
+    // one is page-capped, and reading its truncation as staleness would empty
     // price/day for every set on the board.
-    const freshPrice = getFreshUsdPrice(
-      product.usd_price,
-      newestPricedAt.get(product.id) ?? null
-    );
+    const releaseMs = getReleaseMs(set.release_date);
     if (releaseMs !== null && freshPrice !== null && freshPrice > 0) {
       const daysSinceRelease = Math.max(
         0,
@@ -704,18 +714,29 @@ async function fetchProductsWithFallbackReturns(): Promise<Product[]> {
     const priceRecordedAt =
       newestPricedAt.get(product.id) ??
       getLatestPriceRecordedAt(historyByProduct[product.id]);
+    const freshPrice = getFreshUsdPrice(product.usd_price, priceRecordedAt);
+    const history = historyByProduct[product.id];
     return {
       ...product,
-      usd_price: getFreshUsdPrice(product.usd_price, priceRecordedAt),
+      usd_price: freshPrice,
       price_recorded_at: priceRecordedAt,
-      returns: {
-        "1D": getReturnPercent(historyByProduct[product.id], 1),
-        "7D": getReturnPercent(historyByProduct[product.id], 7),
-        "1M": getReturnPercent(historyByProduct[product.id], 30),
-        "3M": getReturnPercent(historyByProduct[product.id], 90),
-        "6M": getReturnPercent(historyByProduct[product.id], 180),
-        "1Y": getReturnPercent(historyByProduct[product.id], 365),
-      },
+      // Returns are withheld with the price, matching the gate 0023 applies
+      // to the RPC this path stands in for. getReturnPercent only needs the
+      // latest history row to fall inside the window, so a product last
+      // priced 15-29 days ago would otherwise report a numeric 1M return
+      // beside a blank price — the same "one stale number becomes six" the
+      // migration exists to stop.
+      returns:
+        freshPrice === null
+          ? null
+          : {
+              "1D": getReturnPercent(history, 1),
+              "7D": getReturnPercent(history, 7),
+              "1M": getReturnPercent(history, 30),
+              "3M": getReturnPercent(history, 90),
+              "6M": getReturnPercent(history, 180),
+              "1Y": getReturnPercent(history, 365),
+            },
     };
   });
 }

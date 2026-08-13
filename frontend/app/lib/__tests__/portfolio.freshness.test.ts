@@ -16,6 +16,7 @@ jest.mock("../supabase", () => ({
 
 jest.mock("../clientMarketData", () => ({
   fetchMarketProductsClient: jest.fn(),
+  fetchNewestPricedAtClient: jest.fn(),
 }));
 
 jest.mock("../logger", () => ({
@@ -24,7 +25,10 @@ jest.mock("../logger", () => ({
 }));
 
 import { supabase } from "../supabase";
-import { fetchMarketProductsClient } from "../clientMarketData";
+import {
+  fetchMarketProductsClient,
+  fetchNewestPricedAtClient,
+} from "../clientMarketData";
 import {
   calculatePortfolioSummary,
   getHoldings,
@@ -36,6 +40,10 @@ const fromMock = supabase.from as jest.Mock;
 const fetchProductsMock = fetchMarketProductsClient as jest.MockedFunction<
   typeof fetchMarketProductsClient
 >;
+const fetchNewestPricedAtMock =
+  fetchNewestPricedAtClient as jest.MockedFunction<
+    typeof fetchNewestPricedAtClient
+  >;
 
 function makeHolding(
   overrides: Partial<{
@@ -172,7 +180,16 @@ describe("calculatePortfolioSummary with a partially priced portfolio", () => {
 });
 
 describe("getHoldings freshness map", () => {
-  function mockHoldingsQuery(rows: unknown[]) {
+  /**
+   * @param rows           portfolio_holdings rows
+   * @param historyRows    product_price_history rows inside the tolerance
+   *                       window, for products the summaries do not cover
+   */
+  function mockHoldingsQuery(
+    rows: unknown[],
+    freshness: Array<[number, string]> = []
+  ) {
+    fetchNewestPricedAtMock.mockResolvedValue(new Map(freshness));
     fromMock.mockImplementation((table: string) => {
       if (table !== "portfolio_holdings") {
         throw new Error(`unexpected table in this test: ${table}`);
@@ -187,16 +204,31 @@ describe("getHoldings freshness map", () => {
     });
   }
 
-  it("keeps a holding's own price when the product is absent from the summaries", async () => {
-    // get_market_product_summaries only covers active products, so a holding
-    // of a deactivated one is simply missing — that is not evidence its price
-    // is stale, and blanking it would take the whole portfolio with it.
-    mockHoldingsQuery([makeHolding({ product_id: 42, usd_price: 449.95 })]);
+  it("keeps a deactivated product's price when it was recorded recently", async () => {
+    // get_market_product_summaries covers active products only, so a holding
+    // of a deactivated one is absent from the map. Absence is not evidence of
+    // staleness, so its freshness is looked up rather than assumed.
+    mockHoldingsQuery(
+      [makeHolding({ product_id: 42, usd_price: 449.95 })],
+      [[42, `${dateKeyDaysAgo(1)}T09:00:00`]]
+    );
     fetchProductsMock.mockResolvedValue([]);
 
     const [holding] = await getHoldings(1);
 
     expect(holding.products?.usd_price).toBe(449.95);
+  });
+
+  it("withholds a deactivated product's price when nothing was recorded recently", async () => {
+    // Absence from the map is not evidence of freshness either: products
+    // .usd_price is last-write-wins, so a deactivated product would otherwise
+    // contribute an indefinitely old value to the portfolio total.
+    mockHoldingsQuery([makeHolding({ product_id: 42, usd_price: 449.95 })], []);
+    fetchProductsMock.mockResolvedValue([]);
+
+    const [holding] = await getHoldings(1);
+
+    expect(holding.products?.usd_price).toBeNull();
   });
 
   it("takes the guarded price when the product is present", async () => {

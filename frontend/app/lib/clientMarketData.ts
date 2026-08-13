@@ -15,6 +15,11 @@ import {
   mapProductsQueryResultToProducts,
   MarketSummaryRow,
 } from "./marketData";
+import {
+  getFreshUsdPrice,
+  PRICE_STALENESS_TOLERANCE_DAYS,
+  utcMidnightMs,
+} from "./marketPulse";
 import { logCaughtError, logSupabaseError } from "./logger";
 import { supabase } from "./supabase";
 
@@ -56,22 +61,110 @@ function isMissingRpc(error: { code?: string; message?: string } | null) {
   );
 }
 
+const FRESHNESS_PAGE_SIZE = 1000;
+const FRESHNESS_MAX_PAGES = 30;
+
+/**
+ * product_id -> newest recorded_at inside the staleness tolerance. Products
+ * absent from the map have no current price.
+ *
+ * Paged, because PostgREST caps a response at 1000 rows and the whole-catalog
+ * form of this query wants roughly 306 products x 14 days. Unpaged it would
+ * return the first thousand and leave every other product looking stale —
+ * which is the failure this guard exists to avoid, arrived at from the other
+ * direction. Ordering breaks ties on id so a row cannot repeat or vanish
+ * across a page boundary.
+ *
+ * Pass productIds to scope it; omit for the whole active catalog.
+ */
+export async function fetchNewestPricedAtClient(
+  productIds?: number[]
+): Promise<Map<number, string>> {
+  const newestByProduct = new Map<number, string>();
+  if (productIds && productIds.length === 0) return newestByProduct;
+
+  const windowStart = new Date(
+    utcMidnightMs() - PRICE_STALENESS_TOLERANCE_DAYS * 24 * 60 * 60 * 1000
+  )
+    .toISOString()
+    .split("T")[0];
+
+  for (let page = 0; page < FRESHNESS_MAX_PAGES; page++) {
+    const from = page * FRESHNESS_PAGE_SIZE;
+    let query = supabase
+      .from("product_price_history")
+      .select("product_id, recorded_at")
+      .gte("recorded_at", windowStart);
+    if (productIds) query = query.in("product_id", productIds);
+
+    const { data, error } = await query
+      .order("recorded_at", { ascending: true })
+      .order("id", { ascending: true })
+      .range(from, from + FRESHNESS_PAGE_SIZE - 1);
+
+    if (error) {
+      // Fail closed: a partial read would mark real products stale, so throw
+      // away what we have rather than publish a verdict built on half the data.
+      logSupabaseError("client_price_freshness_failed", error);
+      return new Map();
+    }
+    if (!data || data.length === 0) return newestByProduct;
+
+    for (const row of data as Array<{
+      product_id: number;
+      recorded_at: string;
+    }>) {
+      const current = newestByProduct.get(row.product_id);
+      if (current === undefined || row.recorded_at > current) {
+        newestByProduct.set(row.product_id, row.recorded_at);
+      }
+    }
+
+    if (data.length < FRESHNESS_PAGE_SIZE) return newestByProduct;
+  }
+
+  logCaughtError(
+    "client_price_freshness_page_cap_reached",
+    new Error("Freshness window exceeded the page cap; verdicts may be wrong.")
+  );
+  return newestByProduct;
+}
+
+/**
+ * Used when the summaries RPC is missing. It reads the products table
+ * directly, so nothing has applied the freshness guard for it — and unlike
+ * mapMarketSummaryRowToProduct, which passes a price through when the RPC
+ * predates migration 0023 because there is genuinely no signal to judge by,
+ * here the signal is one query away. Its server-side twin,
+ * fetchProductsWithFallbackReturns, is guarded; this one was the last read
+ * path in the frontend that rendered raw products.usd_price.
+ */
 async function fetchProductsFallback(): Promise<Product[]> {
-  const { data, error } = await supabase
-    .from("products")
-    .select(
-      `id, usd_price, last_updated, url, image_url, variant, sku,
-       sets ( id, name, code, release_date, generation_id, expansion_type, generations!inner ( id, name ) ),
-       product_types ( id, name, label )`
-    )
-    .eq("active", true)
-    .order("last_updated", { ascending: false });
+  const [{ data, error }, newestPricedAt] = await Promise.all([
+    supabase
+      .from("products")
+      .select(
+        `id, usd_price, last_updated, url, image_url, variant, sku,
+         sets ( id, name, code, release_date, generation_id, expansion_type, generations!inner ( id, name ) ),
+         product_types ( id, name, label )`
+      )
+      .eq("active", true)
+      .order("last_updated", { ascending: false }),
+    fetchNewestPricedAtClient(),
+  ]);
 
   if (error) {
     throw error;
   }
 
-  return mapProductsQueryResultToProducts(data || []);
+  return mapProductsQueryResultToProducts(data || []).map((product) => {
+    const priceRecordedAt = newestPricedAt.get(product.id) ?? null;
+    return {
+      ...product,
+      usd_price: getFreshUsdPrice(product.usd_price, priceRecordedAt),
+      price_recorded_at: priceRecordedAt,
+    };
+  });
 }
 
 export async function fetchMarketProductsClient(): Promise<Product[]> {

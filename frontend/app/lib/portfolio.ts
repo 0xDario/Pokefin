@@ -1,6 +1,9 @@
 import { supabase } from "./supabase";
-import { fetchMarketProductsClient } from "./clientMarketData";
-import { isPriceFresh } from "./marketPulse";
+import {
+  fetchMarketProductsClient,
+  fetchNewestPricedAtClient,
+} from "./clientMarketData";
+import { getFreshUsdPrice, isPriceFresh } from "./marketPulse";
 import { logCaughtError, logSupabaseError } from "./logger";
 import type {
   Portfolio,
@@ -44,17 +47,42 @@ async function getFreshProductsById(): Promise<Map<
 }
 
 /**
+ * Newest recorded_at inside the staleness tolerance, for products the market
+ * summaries do not describe.
+ *
+ * The summaries cover active products only, so a holding of a deactivated one
+ * is absent from that map. Absence is not evidence of staleness — but it is
+ * not evidence of freshness either, and `products.usd_price` is
+ * last-write-wins, so trusting it would let a deactivated product contribute
+ * an indefinitely old value to portfolio totals. Rather than guess in either
+ * direction, look the freshness up. Usually a no-op: nothing is queried when
+ * every product is in the map, which is the normal case.
+ */
+async function fetchRecordedAtForMissing(
+  productsById: Map<number, ProductWithPrice> | null,
+  productIds: number[]
+): Promise<Map<number, string>> {
+  if (productsById === null) return new Map();
+
+  const missing = [...new Set(productIds)].filter((id) => !productsById.has(id));
+  if (missing.length === 0) return new Map();
+
+  // Scoped to the unmatched ids and shared with the catalog fallback, so the
+  // paging and the fail-closed behaviour are defined once.
+  return fetchNewestPricedAtClient(missing);
+}
+
+/**
  * Resolve one product's price against the freshness map.
  *
- * A product missing from a map that loaded successfully is not a stale
- * product — the market summaries only cover active products, so a holding of
- * a deactivated one lands here with a price that may be perfectly current.
- * There is no freshness signal for it either way, so its own price stands,
- * exactly as applySummaryPriceFreshness passes a price through when the RPC
- * predates migration 0023. Only an absent map (the fetch failed) withholds.
+ * Three cases, and they mean different things: an absent map is a failed
+ * lookup and withholds; a product in the map already carries the server's
+ * verdict; a product missing from a map that loaded is judged against the
+ * timestamp fetched by fetchRecordedAtForMissing.
  */
 function pickGuardedPrice(
   productsById: Map<number, ProductWithPrice> | null,
+  missingRecordedAt: Map<number, string>,
   productId: number,
   ownPrice: number | null | undefined
 ): { usd_price: number | null; price_recorded_at: string | null } {
@@ -64,7 +92,11 @@ function pickGuardedPrice(
 
   const guarded = productsById.get(productId);
   if (guarded === undefined) {
-    return { usd_price: ownPrice ?? null, price_recorded_at: null };
+    const recordedAt = missingRecordedAt.get(productId) ?? null;
+    return {
+      usd_price: getFreshUsdPrice(ownPrice, recordedAt),
+      price_recorded_at: recordedAt,
+    };
   }
 
   return {
@@ -73,16 +105,21 @@ function pickGuardedPrice(
   };
 }
 
-function applyFreshPricesToHoldings(
+async function applyFreshPricesToHoldings(
   holdings: HoldingWithProduct[],
   productsById: Map<number, ProductWithPrice> | null
-): HoldingWithProduct[] {
+): Promise<HoldingWithProduct[]> {
+  const missingRecordedAt = await fetchRecordedAtForMissing(
+    productsById,
+    holdings.map((holding) => holding.product_id)
+  );
   return holdings.map((holding) => ({
     ...holding,
     products: {
       ...holding.products,
       ...pickGuardedPrice(
         productsById,
+        missingRecordedAt,
         holding.product_id,
         holding.products?.usd_price
       ),
@@ -90,13 +127,22 @@ function applyFreshPricesToHoldings(
   }));
 }
 
-function applyFreshPricesToSearchResults(
+async function applyFreshPricesToSearchResults(
   products: ProductSearchResult[],
   productsById: Map<number, ProductWithPrice> | null
-): ProductSearchResult[] {
+): Promise<ProductSearchResult[]> {
+  const missingRecordedAt = await fetchRecordedAtForMissing(
+    productsById,
+    products.map((product) => product.id)
+  );
   return products.map((product) => ({
     ...product,
-    ...pickGuardedPrice(productsById, product.id, product.usd_price),
+    ...pickGuardedPrice(
+      productsById,
+      missingRecordedAt,
+      product.id,
+      product.usd_price
+    ),
   }));
 }
 
@@ -223,7 +269,7 @@ export async function getHoldings(portfolioId: number): Promise<HoldingWithProdu
   }
 
   const holdings = (data || []) as unknown as HoldingWithProduct[];
-  return applyFreshPricesToHoldings(holdings, productsById);
+  return await applyFreshPricesToHoldings(holdings, productsById);
 }
 
 /**
@@ -277,7 +323,7 @@ export async function getHoldingById(
   }
 
   if (!data) return null;
-  const [holding] = applyFreshPricesToHoldings(
+  const [holding] = await applyFreshPricesToHoldings(
     [data as unknown as HoldingWithProduct],
     productsById
   );
@@ -696,7 +742,7 @@ export async function searchProducts(query: string): Promise<ProductSearchResult
   }
 
   const products = (data || []) as unknown as ProductSearchResult[];
-  return applyFreshPricesToSearchResults(products, productsById);
+  return await applyFreshPricesToSearchResults(products, productsById);
 }
 
 /**
@@ -735,7 +781,7 @@ export async function searchProductsBySet(setName: string): Promise<ProductSearc
   }
 
   const products = (data || []) as unknown as ProductSearchResult[];
-  return applyFreshPricesToSearchResults(products, productsById);
+  return await applyFreshPricesToSearchResults(products, productsById);
 }
 
 /**
@@ -760,5 +806,5 @@ export async function getAllProducts(): Promise<ProductSearchResult[]> {
   }
 
   const products = (data || []) as unknown as ProductSearchResult[];
-  return applyFreshPricesToSearchResults(products, productsById);
+  return await applyFreshPricesToSearchResults(products, productsById);
 }
