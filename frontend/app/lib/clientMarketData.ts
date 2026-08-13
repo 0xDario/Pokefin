@@ -18,7 +18,23 @@ import {
 import { logCaughtError, logSupabaseError } from "./logger";
 import { supabase } from "./supabase";
 
+/**
+ * How long a fetched market-products array may be reused.
+ *
+ * It used to be reused for the whole browser session. That was tolerable when
+ * every consumer just displayed a price, but these products now carry a
+ * freshness verdict decided at fetch time: usd_price is already nulled, or
+ * not, according to how old price_recorded_at was when the RPC ran. A
+ * long-lived tab therefore kept computing box NAV — and its buy/hold/avoid
+ * verdict — from a price that had since changed or crossed the 14-day cutoff,
+ * with no way to notice. An hour matches the server-side
+ * getCachedMarketProductSummaries revalidate, so both halves of the app age
+ * their view of the catalog at the same rate.
+ */
+const MARKET_PRODUCTS_TTL_MS = 60 * 60 * 1000;
+
 let marketProductsCache: Product[] | null = null;
+let marketProductsCachedAt = 0;
 let marketProductsPromise: Promise<Product[]> | null = null;
 
 const productHistoryCache = new Map<number, { daysLoaded: number; history: PriceHistoryEntry[] }>();
@@ -59,7 +75,10 @@ async function fetchProductsFallback(): Promise<Product[]> {
 }
 
 export async function fetchMarketProductsClient(): Promise<Product[]> {
-  if (marketProductsCache) {
+  if (
+    marketProductsCache &&
+    Date.now() - marketProductsCachedAt < MARKET_PRODUCTS_TTL_MS
+  ) {
     return marketProductsCache;
   }
 
@@ -76,6 +95,7 @@ export async function fetchMarketProductsClient(): Promise<Product[]> {
         }
         const fallbackProducts = await fetchProductsFallback();
         marketProductsCache = fallbackProducts;
+        marketProductsCachedAt = Date.now();
         return fallbackProducts;
       }
 
@@ -83,6 +103,7 @@ export async function fetchMarketProductsClient(): Promise<Product[]> {
         mapMarketSummaryRowToProduct
       );
       marketProductsCache = products;
+      marketProductsCachedAt = Date.now();
       return products;
     } finally {
       marketProductsPromise = null;
