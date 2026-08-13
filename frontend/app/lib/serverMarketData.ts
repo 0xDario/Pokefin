@@ -17,7 +17,13 @@ import {
   MarketSummaryRow,
   SetAnalyticsRow,
 } from "./marketData";
-import { logSupabaseError } from "./logger";
+import {
+  getFreshUsdPrice,
+  getLatestPriceRecordedAt,
+  PRICE_STALENESS_TOLERANCE_DAYS,
+  utcMidnightMs,
+} from "./marketPulse";
+import { logCaughtError, logSupabaseError } from "./logger";
 const supabaseUrl =
   process.env.NEXT_PUBLIC_SUPABASE_URL || "https://placeholder.supabase.invalid";
 const supabaseAnonKey =
@@ -45,6 +51,140 @@ function createMarketDataSupabaseClient() {
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 type FallbackSetStats = Omit<SetAnalyticsRow, "investScore" | "rank">;
+
+type PriceHistoryRow = {
+  product_id: number;
+  usd_price: number;
+  recorded_at: string;
+};
+
+type MarketDataSupabaseClient = ReturnType<
+  typeof createMarketDataSupabaseClient
+>;
+
+const HISTORY_PAGE_SIZE = 1000;
+// Bounded loop - MAX_PAGES * PAGE_SIZE caps the worst-case fetch so a runaway
+// query can't tie up a serverless function indefinitely.
+const HISTORY_MAX_PAGES = 50;
+
+/**
+ * Page through product_price_history for a set of products.
+ *
+ * The cap is a real ceiling, not a formality: a full year across every active
+ * product is comfortably over 100k rows, so the 367-day callers come back
+ * short and the rows they do get are the oldest ones. That is survivable for
+ * the returns built from them and fatal for a freshness verdict, which is why
+ * freshness has its own narrow window — see fetchNewestPricedAt. Truncation is
+ * logged either way; silently returning half a history is how this went
+ * unnoticed.
+ */
+async function fetchPriceHistoryPages(
+  supabase: MarketDataSupabaseClient,
+  productIds: number[],
+  startDateStr: string
+): Promise<PriceHistoryRow[]> {
+  const rows: PriceHistoryRow[] = [];
+  let from = 0;
+
+  for (let page = 0; page < HISTORY_MAX_PAGES; page++) {
+    const to = from + HISTORY_PAGE_SIZE - 1;
+    const { data, error } = await supabase
+      .from("product_price_history")
+      .select("product_id, usd_price, recorded_at")
+      .in("product_id", productIds)
+      .gte("recorded_at", startDateStr)
+      .order("recorded_at", { ascending: true })
+      // recorded_at alone is not a total order — the scraper writes a batch of
+      // rows per tick and they can share a timestamp — so offset paging could
+      // repeat or skip a row at a page boundary. A skipped row in
+      // fetchNewestPricedAt reads as "this product has no recent history" and
+      // withholds a current price.
+      .order("id", { ascending: true })
+      .range(from, to);
+
+    if (error) {
+      throw error;
+    }
+
+    if (!data || data.length === 0) {
+      return rows;
+    }
+
+    rows.push(...data);
+    if (data.length < HISTORY_PAGE_SIZE) {
+      return rows;
+    }
+
+    from += HISTORY_PAGE_SIZE;
+  }
+
+  logCaughtError(
+    "price_history_page_cap_reached",
+    new Error(
+      `Stopped at ${rows.length} rows from ${startDateStr}; the tail is missing.`
+    )
+  );
+  return rows;
+}
+
+/**
+ * product_id -> newest recorded_at, for products priced inside the staleness
+ * tolerance. Products absent from the map have no recent price row.
+ *
+ * Its own query rather than a max() over the paged history above, because that
+ * fetch is ordered oldest-first and gets cut off by the page cap: the newest
+ * row it can show is months old, which would read as "every product is stale"
+ * and blank every price on the site. This window is only
+ * PRICE_STALENESS_TOLERANCE_DAYS wide, so it is a few thousand rows and always
+ * complete.
+ */
+async function fetchNewestPricedAt(
+  supabase: MarketDataSupabaseClient,
+  productIds: number[]
+): Promise<Map<number, { recordedAt: string; usdPrice: number | null }>> {
+  const windowStart = new Date(
+    utcMidnightMs() - PRICE_STALENESS_TOLERANCE_DAYS * DAY_MS
+  )
+    .toISOString()
+    .split("T")[0];
+
+  const rows = await fetchPriceHistoryPages(supabase, productIds, windowStart);
+
+  const newestByProduct = new Map<
+    number,
+    { recordedAt: string; usdPrice: number | null }
+  >();
+  for (const row of rows) {
+    const current = newestByProduct.get(row.product_id);
+    if (current === undefined || row.recorded_at > current.recordedAt) {
+      newestByProduct.set(row.product_id, {
+        recordedAt: row.recorded_at,
+        usdPrice: row.usd_price,
+      });
+    }
+  }
+  return newestByProduct;
+}
+
+/**
+ * The price to publish for a product, or null.
+ *
+ * Mirrors the gate in migration 0023: the value must be recent AND must still
+ * equal the history row that dates it. products.usd_price and the history row
+ * are two independent writes in main.py, so a failed update leaves the cached
+ * value behind its own timestamp, and a timestamp-only check would publish one
+ * event's value under another's date.
+ */
+function guardedPrice(
+  ownPrice: number | null | undefined,
+  newest: { recordedAt: string; usdPrice: number | null } | undefined
+): { price: number | null; recordedAt: string | null } {
+  const recordedAt = newest?.recordedAt ?? null;
+  if (newest === undefined || !Object.is(ownPrice ?? null, newest.usdPrice)) {
+    return { price: null, recordedAt };
+  }
+  return { price: getFreshUsdPrice(ownPrice, recordedAt), recordedAt };
+}
 
 function getReleaseMs(releaseDate?: string | null) {
   if (!releaseDate) return null;
@@ -201,42 +341,10 @@ async function fetchSetAnalyticsFallback(): Promise<SetAnalyticsRow[]> {
   startDate.setDate(startDate.getDate() - 367);
   const startDateStr = startDate.toISOString().split("T")[0];
 
-  const PAGE_SIZE = 1000;
-  const allRows: Array<{
-    product_id: number;
-    usd_price: number;
-    recorded_at: string;
-  }> = [];
-
-  // Bounded loop - MAX_PAGES * PAGE_SIZE caps the worst-case fetch
-  // so a runaway query can't tie up a serverless function indefinitely.
-  const MAX_PAGES = 50;
-  let from = 0;
-  for (let page = 0; page < MAX_PAGES; page++) {
-    const to = from + PAGE_SIZE - 1;
-    const { data, error } = await supabase
-      .from("product_price_history")
-      .select("product_id, usd_price, recorded_at")
-      .in("product_id", productIds)
-      .gte("recorded_at", startDateStr)
-      .order("recorded_at", { ascending: true })
-      .range(from, to);
-
-    if (error) {
-      throw error;
-    }
-
-    if (!data || data.length === 0) {
-      break;
-    }
-
-    allRows.push(...data);
-    if (data.length < PAGE_SIZE) {
-      break;
-    }
-
-    from += PAGE_SIZE;
-  }
+  const [allRows, newestPricedAt] = await Promise.all([
+    fetchPriceHistoryPages(supabase, productIds, startDateStr),
+    fetchNewestPricedAt(supabase, productIds),
+  ]);
 
   const priceHistory = groupHistoryRowsByProduct(allRows);
   const setMap = new Map<
@@ -285,13 +393,27 @@ async function fetchSetAnalyticsFallback(): Promise<SetAnalyticsRow[]> {
     entry.productCount += 1;
 
     const history = priceHistory[product.id];
-    const ret30 = getReturnPercent(history, 30);
-    const ret90 = getReturnPercent(history, 90);
-    const ret365 = getReturnPercent(history, 365);
-    if (ret30 !== null) entry.returns30.push(ret30);
-    if (ret90 !== null) entry.returns90.push(ret90);
-    if (ret365 !== null) entry.returns365.push(ret365);
 
+    // Resolved before the returns, not after: a product with no current price
+    // must not contribute one to the set's averages either. Mirrors the gate
+    // 0023 puts on get_set_analytics, which this path stands in for.
+    const freshPrice = guardedPrice(
+      product.usd_price,
+      newestPricedAt.get(product.id)
+    ).price;
+
+    if (freshPrice !== null) {
+      const ret30 = getReturnPercent(history, 30);
+      const ret90 = getReturnPercent(history, 90);
+      const ret365 = getReturnPercent(history, 365);
+      if (ret30 !== null) entry.returns30.push(ret30);
+      if (ret90 !== null) entry.returns90.push(ret90);
+      if (ret365 !== null) entry.returns365.push(ret365);
+    }
+
+    // Volatility, drawdown and trend stay ungated — they come from the
+    // recorded daily series and remain true descriptions of it however old
+    // its last point is. Same split as the SQL.
     const series90 = buildDailySeries(history, 90);
     const series365 = buildDailySeries(history, 365);
     const volatility90 = getVolatility(series90);
@@ -304,34 +426,25 @@ async function fetchSetAnalyticsFallback(): Promise<SetAnalyticsRow[]> {
     if (trend90 !== null) entry.trend90.push(trend90);
     if (trend365 !== null) entry.trend365.push(trend365);
 
+    // Non-nullness alone was never enough here: a product whose SKU has gone
+    // dead keeps its last successful price forever, and averaging that into
+    // the set's price/day presents a months-old number as today's. freshPrice
+    // comes from the tolerance-window query above, not from `history` — that
+    // one is page-capped, and reading its truncation as staleness would empty
+    // price/day for every set on the board.
     const releaseMs = getReleaseMs(set.release_date);
-    if (
-      releaseMs !== null &&
-      typeof product.usd_price === "number" &&
-      product.usd_price > 0
-    ) {
-      const today = new Date();
-      const todayUtcMs = Date.UTC(
-        today.getUTCFullYear(),
-        today.getUTCMonth(),
-        today.getUTCDate()
-      );
+    if (releaseMs !== null && freshPrice !== null && freshPrice > 0) {
       const daysSinceRelease = Math.max(
         0,
-        Math.floor((todayUtcMs - releaseMs) / DAY_MS)
+        Math.floor((utcMidnightMs() - releaseMs) / DAY_MS)
       );
       if (daysSinceRelease > 0) {
-        entry.pricePerDay.push(product.usd_price / daysSinceRelease);
+        entry.pricePerDay.push(freshPrice / daysSinceRelease);
       }
     }
   }
 
-  const today = new Date();
-  const todayUtcMs = Date.UTC(
-    today.getUTCFullYear(),
-    today.getUTCMonth(),
-    today.getUTCDate()
-  );
+  const todayUtcMs = utcMidnightMs();
 
   const setStats: FallbackSetStats[] = Array.from(setMap.entries()).map(
     ([key, entry]) => {
@@ -402,6 +515,15 @@ async function fetchSetAnalyticsFallback(): Promise<SetAnalyticsRow[]> {
 
   const scored = setStats
     .map((set) => {
+      // Mirrors the guard 0023 puts on invest_score: with every return
+      // average withheld, computeZScore turns each of them into a 0 —
+      // "exactly market average" — and the set would be scored and ranked on
+      // the two ungated series metrics alone, landing in the stats page's top
+      // sets with no current price behind it.
+      if (set.avg30 === null && set.avg90 === null && set.avg365 === null) {
+        return { ...set, investScore: null };
+      }
+
       const investScore =
         computeZScore(set.avg30, metrics.avg30.mean, metrics.avg30.std) * 0.2 +
         computeZScore(set.avg90, metrics.avg90.mean, metrics.avg90.std) * 0.4 +
@@ -434,11 +556,21 @@ async function fetchSetAnalyticsFallback(): Promise<SetAnalyticsRow[]> {
         investScore,
       };
     })
-    .sort((a, b) => b.investScore - a.investScore)
-    .map((set, index) => ({
-      ...set,
-      rank: index + 1,
-    }));
+    // Unscored sets sort last and are left unranked, so "no rank" stays a
+    // statement the output actually makes rather than position 64.
+    .sort((a, b) => {
+      if (a.investScore === null && b.investScore === null) return 0;
+      if (a.investScore === null) return 1;
+      if (b.investScore === null) return -1;
+      return b.investScore - a.investScore;
+    })
+    .reduce<Array<SetAnalyticsRow>>((rows, set) => {
+      rows.push({
+        ...set,
+        rank: set.investScore === null ? null : rows.length + 1,
+      });
+      return rows;
+    }, []);
 
   return scored;
 }
@@ -462,8 +594,8 @@ async function fetchProductDetail(
   productId: number
 ): Promise<ProductDetail | null> {
   const allProducts = await getCachedMarketProductSummaries();
-  const product = allProducts.find((p) => p.id === productId);
-  if (!product) return null;
+  const summary = allProducts.find((p) => p.id === productId);
+  if (!summary) return null;
 
   const supabase = createMarketDataSupabaseClient();
   const startDate = new Date();
@@ -513,6 +645,43 @@ async function fetchProductDetail(
   }
 
   const history = groupHistoryRowsByProduct(historyRows || [])[productId] || [];
+
+  // This page has the product's own price history in hand, so it decides
+  // freshness from the newest recorded_at directly rather than trusting the
+  // summaries RPC to have been migrated — the same reason isListingsSnapshotFresh
+  // guards the listings query below instead of relying on the volume RPC.
+  // History is fetched 367 days back, so a product last priced before that
+  // window has an empty history and is correctly treated as unpriced.
+  const newestRecordedAt = getLatestPriceRecordedAt(history);
+  const priceRecordedAt =
+    newestRecordedAt ?? summary.price_recorded_at ?? null;
+
+  // Deliberately NOT compared against the newest history row's VALUE here,
+  // though the SQL and the fallbacks both do that. The two numbers come from
+  // different moments: `summary` is served by getCachedMarketProductSummaries
+  // (revalidate 3600) while the history above is queried live, so after any
+  // ordinary scraper update the cached summary lags the history by up to an
+  // hour. Comparing them would then withhold the price AND every return for a
+  // perfectly healthy product, and getCachedProductDetail would cache that
+  // verdict for another hour.
+  //
+  // The check belongs where both values are read in one snapshot, which is
+  // migration 0023 — post-0023 the RPC has already made it, so repeating it
+  // here buys nothing and costs the steady state. The timestamp check below is
+  // safe across the skew: a fresher recorded_at only makes it more permissive,
+  // and a price an hour old is well inside a 14-day tolerance.
+  const freshPrice = getFreshUsdPrice(summary.usd_price, priceRecordedAt);
+  const product: Product = {
+    ...summary,
+    usd_price: freshPrice,
+    price_recorded_at: priceRecordedAt,
+    // The verdict reached here is stricter than the RPC's, so the returns
+    // that came with the summary have to be re-judged against it too.
+    // Otherwise this page prints "No current price" above six numeric
+    // returns — and priceReturn30d feeds the Market Pulse signal, which
+    // could still award "Demand surge" to a product nobody can price.
+    returns: freshPrice === null ? null : summary.returns,
+  };
 
   let salesHistory: SalesHistoryEntry[] = [];
   if (salesError) {
@@ -597,56 +766,47 @@ async function fetchProductsWithFallbackReturns(): Promise<Product[]> {
   startDate.setDate(startDate.getDate() - 367);
   const startDateStr = startDate.toISOString().split("T")[0];
 
-  const PAGE_SIZE = 1000;
-  const allRows: Array<{
-    product_id: number;
-    usd_price: number;
-    recorded_at: string;
-  }> = [];
-
-  // Bounded loop - MAX_PAGES * PAGE_SIZE caps the worst-case fetch
-  // so a runaway query can't tie up a serverless function indefinitely.
-  const MAX_PAGES = 50;
-  let from = 0;
-  for (let page = 0; page < MAX_PAGES; page++) {
-    const to = from + PAGE_SIZE - 1;
-    const { data, error } = await supabase
-      .from("product_price_history")
-      .select("product_id, usd_price, recorded_at")
-      .in("product_id", productIds)
-      .gte("recorded_at", startDateStr)
-      .order("recorded_at", { ascending: true })
-      .range(from, to);
-
-    if (error) {
-      throw error;
-    }
-
-    if (!data || data.length === 0) {
-      break;
-    }
-
-    allRows.push(...data);
-    if (data.length < PAGE_SIZE) {
-      break;
-    }
-
-    from += PAGE_SIZE;
-  }
+  const [allRows, newestPricedAt] = await Promise.all([
+    fetchPriceHistoryPages(supabase, productIds, startDateStr),
+    fetchNewestPricedAt(supabase, productIds),
+  ]);
 
   const historyByProduct = groupHistoryRowsByProduct(allRows);
 
-  return products.map((product) => ({
-    ...product,
-    returns: {
-      "1D": getReturnPercent(historyByProduct[product.id], 1),
-      "7D": getReturnPercent(historyByProduct[product.id], 7),
-      "1M": getReturnPercent(historyByProduct[product.id], 30),
-      "3M": getReturnPercent(historyByProduct[product.id], 90),
-      "6M": getReturnPercent(historyByProduct[product.id], 180),
-      "1Y": getReturnPercent(historyByProduct[product.id], 365),
-    },
-  }));
+  return products.map((product) => {
+    // The products table has no freshness column, so this path derives it from
+    // the tolerance-window query. Not from the year of history paged in above:
+    // that fetch is ordered oldest-first and the page cap truncates it well
+    // short of today, so every product would look months stale and the whole
+    // catalog would render "--".
+    const guarded = guardedPrice(product.usd_price, newestPricedAt.get(product.id));
+    const priceRecordedAt =
+      guarded.recordedAt ?? getLatestPriceRecordedAt(historyByProduct[product.id]);
+    const freshPrice = guarded.price;
+    const history = historyByProduct[product.id];
+    return {
+      ...product,
+      usd_price: freshPrice,
+      price_recorded_at: priceRecordedAt,
+      // Returns are withheld with the price, matching the gate 0023 applies
+      // to the RPC this path stands in for. getReturnPercent only needs the
+      // latest history row to fall inside the window, so a product last
+      // priced 15-29 days ago would otherwise report a numeric 1M return
+      // beside a blank price — the same "one stale number becomes six" the
+      // migration exists to stop.
+      returns:
+        freshPrice === null
+          ? null
+          : {
+              "1D": getReturnPercent(history, 1),
+              "7D": getReturnPercent(history, 7),
+              "1M": getReturnPercent(history, 30),
+              "3M": getReturnPercent(history, 90),
+              "6M": getReturnPercent(history, 180),
+              "1Y": getReturnPercent(history, 365),
+            },
+    };
+  });
 }
 
 async function fetchMarketProductSummaries(): Promise<Product[]> {

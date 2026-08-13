@@ -47,13 +47,37 @@ export default function PortfolioChartImpl({
         day: "numeric",
         timeZone: "UTC",
       }),
-      value: currency === "CAD" ? point.value * exchangeRate : point.value,
+      value:
+        point.value === null
+          ? null
+          : currency === "CAD"
+            ? point.value * exchangeRate
+            : point.value,
       timestamp: point.date,
+      pricedProducts: point.priced_products,
+      heldProducts: point.held_products,
+      // A day valued from only some of the holdings is not comparable to a day
+      // valued from all of them: a product going stale drops the line by its
+      // whole value and reads as a loss that never happened. The point is
+      // still plotted — dropping it would blank stretches where most holdings
+      // are priced perfectly well — but it is marked, so the chart never
+      // silently passes partial coverage off as the portfolio total.
+      isPartial:
+        point.priced_products !== undefined &&
+        point.held_products !== undefined &&
+        point.priced_products < point.held_products,
     }));
   }, [data, currency, exchangeRate]);
 
+  const partialDays = useMemo(
+    () => chartData.filter((point) => point.isPartial).length,
+    [chartData]
+  );
+
   const priceStats = useMemo(() => {
-    const values = chartData.map((d) => d.value).filter((v) => v > 0);
+    const values = chartData
+      .map((d) => d.value)
+      .filter((value): value is number => value !== null && value > 0);
     if (values.length === 0) return { min: 0, max: 100 };
 
     const min = Math.min(...values);
@@ -68,6 +92,7 @@ export default function PortfolioChartImpl({
 
   const CustomTooltip = ({ active, payload, label }: any) => {
     if (active && payload && payload.length && payload[0].value !== null) {
+      const point = payload[0].payload;
       return (
         <div className="bg-slate-900 text-white px-4 py-3 rounded-lg shadow-xl border-2 border-emerald-500">
           <p className="text-xs font-semibold text-slate-300 mb-1">{label}</p>
@@ -81,6 +106,12 @@ export default function PortfolioChartImpl({
             </span>
             <span className="text-xs text-slate-400 ml-1">{currency}</span>
           </p>
+          {point?.isPartial && (
+            <p className="text-xs text-amber-300 mt-1">
+              {point.pricedProducts} of {point.heldProducts} products priced —
+              not comparable to fully priced days
+            </p>
+          )}
         </div>
       );
     }
@@ -89,16 +120,43 @@ export default function PortfolioChartImpl({
 
   const timeframes: PortfolioTimeframe[] = ["7D", "1M", "3M", "6M", "1Y", "ALL"];
 
-  if (chartData.length === 0) {
+  // A series of points that are all null is not an empty series: it plots a
+  // blank canvas against the synthetic 0-100 fallback axis, which reads as a
+  // rendering fault rather than as "nothing here could be valued". Checked
+  // separately from length so a genuine zero still charts.
+  const hasAnyValue = chartData.some((point) => point.value !== null);
+
+  if (chartData.length === 0 || !hasAnyValue) {
     return (
       <div className="bg-white rounded-lg shadow-lg p-4 md:p-6">
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-lg font-semibold text-slate-900">
             Portfolio Value
           </h2>
+          {/* The timeframe buttons live only in this header, so omitting them
+              here strands the user: picking a range with no valuations would
+              remove the control that selects a different one, and only a
+              reload would get them back. */}
+          <div className="flex gap-1">
+            {timeframes.map((tf) => (
+              <button
+                key={tf}
+                onClick={() => onTimeframeChange(tf)}
+                className={`px-3 py-1 text-xs font-medium rounded transition-colors ${
+                  timeframe === tf
+                    ? "bg-emerald-100 text-emerald-700"
+                    : "text-slate-500 hover:bg-slate-100"
+                }`}
+              >
+                {tf}
+              </button>
+            ))}
+          </div>
         </div>
         <div className="h-48 flex items-center justify-center text-slate-500">
-          No historical data available yet
+          {chartData.length === 0
+            ? "No historical data available yet"
+            : "No current prices for this period"}
         </div>
       </div>
     );
@@ -190,6 +248,14 @@ export default function PortfolioChartImpl({
           />
         </ComposedChart>
       </ResponsiveContainer>
+
+      {partialDays > 0 && (
+        <p className="mt-2 text-xs text-slate-500">
+          {partialDays} {partialDays === 1 ? "day is" : "days are"} valued from
+          only part of the portfolio — hover for the coverage. Movement across
+          those points reflects what could be priced, not a change in holdings.
+        </p>
+      )}
     </div>
   );
 }

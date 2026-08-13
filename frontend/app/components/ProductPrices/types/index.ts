@@ -44,8 +44,16 @@ export interface ProductReturnMetrics {
 
 export interface Product {
   id: number;
-  usd_price: number;
+  // Null means "no current price", not "free": either nothing was ever
+  // scraped, or the newest product_price_history row is past
+  // PRICE_STALENESS_TOLERANCE_DAYS and the guard in marketPulse.ts withheld
+  // it. Render it as "--", never as a number.
+  usd_price: number | null;
   url: string;
+  // When the price above was last recorded. Kept even when usd_price was
+  // withheld, so a caller can still say when the product was last priced —
+  // same reasoning as listings_snapshot_date surviving the listings guard.
+  price_recorded_at?: string | null;
   last_updated: string;
   variant?: string | null;
   image_url?: string | null;

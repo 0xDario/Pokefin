@@ -1,13 +1,19 @@
 import {
   getDaysOfSupply,
+  getFreshUsdPrice,
+  getLatestPriceRecordedAt,
   isListingsSnapshotFresh,
+  isPriceFresh,
   getPriorUnitsSold30d,
   getPulseSignal,
   getUnitsSoldWindow,
   getVolumeTrendPercent,
   PULSE_SIGNAL_META,
 } from "../marketPulse";
-import type { SalesHistoryEntry } from "../../components/ProductPrices/types";
+import type {
+  PriceHistoryEntry,
+  SalesHistoryEntry,
+} from "../../components/ProductPrices/types";
 
 function makeSale(
   bucketDate: string,
@@ -60,6 +66,118 @@ describe("isListingsSnapshotFresh", () => {
   it("treats a missing snapshot as not fresh", () => {
     expect(isListingsSnapshotFresh(null, REFERENCE_DATE)).toBe(false);
     expect(isListingsSnapshotFresh(undefined, REFERENCE_DATE)).toBe(false);
+  });
+});
+
+// Noon UTC on July 6 2026, constructed as a UTC date rather than a local one:
+// recorded_at carries no offset and its date part is a UTC date key, so the
+// price guard compares in UTC on both sides. Building the reference locally
+// would make these assertions pass or fail depending on the runner's zone.
+const PRICE_REFERENCE_DATE = new Date(Date.UTC(2026, 6, 6, 12, 0, 0));
+
+function makePriceEntry(recordedAt: string): PriceHistoryEntry {
+  return { usd_price: 100, recorded_at: recordedAt };
+}
+
+describe("isPriceFresh", () => {
+  it("accepts today and everything inside the tolerance", () => {
+    expect(isPriceFresh("2026-07-06T08:15:00", PRICE_REFERENCE_DATE)).toBe(true);
+    expect(isPriceFresh("2026-07-01T08:15:00", PRICE_REFERENCE_DATE)).toBe(true);
+    // Exactly 14 days back is the oldest price still allowed to render.
+    expect(isPriceFresh("2026-06-22T00:00:01", PRICE_REFERENCE_DATE)).toBe(true);
+  });
+
+  it("rejects a price past the tolerance", () => {
+    // One day beyond the boundary: 15 days with nothing recorded is no longer
+    // a run of missed scrapes, it is a product that cannot be priced.
+    expect(isPriceFresh("2026-06-21T23:59:59", PRICE_REFERENCE_DATE)).toBe(false);
+    expect(isPriceFresh("2026-05-08T10:00:00", PRICE_REFERENCE_DATE)).toBe(false);
+  });
+
+  it("rejects the two production products with dead TCGPlayer SKUs", () => {
+    // Both still carry a non-null usd_price that rendered as current before
+    // this guard: id 415 at $1,649.99 and id 42 at $449.95.
+    const today = new Date(Date.UTC(2026, 7, 11, 12, 0, 0));
+    expect(isPriceFresh("2026-06-17T04:12:33", today)).toBe(false);
+    expect(isPriceFresh("2026-05-08T04:07:55", today)).toBe(false);
+  });
+
+  it("reads both PostgREST timestamp spellings", () => {
+    expect(isPriceFresh("2026-07-06 08:15:00", PRICE_REFERENCE_DATE)).toBe(true);
+    expect(isPriceFresh("2026-07-06T08:15:00Z", PRICE_REFERENCE_DATE)).toBe(true);
+    expect(isPriceFresh("2026-07-06", PRICE_REFERENCE_DATE)).toBe(true);
+  });
+
+  it("treats a missing or unparseable timestamp as not fresh", () => {
+    expect(isPriceFresh(null, PRICE_REFERENCE_DATE)).toBe(false);
+    expect(isPriceFresh(undefined, PRICE_REFERENCE_DATE)).toBe(false);
+    expect(isPriceFresh("", PRICE_REFERENCE_DATE)).toBe(false);
+    expect(isPriceFresh("last tuesday", PRICE_REFERENCE_DATE)).toBe(false);
+  });
+});
+
+describe("getLatestPriceRecordedAt", () => {
+  it("returns the newest entry regardless of array order", () => {
+    const history = [
+      makePriceEntry("2026-07-01T09:00:00"),
+      makePriceEntry("2026-07-06T09:00:00"),
+      makePriceEntry("2026-07-03T09:00:00"),
+    ];
+    expect(getLatestPriceRecordedAt(history)).toBe("2026-07-06T09:00:00");
+  });
+
+  it("returns null for an empty or missing history", () => {
+    expect(getLatestPriceRecordedAt([])).toBeNull();
+    expect(getLatestPriceRecordedAt(null)).toBeNull();
+    expect(getLatestPriceRecordedAt(undefined)).toBeNull();
+  });
+
+  it("skips entries whose timestamp is unusable", () => {
+    const history = [
+      makePriceEntry("2026-07-01T09:00:00"),
+      makePriceEntry("whenever"),
+    ];
+    expect(getLatestPriceRecordedAt(history)).toBe("2026-07-01T09:00:00");
+  });
+});
+
+describe("getFreshUsdPrice", () => {
+  it("returns the price when it was recorded recently enough", () => {
+    expect(
+      getFreshUsdPrice(449.95, "2026-07-05T09:00:00", PRICE_REFERENCE_DATE)
+    ).toBe(449.95);
+  });
+
+  it("withholds a price whose newest recording is stale", () => {
+    // The value is not wrong, it is old — and null is what callers turn into
+    // "--", the same treatment stale volume and listings data get.
+    expect(
+      getFreshUsdPrice(1649.99, "2026-06-17T09:00:00", PRICE_REFERENCE_DATE)
+    ).toBeNull();
+  });
+
+  it("withholds a price with no recording at all", () => {
+    expect(getFreshUsdPrice(449.95, null, PRICE_REFERENCE_DATE)).toBeNull();
+  });
+
+  it("returns null for a missing price even when the timestamp is fresh", () => {
+    expect(
+      getFreshUsdPrice(null, "2026-07-06T09:00:00", PRICE_REFERENCE_DATE)
+    ).toBeNull();
+    expect(
+      getFreshUsdPrice(undefined, "2026-07-06T09:00:00", PRICE_REFERENCE_DATE)
+    ).toBeNull();
+    expect(
+      getFreshUsdPrice(Number.NaN, "2026-07-06T09:00:00", PRICE_REFERENCE_DATE)
+    ).toBeNull();
+  });
+
+  it("passes a zero price through rather than treating it as missing", () => {
+    // Guards the null check against sliding back to a falsy one, which would
+    // make 0 and "unknown" indistinguishable.
+    expect(
+      getFreshUsdPrice(0, "2026-07-06T09:00:00", PRICE_REFERENCE_DATE)
+    ).toBe(0);
   });
 });
 

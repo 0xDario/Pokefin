@@ -17,10 +17,12 @@ import type { PortfolioSummary } from "../types";
 function createMockSummary(overrides: Partial<PortfolioSummary> = {}): PortfolioSummary {
   return {
     total_cost_basis: 1000,
+    priced_cost_basis: 1000,
     total_current_value: 1200,
     total_gain_loss: 200,
     total_gain_loss_percent: 20,
     holdings_count: 5,
+    unpriced_holdings_count: 0,
     unique_products_count: 3,
     ...overrides,
   };
@@ -238,6 +240,22 @@ describe("PortfolioSummaryCard", () => {
   });
 
   describe("Edge cases", () => {
+    it("should render an unknown valuation as dashes, not as a total loss", () => {
+      render(
+        <PortfolioSummaryCard
+          summary={createMockSummary({
+            total_current_value: null,
+            total_gain_loss: null,
+            total_gain_loss_percent: null,
+          })}
+        />
+      );
+
+      expect(screen.getAllByText("--")).toHaveLength(3);
+      expect(screen.queryByText("$0.00")).not.toBeInTheDocument();
+      expect(screen.queryByText("-100.00%")).not.toBeInTheDocument();
+    });
+
     it("should handle zero values for all fields", () => {
       render(
         <PortfolioSummaryCard

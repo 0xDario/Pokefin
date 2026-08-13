@@ -29,6 +29,8 @@ export default function HoldingsTable({
       const perfB = calculateHoldingPerformance(b);
 
       let comparison = 0;
+      let valueA: number | null = null;
+      let valueB: number | null = null;
 
       switch (sortBy) {
         case "name":
@@ -37,17 +39,28 @@ export default function HoldingsTable({
           comparison = nameA.localeCompare(nameB);
           break;
         case "value":
-          comparison = perfA.current_value - perfB.current_value;
+          valueA = perfA.current_value;
+          valueB = perfB.current_value;
           break;
         case "gain_loss":
-          comparison = perfA.gain_loss - perfB.gain_loss;
+          valueA = perfA.gain_loss;
+          valueB = perfB.gain_loss;
           break;
         case "gain_loss_percent":
-          comparison = perfA.gain_loss_percent - perfB.gain_loss_percent;
+          valueA = perfA.gain_loss_percent;
+          valueB = perfB.gain_loss_percent;
           break;
         case "purchase_date":
           comparison = a.purchase_date.localeCompare(b.purchase_date);
           break;
+      }
+
+      // Unknown valuations sort last in either direction. Treating them as
+      // zero would make a missing price look like a total loss.
+      if (valueA === null && valueB !== null) return 1;
+      if (valueA !== null && valueB === null) return -1;
+      if (valueA !== null && valueB !== null) {
+        comparison = valueA - valueB;
       }
 
       return sortDirection === "asc" ? comparison : -comparison;

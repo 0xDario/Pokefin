@@ -19,9 +19,11 @@ export default function HoldingCard({
   onDelete,
 }: HoldingCardProps) {
   const performance = calculateHoldingPerformance(holding);
-  const isPositive = performance.gain_loss >= 0;
+  const isPositive =
+    performance.gain_loss !== null && performance.gain_loss >= 0;
 
-  const formatCurrency = (value: number) => {
+  const formatCurrency = (value: number | null) => {
+    if (value === null) return "--";
     const convertedValue = currency === "CAD" ? value * exchangeRate : value;
     const symbol = currency === "CAD" ? "C$" : "$";
     return `${symbol}${convertedValue.toLocaleString(undefined, {
@@ -30,7 +32,8 @@ export default function HoldingCard({
     })}`;
   };
 
-  const formatPercent = (value: number) => {
+  const formatPercent = (value: number | null) => {
+    if (value === null) return "--";
     const sign = value >= 0 ? "+" : "";
     return `${sign}${value.toFixed(2)}%`;
   };
@@ -110,10 +113,18 @@ export default function HoldingCard({
           </div>
           <div className="text-right">
             <p className="text-xs text-slate-500">Gain/Loss</p>
-            <p className={`font-semibold ${isPositive ? "text-emerald-600" : "text-rose-600"}`}>
+            <p className={`font-semibold ${
+              performance.gain_loss === null
+                ? "text-slate-500"
+                : isPositive
+                  ? "text-emerald-600"
+                  : "text-rose-600"
+            }`}>
               {isPositive ? "+" : ""}{formatCurrency(performance.gain_loss)}
               <span className="text-xs ml-1">
-                ({formatPercent(performance.gain_loss_percent)})
+                {performance.gain_loss_percent === null
+                  ? ""
+                  : `(${formatPercent(performance.gain_loss_percent)})`}
               </span>
             </p>
           </div>

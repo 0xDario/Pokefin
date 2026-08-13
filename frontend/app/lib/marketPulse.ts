@@ -1,4 +1,7 @@
-import { SalesHistoryEntry } from "../components/ProductPrices/types";
+import {
+  PriceHistoryEntry,
+  SalesHistoryEntry,
+} from "../components/ProductPrices/types";
 
 export type PulseSignal =
   | "demand_surge"
@@ -52,6 +55,132 @@ function toLocalDateKey(d: Date): string {
   const mm = String(d.getMonth() + 1).padStart(2, "0");
   const dd = String(d.getDate()).padStart(2, "0");
   return `${yyyy}-${mm}-${dd}`;
+}
+
+function toUtcDateKey(d: Date): string {
+  const yyyy = d.getUTCFullYear();
+  const mm = String(d.getUTCMonth() + 1).padStart(2, "0");
+  const dd = String(d.getUTCDate()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd}`;
+}
+
+/**
+ * Midnight UTC of the given instant, in epoch milliseconds.
+ *
+ * The one place this idiom lives. Every open-coded
+ * Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()) is another
+ * chance to build a date in UTC and read it back in the viewer's zone — the
+ * drift that made /product/[id] print the day before for every visitor west
+ * of Greenwich.
+ */
+export function utcMidnightMs(d: Date = new Date()): number {
+  return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
+}
+
+/**
+ * The date part of a product_price_history.recorded_at value.
+ *
+ * recorded_at is `timestamp without time zone` written by the scraper from
+ * datetime.now(timezone.utc), so its date part is a UTC date key. It is taken
+ * by string split rather than by new Date(...): the value carries no offset,
+ * so parsing it would attach the runtime's local zone and shift the day.
+ * Null for anything that is not a leading YYYY-MM-DD.
+ */
+function toRecordedDateKey(recordedAt: string | null | undefined): string | null {
+  if (!recordedAt) return null;
+  const dateKey = recordedAt.split("T")[0].split(" ")[0];
+  return /^\d{4}-\d{2}-\d{2}$/.test(dateKey) ? dateKey : null;
+}
+
+/**
+ * A recorded_at normalised so that two of them can be ordered by plain string
+ * comparison. toRecordedDateKey accepts three spellings of the same instant
+ * ("T", a space, and date-only), and a space (0x20) sorts before "T" (0x54) —
+ * so comparing the raw values would rank "2026-08-11 23:00:00" below
+ * "2026-08-11T04:00:00". Only the separator needs fixing; the rest of an ISO
+ * timestamp already compares correctly as text.
+ */
+function toComparableRecordedAt(recordedAt: string): string {
+  return recordedAt.replace(" ", "T");
+}
+
+/**
+ * Whether a recorded price is recent enough to present as the current price.
+ *
+ * The freshness signal is deliberately the newest product_price_history row
+ * for the product, never products.last_updated. That product-level field is
+ * nullable for products that have never priced and is not itself an auditable
+ * price event; the history row is the evidence that this exact value was
+ * recorded. Failed upstream lookups write neither field, so only the history
+ * also preserves the price series the guard is meant to judge.
+ *
+ * Mirrors the guard in migrations/0023_price_freshness_guard.sql, which
+ * applies the identical rule to get_market_product_summaries — otherwise the
+ * catalog and /product/[id] would contradict each other for the same product.
+ * Keep both sides in sync.
+ */
+export function isPriceFresh(
+  recordedAt: string | null | undefined,
+  referenceDate: Date = new Date()
+): boolean {
+  const recordedDateKey = toRecordedDateKey(recordedAt);
+  if (recordedDateKey === null) return false;
+
+  const oldestAllowed = toUtcDateKey(
+    new Date(
+      Date.UTC(
+        referenceDate.getUTCFullYear(),
+        referenceDate.getUTCMonth(),
+        referenceDate.getUTCDate() - PRICE_STALENESS_TOLERANCE_DAYS
+      )
+    )
+  );
+  return recordedDateKey >= oldestAllowed;
+}
+
+/**
+ * The newest recorded_at in a price history, or null for an empty history.
+ * groupHistoryRowsByProduct sorts ascending, but this scans rather than
+ * trusting that: callers pass histories from several query paths.
+ */
+export function getLatestPriceRecordedAt(
+  history: PriceHistoryEntry[] | null | undefined
+): string | null {
+  if (!history || history.length === 0) return null;
+
+  let newest: string | null = null;
+  let newestComparable = "";
+  for (const entry of history) {
+    const dateKey = toRecordedDateKey(entry.recorded_at);
+    if (dateKey === null) continue;
+    const comparable = toComparableRecordedAt(entry.recorded_at);
+    if (newest === null || comparable > newestComparable) {
+      newest = entry.recorded_at;
+      newestComparable = comparable;
+    }
+  }
+  return newest;
+}
+
+/**
+ * A price to render, or null when there is nothing current to show.
+ *
+ * Null — meaning "unknown", not "free" — is what callers turn into "--", the
+ * same treatment the volume and listings metrics give stale data. A price that
+ * is merely non-null is not enough: six active products currently return no
+ * TCGPlayer sales history, and two of them still carry the last price
+ * that ever scraped successfully (55 and 95 days old as of 2026-08-11), which
+ * without this guard renders as today's market price.
+ */
+export function getFreshUsdPrice(
+  usdPrice: number | null | undefined,
+  recordedAt: string | null | undefined,
+  referenceDate: Date = new Date()
+): number | null {
+  if (usdPrice === null || usdPrice === undefined || Number.isNaN(usdPrice)) {
+    return null;
+  }
+  return isPriceFresh(recordedAt, referenceDate) ? usdPrice : null;
 }
 
 /**
@@ -137,6 +266,22 @@ const PRIOR_WINDOW_MIN_DAY_COVERAGE = 28;
 // no longer describing the market a buyer would see. Mirrors the guard in
 // migrations/0022_listings_freshness_guard.sql — keep both sides in sync.
 const LISTINGS_STALENESS_TOLERANCE_DAYS = 3;
+
+// A price is a far slower signal than a daily volume bucket, so it gets a far
+// wider tolerance than the 3 days above. The scraper re-prices each product at
+// most once per 23h, so a healthy product gains a history row about daily and
+// single missed days are routine (a skipped cron tick, a rate limit, one 5xx);
+// blanking the catalog on those would hide data that is still a fair
+// description of the market, since sealed prices move on the order of
+// percent-per-week. Two full weeks with nothing recorded cannot be a blip — it
+// means the product is not currently producing usable price data. 14 also
+// keeps a rendered
+// price inside half of the shortest return window on screen (1M / 30 days), so
+// a price can never be more than half its own return window out of date.
+// Mirror of the guard in migrations/0023_price_freshness_guard.sql, which
+// applies the identical rule to get_market_product_summaries and to the
+// price_per_day input of get_set_analytics. Keep both sides in sync.
+export const PRICE_STALENESS_TOLERANCE_DAYS = 14;
 
 // The prior window's weekly fallback range (today-63 .. today-36) is 28 days,
 // i.e. exactly four Monday-anchored buckets. Mirrors the same requirement in

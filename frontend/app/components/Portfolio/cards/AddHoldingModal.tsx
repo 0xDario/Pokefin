@@ -48,10 +48,19 @@ export default function AddHoldingModal({
     }
   }, [isOpen]);
 
-  // Pre-fill purchase price when product is selected
+  // Pre-fill purchase price when product is selected.
+  //
+  // The else branch matters: the freshness guard nulls the price of a product
+  // it cannot value, and without clearing, switching from a priced product to
+  // an unpriced one leaves the FIRST product's price in the field — which then
+  // saves as the new holding's cost basis. A wrong number written to the
+  // portfolio is worse than an empty field the user has to fill in.
   useEffect(() => {
-    if (selectedProduct?.usd_price) {
+    if (!selectedProduct) return;
+    if (selectedProduct.usd_price !== null && selectedProduct.usd_price !== undefined) {
       setPurchasePrice(selectedProduct.usd_price.toFixed(2));
+    } else {
+      setPurchasePrice("");
     }
   }, [selectedProduct]);
 

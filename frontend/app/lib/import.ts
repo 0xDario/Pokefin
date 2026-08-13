@@ -1,12 +1,10 @@
-import { supabase } from "./supabase";
-import { logSupabaseError } from "./logger";
 import type {
   CollectrCSVRow,
   ImportMatchResult,
   ProductSearchResult,
   NewHolding,
 } from "../components/Portfolio/types";
-import { addHolding } from "./portfolio";
+import { addHolding, getAllProducts } from "./portfolio";
 import {
   QUANTITY_MAX,
   QUANTITY_MIN,
@@ -264,48 +262,19 @@ function matchesTokenGroups(
 }
 
 /**
- * Fetch all products that match supported types
+ * Fetch all products that match supported types.
+ *
+ * Delegates to getAllProducts rather than issuing its own query: the two were
+ * byte-identical selects returning the same type, and only that one had the
+ * freshness guard applied — so an import match carried a raw, possibly
+ * months-old products.usd_price while every other ProductSearchResult in the
+ * app carried a guarded one. The duplicated error-fallback went with it; the
+ * two branches ran the same query and getAllProducts already degrades to [].
  */
 async function fetchSupportedProducts(): Promise<ProductSearchResult[]> {
-  const { data, error } = await supabase
-    .from("products")
-    .select(`
-      id, usd_price, image_url, variant,
-      sets ( name, code ),
-      product_types ( name, label )
-    `)
-    .order("id", { ascending: true });
+  const products = await getAllProducts();
 
-  if (error) {
-    logSupabaseError("import_products_fetch_failed", error);
-
-    // Fallback: fetch all and filter client-side
-    const { data: allData, error: allError } = await supabase
-      .from("products")
-      .select(`
-        id, usd_price, image_url, variant,
-        sets ( name, code ),
-        product_types ( name, label )
-      `)
-      .order("id", { ascending: true });
-
-    if (allError) {
-      logSupabaseError("import_all_products_fetch_failed", allError);
-      return [];
-    }
-
-    // Filter to supported product types
-    return ((allData || []) as unknown as ProductSearchResult[]).filter((p) => {
-      const typeText = p.product_types?.label || p.product_types?.name || "";
-      if (!typeText) return false;
-      const tokens = tokenize(typeText);
-      return SUPPORTED_PRODUCT_TYPES.some((type) =>
-        matchesTokenGroups(tokens, type.tokenGroups, type.excludeTokens)
-      );
-    });
-  }
-
-  return ((data || []) as unknown as ProductSearchResult[]).filter((p) => {
+  return products.filter((p) => {
     const typeText = p.product_types?.label || p.product_types?.name || "";
     if (!typeText) return false;
     const tokens = tokenize(typeText);
