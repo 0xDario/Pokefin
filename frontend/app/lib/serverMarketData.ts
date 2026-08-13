@@ -141,7 +141,7 @@ async function fetchPriceHistoryPages(
 async function fetchNewestPricedAt(
   supabase: MarketDataSupabaseClient,
   productIds: number[]
-): Promise<Map<number, string>> {
+): Promise<Map<number, { recordedAt: string; usdPrice: number | null }>> {
   const windowStart = new Date(
     utcMidnightMs() - PRICE_STALENESS_TOLERANCE_DAYS * DAY_MS
   )
@@ -150,14 +150,40 @@ async function fetchNewestPricedAt(
 
   const rows = await fetchPriceHistoryPages(supabase, productIds, windowStart);
 
-  const newestByProduct = new Map<number, string>();
+  const newestByProduct = new Map<
+    number,
+    { recordedAt: string; usdPrice: number | null }
+  >();
   for (const row of rows) {
     const current = newestByProduct.get(row.product_id);
-    if (current === undefined || row.recorded_at > current) {
-      newestByProduct.set(row.product_id, row.recorded_at);
+    if (current === undefined || row.recorded_at > current.recordedAt) {
+      newestByProduct.set(row.product_id, {
+        recordedAt: row.recorded_at,
+        usdPrice: row.usd_price,
+      });
     }
   }
   return newestByProduct;
+}
+
+/**
+ * The price to publish for a product, or null.
+ *
+ * Mirrors the gate in migration 0023: the value must be recent AND must still
+ * equal the history row that dates it. products.usd_price and the history row
+ * are two independent writes in main.py, so a failed update leaves the cached
+ * value behind its own timestamp, and a timestamp-only check would publish one
+ * event's value under another's date.
+ */
+function guardedPrice(
+  ownPrice: number | null | undefined,
+  newest: { recordedAt: string; usdPrice: number | null } | undefined
+): { price: number | null; recordedAt: string | null } {
+  const recordedAt = newest?.recordedAt ?? null;
+  if (newest === undefined || !Object.is(ownPrice ?? null, newest.usdPrice)) {
+    return { price: null, recordedAt };
+  }
+  return { price: getFreshUsdPrice(ownPrice, recordedAt), recordedAt };
 }
 
 function getReleaseMs(releaseDate?: string | null) {
@@ -371,10 +397,10 @@ async function fetchSetAnalyticsFallback(): Promise<SetAnalyticsRow[]> {
     // Resolved before the returns, not after: a product with no current price
     // must not contribute one to the set's averages either. Mirrors the gate
     // 0023 puts on get_set_analytics, which this path stands in for.
-    const freshPrice = getFreshUsdPrice(
+    const freshPrice = guardedPrice(
       product.usd_price,
-      newestPricedAt.get(product.id) ?? null
-    );
+      newestPricedAt.get(product.id)
+    ).price;
 
     if (freshPrice !== null) {
       const ret30 = getReturnPercent(history, 30);
@@ -737,10 +763,10 @@ async function fetchProductsWithFallbackReturns(): Promise<Product[]> {
     // that fetch is ordered oldest-first and the page cap truncates it well
     // short of today, so every product would look months stale and the whole
     // catalog would render "--".
+    const guarded = guardedPrice(product.usd_price, newestPricedAt.get(product.id));
     const priceRecordedAt =
-      newestPricedAt.get(product.id) ??
-      getLatestPriceRecordedAt(historyByProduct[product.id]);
-    const freshPrice = getFreshUsdPrice(product.usd_price, priceRecordedAt);
+      guarded.recordedAt ?? getLatestPriceRecordedAt(historyByProduct[product.id]);
+    const freshPrice = guarded.price;
     const history = historyByProduct[product.id];
     return {
       ...product,

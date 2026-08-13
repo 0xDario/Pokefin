@@ -149,6 +149,22 @@ describe("market products fallback freshness", () => {
     expect(products[0].price_recorded_at).toBe(recordedDaysAgo(1));
   });
 
+  it("withholds a price the newest history row disagrees with", async () => {
+    // products.usd_price and the history row are two independent writes in
+    // main.py; a failed update leaves the cached value behind its own
+    // timestamp. A fresh timestamp must not launder a stale value.
+    mockSupabase(
+      [{ product_id: 42, usd_price: 449.95, recorded_at: recordedDaysAgo(183) }],
+      // recorded today, but the row's price is NOT what products.usd_price holds
+      [{ product_id: 42, usd_price: 501.5, recorded_at: recordedDaysAgo(1) }]
+    );
+
+    const products = await getCachedMarketProductSummaries();
+
+    expect(products).toHaveLength(1);
+    expect(products[0].usd_price).toBeNull();
+  });
+
   it("withholds the price when the product has no row in the tolerance window", async () => {
     mockSupabase(
       [

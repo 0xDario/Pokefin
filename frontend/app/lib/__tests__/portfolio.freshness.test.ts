@@ -185,11 +185,17 @@ describe("getHoldings freshness map", () => {
    * @param historyRows    product_price_history rows inside the tolerance
    *                       window, for products the summaries do not cover
    */
+  /** freshness entries are [productId, recordedAt, newestHistoryPrice]. */
   function mockHoldingsQuery(
     rows: unknown[],
-    freshness: Array<[number, string]> = []
+    freshness: Array<[number, string, number | null]> = []
   ) {
-    fetchNewestPricedAtMock.mockResolvedValue(new Map(freshness));
+    fetchNewestPricedAtMock.mockResolvedValue(
+      new Map(freshness.map(([id, recordedAt, usdPrice]) => [
+        id,
+        { recordedAt, usdPrice },
+      ]))
+    );
     fromMock.mockImplementation((table: string) => {
       if (table !== "portfolio_holdings") {
         throw new Error(`unexpected table in this test: ${table}`);
@@ -210,7 +216,7 @@ describe("getHoldings freshness map", () => {
     // staleness, so its freshness is looked up rather than assumed.
     mockHoldingsQuery(
       [makeHolding({ product_id: 42, usd_price: 449.95 })],
-      [[42, `${dateKeyDaysAgo(1)}T09:00:00`]]
+      [[42, `${dateKeyDaysAgo(1)}T09:00:00`, 449.95]]
     );
     fetchProductsMock.mockResolvedValue([]);
 

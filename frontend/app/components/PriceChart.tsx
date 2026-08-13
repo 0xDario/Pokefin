@@ -146,6 +146,8 @@ const PriceChart = memo(function PriceChart({
     // Anchor the date range to today's LOCAL date so all products share
     // the exact same start/end dates for a given timeframe.
     const today = new Date();
+    // Captured once so every day in the loop clamps against the same instant.
+    const nowMs = today.getTime();
     const endDate = new Date(today.getFullYear(), today.getMonth(), today.getDate());
     const startDate = new Date(endDate);
     startDate.setDate(startDate.getDate() - daysNeeded + 1); // inclusive range: startDate..endDate = daysNeeded days
@@ -185,14 +187,20 @@ const PriceChart = memo(function PriceChart({
       const existing = dataByDate.get(key);
 
       // Expiry is asked of isPriceFresh, the same helper the price itself is
-      // judged by, rather than counted in chart rows. Rows are bucketed by
-      // LOCAL date, so a 04:00 UTC reading falls into the previous day west of
-      // UTC and a row-counter expires a day early — the chart would say "No
-      // recent prices" while the card beside it still showed one. The cursor's
-      // calendar day is passed as a UTC instant so both sides compare UTC date
-      // keys.
+      // judged by, rather than counted in chart rows — a row counter works in
+      // LOCAL buckets and expires a day early west of UTC.
+      //
+      // The reference is the last instant of this chart day, clamped to now.
+      // Rows bucket by local date and isPriceFresh reads UTC dates, and for
+      // part of every day those two calendars name different days: neither the
+      // cursor instant nor its calendar fields rebuilt as UTC agrees with the
+      // card at all hours — each is right for roughly half of them, in
+      // opposite halves. Clamping makes the FINAL chart day resolve to `now`,
+      // which is exactly what the card passes, so the two agree at the
+      // boundary in every timezone at every hour. Earlier days resolve to the
+      // end of their own local day, which is a real instant and monotonic.
       const referenceDate = new Date(
-        Date.UTC(cursor.getFullYear(), cursor.getMonth(), cursor.getDate())
+        Math.min(cursor.getTime() + 24 * 60 * 60 * 1000 - 1, nowMs)
       );
 
       if (existing) {

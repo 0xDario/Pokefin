@@ -75,12 +75,21 @@ const FRESHNESS_MAX_PAGES = 30;
  * direction. Ordering breaks ties on id so a row cannot repeat or vanish
  * across a page boundary.
  *
+ * Carries the row's PRICE as well as its date. products.usd_price and the
+ * history row are two independent writes in main.py, so a failed update leaves
+ * the cached value behind its own timestamp; approving it on the timestamp
+ * alone publishes one event's value under another's date. Migration 0023
+ * compares both, and these compatibility paths have to make the same check or
+ * they are a weaker guard wearing the same name.
+ *
  * Pass productIds to scope it; omit for the whole active catalog.
  */
+export type NewestPricedAt = { recordedAt: string; usdPrice: number | null };
+
 export async function fetchNewestPricedAtClient(
   productIds?: number[]
-): Promise<Map<number, string>> {
-  const newestByProduct = new Map<number, string>();
+): Promise<Map<number, NewestPricedAt>> {
+  const newestByProduct = new Map<number, NewestPricedAt>();
   if (productIds && productIds.length === 0) return newestByProduct;
 
   const windowStart = new Date(
@@ -93,7 +102,7 @@ export async function fetchNewestPricedAtClient(
     const from = page * FRESHNESS_PAGE_SIZE;
     let query = supabase
       .from("product_price_history")
-      .select("product_id, recorded_at")
+      .select("product_id, recorded_at, usd_price")
       .gte("recorded_at", windowStart);
     if (productIds) query = query.in("product_id", productIds);
 
@@ -113,10 +122,14 @@ export async function fetchNewestPricedAtClient(
     for (const row of data as Array<{
       product_id: number;
       recorded_at: string;
+      usd_price: number | null;
     }>) {
       const current = newestByProduct.get(row.product_id);
-      if (current === undefined || row.recorded_at > current) {
-        newestByProduct.set(row.product_id, row.recorded_at);
+      if (current === undefined || row.recorded_at > current.recordedAt) {
+        newestByProduct.set(row.product_id, {
+          recordedAt: row.recorded_at,
+          usdPrice: row.usd_price,
+        });
       }
     }
 
@@ -158,10 +171,17 @@ async function fetchProductsFallback(): Promise<Product[]> {
   }
 
   return mapProductsQueryResultToProducts(data || []).map((product) => {
-    const priceRecordedAt = newestPricedAt.get(product.id) ?? null;
+    const newest = newestPricedAt.get(product.id) ?? null;
+    const priceRecordedAt = newest?.recordedAt ?? null;
+    // The cached value must still agree with the row that dates it, matching
+    // the gate in migration 0023. Object.is, so a NULL on either side does not
+    // slip through the way == would.
+    const agrees = newest !== null && Object.is(product.usd_price, newest.usdPrice);
     return {
       ...product,
-      usd_price: getFreshUsdPrice(product.usd_price, priceRecordedAt),
+      usd_price: agrees
+        ? getFreshUsdPrice(product.usd_price, priceRecordedAt)
+        : null,
       price_recorded_at: priceRecordedAt,
     };
   });

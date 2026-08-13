@@ -2,6 +2,7 @@ import { supabase } from "./supabase";
 import {
   fetchMarketProductsClient,
   fetchNewestPricedAtClient,
+  type NewestPricedAt,
 } from "./clientMarketData";
 import {
   getFreshUsdPrice,
@@ -66,7 +67,7 @@ async function getFreshProductsById(): Promise<Map<
 async function fetchRecordedAtForMissing(
   productsById: Map<number, ProductWithPrice> | null,
   productIds: number[]
-): Promise<Map<number, string>> {
+): Promise<Map<number, NewestPricedAt>> {
   if (productsById === null) return new Map();
 
   const missing = [...new Set(productIds)].filter((id) => !productsById.has(id));
@@ -87,7 +88,7 @@ async function fetchRecordedAtForMissing(
  */
 function pickGuardedPrice(
   productsById: Map<number, ProductWithPrice> | null,
-  missingRecordedAt: Map<number, string>,
+  missingRecordedAt: Map<number, NewestPricedAt>,
   productId: number,
   ownPrice: number | null | undefined
 ): { usd_price: number | null; price_recorded_at: string | null } {
@@ -97,9 +98,14 @@ function pickGuardedPrice(
 
   const guarded = productsById.get(productId);
   if (guarded === undefined) {
-    const recordedAt = missingRecordedAt.get(productId) ?? null;
+    const newest = missingRecordedAt.get(productId) ?? null;
+    const recordedAt = newest?.recordedAt ?? null;
+    // The row's own price must still match the value being judged, the same
+    // check migration 0023 makes — a timestamp alone can date a value that a
+    // failed products update left behind.
+    const agrees = newest !== null && Object.is(ownPrice ?? null, newest.usdPrice);
     return {
-      usd_price: getFreshUsdPrice(ownPrice, recordedAt),
+      usd_price: agrees ? getFreshUsdPrice(ownPrice, recordedAt) : null,
       price_recorded_at: recordedAt,
     };
   }
