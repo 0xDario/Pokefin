@@ -77,10 +77,12 @@ describe("portfolio library functions", () => {
 
       expect(result).toEqual({
         total_cost_basis: 0,
+        priced_cost_basis: 0,
         total_current_value: 0,
         total_gain_loss: 0,
         total_gain_loss_percent: 0,
         holdings_count: 0,
+        unpriced_holdings_count: 0,
         unique_products_count: 0,
       });
     });
@@ -178,7 +180,7 @@ describe("portfolio library functions", () => {
       expect(result.unique_products_count).toBe(2); // Only 2 unique products
     });
 
-    it("should handle holdings with null current price", () => {
+    it("should report an unknown valuation when any current price is missing", () => {
       const holding = createMockHolding({
         quantity: 2,
         purchase_price_usd: 100,
@@ -188,9 +190,9 @@ describe("portfolio library functions", () => {
       const result = calculatePortfolioSummary([holding]);
 
       expect(result.total_cost_basis).toBe(200);
-      expect(result.total_current_value).toBe(0); // null price treated as 0
-      expect(result.total_gain_loss).toBe(-200);
-      expect(result.total_gain_loss_percent).toBe(-100);
+      expect(result.total_current_value).toBeNull();
+      expect(result.total_gain_loss).toBeNull();
+      expect(result.total_gain_loss_percent).toBeNull();
     });
 
     it("should handle zero cost basis (avoid division by zero)", () => {
@@ -293,7 +295,7 @@ describe("portfolio library functions", () => {
       expect(result.gain_loss_percent).toBe(0);
     });
 
-    it("should handle null current price as zero", () => {
+    it("should keep performance unknown when the current price is missing", () => {
       const holding = createMockHolding({
         quantity: 2,
         purchase_price_usd: 100,
@@ -303,10 +305,10 @@ describe("portfolio library functions", () => {
       const result = calculateHoldingPerformance(holding);
 
       expect(result.cost_basis).toBe(200);
-      expect(result.current_value).toBe(0);
-      expect(result.gain_loss).toBe(-200);
-      expect(result.gain_loss_percent).toBe(-100);
-      expect(result.current_price).toBe(0);
+      expect(result.current_value).toBeNull();
+      expect(result.gain_loss).toBeNull();
+      expect(result.gain_loss_percent).toBeNull();
+      expect(result.current_price).toBeNull();
     });
 
     it("should handle zero purchase price (avoid division by zero)", () => {

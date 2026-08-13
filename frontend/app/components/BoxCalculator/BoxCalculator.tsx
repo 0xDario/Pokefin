@@ -29,8 +29,15 @@ function calculateNav(
 ): NavResult | null {
   if (packs.length === 0 || retailPrice <= 0) return null;
 
+  // A pack with no current price cannot be valued, and counting it as free
+  // would quietly understate the NAV and flip the buy/hold/avoid verdict —
+  // the exact "$0.00 reads as a real price" failure the freshness guard
+  // exists to prevent. Saved recipes can reference a set whose pack went
+  // stale, so this is reachable without touching the picker.
+  if (packs.some((pack) => getPackPrice(pack.setId) === null)) return null;
+
   const packBreakdown = packs.map((pack) => {
-    const usdPrice = getPackPrice(pack.setId) || 0;
+    const usdPrice = getPackPrice(pack.setId) ?? 0;
     const perPackPrice = convertPackPrice(usdPrice);
     return {
       setName: pack.setName,
@@ -245,6 +252,13 @@ export default function BoxCalculator() {
     [packs, promoValue, retailPrice, getPackPrice, convertPrice]
   );
 
+  // calculateNav refuses to value a recipe containing an unpriced pack. Say so,
+  // otherwise the results panel just silently fails to appear.
+  const unpricedPacks = useMemo(
+    () => packs.filter((pack) => getPackPrice(pack.setId) === null),
+    [packs, getPackPrice]
+  );
+
   if (pricesLoading) {
     return (
       <div className="max-w-4xl mx-auto space-y-6">
@@ -421,7 +435,10 @@ export default function BoxCalculator() {
           <div className="space-y-2">
             {packs.map((pack) => {
               const packPrice = getPackPrice(pack.setId);
-              const totalValue = (packPrice || 0) * pack.quantity;
+              // Null, not 0: the row already says "No price data", and a
+              // "$0.00" line total beside it would contradict it.
+              const totalValue =
+                packPrice === null ? null : packPrice * pack.quantity;
 
               return (
                 <div
@@ -523,6 +540,18 @@ export default function BoxCalculator() {
           </div>
         </div>
       </div>
+
+      {!navResult && unpricedPacks.length > 0 && (
+        <div className="bg-white rounded-xl shadow-sm p-5 text-sm text-slate-600">
+          <span className="font-medium text-slate-900">
+            NAV unavailable
+          </span>{" "}
+          — no current price for{" "}
+          {unpricedPacks.map((pack) => pack.setName).join(", ")}. Valuing{" "}
+          {unpricedPacks.length === 1 ? "it" : "them"} at $0 would understate
+          the box.
+        </div>
+      )}
 
       {/* NAV Results */}
       {navResult && (

@@ -21,7 +21,13 @@ export interface BoxRecipe {
 export interface BoosterPackPrice {
   setId: number;
   setName: string;
-  usdPrice: number;
+  /**
+   * Null when the freshness guard withheld this product's price. The entry is
+   * still listed, so getPackPrice can tell "this set has no standard pack"
+   * from "the standard pack exists but cannot be priced" — collapsing those
+   * two makes it substitute a variant's price for the standard one.
+   */
+  usdPrice: number | null;
   variant: string | null;
 }
 

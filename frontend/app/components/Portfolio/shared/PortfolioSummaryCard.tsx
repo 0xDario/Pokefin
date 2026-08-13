@@ -13,7 +13,8 @@ export default function PortfolioSummaryCard({
   currency = "USD",
   exchangeRate = 1.36,
 }: PortfolioSummaryCardProps) {
-  const formatCurrency = (value: number) => {
+  const formatCurrency = (value: number | null) => {
+    if (value === null) return "--";
     const convertedValue = currency === "CAD" ? value * exchangeRate : value;
     const symbol = currency === "CAD" ? "C$" : "$";
     return `${symbol}${convertedValue.toLocaleString(undefined, {
@@ -22,12 +23,14 @@ export default function PortfolioSummaryCard({
     })}`;
   };
 
-  const formatPercent = (value: number) => {
+  const formatPercent = (value: number | null) => {
+    if (value === null) return "--";
     const sign = value >= 0 ? "+" : "";
     return `${sign}${value.toFixed(2)}%`;
   };
 
-  const isPositive = summary.total_gain_loss >= 0;
+  const isPositive =
+    summary.total_gain_loss !== null && summary.total_gain_loss >= 0;
 
   return (
     <div className="bg-white rounded-lg shadow-lg p-4 md:p-6 h-full">
@@ -44,6 +47,14 @@ export default function PortfolioSummaryCard({
           <p className="text-xl font-bold text-slate-900">
             {formatCurrency(summary.total_current_value)}
           </p>
+          {/* The valuation covers only part of the portfolio, so it says so
+              rather than passing a partial sum off as the total. */}
+          {summary.unpriced_holdings_count > 0 && (
+            <p className="mt-1 text-xs text-slate-500">
+              {summary.holdings_count - summary.unpriced_holdings_count} of{" "}
+              {summary.holdings_count} priced
+            </p>
+          )}
         </div>
 
         {/* Cost Basis */}
@@ -51,9 +62,22 @@ export default function PortfolioSummaryCard({
           <p className="text-xs text-slate-500 uppercase tracking-wider mb-1">
             Cost Basis
           </p>
+          {/* The priced subset, not every holding: Total Value, Unrealized G/L
+              and ROI beside it are all scoped that way, and mixing the two
+              made the four tiles impossible to reconcile — value minus a
+              larger basis does not equal the G/L shown next to it. */}
           <p className="text-xl font-bold text-slate-900">
-            {formatCurrency(summary.total_cost_basis)}
+            {formatCurrency(
+              summary.unpriced_holdings_count > 0
+                ? summary.priced_cost_basis
+                : summary.total_cost_basis
+            )}
           </p>
+          {summary.unpriced_holdings_count > 0 && (
+            <p className="mt-1 text-xs text-slate-500">
+              of {formatCurrency(summary.total_cost_basis)} total
+            </p>
+          )}
         </div>
 
         {/* Gain/Loss */}
@@ -63,9 +87,11 @@ export default function PortfolioSummaryCard({
           </p>
           <p
             className={`text-xl font-bold ${
-              isPositive
-                ? "text-emerald-600"
-                : "text-rose-600"
+              summary.total_gain_loss === null
+                ? "text-slate-500"
+                : isPositive
+                  ? "text-emerald-600"
+                  : "text-rose-600"
             }`}
           >
             {isPositive ? "+" : ""}
@@ -80,9 +106,11 @@ export default function PortfolioSummaryCard({
           </p>
           <p
             className={`text-xl font-bold ${
-              isPositive
-                ? "text-emerald-600"
-                : "text-rose-600"
+              summary.total_gain_loss_percent === null
+                ? "text-slate-500"
+                : isPositive
+                  ? "text-emerald-600"
+                  : "text-rose-600"
             }`}
           >
             {formatPercent(summary.total_gain_loss_percent)}

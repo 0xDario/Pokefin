@@ -53,11 +53,17 @@ export function useCurrencyConversion(initialExchangeRate?: number, initialCurre
     return selectedCurrency === "CAD" ? usdPrice * exchangeRate : usdPrice;
   }, [selectedCurrency, exchangeRate]);
 
-  // Helper function to format price with currency symbol - memoized
+  // Helper function to format price with currency symbol - memoized.
+  // A missing price renders as "--", never as a currency amount: null here
+  // means the price is unknown — nothing was ever scraped, or the newest one
+  // is past PRICE_STALENESS_TOLERANCE_DAYS and the guard in marketPulse.ts
+  // withheld it — and "$0.00" reads as a real, and very wrong, market price.
+  // Matches formatUsd on the dashboard and /product/[id]. A literal 0 still
+  // formats as 0.00; the scraper rejects non-positive prices, so it does not
+  // occur for products, and calculator subtotals do legitimately reach 0.
   const formatPrice = useCallback((usdPrice: number | null | undefined): string => {
-    if (!usdPrice) {
-      const symbol = selectedCurrency === "CAD" ? "C$" : "$";
-      return `${symbol}0.00`;
+    if (usdPrice === null || usdPrice === undefined || Number.isNaN(usdPrice)) {
+      return "--";
     }
     const price = selectedCurrency === "CAD" ? usdPrice * exchangeRate : usdPrice;
     const symbol = selectedCurrency === "CAD" ? "C$" : "$";

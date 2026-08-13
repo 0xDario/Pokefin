@@ -38,11 +38,19 @@ export default function AllocationChartImpl({
 }: AllocationChartImplProps) {
   const currencySymbol = currency === "CAD" ? "C$" : "$";
 
-  const allocationData = useMemo(() => {
+  // One pass over the holdings produces both the slices and the count of what
+  // had to be left out: two memos calling calculateHoldingPerformance over the
+  // same list did the arithmetic twice and let the two answers drift.
+  const { allocationData, unpricedCount } = useMemo(() => {
     const groupMap = new Map<string, number>();
+    let unpriced = 0;
 
     for (const holding of holdings) {
       const perf = calculateHoldingPerformance(holding);
+      if (perf.current_value === null) {
+        unpriced += 1;
+        continue;
+      }
       const value = currency === "CAD" ? perf.current_value * exchangeRate : perf.current_value;
 
       let groupName: string;
@@ -69,7 +77,7 @@ export default function AllocationChartImpl({
       }))
       .sort((a, b) => b.value - a.value);
 
-    return items;
+    return { allocationData: items, unpricedCount: unpriced };
   }, [holdings, groupBy, currency, exchangeRate]);
 
   const CustomTooltip = ({ active, payload }: any) => {
@@ -92,14 +100,19 @@ export default function AllocationChartImpl({
     return null;
   };
 
-  if (holdings.length === 0) {
+  // Only an allocation with nothing in it is worth suppressing. An unpriced
+  // holding is excluded from the slices and reported underneath — hiding the
+  // whole breakdown would throw away every holding that is priced.
+  if (holdings.length === 0 || allocationData.length === 0) {
     return (
       <div className="bg-white rounded-lg shadow-lg p-4 md:p-6 h-full flex flex-col">
         <h2 className="text-lg font-semibold text-slate-900 mb-4">
           Allocation by {groupBy === "set" ? "Set" : "Product Type"}
         </h2>
         <div className="flex-1 flex items-center justify-center text-slate-500">
-          No holdings to display
+          {holdings.length === 0
+            ? "No holdings to display"
+            : "No current prices available"}
         </div>
       </div>
     );
@@ -161,6 +174,13 @@ export default function AllocationChartImpl({
             )}
           </ul>
         </div>
+
+        {unpricedCount > 0 && (
+          <p className="w-full text-xs text-slate-500">
+            {unpricedCount} holding{unpricedCount !== 1 ? "s" : ""} excluded — no
+            current price
+          </p>
+        )}
       </div>
     </div>
   );

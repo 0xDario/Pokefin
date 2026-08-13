@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useMemo, memo } from "react";
+import { isPriceFresh } from "../lib/marketPulse";
 import {
   ResponsiveContainer,
   Area,
@@ -115,7 +116,7 @@ const PriceChart = memo(function PriceChart({
     }
 
     // Convert to array and sort by date in ascending order (oldest to newest for chart display)
-    const result: Array<{ date: string; price: number | null; timestamp: string }> = Array.from(map.entries())
+    const result: Array<{ date: string; price: number | null; timestamp: string; recordedAt?: string }> = Array.from(map.entries())
       .map(([dateStr]) => {
         const entry = map.get(dateStr)!;
         // Parse date parts directly to avoid timezone issues with Date constructor
@@ -128,6 +129,10 @@ const PriceChart = memo(function PriceChart({
           date: displayDate,
           price: currency === "CAD" ? entry.usd_price * exchangeRate : entry.usd_price,
           timestamp: dateStr,
+          // The raw value, kept because `timestamp` above is a LOCAL date key.
+          // Freshness is a UTC-date question, and judging it from the local
+          // bucket shifts it by a day for anyone west of UTC.
+          recordedAt: entry.recorded_at,
         };
       })
       .sort((a, b) => a.timestamp.localeCompare(b.timestamp)); // Sort by date ascending
@@ -141,6 +146,8 @@ const PriceChart = memo(function PriceChart({
     // Anchor the date range to today's LOCAL date so all products share
     // the exact same start/end dates for a given timeframe.
     const today = new Date();
+    // Captured once so every day in the loop clamps against the same instant.
+    const nowMs = today.getTime();
     const endDate = new Date(today.getFullYear(), today.getMonth(), today.getDate());
     const startDate = new Date(endDate);
     startDate.setDate(startDate.getDate() - daysNeeded + 1); // inclusive range: startDate..endDate = daysNeeded days
@@ -156,7 +163,10 @@ const PriceChart = memo(function PriceChart({
     const endKey = toKey(endDate);
 
     // Build a lookup of actual data points within the range
-    const dataByDate = new Map<string, { date: string; price: number | null; timestamp: string }>();
+    const dataByDate = new Map<
+      string,
+      { date: string; price: number | null; timestamp: string; recordedAt?: string }
+    >();
     for (const entry of groupedDaily) {
       if (entry.timestamp >= startKey && entry.timestamp <= endKey) {
         dataByDate.set(entry.timestamp, entry);
@@ -167,21 +177,45 @@ const PriceChart = memo(function PriceChart({
     // - Before first data point: insert null (no line drawn)
     // - Between/after data points: forward-fill the last known price
     //   so the line extends smoothly to the end of the range
-    const result: Array<{ date: string; price: number | null; timestamp: string }> = [];
+    const result: Array<{ date: string; price: number | null; timestamp: string; recordedAt?: string }> = [];
     let lastKnownPrice: number | null = null;
+    let lastRecordedAt: string | null = null;
     const cursor = new Date(startDate);
     while (cursor <= endDate) {
       const key = toKey(cursor);
       const displayDate = cursor.toLocaleDateString(undefined, { month: "short", day: "numeric" });
       const existing = dataByDate.get(key);
+
+      // Expiry is asked of isPriceFresh, the same helper the price itself is
+      // judged by, rather than counted in chart rows — a row counter works in
+      // LOCAL buckets and expires a day early west of UTC.
+      //
+      // The reference is the last instant of this chart day, clamped to now.
+      // Rows bucket by local date and isPriceFresh reads UTC dates, and for
+      // part of every day those two calendars name different days: neither the
+      // cursor instant nor its calendar fields rebuilt as UTC agrees with the
+      // card at all hours — each is right for roughly half of them, in
+      // opposite halves. Clamping makes the FINAL chart day resolve to `now`,
+      // which is exactly what the card passes, so the two agree at the
+      // boundary in every timezone at every hour. Earlier days resolve to the
+      // end of their own local day, which is a real instant and monotonic.
+      const referenceDate = new Date(
+        Math.min(cursor.getTime() + 24 * 60 * 60 * 1000 - 1, nowMs)
+      );
+
       if (existing) {
         lastKnownPrice = existing.price;
+        lastRecordedAt = existing.recordedAt ?? null;
         result.push(existing);
-      } else if (lastKnownPrice !== null) {
-        // Forward-fill: carry the last known price through gaps and to the end
+      } else if (lastKnownPrice !== null && isPriceFresh(lastRecordedAt, referenceDate)) {
+        // Forward-fill across short gaps only. Single missed scrapes are
+        // routine and a continuous line is the honest read of them, but the
+        // fill expires at the same tolerance the price guard uses: past it
+        // the line stops rather than drawing a flat, hoverable price for
+        // days on which nothing was recorded and nobody can buy.
         result.push({ date: displayDate, price: lastKnownPrice, timestamp: key });
       } else {
-        // Before any data exists: null (no line)
+        // Before any data exists, or past the fill's expiry: null (no line)
         result.push({ date: displayDate, price: null, timestamp: key });
       }
       cursor.setDate(cursor.getDate() + 1);
@@ -303,11 +337,28 @@ const PriceChart = memo(function PriceChart({
   const dataAvailability = useMemo(() => {
     const daysNeeded = range === "7D" ? 7 : range === "1M" ? 30 : range === "3M" ? 90 : range === "6M" ? 180 : 365;
     const firstDataIndex = slicedData.findIndex(d => d.price !== null);
+    // Nothing usable anywhere in the window — a short range on a product whose
+    // last reading predates it. Both gap checks below key off a real data
+    // point, so without this the range reads as complete and the chart draws
+    // an empty grid against the synthetic $0-$100 fallback axis, which looks
+    // like a price range rather than an absence of one.
+    const hasNoData = firstDataIndex === -1;
     const hasLeadingGap = firstDataIndex > 0;
-    const daysCovered = firstDataIndex >= 0 ? slicedData.length - firstDataIndex : 0;
+    // A trailing gap is what staleness looks like on a chart, and it was the
+    // one shape this badge could not see: the fill used to run to the right
+    // edge, so the series always ended in data. Now that the fill expires,
+    // check both ends.
+    const lastDataIndex = slicedData.length - 1 - [...slicedData].reverse()
+      .findIndex(d => d.price !== null);
+    const hasTrailingGap =
+      firstDataIndex >= 0 && lastDataIndex < slicedData.length - 1;
+    const daysCovered =
+      firstDataIndex >= 0 ? lastDataIndex - firstDataIndex + 1 : 0;
 
     return {
-      isIncomplete: hasLeadingGap,
+      isIncomplete: hasNoData || hasLeadingGap || hasTrailingGap,
+      hasNoData,
+      hasTrailingGap,
       actualDays: daysCovered,
       requestedDays: daysNeeded,
       percentComplete: Math.round((daysCovered / daysNeeded) * 100),
@@ -356,9 +407,21 @@ const PriceChart = memo(function PriceChart({
       return { returnPct: null, cagr: null, maxDrawdown: null };
     }
 
+    // ROI and CAGR measure from a start point TO an endpoint, so a range whose
+    // tail expired has no endpoint to measure to: filtering the nulls out just
+    // silently promotes the last stale reading into that role, and the chips
+    // would report a return beside a card that withholds the price and a badge
+    // that says "No recent prices". Max drawdown is genuinely historical — it
+    // describes the series that exists — so it survives, the same split the
+    // SQL and the product page use.
+    const endpointExpired =
+      chartDataWithTrend.length > 0 &&
+      chartDataWithTrend[chartDataWithTrend.length - 1].price === null;
+
     const first = prices[0];
     const last = prices[prices.length - 1];
-    const returnPct = first > 0 ? ((last - first) / first) * 100 : null;
+    const returnPct =
+      endpointExpired || first <= 0 ? null : ((last - first) / first) * 100;
 
     let peak = first;
     let maxDrawdown = 0;
@@ -381,7 +444,7 @@ const PriceChart = memo(function PriceChart({
       .find((point) => point.price !== null)?.timestamp;
 
     let cagr: number | null = null;
-    if (start && end) {
+    if (start && end && !endpointExpired) {
       const startMs = new Date(start).getTime();
       const endMs = new Date(end).getTime();
       const years = (endMs - startMs) / (365 * 24 * 60 * 60 * 1000);
@@ -478,6 +541,27 @@ const PriceChart = memo(function PriceChart({
     return match ? match.date : null;
   }, [releaseDate, chartDataWithTrend]);
 
+  // Nothing to plot in this window. Rendering the axes anyway would put a
+  // $0-$100 scale on screen for a product that has no price at all, so say so
+  // instead — the same treatment PortfolioChartImpl gives an all-null series.
+  //
+  // Unless there are volume bars: those are real, covered data and this return
+  // would discard them to report the absence of a different series. In that
+  // case the chart renders as usual and the "No recent prices" badge carries
+  // the price story. No active product is in that state today — every one with
+  // recent sales also has a fresh price — so this is a guard on the shape of
+  // the code rather than a live case.
+  if (dataAvailability.hasNoData && !hasVolume) {
+    return (
+      <div
+        className="w-full flex items-center justify-center text-sm text-slate-500"
+        style={{ height }}
+      >
+        No prices recorded in this period
+      </div>
+    );
+  }
+
   return (
     <div className="w-full relative">
       {/* Data availability indicator */}
@@ -487,7 +571,12 @@ const PriceChart = memo(function PriceChart({
             <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
           </svg>
           <span className="font-medium">
-            Only {dataAvailability.actualDays}d of data
+            {/* hasNoData first: with volume bars present the chart still
+                renders, and "Only 0d of data" would be a confusing way to say
+                the price series is empty. */}
+            {dataAvailability.hasNoData || dataAvailability.hasTrailingGap
+              ? "No recent prices"
+              : `Only ${dataAvailability.actualDays}d of data`}
           </span>
         </div>
       )}

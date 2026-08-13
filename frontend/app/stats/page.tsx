@@ -105,7 +105,11 @@ function ScoreCell({ value }: { value: number | null }) {
 
 export default async function StatsPage() {
   const stats = await getCachedSetAnalytics();
-  const topRanked = stats.slice(0, 10);
+  // Unranked sets — no product in them has a current price — are excluded
+  // rather than sliced around. They sort last, so they only reach this list
+  // when fewer than ten sets are scored, which is exactly when a "top sets"
+  // table quietly filling up with unpriced ones would mislead most.
+  const topRanked = stats.filter((set) => set.rank !== null).slice(0, 10);
 
   return (
     <main className="p-3 md:p-6">
