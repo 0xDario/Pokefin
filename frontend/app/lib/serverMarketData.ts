@@ -18,11 +18,11 @@ import {
   SetAnalyticsRow,
 } from "./marketData";
 import {
-  getFreshUsdPrice,
   getLatestPriceRecordedAt,
   PRICE_STALENESS_TOLERANCE_DAYS,
   utcMidnightMs,
 } from "./marketPulse";
+import { derivedFromPrice, resolvePrice } from "./priceGuard";
 import { logCaughtError, logSupabaseError } from "./logger";
 const supabaseUrl =
   process.env.NEXT_PUBLIC_SUPABASE_URL || "https://placeholder.supabase.invalid";
@@ -178,12 +178,19 @@ async function fetchNewestPricedAt(
 function guardedPrice(
   ownPrice: number | null | undefined,
   newest: { recordedAt: string; usdPrice: number | null } | undefined
-): { price: number | null; recordedAt: string | null } {
-  const recordedAt = newest?.recordedAt ?? null;
-  if (newest === undefined || !Object.is(ownPrice ?? null, newest.usdPrice)) {
-    return { price: null, recordedAt };
-  }
-  return { price: getFreshUsdPrice(ownPrice, recordedAt), recordedAt };
+) {
+  // Absent from the tolerance-window query means no row was recorded in it —
+  // a successful lookup that found nothing, not a failed one.
+  return resolvePrice(
+    ownPrice,
+    newest === undefined
+      ? { kind: "timestamp", recordedAt: null }
+      : {
+          kind: "snapshot",
+          recordedAt: newest.recordedAt,
+          recordedPrice: newest.usdPrice,
+        }
+  );
 }
 
 function getReleaseMs(releaseDate?: string | null) {
@@ -400,7 +407,7 @@ async function fetchSetAnalyticsFallback(): Promise<SetAnalyticsRow[]> {
     const freshPrice = guardedPrice(
       product.usd_price,
       newestPricedAt.get(product.id)
-    ).price;
+    ).usdPrice;
 
     if (freshPrice !== null) {
       const ret30 = getReturnPercent(history, 30);
@@ -670,17 +677,20 @@ async function fetchProductDetail(
   // here buys nothing and costs the steady state. The timestamp check below is
   // safe across the skew: a fresher recorded_at only makes it more permissive,
   // and a price an hour old is well inside a 14-day tolerance.
-  const freshPrice = getFreshUsdPrice(summary.usd_price, priceRecordedAt);
+  const guardedDetail = resolvePrice(summary.usd_price, {
+    kind: "timestamp",
+    recordedAt: priceRecordedAt,
+  });
   const product: Product = {
     ...summary,
-    usd_price: freshPrice,
+    usd_price: guardedDetail.usdPrice,
     price_recorded_at: priceRecordedAt,
     // The verdict reached here is stricter than the RPC's, so the returns
     // that came with the summary have to be re-judged against it too.
     // Otherwise this page prints "No current price" above six numeric
     // returns — and priceReturn30d feeds the Market Pulse signal, which
     // could still award "Demand surge" to a product nobody can price.
-    returns: freshPrice === null ? null : summary.returns,
+    returns: derivedFromPrice(guardedDetail, () => summary.returns ?? null),
   };
 
   let salesHistory: SalesHistoryEntry[] = [];
@@ -781,12 +791,11 @@ async function fetchProductsWithFallbackReturns(): Promise<Product[]> {
     // catalog would render "--".
     const guarded = guardedPrice(product.usd_price, newestPricedAt.get(product.id));
     const priceRecordedAt =
-      guarded.recordedAt ?? getLatestPriceRecordedAt(historyByProduct[product.id]);
-    const freshPrice = guarded.price;
+      guarded.priceRecordedAt ?? getLatestPriceRecordedAt(historyByProduct[product.id]);
     const history = historyByProduct[product.id];
     return {
       ...product,
-      usd_price: freshPrice,
+      usd_price: guarded.usdPrice,
       price_recorded_at: priceRecordedAt,
       // Returns are withheld with the price, matching the gate 0023 applies
       // to the RPC this path stands in for. getReturnPercent only needs the
@@ -794,17 +803,14 @@ async function fetchProductsWithFallbackReturns(): Promise<Product[]> {
       // priced 15-29 days ago would otherwise report a numeric 1M return
       // beside a blank price — the same "one stale number becomes six" the
       // migration exists to stop.
-      returns:
-        freshPrice === null
-          ? null
-          : {
-              "1D": getReturnPercent(history, 1),
-              "7D": getReturnPercent(history, 7),
-              "1M": getReturnPercent(history, 30),
-              "3M": getReturnPercent(history, 90),
-              "6M": getReturnPercent(history, 180),
-              "1Y": getReturnPercent(history, 365),
-            },
+      returns: derivedFromPrice(guarded, () => ({
+        "1D": getReturnPercent(history, 1),
+        "7D": getReturnPercent(history, 7),
+        "1M": getReturnPercent(history, 30),
+        "3M": getReturnPercent(history, 90),
+        "6M": getReturnPercent(history, 180),
+        "1Y": getReturnPercent(history, 365),
+      })),
     };
   });
 }

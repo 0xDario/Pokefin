@@ -1,4 +1,5 @@
 import { Product, SortBy, SortDirection } from "../types";
+import { hasCurrentPrice } from "../../../lib/priceGuard";
 
 function normalize(value?: string | null): string {
   return (value || "").toLowerCase().replace(/[_-]/g, " ");
@@ -114,11 +115,13 @@ export function sortProducts(
       // Unknown prices sort last in either direction, matching HoldingsTable.
       // Coercing them to 0 would file every stale and never-priced product in
       // among the genuinely cheap ones at the top of an ascending sort.
-      const priceA = a.usd_price;
-      const priceB = b.usd_price;
-      if (priceA === null && priceB === null) return 0;
-      if (priceA === null) return 1;
-      if (priceB === null) return -1;
+      const hasA = hasCurrentPrice(a);
+      const hasB = hasCurrentPrice(b);
+      if (!hasA && !hasB) return 0;
+      if (!hasA) return 1;
+      if (!hasB) return -1;
+      const priceA = a.usd_price as number;
+      const priceB = b.usd_price as number;
       return sortDirection === "asc" ? priceA - priceB : priceB - priceA;
     }
 

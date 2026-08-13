@@ -4,12 +4,8 @@ import {
   fetchNewestPricedAtClient,
   type NewestPricedAt,
 } from "./clientMarketData";
-import {
-  getFreshUsdPrice,
-  isPriceFresh,
-  PRICE_STALENESS_TOLERANCE_DAYS,
-  utcMidnightMs,
-} from "./marketPulse";
+import { PRICE_STALENESS_TOLERANCE_DAYS, utcMidnightMs } from "./marketPulse";
+import { resolvePrice } from "./priceGuard";
 import { logCaughtError, logSupabaseError } from "./logger";
 import type {
   Portfolio,
@@ -93,20 +89,31 @@ function pickGuardedPrice(
   ownPrice: number | null | undefined
 ): { usd_price: number | null; price_recorded_at: string | null } {
   if (productsById === null) {
-    return { usd_price: null, price_recorded_at: null };
+    // The freshness source itself failed: no verdict was reached.
+    const resolved = resolvePrice(ownPrice, { kind: "unavailable" });
+    return {
+      usd_price: resolved.usdPrice,
+      price_recorded_at: resolved.priceRecordedAt,
+    };
   }
 
   const guarded = productsById.get(productId);
   if (guarded === undefined) {
-    const newest = missingRecordedAt.get(productId) ?? null;
-    const recordedAt = newest?.recordedAt ?? null;
-    // The row's own price must still match the value being judged, the same
-    // check migration 0023 makes — a timestamp alone can date a value that a
-    // failed products update left behind.
-    const agrees = newest !== null && Object.is(ownPrice ?? null, newest.usdPrice);
+    const newest = missingRecordedAt.get(productId);
+    // Same-read pair from the scoped lookup, so both date and value count.
+    const resolved = resolvePrice(
+      ownPrice,
+      newest === undefined
+        ? { kind: "timestamp", recordedAt: null }
+        : {
+            kind: "snapshot",
+            recordedAt: newest.recordedAt,
+            recordedPrice: newest.usdPrice,
+          }
+    );
     return {
-      usd_price: agrees ? getFreshUsdPrice(ownPrice, recordedAt) : null,
-      price_recorded_at: recordedAt,
+      usd_price: resolved.usdPrice,
+      price_recorded_at: resolved.priceRecordedAt,
     };
   }
 
@@ -699,15 +706,17 @@ export async function getPortfolioHistory(
       }
 
       const referenceDate = new Date(`${dateStr}T12:00:00Z`);
-      if (
-        priceData.price === null ||
-        !isPriceFresh(priceData.recordedAt, referenceDate)
-      ) {
+      const asOfThisDay = resolvePrice(
+        priceData.price,
+        { kind: "timestamp", recordedAt: priceData.recordedAt },
+        referenceDate
+      );
+      if (asOfThisDay.usdPrice === null) {
         continue;
       }
 
       pricedProducts += 1;
-      dailyValue += holdingData.quantity * priceData.price;
+      dailyValue += holdingData.quantity * asOfThisDay.usdPrice;
     }
 
     // Chart what is known and record the coverage, rather than blanking the

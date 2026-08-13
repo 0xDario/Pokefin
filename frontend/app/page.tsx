@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { hasCurrentPrice } from "./lib/priceGuard";
 import CardRinkPromo from "./components/CardRinkPromo";
 import ProductImage from "./components/ProductPrices/shared/ProductImage";
 import RecentlyReleased from "./components/dashboard/RecentlyReleased";
@@ -165,7 +166,7 @@ export default async function Home() {
   // dashboard's headline stat.
   const mostExpensive = products.reduce<Product | null>(
     (max, p) =>
-      p.usd_price !== null && p.usd_price > (max?.usd_price ?? -1) ? p : max,
+      hasCurrentPrice(p) && p.usd_price! > (max?.usd_price ?? -1) ? p : max,
     null
   );
 
