@@ -133,6 +133,25 @@ export default function PortfolioChartImpl({
           <h2 className="text-lg font-semibold text-slate-900">
             Portfolio Value
           </h2>
+          {/* The timeframe buttons live only in this header, so omitting them
+              here strands the user: picking a range with no valuations would
+              remove the control that selects a different one, and only a
+              reload would get them back. */}
+          <div className="flex gap-1">
+            {timeframes.map((tf) => (
+              <button
+                key={tf}
+                onClick={() => onTimeframeChange(tf)}
+                className={`px-3 py-1 text-xs font-medium rounded transition-colors ${
+                  timeframe === tf
+                    ? "bg-emerald-100 text-emerald-700"
+                    : "text-slate-500 hover:bg-slate-100"
+                }`}
+              >
+                {tf}
+              </button>
+            ))}
+          </div>
         </div>
         <div className="h-48 flex items-center justify-center text-slate-500">
           {chartData.length === 0

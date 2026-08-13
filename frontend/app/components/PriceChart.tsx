@@ -536,7 +536,14 @@ const PriceChart = memo(function PriceChart({
   // Nothing to plot in this window. Rendering the axes anyway would put a
   // $0-$100 scale on screen for a product that has no price at all, so say so
   // instead — the same treatment PortfolioChartImpl gives an all-null series.
-  if (dataAvailability.hasNoData) {
+  //
+  // Unless there are volume bars: those are real, covered data and this return
+  // would discard them to report the absence of a different series. In that
+  // case the chart renders as usual and the "No recent prices" badge carries
+  // the price story. No active product is in that state today — every one with
+  // recent sales also has a fresh price — so this is a guard on the shape of
+  // the code rather than a live case.
+  if (dataAvailability.hasNoData && !hasVolume) {
     return (
       <div
         className="w-full flex items-center justify-center text-sm text-slate-500"
@@ -556,7 +563,10 @@ const PriceChart = memo(function PriceChart({
             <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
           </svg>
           <span className="font-medium">
-            {dataAvailability.hasTrailingGap
+            {/* hasNoData first: with volume bars present the chart still
+                renders, and "Only 0d of data" would be a confusing way to say
+                the price series is empty. */}
+            {dataAvailability.hasNoData || dataAvailability.hasTrailingGap
               ? "No recent prices"
               : `Only ${dataAvailability.actualDays}d of data`}
           </span>

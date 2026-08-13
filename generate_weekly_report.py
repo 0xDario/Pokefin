@@ -23,7 +23,7 @@ import html
 import shutil
 import statistics
 import subprocess
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 
 from supabase import create_client
 
@@ -112,6 +112,21 @@ def load_data():
 # --------------------------------------------------------------------------- #
 # Analytics
 # --------------------------------------------------------------------------- #
+
+def utc_today() -> date:
+    """
+    Today's date in UTC.
+
+    Not date.today(): recorded_at is written by the scraper from
+    datetime.now(timezone.utc) and parse_day reads its date part as a UTC date,
+    so measuring an age against the host's local date mixes two calendars. On a
+    host west of UTC, in the hours after UTC midnight, that admits a price a
+    day older than the tolerance the site enforces — the report and the site
+    then disagree about the same product. The scraper host is not UTC.
+    """
+    return datetime.now(timezone.utc).date()
+
+
 def parse_day(ts: str) -> date:
     # recorded_at is naive UTC, e.g. "2026-06-18T04:12:00" or with space
     return date.fromisoformat(ts[:10])
@@ -153,7 +168,7 @@ def compute_returns(product_types, sets, products, history):
         # a product that is tolerance + 3 days old at publication — 17 days,
         # against the 14 the site enforces. The two guards then disagree about
         # the same product on the same day.
-        if (date.today() - end_day).days > PRICE_STALENESS_TOLERANCE_DAYS:
+        if (utc_today() - end_day).days > PRICE_STALENESS_TOLERANCE_DAYS:
             continue
 
         rec = {
@@ -527,7 +542,7 @@ def main():
     # A stalled scraper must not yield a normal-looking edition. The anchor is
     # disclosed in the filename and masthead, but nothing previously alerted:
     # the job exited 0 and the wrapper announced a fresh report.
-    staleness = (date.today() - anchor).days
+    staleness = (utc_today() - anchor).days
     if staleness > ANCHOR_STALE_AFTER_DAYS:
         print(f"! Price data is stale: newest row is {anchor} "
               f"({staleness} days old, tolerance {ANCHOR_STALE_AFTER_DAYS}). "
