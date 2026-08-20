@@ -123,7 +123,11 @@ def utc_today() -> date:
     so measuring an age against the host's local date mixes two calendars. On a
     host west of UTC, in the hours after UTC midnight, that admits a price a
     day older than the tolerance the site enforces — the report and the site
-    then disagree about the same product. The scraper host is not UTC.
+    then disagree about the same product.
+
+    The Linux scraper host happens to run UTC, where the two agree and this is
+    a no-op. The macOS checkout the report ran from does not, and neither is a
+    property the correctness of an edition should rest on.
     """
     return datetime.now(timezone.utc).date()
 
