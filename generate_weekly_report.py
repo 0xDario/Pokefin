@@ -547,7 +547,12 @@ def write_summary(path, anchor, cats, sets_rows, tops, meta):
     the first time the layout changes. The generator already has them in hand.
     """
     def cat_entry(c):
+        # n_6m, not n: category_table gates each window on its own sample, so
+        # a category's 6M median can come from fewer products than the category
+        # holds. The PDF prints the window-specific count; the email quotes this
+        # one beside the 6M figure and would otherwise overstate the sample.
         return {"category": c["category"], "n": c["n"],
+                "n_6m": c.get("n_6m"), "n_1y": c.get("n_1y"),
                 "m6": c.get("6m"), "y1": c.get("1y")}
 
     ranked6 = [c for c in cats if c.get("6m") is not None]
