@@ -21,6 +21,7 @@ import sys
 import glob
 import html
 import shutil
+import json
 import statistics
 import subprocess
 from datetime import date, datetime, timedelta, timezone
@@ -122,7 +123,11 @@ def utc_today() -> date:
     so measuring an age against the host's local date mixes two calendars. On a
     host west of UTC, in the hours after UTC midnight, that admits a price a
     day older than the tolerance the site enforces — the report and the site
-    then disagree about the same product. The scraper host is not UTC.
+    then disagree about the same product.
+
+    The Linux scraper host happens to run UTC, where the two agree and this is
+    a no-op. The macOS checkout the report ran from does not, and neither is a
+    property the correctness of an edition should rest on.
     """
     return datetime.now(timezone.utc).date()
 
@@ -532,6 +537,51 @@ def render_pdf(html_path, pdf_path):
 
 
 # --------------------------------------------------------------------------- #
+def write_summary(path, anchor, cats, sets_rows, tops, meta):
+    """
+    A small machine-readable digest beside the PDF.
+
+    The emailer needs the same marquee figures the front page carries, and the
+    alternatives are worse: recomputing them would let the email and the PDF
+    drift apart, and scraping them back out of the rendered HTML would break
+    the first time the layout changes. The generator already has them in hand.
+    """
+    def cat_entry(c):
+        # n_6m, not n: category_table gates each window on its own sample, so
+        # a category's 6M median can come from fewer products than the category
+        # holds. The PDF prints the window-specific count; the email quotes this
+        # one beside the 6M figure and would otherwise overstate the sample.
+        return {"category": c["category"], "n": c["n"],
+                "n_6m": c.get("n_6m"), "n_1y": c.get("n_1y"),
+                "m6": c.get("6m"), "y1": c.get("1y")}
+
+    ranked6 = [c for c in cats if c.get("6m") is not None]
+    best_set = max((s for s in sets_rows if s["avg_1y"] is not None),
+                   key=lambda s: s["avg_1y"], default=None)
+
+    def product_entry(r):
+        return {"name": f"{r['set_name']} {r['category']}".strip(),
+                "variant": r.get("variant"),
+                "end_price": r.get("end_price"),
+                "return": r.get("1y")}
+
+    summary = {
+        "anchor": anchor.isoformat(),
+        "n_products": meta["n_products"],
+        "n_sets": meta["n_sets"],
+        "excluded": meta["excluded"],
+        "categories": [cat_entry(c) for c in cats],
+        "fastest_category": cat_entry(ranked6[0]) if ranked6 else None,
+        "slowest_category": cat_entry(ranked6[-1]) if ranked6 else None,
+        "best_set_1y": ({"set_name": best_set["set_name"],
+                         "avg_1y": best_set["avg_1y"]} if best_set else None),
+        "top_1y": [product_entry(r) for r in tops.get("1y", [])[:3]],
+    }
+    with open(path, "w") as f:
+        json.dump(summary, f, indent=2)
+    return summary
+
+
 def main():
     print("The Pokefin Weekly — generating report")
     print("  loading data from Supabase...", flush=True)
@@ -591,10 +641,15 @@ def main():
     shutil.copyfile(pdf_path, latest)
     print(f"  updated {latest}")
 
+    summary_path = os.path.join(OUT_DIR, f"pokefin_weekly_{stamp}.summary.json")
+    write_summary(summary_path, anchor, cats, sets_rows, tops, meta)
+    print(f"  wrote {summary_path}")
+
     print(f"Done. Anchor date {anchor}, {meta['n_products']} products, "
           f"{excluded} illiquid product(s) excluded.")
     # The wrapper greps this to confirm THIS run produced THIS file.
     print(f"REPORT_PDF={pdf_path}")
+    print(f"REPORT_SUMMARY={summary_path}")
     return 0
 
 

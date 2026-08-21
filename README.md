@@ -172,11 +172,58 @@ Two things it needs:
   a headline. The run prints how many it dropped.
 
 `run_weekly_report.sh` is the scheduler wrapper: it sources the credentials
-file, runs the generator, verifies *this* run produced a PDF, and posts a
-desktop notification. It derives the repo location from its own path, so the
-same script works from a macOS checkout and from the Linux scraper host. On
-macOS it is scheduled by `~/Library/LaunchAgents/com.pokefin.weekly.plist`
-(Fridays 17:00); on Linux, add it to cron.
+file, runs the generator, verifies *this* run produced a PDF, emails it if
+email is configured, and posts a desktop notification. It derives the repo
+location from its own path, so the same script works from a macOS checkout and
+from the Linux scraper host. On macOS it is scheduled by
+`~/Library/LaunchAgents/com.pokefin.weekly.plist` (Fridays 17:00); on Linux,
+add it to cron.
+
+#### Emailing the edition
+
+`send_weekly_email.py` attaches the PDF and puts the front page's marquee
+figures in the body. Those figures come from `pokefin_weekly_<date>.summary.json`,
+which the generator writes alongside the PDF — the email cannot drift away from
+the edition it is attached to, and no HTML is scraped to build it.
+
+It is **opt-in and non-fatal**. With nothing configured it prints a line and
+exits 2; the wrapper treats that as normal, because the PDF on disk is the
+deliverable and email is only delivery. A genuine send failure (exit 1) is
+logged and flips the notification, but the run still counts as a success.
+
+Configuration is plain SMTP, so the provider is config rather than code. Add to
+`~/.config/pokefin/env` (the same file the scraper's credentials live in — it is
+gitignored, and nothing is ever read from the repo):
+
+```sh
+REPORT_EMAIL_TO=you@example.com          # comma-separated for several
+REPORT_EMAIL_FROM=weekly@yourdomain.com  # must be verified with the provider
+SMTP_HOST=smtp-relay.brevo.com           # Brevo
+SMTP_PORT=587                            # 465 switches to implicit TLS
+SMTP_USER=...                            # Brevo: the SMTP login, not your email
+SMTP_PASS=...                            # the SMTP key
+```
+
+For Amazon SES instead, only the first three change:
+
+```sh
+SMTP_HOST=email-smtp.us-east-1.amazonaws.com   # your region
+SMTP_USER=...                                  # SMTP username from IAM
+SMTP_PASS=...                                  # SMTP password from IAM
+```
+
+Two provider gotchas worth knowing before the first Friday: the **From address
+must be verified** with whichever provider you use, and a **new SES account is
+sandboxed** — it can only send to verified recipients until you request
+production access. Both failures surface in `reports/weekly_report.log` with
+the provider's own rejection text.
+
+To test without waiting for Friday:
+
+```sh
+./venv/bin/python send_weekly_email.py reports/pokefin_weekly_latest.pdf \
+  reports/pokefin_weekly_<date>.summary.json
+```
 
 ## 📊 How It Works
 

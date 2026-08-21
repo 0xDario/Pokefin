@@ -40,6 +40,7 @@ echo "$OUTPUT" >> "$LOG"
 # failed run announced last week's file as new — and because the generator
 # exited 0 when Chrome was missing, the success branch fired.
 PDF=$(printf '%s\n' "$OUTPUT" | sed -n 's/^REPORT_PDF=//p' | tail -1)
+SUMMARY=$(printf '%s\n' "$OUTPUT" | sed -n 's/^REPORT_SUMMARY=//p' | tail -1)
 
 # Desktop notification where one exists; the log is the record everywhere else.
 # The Linux scraper host has neither osascript nor a session bus under cron, so
@@ -55,7 +56,19 @@ notify() {  # notify <subtitle> <message> <macos-sound>
 if [ $STATUS -eq 0 ] && [ -n "$PDF" ] && [ -f "$PDF" ]; then
   NAME=$(basename "$PDF")
   echo "OK -> $NAME" >> "$LOG"
-  notify "New investment report generated" "$NAME is ready in reports/" "Glass"
+
+  # Delivery, not generation: the PDF on disk is the deliverable and already
+  # exists by now, so a mail failure is logged and the run still counts as a
+  # success. Exit 2 means email was never configured, which is not a problem
+  # to report every week.
+  MAIL_OUT=$("$PY" "$REPO/send_weekly_email.py" "$PDF" "$SUMMARY" 2>&1)
+  MAIL_STATUS=$?
+  echo "$MAIL_OUT" >> "$LOG"
+  if [ $MAIL_STATUS -eq 1 ]; then
+    notify "Report ready, email failed" "$NAME is in reports/ — see the log" "Basso"
+  else
+    notify "New investment report generated" "$NAME is ready in reports/" "Glass"
+  fi
 else
   echo "FAILED (status $STATUS, pdf='${PDF:-none}')" >> "$LOG"
   notify "Error" "Generation failed — see reports/weekly_report.log" "Basso"
