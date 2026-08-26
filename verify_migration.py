@@ -25,12 +25,17 @@ intent. This does.
 
 WHAT IT COMPARES
 ----------------
-functions    Body, plus the four things a body cannot carry: SECURITY
-             DEFINER, the SET search_path pin, volatility, and argument count
-             (which also picks the right overload). The first two are the ones
-             that vanish quietly - DROP+CREATE discards both, and a trigger
-             that became SECURITY INVOKER has an identical body and no
-             privileges.
+functions    Body, plus what a body cannot carry: SECURITY DEFINER, the SET
+             search_path pin, volatility, and the argument signature. The
+             first two are the ones that vanish quietly - DROP+CREATE
+             discards both, and a trigger that became SECURITY INVOKER has an
+             identical body and no privileges. The signature is compared
+             against pg_get_function_identity_arguments rather than by
+             argument count alone, which could not tell f(text) from
+             f(integer) and would certify one as the other. Quoted
+             identifiers in the body are compared separately and verbatim,
+             since the hash lowercases everything and "UserID" and "userid"
+             are different columns.
 indexes      Definition rather than name: CREATE INDEX IF NOT EXISTS is a
              no-op against an index already holding the name with different
              columns, so a name-only check certifies exactly the drift worth
@@ -75,7 +80,18 @@ under NOT VERIFIED; or the parser could not read it, which is refused by name.
 The exit code says which: 0 everything verified, 1 something refused, 2
 nothing verifiable at all, 3 verified what it could with the rest listed.
 
-Return types and argument names are not compared (only the count).
+Return types are not compared. Argument names and types are, in the dialect
+pg_get_function_identity_arguments speaks - which is why the file's spellings
+are mapped (INT to integer, VARCHAR to character varying, and so on). A
+signature this could not translate is reported as a difference and names both
+sides, rather than being fed to to_regprocedure, which raises on a type it
+cannot parse and would take every other check in the query down with it.
+
+Index parentheses are dropped so that Postgres's own re-parenthesising does
+not read as drift, which means grouping is not compared. With one binary
+operator that costs nothing; with two, ((a+b)*c) and (a+(b*c)) would flatten
+together, so an expression or predicate carrying more than one is refused
+rather than certified.
 
 Index definitions keep their literals: layout is stripped only outside them,
 and because lower() cannot be applied selectively in SQL the literals are also
@@ -95,8 +111,10 @@ stores the unescaped form in prosrc.
 Refused rather than guessed at: a nested dollar-quoted literal or a block
 comment inside a body (the Python and Postgres normalisations could not be
 guaranteed to agree on either), an escape-string body, a column-level grant, a
-grantee that resolves at apply time such as CURRENT_USER, and any statement
-the parser does not recognise.
+grantee that resolves at apply time such as CURRENT_USER, SET ... FROM CURRENT
+(the value is whatever was current when it was applied), an index expression or
+predicate with more than one binary operator, and any statement the parser does
+not recognise.
 
 An expectation comes from the file you pass. If a *later* migration alters an
 object, verify against that later file - this reports drift from the file it
@@ -158,6 +176,16 @@ NORMALIZE_INDEX_SQL = (
     "'(''[^'']*'')|[\\s()]', '\\1', 'g')"
 )
 
+# Built here rather than inline in the query's f-string, where \n and \1 would
+# be read as Python escapes and silently produce a newline and a chr(1) - the
+# regex would then strip every comment marker's replacement and match nothing.
+BODY_IDENTS_SQL = (
+    "(SELECT coalesce(string_agg(m[1], '|' ORDER BY n), '') "
+    "FROM regexp_matches(regexp_replace(p.prosrc, "
+    "'(''[^'']*'')|--[^\\n]*', '\\1', 'g'), '\"[^\"]*\"', 'g') "
+    "WITH ORDINALITY AS t(m, n))"
+)
+
 INDEX_LITERALS_SQL = (
     "(SELECT coalesce(string_agg(m[1], '|' ORDER BY n), '') "
     "FROM regexp_matches(" + INDEX_TAIL_SQL + ", '''[^'']*''', 'g') "
@@ -169,6 +197,12 @@ VOLATILITY = {"immutable": "i", "stable": "s", "volatile": "v"}
 # REVOKE ALL on a function can only mean EXECUTE; on a table it means the lot.
 TABLE_PRIVILEGES = ("SELECT", "INSERT", "UPDATE", "DELETE", "TRUNCATE",
                     "REFERENCES", "TRIGGER")
+
+# Keywords that end a SET clause by starting the next one, so a value is not
+# read past the end of its own clause.
+NEXT_CLAUSE = re.compile(
+    r"\b(AS|LANGUAGE|SECURITY|SET|RETURNS|IMMUTABLE|STABLE|VOLATILE|STRICT"
+    r"|CALLED|COST|ROWS|PARALLEL|LEAKPROOF|WINDOW|TRANSFORM|SUPPORT)\b", re.I)
 
 # Grantees that look like identifiers but are resolved at apply time. PUBLIC is
 # absent deliberately: it is a real grantee here, with its own catalogue check.
@@ -207,6 +241,72 @@ def literals_of(text: str) -> str:
     are different indexes and must not normalise together.
     """
     return "|".join(re.findall(r"'[^']*'", text))
+
+
+def collapse_space_outside_literals(text: str) -> str:
+    """Runs of whitespace become one space - except inside a literal, where
+    'in  progress' and 'in progress' are different values."""
+    return re.sub(r"('[^']*')|\s+", lambda m: m.group(1) or " ", text)
+
+
+def quoted_idents(text: str) -> str:
+    """Double-quoted identifiers, verbatim and in order.
+
+    Compared separately because the body hash lowercases everything and SQL
+    has no selective lower(): "UserID" and "userid" are different columns and
+    must not hash the same.
+    """
+    return "|".join(re.findall(r'"[^"]*"', text))
+
+
+# Spellings Postgres accepts but never renders back. Compared against
+# pg_get_function_identity_arguments, so the file side has to speak its dialect.
+TYPE_ALIASES = {
+    "int": "integer", "int4": "integer", "int2": "smallint",
+    "int8": "bigint", "float4": "real", "float8": "double precision",
+    "bool": "boolean", "varchar": "character varying", "char": "character",
+    "decimal": "numeric", "timestamptz": "timestamp with time zone",
+    "timestamp": "timestamp without time zone", "timetz": "time with time zone",
+    "time": "time without time zone",
+}
+
+# Two or more binary operators mean the parentheses carry meaning, and this
+# comparison drops them: ((a+b)*c) and (a+(b*c)) would both flatten to a+b*c.
+BINARY_OPERATORS = re.compile(r"(?<![<>!])(\+|-|\*|/|%|\|\||\bAND\b|\bOR\b)",
+                              re.I)
+
+
+def has_ambiguous_grouping(text: str) -> bool:
+    bare = re.sub(r"'[^']*'", "", text)
+    return len(BINARY_OPERATORS.findall(bare)) >= 2
+
+
+def canon_signature(arglist: str) -> str | None:
+    """
+    The file's argument list in the dialect pg_get_function_identity_arguments
+    speaks, or None when the file declares none.
+
+    Argument count alone cannot tell f(text) from f(integer), so a migration
+    expecting one could be certified by the other. Identity arguments are used
+    rather than to_regprocedure because a signature this could not parse would
+    make to_regprocedure raise and take every other check in the query with it;
+    a mismatch here is merely reported, and names the difference.
+    """
+    args = []
+    for arg in split_top_level(arglist):
+        arg = re.split(r"\bDEFAULT\b|=", arg, maxsplit=1, flags=re.I)[0].strip()
+        mode = re.match(r"(IN|OUT|INOUT|VARIADIC)\s+", arg, re.I)
+        if mode:
+            arg = arg[mode.end():].strip()
+            if mode.group(1).upper() == "OUT":
+                continue          # identity arguments list only inputs
+            if mode.group(1).upper() != "IN":
+                arg = mode.group(1).lower() + " " + arg
+        arg = re.sub(r"\s+", " ", arg.strip().lower())
+        for alias, canonical in TYPE_ALIASES.items():
+            arg = re.sub(rf"\b{alias}\b(?!\s*\w)", canonical, arg)
+        args.append(arg)
+    return ", ".join(args) if args else None
 
 
 def lower_outside_literals(text: str) -> str:
@@ -357,13 +457,14 @@ def canon_index_columns(cols: str) -> str:
     """
     out = []
     for col in split_top_level(cols):
-        col = re.sub(r"\s+", " ", lower_outside_literals(col.strip()))
+        col = collapse_space_outside_literals(
+            lower_outside_literals(col.strip()))
         col = re.sub(r"\basc\b", "", col).strip()
         if re.search(r"\bdesc\b", col):
             col = re.sub(r"\bnulls first\b", "", col)
         else:
             col = re.sub(r"\bnulls last\b", "", col)
-        out.append(re.sub(r"\s+", " ", col).strip())
+        out.append(collapse_space_outside_literals(col).strip())
     return ", ".join(out)
 
 
@@ -391,19 +492,24 @@ def parse_settings(masked_text: str, source: str) -> list[tuple[str, str]]:
     build a proconfig no correctly deployed function could ever match.
     """
     settings: list[tuple[str, str]] = []
-    for match in re.finditer(r"\bSET\s+(\w+)\s*=", masked_text, re.I):
+    for match in re.finditer(r"\bSET\s+(\w+)\s*(?:=|\bTO\b)", masked_text, re.I):
         key = match.group(1).lower()
-        # The value runs to the first newline or semicolon. Both are looked for
-        # in the masked copy, where a literal is blank, so a semicolon inside
-        # the value cannot cut it short - and the extent must be found this way
-        # rather than by matching the value itself, since against a blanked
-        # literal a trailing `\s*(...)` would backtrack onto the blanks and
-        # capture a single space.
+        # The value runs to the first newline, semicolon, or keyword that
+        # begins another clause - `SET search_path TO public AS $$` on one line
+        # would otherwise read as the value "public AS". All three are looked
+        # for in the masked copy, where a literal is blank, so a semicolon
+        # inside the value cannot cut it short; and the extent must be found
+        # this way rather than by matching the value itself, since against a
+        # blanked literal a trailing `\s*(...)` would backtrack onto the blanks
+        # and capture a single space.
         end = len(masked_text)
         for terminator in ("\n", ";"):
             found = masked_text.find(terminator, match.end())
             if found != -1:
                 end = min(end, found)
+        clause = NEXT_CLAUSE.search(masked_text, match.end(), end)
+        if clause:
+            end = clause.start()
         value = source[match.end():end].strip().rstrip(";")
         settings = [entry for entry in settings if entry[0] != key]
         settings.append((key, value))
@@ -422,7 +528,8 @@ def render_settings(settings: list[tuple[str, str]]) -> str | None:
     return re.sub(r"[\s()']", "", joined.lower()) or None
 
 
-def parse_functions(sql: str, masked: str, spans, out: Migration) -> None:
+def parse_functions(sql: str, masked: str, spans, out: Migration,
+                    first: int) -> None:
     for match in re.finditer(
         r"CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+(?:public\.)?(\w+)\s*\(",
         masked, re.I,
@@ -484,13 +591,32 @@ def parse_functions(sql: str, masked: str, spans, out: Migration) -> None:
         stop = stmt_end if stmt_end > 0 else len(masked)
         header = masked[args_end:body_start] + " " + masked[body_end:stop]
         header_src = sql[args_end:body_start] + " " + sql[body_end:stop]
+        if re.search(r"\bSET\s+\w+\s+FROM\s+CURRENT\b", header, re.I):
+            out.refused.append(
+                f"{name}: SET ... FROM CURRENT captures the value at apply "
+                "time, which cannot be predicted from the file")
+            continue
+
         options = parse_options(header, header_src)
-        out.functions.append({
+        entry = {
             "name": name,
             "body": body_md5(text),
+            # Double-quoted names survive the lowercasing that the body hash
+            # applies, so they are compared on their own, verbatim.
+            "idents": quoted_idents(STRIP_COMMENTS[0].sub(STRIP_COMMENTS[1], text)),
             "nargs": len(split_top_level(arglist)),
+            "signature": canon_signature(sql[match.end():args_end - 1]),
             **options,
-        })
+        }
+        # A file that CREATE OR REPLACEs the same signature twice leaves only
+        # the last body deployed, so an expectation for the earlier one could
+        # never be satisfied. The later definition supersedes it.
+        for previous in out.functions[first:]:
+            if (previous["name"] == entry["name"]
+                    and previous["nargs"] == entry["nargs"]):
+                out.functions.remove(previous)
+                break
+        out.functions.append(entry)
 
 
 def parse_indexes(sql: str, masked: str, out: Migration) -> None:
@@ -510,9 +636,25 @@ def parse_indexes(sql: str, masked: str, out: Migration) -> None:
         where = re.search(r"\bWHERE\b(.*)$", tail, re.S | re.I)
 
         method = (match.group(4) or "btree").lower()
-        definition = f"using {method} ({canon_index_columns(sql[match.end():cols_end - 1])})"
+        columns = sql[match.end():cols_end - 1]
+        definition = f"using {method} ({canon_index_columns(columns)})"
         if where:
-            definition += " where " + re.sub(r"\s+", " ", where.group(1)).strip()
+            # Literal-aware, or 'in  progress' collapses onto 'in progress'
+            # before the literal-preserving normalisation ever sees it.
+            definition += " where " + collapse_space_outside_literals(
+                where.group(1)).strip()
+
+        # Parentheses are dropped so that Postgres's own re-parenthesising does
+        # not read as drift, which means grouping is not compared. With one
+        # binary operator that costs nothing; with two, ((a+b)*c) and (a+(b*c))
+        # flatten together and a wrong index would report OK.
+        if has_ambiguous_grouping(columns) or (where and
+                                               has_ambiguous_grouping(where.group(1))):
+            out.refused.append(
+                f"{match.group(2).lower()}: expression or predicate has more "
+                "than one binary operator, so parenthesis-blind comparison "
+                "could not tell two groupings apart")
+            continue
         out.indexes.append({
             # Unquoted identifiers are folded by the server, so the expectation
             # has to be folded too or a CREATE INDEX MixedCase reports MISSING.
@@ -733,7 +875,7 @@ def parse(sql: str, out: Migration, src: str = "") -> None:
     out.hits = set()
     spans = lex(sql)
     masked = mask(sql, spans)
-    parse_functions(sql, masked, spans, out)
+    parse_functions(sql, masked, spans, out, before["functions"])
     parse_indexes(sql, masked, out)
     parse_privileges(sql, masked, out)
     parse_alter_function(sql, masked, out, before["functions"])
@@ -755,12 +897,14 @@ def build_query(m: Migration) -> str:
 
     if m.functions:
         values = ",\n    ".join(
-            "({}, {}, {}, {}, {}, {}, {}, {})".format(
+            "({}, {}, {}, {}, {}, {}, {}, {}, {}, {})".format(
                 sql_str(f["src"]), sql_str(f["name"]), sql_str(f["body"]),
                 sql_str(f["secdef"]), sql_str(f["lang"]), sql_str(f["volatile"]),
-                sql_str(f["config"]), sql_str(f["nargs"]))
+                sql_str(f["config"]), sql_str(f["nargs"]), sql_str(f["idents"]),
+                sql_str(f["signature"]))
             for f in m.functions)
-        parts.append(f"""fn_expected(src, name, body, secdef, lang, volatile, config, nargs) AS (
+        parts.append(f"""fn_expected(src, name, body, secdef, lang, volatile, config, nargs,
+            idents, signature) AS (
   VALUES
     {values}
 ),
@@ -772,7 +916,11 @@ fn_actual AS (
          p.provolatile::text AS volatile,
          nullif(regexp_replace(lower(array_to_string(p.proconfig, ',')),
                                '[[:space:]()'']', '', 'g'), '') AS config,
-         p.pronargs::int AS nargs
+         p.pronargs::int AS nargs,
+         {BODY_IDENTS_SQL} AS idents,
+         nullif(regexp_replace(
+                  lower(pg_get_function_identity_arguments(p.oid)),
+                  '[[:space:]]+', ' ', 'g'), '') AS signature
   FROM pg_proc p
   JOIN pg_namespace n ON n.oid = p.pronamespace
   JOIN pg_language l ON l.oid = p.prolang
@@ -784,11 +932,19 @@ fn_check AS (
               WHEN a.body = e.body AND a.secdef = e.secdef
                AND a.volatile = e.volatile AND a.nargs = e.nargs
                AND a.config IS NOT DISTINCT FROM e.config
+               AND a.idents = e.idents
+               AND a.signature IS NOT DISTINCT FROM e.signature
                AND (e.lang IS NULL OR a.lang = e.lang)
               THEN 'OK' ELSE 'MISMATCH' END AS status,
          CASE WHEN a.name IS NULL THEN '' ELSE
          coalesce(nullif(concat_ws(', ',
            CASE WHEN a.body IS DISTINCT FROM e.body THEN 'body' END,
+           CASE WHEN a.body = e.body AND a.idents IS DISTINCT FROM e.idents
+                THEN 'quoted identifiers differ only in case (want '
+                     || e.idents || ', got ' || a.idents || ')' END,
+           CASE WHEN a.signature IS DISTINCT FROM e.signature
+                THEN 'signature (want ' || coalesce(e.signature, 'none')
+                     || ', got ' || coalesce(a.signature, 'none') || ')' END,
            CASE WHEN a.secdef IS DISTINCT FROM e.secdef
                 THEN 'security (want ' || CASE WHEN e.secdef THEN 'definer'
                                                ELSE 'invoker' END || ')' END,
@@ -1025,7 +1181,8 @@ def main(argv: list[str]) -> int:
         return 2
 
     for f in m.functions:
-        print(f"-- function {f['name']}({f['nargs']} args): body {f['body']}, "
+        print(f"-- function {f['name']}({f['signature'] or ''}): "
+              f"body {f['body']}, "
               f"{'security definer' if f['secdef'] else 'security invoker'}, "
               f"{f['lang'] or 'any language'}, volatility {f['volatile']}, "
               f"config {f['config'] or 'none'}", file=sys.stderr)

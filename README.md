@@ -319,7 +319,7 @@ What it checks, and why each is there rather than just the body:
 
 | | |
 |---|---|
-| **functions** | Body, `SECURITY DEFINER`, the `SET search_path` pin, volatility, argument count. A `DROP`+`CREATE` discards the first two, and a trigger that became `SECURITY INVOKER` has an identical body and no privileges. |
+| **functions** | Body, `SECURITY DEFINER`, the `SET search_path` pin, volatility, and the argument signature. A `DROP`+`CREATE` discards the first two, and a trigger that became `SECURITY INVOKER` has an identical body and no privileges. The signature is compared against `pg_get_function_identity_arguments`, not by argument count — count alone cannot tell `f(text)` from `f(integer)`. Quoted identifiers in the body are compared verbatim, since the hash lowercases everything and `"UserID"` ≠ `"userid"`. |
 | **indexes** | Definition, not name. `CREATE INDEX IF NOT EXISTS` is a *no-op* against an index already holding the name with different columns, so a name-only check certifies exactly the drift worth catching. Columns, ordering, method, uniqueness, partial predicate, and validity — an index left `INVALID` by an interrupted `CONCURRENTLY` build exists, is named correctly, and is ignored by the planner. |
 | **privileges** | `GRANT`/`REVOKE` on functions and tables, as *effective* access. Revoking from `anon` while `PUBLIC` still holds the privilege changes nothing, and that reads as `MISMATCH` here. |
 | **config** | Standalone `ALTER FUNCTION ... SET`, so a `search_path` hardening migration that touches no function body is still verifiable. |
@@ -370,9 +370,19 @@ compared verbatim. Otherwise `WHERE status = 'ACTIVE'` and `'active'` normalise
 together, as do `'in progress'` and `'inprogress'`, and a wrong index reports
 `OK`.
 
-Return types and argument names are not compared, only the count. Function
-bodies remain blind to a change confined to a literal's case or internal
-spacing.
+Return types are not compared. Argument names and types are, in the dialect
+`pg_get_function_identity_arguments` speaks — which is why the file's spellings
+are mapped (`INT` → `integer`, `VARCHAR` → `character varying`). A signature it
+could not translate is reported as a difference naming both sides, rather than
+being handed to `to_regprocedure`, which *raises* on a type it cannot parse and
+would take every other check in the query down with it.
+
+Index parentheses are dropped so Postgres's own re-parenthesising doesn't read
+as drift, which means grouping is not compared. With one binary operator that
+costs nothing; with two, `((a+b)*c)` and `(a+(b*c))` flatten together — so an
+expression or predicate carrying more than one is **refused** rather than
+certified. Function bodies remain blind to a change confined to a literal's
+case or internal spacing.
 
 Anything it cannot read faithfully is **refused by name**, printed, and the
 exit code is non-zero — nothing is silently skipped, because a skip in a
