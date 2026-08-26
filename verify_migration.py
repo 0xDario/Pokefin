@@ -46,6 +46,7 @@ privileges   GRANT and REVOKE on functions and tables, as *effective* access -
 config       Standalone ALTER FUNCTION ... SET, so a search_path hardening
              migration that touches no function body is still verifiable.
 roles        ALTER ROLE ... SET, against pg_roles.rolconfig.
+RLS          ALTER TABLE ... ENABLE/DISABLE ROW LEVEL SECURITY.
 
 An ALTER and a CREATE assert different things, so they are compared
 differently. ALTER FUNCTION ... SET and ALTER ROLE ... SET name one setting
@@ -59,7 +60,6 @@ knowing about, on a SECURITY DEFINER function especially.
 Unquoted identifiers are folded to lower case, because the server folds them
 too and CREATE FUNCTION RebuildCache would otherwise report MISSING. A quoted
 object name is not parsed at all and lands in the refused pile.
-RLS          ALTER TABLE ... ENABLE/DISABLE ROW LEVEL SECURITY.
 
 EVERY STATEMENT IS ACCOUNTED FOR
 --------------------------------
