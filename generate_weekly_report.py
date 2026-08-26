@@ -105,6 +105,21 @@ RETRYABLE_SQLSTATE_CLASSES = frozenset({
     "XX",  # internal_error
 })
 
+# PostgREST's own identifiers carry no status once APIError has dropped it, so
+# the transient ones have to be named. Group 0 is connectivity and group X is
+# an internal fault in its database driver; every other group is a request,
+# schema-cache or JWT problem that will fail the same way five times.
+# PGRST003 is the one that matters most in practice: a pool-acquisition
+# timeout, returned as 504, which the client library's own retry does not
+# cover because it only retries 503 and 520.
+RETRYABLE_PGRST_CODES = frozenset({
+    "PGRST000",  # 503 could not connect to the database
+    "PGRST001",  # 503 could not connect, internal error
+    "PGRST002",  # 503 could not connect while building the schema cache
+    "PGRST003",  # 504 timed out waiting for a pool connection
+    "PGRSTX00",  # 500 internal error in the connection library
+})
+
 
 def _http_status(exc: Exception) -> int | None:
     """The HTTP status behind an exception, where one is recoverable."""
@@ -121,12 +136,9 @@ def _http_status(exc: Exception) -> int | None:
     return None
 
 
-def _sqlstate_class(exc: Exception) -> str | None:
-    """The two-character class of a SQLSTATE, e.g. 'XX' of 'XX000'."""
+def _error_code(exc: Exception) -> str | None:
     code = getattr(exc, "code", None)
-    if isinstance(code, str) and len(code) == 5 and code.isalnum():
-        return code[:2].upper()
-    return None
+    return code.strip().upper() if isinstance(code, str) else None
 
 
 def _is_retryable(exc: Exception) -> bool:
@@ -135,7 +147,13 @@ def _is_retryable(exc: Exception) -> bool:
     status = _http_status(exc)
     if status is not None:
         return status == 429 or 500 <= status < 600
-    return _sqlstate_class(exc) in RETRYABLE_SQLSTATE_CLASSES
+    code = _error_code(exc)
+    if code is None:
+        return False
+    if code.startswith("PGRST"):
+        return code in RETRYABLE_PGRST_CODES
+    # A SQLSTATE is five characters; its first two are the condition class.
+    return len(code) == 5 and code[:2] in RETRYABLE_SQLSTATE_CLASSES
 
 
 def fetch_page(sb, table, columns, order_col, start, page):

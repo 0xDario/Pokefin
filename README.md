@@ -164,9 +164,10 @@ python generate_weekly_report.py   # writes reports/pokefin_weekly_<date>.{html,
 The full-table fetch is retried: `product_price_history` is ~141k rows at 1000
 a request, so a run is ~142 sequential calls and a single reset used to cost
 the whole edition — the 2026-08-14 report was lost exactly that way. Transient
-transport faults, 429 and 5xx are retried with exponential backoff; a 4xx is
-not, since a bad request fails identically five times. If every attempt is
-exhausted the exception propagates rather than returning a partial history,
+transport faults, 429, 5xx and PostgREST's own connection-group errors are
+retried with exponential backoff; a 4xx is not, since a bad request fails
+identically five times. If every attempt is exhausted the exception
+propagates rather than returning a partial history,
 because half a history makes a wrong newspaper rather than an obviously
 missing one.
 
@@ -176,8 +177,16 @@ HTTP status, so its `code` is one of two unrelated things depending on the
 response body: the HTTP status as an int when the body is not JSON, or a
 PostgreSQL `SQLSTATE` / PostgREST identifier when it is — and PostgREST
 *does* return JSON for a 500. Reading one as the other silently classifies
-every server-side failure as permanent. The library retries on its own, but
-only 503 and 520 on GET, so 500, 502 and 504 arrive here unretried.
+every server-side failure as permanent.
+
+A PostgREST identifier carries no status at all once `APIError` has dropped
+it, so the transient ones are named explicitly: group 0 is connectivity
+(`PGRST000`–`PGRST003`) and `PGRSTX00` is a fault in its database driver;
+every other group is a request, schema-cache or JWT problem that will fail the
+same way five times. `PGRST003` matters most in practice — a pool-acquisition
+timeout, returned as **504**, which the client library's own retry does not
+cover because it only retries 503 and 520 on GET. 500, 502 and 504 all arrive
+here unretried.
 
 Two things it needs:
 
@@ -301,38 +310,49 @@ python verify_migration.py migrations/0023_price_freshness_guard.sql
 ```
 
 That prints one SQL statement. Run it (SQL editor, psql, or an agent's
-`execute_sql`) and every row must say `OK`; `MISMATCH` means the deployed body
-differs from the file and `MISSING` means the object is not there at all.
+`execute_sql`) and every row must say `OK`; `MISMATCH` means the deployed
+object differs from the file and names the facet, `MISSING` means it is not
+there at all. Pass several files — `migrations/*.sql` works — and each row is
+labelled with the file it came from. Needs no database credentials of its own.
 
-It works by hashing the function body from the file and having Postgres hash
-its own `pg_proc.prosrc` the same way — both sides stripped of `--` comments,
-whitespace-collapsed, freed of the spaces beside parens and commas, and
-lowercased, so reworded comments and reindentation do not register but a
-missing clause does. Needs no database credentials of its own.
+What it checks, and why each is there rather than just the body:
 
-A body alone is not a function, so four more facets come from `pg_proc`:
-`SECURITY DEFINER`, the `SET search_path` pin, volatility, and the argument
-count (which also picks the right overload). The first two are the ones that go
-missing quietly — a `DROP`+`CREATE` discards both, and a trigger that became
-`SECURITY INVOKER` has an identical body and no privileges.
+| | |
+|---|---|
+| **functions** | Body, `SECURITY DEFINER`, the `SET search_path` pin, volatility, argument count. A `DROP`+`CREATE` discards the first two, and a trigger that became `SECURITY INVOKER` has an identical body and no privileges. |
+| **indexes** | Definition, not name. `CREATE INDEX IF NOT EXISTS` is a *no-op* against an index already holding the name with different columns, so a name-only check certifies exactly the drift worth catching. Columns, ordering, method, uniqueness, partial predicate, and validity — an index left `INVALID` by an interrupted `CONCURRENTLY` build exists, is named correctly, and is ignored by the planner. |
+| **privileges** | `GRANT`/`REVOKE` on functions and tables, as *effective* access. Revoking from `anon` while `PUBLIC` still holds the privilege changes nothing, and that reads as `MISMATCH` here. |
+| **config** | Standalone `ALTER FUNCTION ... SET`, so a `search_path` hardening migration that touches no function body is still verifiable. |
+| **RLS** | `ALTER TABLE ... ENABLE/DISABLE ROW LEVEL SECURITY`. |
 
-Indexes are compared by definition, not by name. `CREATE INDEX IF NOT EXISTS`
-is a *no-op* against an index that already holds the name with different
-columns, so checking only that the name exists would certify exactly the drift
-worth catching. Columns, ordering, method, uniqueness, the partial predicate
-and validity are all compared — an index left `INVALID` by an interrupted
-`CONCURRENTLY` build exists, is named correctly, and is ignored by the planner.
+Bodies are compared by hashing the file's text and having Postgres hash its own
+`pg_proc.prosrc` the same way — both stripped of `--` comments, whitespace
+collapsed, spaces beside parens and commas removed, lowercased. The comment
+stripping respects single-quoted literals, so a body containing `'prefix--one'`
+is not truncated at the marker and cannot hash the same as one containing
+`'prefix--two'`.
 
-What it does **not** cover: `GRANT`/`REVOKE` — a `DROP`+`CREATE` discards the
-ACL too, so verify those by hand whenever a migration drops a function — plus
-return types, argument names, triggers, RLS policies and data migrations.
-Being blind to formatting costs a little precision inside string literals: the
-comparison lowercases and removes whitespace next to punctuation, so a change
-confined to the case or internal spacing of a literal would not be flagged.
+**It does not cover** `CREATE POLICY`, constraints, triggers, column
+definitions or data migrations. A migration made only of those — `0008` is the
+one in this repo — prints no query and exits 2, rather than printing something
+that would look reassuring. Return types and argument names are not compared
+either, only the count. Being blind to formatting costs a little precision
+inside string literals: the comparison lowercases and removes whitespace next
+to punctuation, so a change confined to a literal's case or internal spacing
+is invisible.
+
+Two constructs are **refused by name** rather than guessed at, because the
+Python and Postgres normalisations could not be guaranteed to agree on them: a
+nested dollar-quoted literal inside a body, and a block comment. So is a
+`GRANT`/`REVOKE` the parser could not read — `ON ALL TABLES IN SCHEMA`, for
+instance. Anything refused is printed and the exit code is non-zero; nothing
+is silently skipped.
 
 Expectations come from the file you pass, so when a *later* migration
-redefines an object, verify against that later file — `0002` reports a body
-`MISMATCH` for `delete_my_account` precisely because `0010` redefines it.
+redefines an object, verify against that later file. `0002` reports a body
+`MISMATCH` for `delete_my_account` because `0010` redefines it, and
+`20260506`'s two dropped indexes report `MISSING` because `0014` drops them —
+both correct.
 
 The editor's own trap is worth knowing: it runs **the selected text** when
 there is a selection, so a stray click before Run silently applies a fragment.
