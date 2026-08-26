@@ -28,7 +28,7 @@ WHAT IT COMPARES
 functions    Body, plus the four things a body cannot carry: SECURITY
              DEFINER, the SET search_path pin, volatility, and argument count
              (which also picks the right overload). The first two are the ones
-             that vanish quietly — DROP+CREATE discards both, and a trigger
+             that vanish quietly - DROP+CREATE discards both, and a trigger
              that became SECURITY INVOKER has an identical body and no
              privileges.
 indexes      Definition rather than name: CREATE INDEX IF NOT EXISTS is a
@@ -38,36 +38,49 @@ indexes      Definition rather than name: CREATE INDEX IF NOT EXISTS is a
              predicate and validity. An index left INVALID by an interrupted
              CONCURRENTLY build exists, is named correctly, and is ignored by
              the planner.
-privileges   GRANT and REVOKE on functions and tables, as *effective* access —
+privileges   GRANT and REVOKE on functions and tables, as *effective* access -
              has_function_privilege / has_table_privilege for named roles, and
              the PUBLIC grant itself for PUBLIC. Revoking from anon while
              PUBLIC still holds the privilege changes nothing, and that reads
              as MISMATCH here, which is the point.
 config       Standalone ALTER FUNCTION ... SET, so a search_path hardening
              migration that touches no function body is still verifiable.
+roles        ALTER ROLE ... SET, against pg_roles.rolconfig.
 RLS          ALTER TABLE ... ENABLE/DISABLE ROW LEVEL SECURITY.
 
-WHAT IT DOES NOT COVER
-----------------------
-CREATE POLICY, constraints, triggers, column definitions and data migrations.
-A migration made only of those cannot be verified here, and the script says so
-and exits non-zero rather than printing a query that would look reassuring.
-Return types and argument names are not compared either (only the count).
+EVERY STATEMENT IS ACCOUNTED FOR
+--------------------------------
+The failure this guards against is a partial check that reads as a full one.
+0009 is the example: three statement_timeout guards and three search_path
+pins, of which an earlier revision checked only the pins - every printed row
+said OK while the half the migration is named after had never been looked at.
+
+So each top-level statement now ends up in exactly one of three places. It is
+verified; or it is a kind deliberately out of scope - CREATE POLICY,
+constraints, triggers, column definitions, data - which is counted and printed
+under NOT VERIFIED; or the parser could not read it, which is refused by name.
+The exit code says which: 0 everything verified, 1 something refused, 2
+nothing verifiable at all, 3 verified what it could with the rest listed.
+
+Return types and argument names are not compared (only the count).
 
 Body comparison is deliberately blind to formatting, which costs a little
 precision inside string literals: it is case-insensitive and removes
 whitespace next to parens and commas, so a change confined to a literal's case
 or internal spacing is invisible. Comment stripping, however, does respect
-single-quoted literals — a body containing 'prefix--one' is not truncated at
-the marker, which would otherwise hash identically to 'prefix--two'.
+single-quoted literals - a body containing 'prefix--one' is not truncated at
+the marker, which would otherwise hash identically to 'prefix--two'. A
+single-quoted body has its doubled quotes unescaped first, because Postgres
+stores the unescaped form in prosrc.
 
-Two constructs are refused rather than guessed at, because the Python and
-Postgres normalisations could not be guaranteed to agree on them: a nested
-dollar-quoted literal inside a body, and a block comment. Both are reported by
-name instead of being silently skipped.
+Refused rather than guessed at: a nested dollar-quoted literal or a block
+comment inside a body (the Python and Postgres normalisations could not be
+guaranteed to agree on either), an escape-string body, a column-level grant, a
+grantee that resolves at apply time such as CURRENT_USER, and any statement
+the parser does not recognise.
 
 An expectation comes from the file you pass. If a *later* migration alters an
-object, verify against that later file — this reports drift from the file it
+object, verify against that later file - this reports drift from the file it
 was given, which is the question it was asked.
 """
 
@@ -115,11 +128,21 @@ NORMALIZE_INDEX_SQL = (
     "'^create (unique )?index [^ ]+ on [^ ]+ ', ''), '[\\s()]', '', 'g')"
 )
 
+ROLE_CONFIG_SQL = (
+    "nullif(regexp_replace(lower(array_to_string(rolconfig, ',')), "
+    "'[[:space:]()'']', '', 'g'), '')"
+)
+
 VOLATILITY = {"immutable": "i", "stable": "s", "volatile": "v"}
 
 # REVOKE ALL on a function can only mean EXECUTE; on a table it means the lot.
 TABLE_PRIVILEGES = ("SELECT", "INSERT", "UPDATE", "DELETE", "TRUNCATE",
                     "REFERENCES", "TRIGGER")
+
+# Grantees that look like identifiers but are resolved at apply time. PUBLIC is
+# absent deliberately: it is a real grantee here, with its own catalogue check.
+RESERVED_ROLES = frozenset({"CURRENT_USER", "SESSION_USER", "CURRENT_ROLE",
+                            "GROUP"})
 
 
 def normalize(sql: str) -> str:
@@ -155,29 +178,36 @@ def sql_str(value) -> str:
 # bodies written exactly as `AS $$...$$;` and to treat `--` inside a literal as
 # a comment. One pass that knows what a literal is fixes both, and lets every
 # search below run against code only.
-TOKEN = re.compile(r"'|--|/\*|\$[A-Za-z_][A-Za-z_0-9]*\$|\$\$", re.S)
+TOKEN = re.compile(r"\"|'|--|/\*|\$[A-Za-z_][A-Za-z_0-9]*\$|\$\$", re.S)
 
 
 def lex(sql: str) -> list[tuple[str, int, int]]:
-    """Spans of ('str' | 'line' | 'block' | 'dollar') in source order."""
+    """
+    Spans of ('str' | 'ident' | 'line' | 'block' | 'dollar') in source order.
+
+    Double-quoted identifiers are tracked but not blanked. A policy named
+    "Users can't edit" would otherwise open a string span at the apostrophe
+    and derail every offset after it, yet the identifier itself is code and
+    the callers need to read it.
+    """
     spans, i = [], 0
     while True:
         match = TOKEN.search(sql, i)
         if not match:
             return spans
         start, token = match.start(), match.group()
-        if token == "'":
+        if token in ("'", '"'):
             end = start + 1
             while True:
-                close = sql.find("'", end)
+                close = sql.find(token, end)
                 if close == -1:
                     return spans + [("str", start, len(sql))]
-                if sql[close + 1:close + 2] == "'":  # '' is an escaped quote
+                if sql[close + 1:close + 2] == token:  # doubled is an escape
                     end = close + 2
                     continue
                 end = close + 1
                 break
-            kind = "str"
+            kind = "str" if token == "'" else "ident"
         elif token == "--":
             newline = sql.find("\n", start)
             end = len(sql) if newline == -1 else newline
@@ -197,7 +227,9 @@ def lex(sql: str) -> list[tuple[str, int, int]]:
 def mask(sql: str, spans: list[tuple[str, int, int]]) -> str:
     """sql with every literal and comment blanked, so indexes still line up."""
     out = list(sql)
-    for _, start, end in spans:
+    for kind, start, end in spans:
+        if kind == "ident":   # an identifier is code, not content
+            continue
         for i in range(start, end):
             if out[i] != "\n":       # keep line structure for readability
                 out[i] = " "
@@ -248,11 +280,17 @@ class Migration:
         self.privileges: list[dict] = []
         self.configs: list[dict] = []
         self.rls: list[dict] = []
+        self.roles: list[dict] = []
         self.refused: list[str] = []
+        # Every statement a parser consumed, so the leftovers can be accounted
+        # for instead of vanishing. Reset per file; offsets are file-local.
+        self.hits: set[int] = set()
+        self.unverified: list[str] = []
+
+    KINDS = ("functions", "indexes", "privileges", "configs", "rls", "roles")
 
     def __len__(self) -> int:
-        return (len(self.functions) + len(self.indexes) + len(self.privileges)
-                + len(self.configs) + len(self.rls))
+        return sum(len(getattr(self, k)) for k in self.KINDS)
 
 
 def canon_index_columns(cols: str) -> str:
@@ -301,7 +339,11 @@ def parse_settings(text: str) -> list[tuple[str, str]]:
 
 
 def render_settings(settings: list[tuple[str, str]]) -> str | None:
-    return strip_layout(",".join(f"{k}={v}" for k, v in settings)) or None
+    # ALTER ROLE anon SET statement_timeout = '3s' is stored as
+    # statement_timeout=3s: the quotes are syntax the catalogue does not keep,
+    # so both sides drop them.
+    joined = ",".join(f"{k}={v}" for k, v in settings)
+    return re.sub(r"[\s()']", "", joined.lower()) or None
 
 
 def parse_functions(sql: str, masked: str, spans, out: Migration) -> None:
@@ -309,6 +351,7 @@ def parse_functions(sql: str, masked: str, spans, out: Migration) -> None:
         r"CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+(?:public\.)?(\w+)\s*\(",
         masked, re.I,
     ):
+        out.hits.add(match.start())
         name = match.group(1)
         args_end = match_paren(masked, match.end() - 1)
         if args_end < 0:
@@ -377,6 +420,7 @@ def parse_indexes(sql: str, masked: str, out: Migration) -> None:
         r"(?:USING\s+(\w+)\s*)?\(",
         masked, re.I,
     ):
+        out.hits.add(match.start())
         cols_end = match_paren(masked, match.end() - 1)
         if cols_end < 0:
             out.refused.append(f"{match.group(2)}: unterminated column list")
@@ -412,6 +456,7 @@ def parse_privileges(sql: str, masked: str, out: Migration) -> None:
         masked, re.S | re.I,
     ):
         seen.add(match.start())
+        out.hits.add(match.start())
         action, privs, on_kind, name, args, roles = match.groups()
         is_function = bool(on_kind and on_kind.strip().upper() == "FUNCTION")
         granted = action.upper() == "GRANT"
@@ -434,9 +479,26 @@ def parse_privileges(sql: str, masked: str, out: Migration) -> None:
                     + (repr(unsupported[0]) if unsupported else "(none parsed)")
                     + " in: " + re.sub(r"\s+", " ", match.group()).strip()[:90])
                 continue
-        for role in (r.strip().lower() for r in roles.split(",")):
-            if not re.fullmatch(r"\w+", role):
-                continue
+        parsed_roles = []
+        for raw in roles.split(","):
+            raw = raw.strip()
+            quoted = re.fullmatch(r'"((?:[^"]|"")*)"', raw)
+            if quoted:                       # "report-reader" is one role name
+                parsed_roles.append(quoted.group(1).replace('""', '"'))
+            elif re.fullmatch(r"\w+", raw) and raw.upper() not in RESERVED_ROLES:
+                parsed_roles.append(raw.lower())
+            else:
+                # CURRENT_USER resolves at apply time and is not a role name;
+                # taking it literally would look up a role called
+                # "current_user" and report a confident MISSING. Dropping the
+                # token while keeping the statement would check a grant that
+                # was never asserted and skip the one that was.
+                out.refused.append(
+                    f"unreadable role {raw!r} in: "
+                    + re.sub(r"\s+", " ", match.group()).strip()[:90])
+                parsed_roles = []
+                break
+        for role in parsed_roles:
             for priv in wanted:
                 out.privileges.append({
                     "kind": "function" if is_function else "table",
@@ -448,6 +510,7 @@ def parse_privileges(sql: str, masked: str, out: Migration) -> None:
     # checked nothing still prints as if it checked everything.
     for kw in re.finditer(r"\b(GRANT|REVOKE)\b", masked, re.I):
         if kw.start() not in seen:
+            out.hits.add(kw.start())
             line = masked[kw.start():masked.find(";", kw.start())]
             out.refused.append("unparsed privilege statement: "
                                + re.sub(r"\s+", " ", line).strip()[:90])
@@ -469,6 +532,7 @@ def parse_alter_function(sql: str, masked: str, out: Migration,
         r"((?:\s*SET\s+\w+\s*=\s*[^\n;]+)+);",
         masked, re.I,
     ):
+        out.hits.add(match.start())
         name, args = match.group(1), re.sub(r"\s+", " ", match.group(2)).strip()
         nargs = len(split_top_level(args[1:-1]))
         settings = parse_settings(sql[match.start(3):match.end(3)])
@@ -487,25 +551,107 @@ def parse_settings_merge(existing, incoming):
     return merged + incoming
 
 
+def parse_alter_role(sql: str, masked: str, out: Migration) -> None:
+    """
+    ALTER ROLE <role> SET key = value, checked against pg_roles.rolconfig.
+
+    0009 is the migration that made this necessary: three statement_timeout
+    guards and three search_path pins, of which only the pins were checked.
+    Every printed row said OK while half the file - the half the migration is
+    named after - had never been looked at.
+    """
+    for match in re.finditer(
+        r'ALTER\s+ROLE\s+(\w+|"(?:[^"]|"")*")\s*'
+        r'((?:\s*SET\s+\w+\s*=\s*[^\n;]+)+);',
+        masked, re.I,
+    ):
+        out.hits.add(match.start())
+        role = match.group(1).strip()
+        if role.startswith('"'):
+            role = role[1:-1].replace('""', '"')
+        else:
+            role = role.lower()
+        out.roles.append({
+            "role": role,
+            "config": render_settings(parse_settings(sql[match.start(2):
+                                                        match.end(2)])),
+        })
+
+
 def parse_rls(masked: str, out: Migration) -> None:
     for match in re.finditer(
         r"ALTER\s+TABLE\s+(?:public\.)?(\w+)\s+(ENABLE|DISABLE)\s+"
         r"ROW\s+LEVEL\s+SECURITY", masked, re.I,
     ):
+        out.hits.add(match.start())
         out.rls.append({"table": f"public.{match.group(1)}",
                         "want": match.group(2).upper() == "ENABLE"})
 
 
+# Statement kinds this deliberately does not verify. They are counted and
+# reported, never silently dropped: a verifier that checks half a file and
+# prints all-OK is worse than one that checks none of it.
+UNVERIFIABLE = (
+    (r"CREATE\s+(OR\s+REPLACE\s+)?POLICY", "CREATE POLICY"),
+    (r"(DROP|ALTER)\s+POLICY", "DROP/ALTER POLICY"),
+    (r"CREATE\s+(TABLE|SCHEMA|TYPE|SEQUENCE|EXTENSION|DOMAIN)", "CREATE (table/type/etc)"),
+    (r"CREATE\s+(OR\s+REPLACE\s+)?(VIEW|MATERIALIZED\s+VIEW)", "CREATE VIEW"),
+    (r"CREATE\s+(OR\s+REPLACE\s+)?TRIGGER", "CREATE TRIGGER"),
+    (r"DROP\s+(TRIGGER|INDEX|FUNCTION|TABLE|VIEW|TYPE|SEQUENCE)", "DROP object"),
+    (r"ALTER\s+TABLE", "ALTER TABLE (other than RLS enablement)"),
+    (r"COMMENT\s+ON", "COMMENT ON"),
+    (r"(INSERT|UPDATE|DELETE|TRUNCATE)\b", "data statement"),
+    (r"DO\b", "DO block"),
+    (r"(BEGIN|COMMIT|ROLLBACK|SET|RESET|ANALYZE|VACUUM|REFRESH)\b",
+     "session/transaction statement"),
+)
+
+
+def statements(masked: str) -> list[tuple[int, int]]:
+    """Top-level statement spans. Literals and bodies are already blanked,
+    so a semicolon inside one cannot split a statement in half."""
+    spans, i = [], 0
+    while i < len(masked):
+        end = masked.find(";", i)
+        if end == -1:
+            if masked[i:].strip():
+                spans.append((i, len(masked)))
+            break
+        spans.append((i, end + 1))
+        i = end + 1
+    return spans
+
+
+def account_for_statements(masked: str, out: Migration, src: str) -> None:
+    """Every statement is verified, knowingly out of scope, or refused."""
+    for start, end in statements(masked):
+        text = masked[start:end].strip()
+        if not text or text == ";":
+            continue
+        if any(start <= hit < end for hit in out.hits):
+            continue
+        label = next((name for pattern, name in UNVERIFIABLE
+                      if re.match(pattern, text, re.I)), None)
+        if label:
+            out.unverified.append(label)
+        else:
+            out.refused.append(
+                f"unrecognised statement in {src}: "
+                + re.sub(r"\s+", " ", text).strip()[:80])
+
+
 def parse(sql: str, out: Migration, src: str = "") -> None:
-    before = {k: len(getattr(out, k)) for k in
-              ("functions", "indexes", "privileges", "configs", "rls")}
+    before = {k: len(getattr(out, k)) for k in Migration.KINDS}
+    out.hits = set()
     spans = lex(sql)
     masked = mask(sql, spans)
     parse_functions(sql, masked, spans, out)
     parse_indexes(sql, masked, out)
     parse_privileges(sql, masked, out)
     parse_alter_function(sql, masked, out, before["functions"])
+    parse_alter_role(sql, masked, out)
     parse_rls(masked, out)
+    account_for_statements(masked, out, src)
     for fn in out.functions[before["functions"]:]:
         fn["config"] = render_settings(fn["config"])
     for key, start in before.items():
@@ -537,7 +683,7 @@ fn_actual AS (
          l.lanname::text AS lang,
          p.provolatile::text AS volatile,
          nullif(regexp_replace(lower(array_to_string(p.proconfig, ',')),
-                               '[[:space:]()]', '', 'g'), '') AS config,
+                               '[[:space:]()'']', '', 'g'), '') AS config,
          p.pronargs::int AS nargs
   FROM pg_proc p
   JOIN pg_namespace n ON n.oid = p.pronamespace
@@ -689,7 +835,7 @@ cfg_check AS (
   FROM cfg_expected e
   LEFT JOIN LATERAL (
     SELECT nullif(regexp_replace(lower(array_to_string(p.proconfig, ',')),
-                                 '[[:space:]()]', '', 'g'), '') AS config
+                                 '[[:space:]()'']', '', 'g'), '') AS config
     FROM pg_proc p WHERE p.oid = to_regprocedure(e.obj)::oid
   ) a ON true
 )""")
@@ -716,6 +862,31 @@ rls_check AS (
   LEFT JOIN pg_class c ON c.oid = to_regclass(e.tbl)::oid
 )""")
         selects.append("SELECT * FROM rls_check")
+
+    if m.roles:
+        values = ",\n    ".join(
+            "({}, {}, {})".format(sql_str(r["src"]), sql_str(r["role"]),
+                                  sql_str(r["config"]))
+            for r in m.roles)
+        parts.append("""role_expected(src, role, config) AS (
+  VALUES
+    @VALUES@
+),
+role_check AS (
+  SELECT e.src::text AS src, 'role' AS kind, e.role::text AS name,
+         CASE WHEN r.rolname IS NULL THEN 'MISSING'
+              WHEN r.config = e.config THEN 'OK' ELSE 'MISMATCH' END AS status,
+         CASE WHEN r.rolname IS NULL THEN 'role not found'
+              WHEN r.config IS DISTINCT FROM e.config
+              THEN 'want ' || e.config || ', got ' || coalesce(r.config, 'none')
+              ELSE '' END AS detail
+  FROM role_expected e
+  LEFT JOIN LATERAL (
+    SELECT rolname, @NORM@ AS config
+    FROM pg_roles WHERE rolname = e.role
+  ) r ON true
+)""".replace("@VALUES@", values).replace("@NORM@", ROLE_CONFIG_SQL))
+        selects.append("SELECT * FROM role_check")
 
     return ("WITH " + ",\n".join(parts) + "\n" +
             "\nUNION ALL\n".join(selects) +
@@ -766,10 +937,22 @@ def main(argv: list[str]) -> int:
     for r in m.rls:
         print(f"-- rls {r['table']}: "
               f"{'enabled' if r['want'] else 'disabled'}", file=sys.stderr)
+    for r in m.roles:
+        print(f"-- role {r['role']}: {r['config']}", file=sys.stderr)
+
+    if m.unverified:
+        counts: dict[str, int] = {}
+        for label in m.unverified:
+            counts[label] = counts.get(label, 0) + 1
+        print("-- NOT VERIFIED (out of scope, check by hand): "
+              + ", ".join(f"{n} x {label}" for label, n
+                          in sorted(counts.items())), file=sys.stderr)
     print("-- run the statement below; every row must say OK\n", file=sys.stderr)
 
     print(build_query(m))
-    return 1 if m.refused else 0
+    if m.refused:
+        return 1
+    return 3 if m.unverified else 0
 
 
 if __name__ == "__main__":

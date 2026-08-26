@@ -323,6 +323,7 @@ What it checks, and why each is there rather than just the body:
 | **indexes** | Definition, not name. `CREATE INDEX IF NOT EXISTS` is a *no-op* against an index already holding the name with different columns, so a name-only check certifies exactly the drift worth catching. Columns, ordering, method, uniqueness, partial predicate, and validity — an index left `INVALID` by an interrupted `CONCURRENTLY` build exists, is named correctly, and is ignored by the planner. |
 | **privileges** | `GRANT`/`REVOKE` on functions and tables, as *effective* access. Revoking from `anon` while `PUBLIC` still holds the privilege changes nothing, and that reads as `MISMATCH` here. |
 | **config** | Standalone `ALTER FUNCTION ... SET`, so a `search_path` hardening migration that touches no function body is still verifiable. |
+| **roles** | `ALTER ROLE ... SET`, against `pg_roles.rolconfig` — the statement-timeout guards in `0009`. |
 | **RLS** | `ALTER TABLE ... ENABLE/DISABLE ROW LEVEL SECURITY`. |
 
 Bodies are compared by hashing the file's text and having Postgres hash its own
@@ -332,14 +333,29 @@ stripping respects single-quoted literals, so a body containing `'prefix--one'`
 is not truncated at the marker and cannot hash the same as one containing
 `'prefix--two'`.
 
-**It does not cover** `CREATE POLICY`, constraints, triggers, column
-definitions or data migrations. A migration made only of those — `0008` is the
-one in this repo — prints no query and exits 2, rather than printing something
-that would look reassuring. Return types and argument names are not compared
-either, only the count. Being blind to formatting costs a little precision
-inside string literals: the comparison lowercases and removes whitespace next
-to punctuation, so a change confined to a literal's case or internal spacing
-is invisible.
+**Every statement is accounted for**, which matters more than any single
+check. The failure to guard against is a partial verification that reads as a
+full one: `0009` is three `statement_timeout` guards and three `search_path`
+pins, and an earlier revision checked only the pins — every printed row said
+`OK` while the half the migration is named after had never been looked at.
+
+So each top-level statement now lands in exactly one of three places. It is
+verified; or it is a kind deliberately out of scope — `CREATE POLICY`,
+constraints, triggers, column definitions, data — which is **counted and
+printed** under `NOT VERIFIED`; or the parser could not read it, and it is
+refused by name. The exit code says which:
+
+| | |
+|---|---|
+| `0` | everything in the file was verified |
+| `1` | something was refused — the parser could not read it |
+| `2` | nothing here is verifiable (`0008`, policies only); no query is printed |
+| `3` | verified what it could; the rest is listed under `NOT VERIFIED` |
+
+Return types and argument names are not compared, only the count. Being blind
+to formatting costs a little precision inside string literals: the comparison
+lowercases and removes whitespace next to punctuation, so a change confined to
+a literal's case or internal spacing is invisible.
 
 Anything it cannot read faithfully is **refused by name**, printed, and the
 exit code is non-zero — nothing is silently skipped, because a skip in a
@@ -347,8 +363,9 @@ verifier reads the same as a pass. That covers a nested dollar-quoted literal
 or a block comment inside a body (the two normalisations could not be
 guaranteed to agree on them), an `E'...'` escape-string body (comparing it
 honestly would need a real decoder), a column-level grant such as
-`GRANT SELECT (email) ON ...`, and a `GRANT`/`REVOKE` the parser could not
-read at all — `ON ALL TABLES IN SCHEMA`, say. A single-quoted body *is*
+`GRANT SELECT (email) ON ...`, a grantee resolved at apply time such as
+`CURRENT_USER`, and a `GRANT`/`REVOKE` the parser could not read at all —
+`ON ALL TABLES IN SCHEMA`, say. A single-quoted body *is*
 supported: its doubled quotes are syntax rather than content, so they are
 unescaped before hashing, and `AS 'SELECT ''x'''` produces the same
 expectation as `AS $$SELECT 'x'$$` — as it must, since Postgres stores the
