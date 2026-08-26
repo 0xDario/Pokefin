@@ -161,6 +161,15 @@ it never writes to the database.
 python generate_weekly_report.py   # writes reports/pokefin_weekly_<date>.{html,pdf}
 ```
 
+The full-table fetch is retried: `product_price_history` is ~141k rows at 1000
+a request, so a run is ~142 sequential calls and a single reset used to cost
+the whole edition — the 2026-08-14 report was lost exactly that way. Transient
+transport faults and 5xx are retried with exponential backoff; a 4xx is not,
+since a bad request fails identically five times. If every attempt is
+exhausted the exception propagates rather than returning a partial history,
+because half a history makes a wrong newspaper rather than an obviously
+missing one.
+
 Two things it needs:
 
 - **Chrome or Chromium on PATH.** The PDF is produced by `--headless
@@ -268,6 +277,39 @@ from-scratch bootstrap and cannot rebuild the database on its own:
 - Not every file is re-runnable: `0003_integrity_constraints.sql` uses bare
   `ALTER TABLE ... ADD CONSTRAINT` and errors on a second run. The rest,
   including `create_box_recipes.sql`, is idempotent.
+
+#### Verify that a migration actually applied
+
+**Do this after every apply.** On 2026-08-13 a migration was applied twice
+through the Supabase SQL editor and reported success both times while the
+database kept running an earlier revision of the same file — the editor said
+OK, the ledger gained rows, and the functions were present and working, just
+not the versions in the repo. It was caught only by reading
+`pg_get_functiondef` by hand.
+
+```bash
+python verify_migration.py migrations/0023_price_freshness_guard.sql
+```
+
+That prints one SQL statement. Run it (SQL editor, psql, or an agent's
+`execute_sql`) and every row must say `OK`; `MISMATCH` means the deployed body
+differs from the file and `MISSING` means the object is not there at all.
+
+It works by hashing the function body from the file and having Postgres hash
+its own `pg_proc.prosrc` the same way — both sides stripped of `--` comments,
+whitespace-collapsed and lowercased, so reworded comments and reindentation do
+not register but a missing clause does. Needs no database credentials of its
+own.
+
+Two things it does **not** cover. `GRANT` and `ALTER FUNCTION ... SET
+search_path` are not checked, which matters because a `DROP`+`CREATE` silently
+discards both — verify those by hand whenever a migration drops a function.
+And because the comparison lowercases, a change confined to the *case* of a
+string literal would not be flagged.
+
+The editor's own trap is worth knowing: it runs **the selected text** when
+there is a selection, so a stray click before Run silently applies a fragment.
+Select all first, or prefer MCP `apply_migration`.
 
 The ordering constraints that matter when applying a *new* migration, or
 replaying a subset:

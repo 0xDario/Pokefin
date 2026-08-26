@@ -24,8 +24,10 @@ import shutil
 import json
 import statistics
 import subprocess
+import time
 from datetime import date, datetime, timedelta, timezone
 
+import httpx
 from supabase import create_client
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -74,18 +76,60 @@ PRICE_STALENESS_TOLERANCE_DAYS = 14
 # --------------------------------------------------------------------------- #
 # Data access
 # --------------------------------------------------------------------------- #
+# One page failing must not cost the whole edition. product_price_history is
+# ~104k rows at 1000 a request, so a full run is 100+ sequential calls and the
+# chance that none of them is reset is not the chance any single one succeeds.
+# The 2026-08-14 edition was lost exactly this way: httpx.ReadError, "Connection
+# reset by peer", partway through the history fetch, and no report that week.
+FETCH_MAX_ATTEMPTS = 5
+FETCH_BACKOFF_SECONDS = 2.0
+
+
+def _is_retryable(exc: Exception) -> bool:
+    """
+    Transient transport faults and 5xx only.
+
+    A 4xx is a bad request or bad credentials and will fail identically five
+    times in a row, so retrying it just turns a clear error into a slow one.
+    """
+    if isinstance(exc, httpx.TransportError):
+        return True
+    code = getattr(exc, "code", None)
+    try:
+        return code is not None and 500 <= int(code) < 600
+    except (TypeError, ValueError):
+        return False
+
+
+def fetch_page(sb, table, columns, order_col, start, page):
+    """One page, retried on transient failure with exponential backoff."""
+    for attempt in range(1, FETCH_MAX_ATTEMPTS + 1):
+        try:
+            resp = (
+                sb.table(table)
+                .select(columns)
+                .order(order_col)
+                .range(start, start + page - 1)
+                .execute()
+            )
+            return resp.data or []
+        except Exception as exc:  # noqa: BLE001 - re-raised below unless retryable
+            if attempt == FETCH_MAX_ATTEMPTS or not _is_retryable(exc):
+                raise
+            delay = FETCH_BACKOFF_SECONDS * (2 ** (attempt - 1))
+            print(f"    {table} rows {start}-{start + page - 1}: "
+                  f"{type(exc).__name__} ({exc}); retry {attempt}"
+                  f"/{FETCH_MAX_ATTEMPTS - 1} in {delay:.0f}s",
+                  file=sys.stderr, flush=True)
+            time.sleep(delay)
+    return []  # unreachable: the loop either returns or raises
+
+
 def fetch_all(sb, table, columns, order_col="id", page=1000):
     """Paginate a table fully (Supabase caps each request at ~1000 rows)."""
     rows, start = [], 0
     while True:
-        resp = (
-            sb.table(table)
-            .select(columns)
-            .order(order_col)
-            .range(start, start + page - 1)
-            .execute()
-        )
-        batch = resp.data or []
+        batch = fetch_page(sb, table, columns, order_col, start, page)
         rows.extend(batch)
         if len(batch) < page:
             break
