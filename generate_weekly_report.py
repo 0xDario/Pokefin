@@ -85,20 +85,57 @@ FETCH_MAX_ATTEMPTS = 5
 FETCH_BACKOFF_SECONDS = 2.0
 
 
-def _is_retryable(exc: Exception) -> bool:
-    """
-    Transient transport faults and 5xx only.
+# 429 and 5xx only, plus transport faults. A 4xx is a bad request or bad
+# credentials and will fail identically five times in a row, so retrying it
+# turns a clear error into a slow one.
+#
+# postgrest-py raises APIError for every non-2xx and throws the HTTP status
+# away, so `code` is whichever of two unrelated things the response body
+# happened to contain: when the body is not JSON, generate_default_error_message
+# puts the HTTP status there as an int; when it IS JSON — which is what
+# PostgREST returns for a 500 — it is a PostgreSQL SQLSTATE ('XX000') or a
+# PostgREST identifier ('PGRST116'). Reading one as the other is why this has
+# to look at both. The library retries on its own, but only 503 and 520 on GET
+# (send_with_retry / should_retry, MAX_RETRIES=3), so 500, 502 and 504 reach us
+# unretried.
+RETRYABLE_SQLSTATE_CLASSES = frozenset({
+    "08",  # connection_exception
+    "53",  # insufficient_resources - out of memory, too many connections
+    "57",  # operator_intervention - query_canceled, admin_shutdown
+    "XX",  # internal_error
+})
 
-    A 4xx is a bad request or bad credentials and will fail identically five
-    times in a row, so retrying it just turns a clear error into a slow one.
-    """
+
+def _http_status(exc: Exception) -> int | None:
+    """The HTTP status behind an exception, where one is recoverable."""
+    status = getattr(getattr(exc, "response", None), "status_code", None)
+    if isinstance(status, int):  # httpx.HTTPStatusError, if it ever surfaces
+        return status
+    code = getattr(exc, "code", None)
+    if isinstance(code, int) and not isinstance(code, bool):
+        return code
+    # Length is what separates a status from a SQLSTATE: '500' is three
+    # digits, '08006' and '57014' are five.
+    if isinstance(code, str) and len(code) == 3 and code.isdigit():
+        return int(code)
+    return None
+
+
+def _sqlstate_class(exc: Exception) -> str | None:
+    """The two-character class of a SQLSTATE, e.g. 'XX' of 'XX000'."""
+    code = getattr(exc, "code", None)
+    if isinstance(code, str) and len(code) == 5 and code.isalnum():
+        return code[:2].upper()
+    return None
+
+
+def _is_retryable(exc: Exception) -> bool:
     if isinstance(exc, httpx.TransportError):
         return True
-    code = getattr(exc, "code", None)
-    try:
-        return code is not None and 500 <= int(code) < 600
-    except (TypeError, ValueError):
-        return False
+    status = _http_status(exc)
+    if status is not None:
+        return status == 429 or 500 <= status < 600
+    return _sqlstate_class(exc) in RETRYABLE_SQLSTATE_CLASSES
 
 
 def fetch_page(sb, table, columns, order_col, start, page):

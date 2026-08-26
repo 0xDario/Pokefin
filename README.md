@@ -164,11 +164,20 @@ python generate_weekly_report.py   # writes reports/pokefin_weekly_<date>.{html,
 The full-table fetch is retried: `product_price_history` is ~141k rows at 1000
 a request, so a run is ~142 sequential calls and a single reset used to cost
 the whole edition — the 2026-08-14 report was lost exactly that way. Transient
-transport faults and 5xx are retried with exponential backoff; a 4xx is not,
-since a bad request fails identically five times. If every attempt is
+transport faults, 429 and 5xx are retried with exponential backoff; a 4xx is
+not, since a bad request fails identically five times. If every attempt is
 exhausted the exception propagates rather than returning a partial history,
 because half a history makes a wrong newspaper rather than an obviously
 missing one.
+
+Deciding *which* failures those are takes more care than it looks like it
+should. `postgrest-py` raises `APIError` for every non-2xx and discards the
+HTTP status, so its `code` is one of two unrelated things depending on the
+response body: the HTTP status as an int when the body is not JSON, or a
+PostgreSQL `SQLSTATE` / PostgREST identifier when it is — and PostgREST
+*does* return JSON for a 500. Reading one as the other silently classifies
+every server-side failure as permanent. The library retries on its own, but
+only 503 and 520 on GET, so 500, 502 and 504 arrive here unretried.
 
 Two things it needs:
 
@@ -297,15 +306,33 @@ differs from the file and `MISSING` means the object is not there at all.
 
 It works by hashing the function body from the file and having Postgres hash
 its own `pg_proc.prosrc` the same way — both sides stripped of `--` comments,
-whitespace-collapsed and lowercased, so reworded comments and reindentation do
-not register but a missing clause does. Needs no database credentials of its
-own.
+whitespace-collapsed, freed of the spaces beside parens and commas, and
+lowercased, so reworded comments and reindentation do not register but a
+missing clause does. Needs no database credentials of its own.
 
-Two things it does **not** cover. `GRANT` and `ALTER FUNCTION ... SET
-search_path` are not checked, which matters because a `DROP`+`CREATE` silently
-discards both — verify those by hand whenever a migration drops a function.
-And because the comparison lowercases, a change confined to the *case* of a
-string literal would not be flagged.
+A body alone is not a function, so four more facets come from `pg_proc`:
+`SECURITY DEFINER`, the `SET search_path` pin, volatility, and the argument
+count (which also picks the right overload). The first two are the ones that go
+missing quietly — a `DROP`+`CREATE` discards both, and a trigger that became
+`SECURITY INVOKER` has an identical body and no privileges.
+
+Indexes are compared by definition, not by name. `CREATE INDEX IF NOT EXISTS`
+is a *no-op* against an index that already holds the name with different
+columns, so checking only that the name exists would certify exactly the drift
+worth catching. Columns, ordering, method, uniqueness, the partial predicate
+and validity are all compared — an index left `INVALID` by an interrupted
+`CONCURRENTLY` build exists, is named correctly, and is ignored by the planner.
+
+What it does **not** cover: `GRANT`/`REVOKE` — a `DROP`+`CREATE` discards the
+ACL too, so verify those by hand whenever a migration drops a function — plus
+return types, argument names, triggers, RLS policies and data migrations.
+Being blind to formatting costs a little precision inside string literals: the
+comparison lowercases and removes whitespace next to punctuation, so a change
+confined to the case or internal spacing of a literal would not be flagged.
+
+Expectations come from the file you pass, so when a *later* migration
+redefines an object, verify against that later file — `0002` reports a body
+`MISMATCH` for `delete_my_account` precisely because `0010` redefines it.
 
 The editor's own trap is worth knowing: it runs **the selected text** when
 there is a selection, so a stray click before Run silently applies a fragment.
