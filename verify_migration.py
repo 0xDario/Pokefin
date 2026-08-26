@@ -279,13 +279,29 @@ def parse_options(header: str) -> dict:
     """LANGUAGE / volatility / SECURITY / SET, wherever they sit."""
     lang = re.search(r"\bLANGUAGE\s+(\w+)", header, re.I)
     volatile = re.search(r"\b(IMMUTABLE|STABLE|VOLATILE)\b", header, re.I)
-    config = re.findall(r"\bSET\s+(\w+)\s*=\s*([^\n;]+)", header, re.I)
     return {
         "lang": lang.group(1).lower() if lang else None,
         "volatile": VOLATILITY[volatile.group(1).lower()] if volatile else "v",
         "secdef": bool(re.search(r"\bSECURITY\s+DEFINER\b", header, re.I)),
-        "config": [f"{k.lower()}={v.strip().rstrip(';')}" for k, v in config],
+        "config": parse_settings(header),
     }
+
+
+def parse_settings(text: str) -> list[tuple[str, str]]:
+    """(key, value) per SET, a later assignment replacing an earlier one.
+
+    Postgres replaces a setting rather than accumulating it, so appending
+    would build a proconfig no correctly deployed function could ever match.
+    """
+    settings: list[tuple[str, str]] = []
+    for key, value in re.findall(r"\bSET\s+(\w+)\s*=\s*([^\n;]+)", text, re.I):
+        settings = [s for s in settings if s[0] != key.lower()]
+        settings.append((key.lower(), value.strip().rstrip(";")))
+    return settings
+
+
+def render_settings(settings: list[tuple[str, str]]) -> str | None:
+    return strip_layout(",".join(f"{k}={v}" for k, v in settings)) or None
 
 
 def parse_functions(sql: str, masked: str, spans, out: Migration) -> None:
@@ -298,7 +314,9 @@ def parse_functions(sql: str, masked: str, spans, out: Migration) -> None:
         if args_end < 0:
             out.refused.append(f"{name}: unterminated argument list")
             continue
-        arglist = sql[match.end():args_end - 1]
+        # Masked, so a comma inside a default literal is not an
+        # argument separator: pronargs counts declarations, not commas.
+        arglist = masked[match.end():args_end - 1]
 
         # The body is the first dollar-quoted or single-quoted span after AS.
         # Options may sit on either side of it: `AS $f$...$f$ LANGUAGE sql` is
@@ -314,9 +332,23 @@ def parse_functions(sql: str, masked: str, spans, out: Migration) -> None:
             out.refused.append(f"{name}: no function body found after AS")
             continue
         kind, body_start, body_end = body
-        delim = len(re.match(r"\$[A-Za-z_0-9]*\$", sql[body_start:]).group()) \
-            if kind == "dollar" else 1
-        text = sql[body_start + delim:body_end - delim]
+        if kind == "str":
+            # A single-quoted body stores doubled quotes as syntax, not
+            # content: Postgres keeps SELECT 'x' in prosrc for a body written
+            # AS 'SELECT ''x'''. Hashing the doubled form would report a
+            # correctly deployed function as drifted every time. An E'' or
+            # U&'' body carries backslash or unicode escapes that would need a
+            # real decoder to compare honestly, so it is refused, not guessed.
+            prefix = re.search(r"(?:[Uu]&|[EeBbXx])$", sql[:body_start])
+            if prefix:
+                out.refused.append(
+                    f"{name}: body uses {prefix.group()}'...' escape-string "
+                    "syntax, which this cannot decode faithfully")
+                continue
+            text = sql[body_start + 1:body_end - 1].replace("''", "'")
+        else:
+            delim = len(re.match(r"\$[A-Za-z_0-9]*\$", sql[body_start:]).group())
+            text = sql[body_start + delim:body_end - delim]
 
         inner = [s for s in lex(text) if s[0] in ("dollar", "block")]
         if inner:
@@ -391,7 +423,17 @@ def parse_privileges(sql: str, masked: str, out: Migration) -> None:
             wanted = TABLE_PRIVILEGES
         if not re.search(r"\bALL\b", privs, re.I):
             wanted = [p.strip().upper() for p in privs.split(",") if p.strip()]
-            wanted = [p for p in wanted if re.fullmatch(r"[A-Z ]+", p)]
+            # A column-level grant - GRANT SELECT (email) ON ... - is a
+            # privilege this cannot express. Dropping the unreadable token and
+            # keeping the rest would emit a query that silently omits the
+            # grant, so the whole statement is refused.
+            unsupported = [p for p in wanted if not re.fullmatch(r"[A-Z ]+", p)]
+            if unsupported or not wanted:
+                out.refused.append(
+                    "unsupported privilege "
+                    + (repr(unsupported[0]) if unsupported else "(none parsed)")
+                    + " in: " + re.sub(r"\s+", " ", match.group()).strip()[:90])
+                continue
         for role in (r.strip().lower() for r in roles.split(",")):
             if not re.fullmatch(r"\w+", role):
                 continue
@@ -411,26 +453,38 @@ def parse_privileges(sql: str, masked: str, out: Migration) -> None:
                                + re.sub(r"\s+", " ", line).strip()[:90])
 
 
-def parse_alter_function(sql: str, masked: str, out: Migration) -> None:
-    """ALTER FUNCTION ... SET x = y, merged into the CREATE when there is one."""
+def parse_alter_function(sql: str, masked: str, out: Migration,
+                        first: int) -> None:
+    """
+    ALTER FUNCTION ... SET x = y.
+
+    Folded into the CREATE only when this same file defines a function of that
+    name and arity: an ALTER in a later migration is that migration's
+    assertion, not a retrospective edit to an earlier file's, and attributing
+    it to the earlier file would both misreport the source and, before
+    settings replaced by key, build a proconfig nothing could match.
+    """
     for match in re.finditer(
         r"ALTER\s+FUNCTION\s+(?:public\.)?(\w+)\s*(\([^)]*\))\s*"
         r"((?:\s*SET\s+\w+\s*=\s*[^\n;]+)+);",
         masked, re.I,
     ):
         name, args = match.group(1), re.sub(r"\s+", " ", match.group(2)).strip()
-        entries = [f"{k.lower()}={v.strip().rstrip(';')}" for k, v in
-                   re.findall(r"SET\s+(\w+)\s*=\s*([^\n;]+)",
-                              sql[match.start(3):match.end(3)], re.I)]
-        defined = [f for f in out.functions if f["name"].lower() == name.lower()]
+        nargs = len(split_top_level(args[1:-1]))
+        settings = parse_settings(sql[match.start(3):match.end(3)])
+        defined = [f for f in out.functions[first:]
+                   if f["name"].lower() == name.lower() and f["nargs"] == nargs]
         if defined:
             for fn in defined:
-                for entry in entries:
-                    if entry not in fn["config"]:
-                        fn["config"].append(entry)
+                fn["config"] = parse_settings_merge(fn["config"], settings)
         else:
             out.configs.append({"obj": f"public.{name}{args}",
-                                "config": strip_layout(",".join(entries))})
+                                "config": render_settings(settings)})
+
+
+def parse_settings_merge(existing, incoming):
+    merged = [s for s in existing if s[0] not in {k for k, _ in incoming}]
+    return merged + incoming
 
 
 def parse_rls(masked: str, out: Migration) -> None:
@@ -450,10 +504,10 @@ def parse(sql: str, out: Migration, src: str = "") -> None:
     parse_functions(sql, masked, spans, out)
     parse_indexes(sql, masked, out)
     parse_privileges(sql, masked, out)
-    parse_alter_function(sql, masked, out)
+    parse_alter_function(sql, masked, out, before["functions"])
     parse_rls(masked, out)
     for fn in out.functions[before["functions"]:]:
-        fn["config"] = strip_layout(",".join(fn["config"])) or None
+        fn["config"] = render_settings(fn["config"])
     for key, start in before.items():
         for item in getattr(out, key)[start:]:
             item["src"] = src

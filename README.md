@@ -341,12 +341,18 @@ inside string literals: the comparison lowercases and removes whitespace next
 to punctuation, so a change confined to a literal's case or internal spacing
 is invisible.
 
-Two constructs are **refused by name** rather than guessed at, because the
-Python and Postgres normalisations could not be guaranteed to agree on them: a
-nested dollar-quoted literal inside a body, and a block comment. So is a
-`GRANT`/`REVOKE` the parser could not read — `ON ALL TABLES IN SCHEMA`, for
-instance. Anything refused is printed and the exit code is non-zero; nothing
-is silently skipped.
+Anything it cannot read faithfully is **refused by name**, printed, and the
+exit code is non-zero — nothing is silently skipped, because a skip in a
+verifier reads the same as a pass. That covers a nested dollar-quoted literal
+or a block comment inside a body (the two normalisations could not be
+guaranteed to agree on them), an `E'...'` escape-string body (comparing it
+honestly would need a real decoder), a column-level grant such as
+`GRANT SELECT (email) ON ...`, and a `GRANT`/`REVOKE` the parser could not
+read at all — `ON ALL TABLES IN SCHEMA`, say. A single-quoted body *is*
+supported: its doubled quotes are syntax rather than content, so they are
+unescaped before hashing, and `AS 'SELECT ''x'''` produces the same
+expectation as `AS $$SELECT 'x'$$` — as it must, since Postgres stores the
+same `prosrc` for both.
 
 Expectations come from the file you pass, so when a *later* migration
 redefines an object, verify against that later file. `0002` reports a body
