@@ -352,10 +352,27 @@ refused by name. The exit code says which:
 | `2` | nothing here is verifiable (`0008`, policies only); no query is printed |
 | `3` | verified what it could; the rest is listed under `NOT VERIFIED` |
 
-Return types and argument names are not compared, only the count. Being blind
-to formatting costs a little precision inside string literals: the comparison
-lowercases and removes whitespace next to punctuation, so a change confined to
-a literal's case or internal spacing is invisible.
+An `ALTER` and a `CREATE` assert different things, so they are compared
+differently. `ALTER FUNCTION … SET` and `ALTER ROLE … SET` name one setting and
+leave the rest of the catalogue entry alone, so each is checked for *presence*
+— pinning `search_path` on a function that already carries a `statement_timeout`
+is not drift. A `CREATE OR REPLACE` assigns every property specified or implied
+and drops the ones it omits, so its config is compared *whole*: a leftover pin
+the file no longer asks for is worth knowing about, on a `SECURITY DEFINER`
+function especially.
+
+Unquoted identifiers are folded to lower case, since the server folds them too
+and `CREATE FUNCTION RebuildCache()` would otherwise report `MISSING`.
+
+Index definitions keep their literals — layout is stripped only outside them,
+and since `lower()` cannot be applied selectively in SQL the literals are also
+compared verbatim. Otherwise `WHERE status = 'ACTIVE'` and `'active'` normalise
+together, as do `'in progress'` and `'inprogress'`, and a wrong index reports
+`OK`.
+
+Return types and argument names are not compared, only the count. Function
+bodies remain blind to a change confined to a literal's case or internal
+spacing.
 
 Anything it cannot read faithfully is **refused by name**, printed, and the
 exit code is non-zero — nothing is silently skipped, because a skip in a

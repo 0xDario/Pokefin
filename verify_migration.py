@@ -46,6 +46,19 @@ privileges   GRANT and REVOKE on functions and tables, as *effective* access -
 config       Standalone ALTER FUNCTION ... SET, so a search_path hardening
              migration that touches no function body is still verifiable.
 roles        ALTER ROLE ... SET, against pg_roles.rolconfig.
+
+An ALTER and a CREATE assert different things, so they are compared
+differently. ALTER FUNCTION ... SET and ALTER ROLE ... SET name one setting
+and leave the rest of the catalogue entry alone, so each is checked for
+presence: pinning search_path on a function that already carries a
+statement_timeout is not drift. A CREATE OR REPLACE assigns every property
+specified or implied, dropping any it omits, so its config is compared whole -
+a leftover pin the file no longer asks for is exactly the kind of thing worth
+knowing about, on a SECURITY DEFINER function especially.
+
+Unquoted identifiers are folded to lower case, because the server folds them
+too and CREATE FUNCTION RebuildCache would otherwise report MISSING. A quoted
+object name is not parsed at all and lands in the refused pile.
 RLS          ALTER TABLE ... ENABLE/DISABLE ROW LEVEL SECURITY.
 
 EVERY STATEMENT IS ACCOUNTED FOR
@@ -63,6 +76,12 @@ The exit code says which: 0 everything verified, 1 something refused, 2
 nothing verifiable at all, 3 verified what it could with the rest listed.
 
 Return types and argument names are not compared (only the count).
+
+Index definitions keep their literals: layout is stripped only outside them,
+and because lower() cannot be applied selectively in SQL the literals are also
+compared separately and verbatim. Otherwise WHERE status = 'ACTIVE' and
+'active' normalise together, as do 'in progress' and 'inprogress', and a wrong
+index reports OK.
 
 Body comparison is deliberately blind to formatting, which costs a little
 precision inside string literals: it is case-insensitive and removes
@@ -123,14 +142,26 @@ NORMALIZE_BODY_SQL = (
 # CREATE INDEX in spacing, schema qualification and implicit ASC/NULLS. Strip
 # the preamble and every space and paren from both sides so what remains is the
 # part that carries meaning: method, columns, ordering, predicate.
-NORMALIZE_INDEX_SQL = (
-    "regexp_replace(regexp_replace(lower(pg_get_indexdef(i.indexrelid)), "
-    "'^create (unique )?index [^ ]+ on [^ ]+ ', ''), '[\\s()]', '', 'g')"
+#
+# Layout inside a literal is not noise, so the same capture-group trick used on
+# function bodies keeps literals intact here: 'in progress' and 'inprogress'
+# must not collapse together. Case inside a literal matters too, and lower()
+# cannot be applied selectively, so the literals are compared separately and
+# verbatim - see INDEX_LITERALS_SQL.
+INDEX_TAIL_SQL = (
+    "regexp_replace(pg_get_indexdef(i.indexrelid), "
+    "'^CREATE (UNIQUE )?INDEX [^ ]+ ON [^ ]+ ', '')"
 )
 
-ROLE_CONFIG_SQL = (
-    "nullif(regexp_replace(lower(array_to_string(rolconfig, ',')), "
-    "'[[:space:]()'']', '', 'g'), '')"
+NORMALIZE_INDEX_SQL = (
+    "regexp_replace(lower(" + INDEX_TAIL_SQL + "), "
+    "'(''[^'']*'')|[\\s()]', '\\1', 'g')"
+)
+
+INDEX_LITERALS_SQL = (
+    "(SELECT coalesce(string_agg(m[1], '|' ORDER BY n), '') "
+    "FROM regexp_matches(" + INDEX_TAIL_SQL + ", '''[^'']*''', 'g') "
+    "WITH ORDINALITY AS t(m, n))"
 )
 
 VOLATILITY = {"immutable": "i", "stable": "s", "volatile": "v"}
@@ -158,6 +189,29 @@ def body_md5(body: str) -> str:
 
 def strip_layout(text: str) -> str:
     return re.sub(r"[\s()]", "", text.lower())
+
+
+# Layout is noise; the inside of a string literal is not. Squeezing the space
+# out of both 'in progress' and 'inprogress' would let a wrong index report OK,
+# so the same capture-group trick used on function bodies applies here: the
+# literal branch is put back verbatim and only the layout branch is dropped.
+def strip_index_layout(text: str) -> str:
+    return re.sub(r"('[^']*')|[\s()]", r"\1", text.lower())
+
+
+def literals_of(text: str) -> str:
+    """The string literals, verbatim and in order.
+
+    Compared separately and case-sensitively, because the layout comparison
+    lowercases everything: WHERE status = 'ACTIVE' and WHERE status = 'active'
+    are different indexes and must not normalise together.
+    """
+    return "|".join(re.findall(r"'[^']*'", text))
+
+
+def lower_outside_literals(text: str) -> str:
+    return re.sub(r"('[^']*')|([^']+)",
+                  lambda m: m.group(1) or m.group(2).lower(), text)
 
 
 def sql_str(value) -> str:
@@ -303,7 +357,7 @@ def canon_index_columns(cols: str) -> str:
     """
     out = []
     for col in split_top_level(cols):
-        col = re.sub(r"\s+", " ", col.strip().lower())
+        col = re.sub(r"\s+", " ", lower_outside_literals(col.strip()))
         col = re.sub(r"\basc\b", "", col).strip()
         if re.search(r"\bdesc\b", col):
             col = re.sub(r"\bnulls first\b", "", col)
@@ -313,7 +367,7 @@ def canon_index_columns(cols: str) -> str:
     return ", ".join(out)
 
 
-def parse_options(header: str) -> dict:
+def parse_options(header: str, source: str) -> dict:
     """LANGUAGE / volatility / SECURITY / SET, wherever they sit."""
     lang = re.search(r"\bLANGUAGE\s+(\w+)", header, re.I)
     volatile = re.search(r"\b(IMMUTABLE|STABLE|VOLATILE)\b", header, re.I)
@@ -321,21 +375,43 @@ def parse_options(header: str) -> dict:
         "lang": lang.group(1).lower() if lang else None,
         "volatile": VOLATILITY[volatile.group(1).lower()] if volatile else "v",
         "secdef": bool(re.search(r"\bSECURITY\s+DEFINER\b", header, re.I)),
-        "config": parse_settings(header),
+        "config": parse_settings(header, source),
     }
 
 
-def parse_settings(text: str) -> list[tuple[str, str]]:
+def parse_settings(masked_text: str, source: str) -> list[tuple[str, str]]:
     """(key, value) per SET, a later assignment replacing an earlier one.
 
-    Postgres replaces a setting rather than accumulating it, so appending
-    would build a proconfig no correctly deployed function could ever match.
+    Clauses are located in the masked text so a SET inside a comment does not
+    count, but the value is read from the source at the same offsets: masked
+    blanks literals, and SET statement_timeout = '3s' would otherwise parse as
+    statement_timeout= and mismatch a correctly deployed function forever.
+
+    Postgres replaces a setting rather than accumulating it, so appending would
+    build a proconfig no correctly deployed function could ever match.
     """
     settings: list[tuple[str, str]] = []
-    for key, value in re.findall(r"\bSET\s+(\w+)\s*=\s*([^\n;]+)", text, re.I):
-        settings = [s for s in settings if s[0] != key.lower()]
-        settings.append((key.lower(), value.strip().rstrip(";")))
+    for match in re.finditer(r"\bSET\s+(\w+)\s*=", masked_text, re.I):
+        key = match.group(1).lower()
+        # The value runs to the first newline or semicolon. Both are looked for
+        # in the masked copy, where a literal is blank, so a semicolon inside
+        # the value cannot cut it short - and the extent must be found this way
+        # rather than by matching the value itself, since against a blanked
+        # literal a trailing `\s*(...)` would backtrack onto the blanks and
+        # capture a single space.
+        end = len(masked_text)
+        for terminator in ("\n", ";"):
+            found = masked_text.find(terminator, match.end())
+            if found != -1:
+                end = min(end, found)
+        value = source[match.end():end].strip().rstrip(";")
+        settings = [entry for entry in settings if entry[0] != key]
+        settings.append((key, value))
     return settings
+
+
+def render_setting(key: str, value: str) -> str:
+    return re.sub(r"[\s()']", "", f"{key}={value}".lower())
 
 
 def render_settings(settings: list[tuple[str, str]]) -> str | None:
@@ -352,7 +428,7 @@ def parse_functions(sql: str, masked: str, spans, out: Migration) -> None:
         masked, re.I,
     ):
         out.hits.add(match.start())
-        name = match.group(1)
+        name = match.group(1).lower()
         args_end = match_paren(masked, match.end() - 1)
         if args_end < 0:
             out.refused.append(f"{name}: unterminated argument list")
@@ -401,10 +477,14 @@ def parse_functions(sql: str, masked: str, spans, out: Migration) -> None:
                 "Postgres normalisations cannot be guaranteed to agree on")
             continue
 
+        # Options may sit either side of the body. The masked copy locates the
+        # clauses; the source copy, sliced identically so the offsets line up,
+        # supplies values that masking would have blanked.
         stmt_end = masked.find(";", body_end)
-        header = masked[args_end:body_start] + " " + \
-            masked[body_end:stmt_end if stmt_end > 0 else len(masked)]
-        options = parse_options(header)
+        stop = stmt_end if stmt_end > 0 else len(masked)
+        header = masked[args_end:body_start] + " " + masked[body_end:stop]
+        header_src = sql[args_end:body_start] + " " + sql[body_end:stop]
+        options = parse_options(header, header_src)
         out.functions.append({
             "name": name,
             "body": body_md5(text),
@@ -434,10 +514,13 @@ def parse_indexes(sql: str, masked: str, out: Migration) -> None:
         if where:
             definition += " where " + re.sub(r"\s+", " ", where.group(1)).strip()
         out.indexes.append({
-            "name": match.group(2),
+            # Unquoted identifiers are folded by the server, so the expectation
+            # has to be folded too or a CREATE INDEX MixedCase reports MISSING.
+            "name": match.group(2).lower(),
             "table": match.group(3).lower(),
             "unique": bool(match.group(1)),
-            "definition": strip_layout(definition),
+            "definition": strip_index_layout(definition),
+            "literals": literals_of(definition),
         })
 
 
@@ -535,15 +618,21 @@ def parse_alter_function(sql: str, masked: str, out: Migration,
         out.hits.add(match.start())
         name, args = match.group(1), re.sub(r"\s+", " ", match.group(2)).strip()
         nargs = len(split_top_level(args[1:-1]))
-        settings = parse_settings(sql[match.start(3):match.end(3)])
+        settings = parse_settings(masked[match.start(3):match.end(3)],
+                                  sql[match.start(3):match.end(3)])
         defined = [f for f in out.functions[first:]
                    if f["name"].lower() == name.lower() and f["nargs"] == nargs]
         if defined:
             for fn in defined:
                 fn["config"] = parse_settings_merge(fn["config"], settings)
         else:
-            out.configs.append({"obj": f"public.{name}{args}",
-                                "config": render_settings(settings)})
+            # An ALTER asserts only the settings it names; Postgres keeps the
+            # rest of proconfig. One row per setting, checked by containment,
+            # so pinning search_path on a function that already carries a
+            # statement_timeout is not reported as drift.
+            for key, value in settings:
+                out.configs.append({"obj": f"public.{name}{args}".lower(),
+                                    "setting": render_setting(key, value)})
 
 
 def parse_settings_merge(existing, incoming):
@@ -571,11 +660,10 @@ def parse_alter_role(sql: str, masked: str, out: Migration) -> None:
             role = role[1:-1].replace('""', '"')
         else:
             role = role.lower()
-        out.roles.append({
-            "role": role,
-            "config": render_settings(parse_settings(sql[match.start(2):
-                                                        match.end(2)])),
-        })
+        for key, value in parse_settings(masked[match.start(2):match.end(2)],
+                                         sql[match.start(2):match.end(2)]):
+            out.roles.append({"role": role,
+                              "setting": render_setting(key, value)})
 
 
 def parse_rls(masked: str, out: Migration) -> None:
@@ -724,11 +812,12 @@ fn_check AS (
 
     if m.indexes:
         values = ",\n    ".join(
-            "({}, {}, {}, {}, {})".format(
+            "({}, {}, {}, {}, {}, {})".format(
                 sql_str(x["src"]), sql_str(x["name"]), sql_str(x["table"]),
-                sql_str(x["unique"]), sql_str(x["definition"]))
+                sql_str(x["unique"]), sql_str(x["definition"]),
+                sql_str(x["literals"]))
             for x in m.indexes)
-        parts.append(f"""ix_expected(src, name, tbl, is_unique, definition) AS (
+        parts.append(f"""ix_expected(src, name, tbl, is_unique, definition, literals) AS (
   VALUES
     {values}
 ),
@@ -736,7 +825,8 @@ ix_actual AS (
   SELECT c.relname::text AS name, t.relname::text AS tbl,
          i.indisunique AS is_unique,
          (i.indisvalid AND i.indisready) AS usable,
-         {NORMALIZE_INDEX_SQL} AS definition
+         {NORMALIZE_INDEX_SQL} AS definition,
+         {INDEX_LITERALS_SQL} AS literals
   FROM pg_index i
   JOIN pg_class c ON c.oid = i.indexrelid
   JOIN pg_class t ON t.oid = i.indrelid
@@ -746,14 +836,18 @@ ix_actual AS (
 ix_check AS (
   SELECT e.src::text AS src, 'index' AS kind, e.name::text AS name,
          CASE WHEN a.name IS NULL THEN 'MISSING'
-              WHEN a.definition = e.definition AND a.is_unique = e.is_unique
-               AND a.tbl = e.tbl AND a.usable
+              WHEN a.definition = e.definition AND a.literals = e.literals
+               AND a.is_unique = e.is_unique AND a.tbl = e.tbl AND a.usable
               THEN 'OK' ELSE 'MISMATCH' END AS status,
          CASE WHEN a.name IS NULL THEN '' ELSE
          coalesce(nullif(concat_ws(', ',
            CASE WHEN a.definition IS DISTINCT FROM e.definition
                 THEN 'definition (want ' || e.definition
                      || ', got ' || a.definition || ')' END,
+           CASE WHEN a.definition = e.definition
+                 AND a.literals IS DISTINCT FROM e.literals
+                THEN 'literals differ only in case (want ' || e.literals
+                     || ', got ' || a.literals || ')' END,
            CASE WHEN a.is_unique IS DISTINCT FROM e.is_unique
                 THEN 'uniqueness (want ' || CASE WHEN e.is_unique THEN 'unique'
                                                  ELSE 'non-unique' END || ')' END,
@@ -818,27 +912,31 @@ pv_check AS (
     if m.configs:
         values = ",\n    ".join(
             "({}, {}, {})".format(sql_str(c["src"]), sql_str(c["obj"]),
-                                  sql_str(c["config"]))
+                                  sql_str(c["setting"]))
             for c in m.configs)
-        parts.append(f"""cfg_expected(src, obj, config) AS (
+        parts.append("""cfg_expected(src, obj, setting) AS (
   VALUES
-    {values}
+    @VALUES@
 ),
 cfg_check AS (
-  SELECT e.src::text AS src, 'config' AS kind, e.obj::text AS name,
+  SELECT e.src::text AS src, 'config' AS kind,
+         (e.obj || ' ' || split_part(e.setting, '=', 1))::text AS name,
          CASE WHEN to_regprocedure(e.obj) IS NULL THEN 'MISSING'
-              WHEN a.config = e.config THEN 'OK' ELSE 'MISMATCH' END AS status,
+              WHEN e.setting = ANY(a.settings) THEN 'OK'
+              ELSE 'MISMATCH' END AS status,
          CASE WHEN to_regprocedure(e.obj) IS NULL THEN 'function not found'
-              WHEN a.config IS DISTINCT FROM e.config
-              THEN 'want ' || e.config || ', got ' || coalesce(a.config, 'none')
+              WHEN NOT (e.setting = ANY(a.settings))
+              THEN 'want ' || e.setting || ', got '
+                   || coalesce(nullif(array_to_string(a.settings, ', '), ''),
+                               'none')
               ELSE '' END AS detail
   FROM cfg_expected e
   LEFT JOIN LATERAL (
-    SELECT nullif(regexp_replace(lower(array_to_string(p.proconfig, ',')),
-                                 '[[:space:]()'']', '', 'g'), '') AS config
+    SELECT array(SELECT regexp_replace(lower(x), '[[:space:]()'']', '', 'g')
+                   FROM unnest(coalesce(p.proconfig, '{}'::text[])) AS x) AS settings
     FROM pg_proc p WHERE p.oid = to_regprocedure(e.obj)::oid
   ) a ON true
-)""")
+)""".replace("@VALUES@", values))
         selects.append("SELECT * FROM cfg_check")
 
     if m.rls:
@@ -866,26 +964,32 @@ rls_check AS (
     if m.roles:
         values = ",\n    ".join(
             "({}, {}, {})".format(sql_str(r["src"]), sql_str(r["role"]),
-                                  sql_str(r["config"]))
+                                  sql_str(r["setting"]))
             for r in m.roles)
-        parts.append("""role_expected(src, role, config) AS (
+        parts.append("""role_expected(src, role, setting) AS (
   VALUES
     @VALUES@
 ),
 role_check AS (
-  SELECT e.src::text AS src, 'role' AS kind, e.role::text AS name,
+  SELECT e.src::text AS src, 'role' AS kind,
+         (e.role || ' ' || split_part(e.setting, '=', 1))::text AS name,
          CASE WHEN r.rolname IS NULL THEN 'MISSING'
-              WHEN r.config = e.config THEN 'OK' ELSE 'MISMATCH' END AS status,
+              WHEN e.setting = ANY(r.settings) THEN 'OK'
+              ELSE 'MISMATCH' END AS status,
          CASE WHEN r.rolname IS NULL THEN 'role not found'
-              WHEN r.config IS DISTINCT FROM e.config
-              THEN 'want ' || e.config || ', got ' || coalesce(r.config, 'none')
+              WHEN NOT (e.setting = ANY(r.settings))
+              THEN 'want ' || e.setting || ', got '
+                   || coalesce(nullif(array_to_string(r.settings, ', '), ''),
+                               'none')
               ELSE '' END AS detail
   FROM role_expected e
   LEFT JOIN LATERAL (
-    SELECT rolname, @NORM@ AS config
+    SELECT rolname,
+           array(SELECT regexp_replace(lower(x), '[[:space:]()'']', '', 'g')
+                   FROM unnest(coalesce(rolconfig, '{}'::text[])) AS x) AS settings
     FROM pg_roles WHERE rolname = e.role
   ) r ON true
-)""".replace("@VALUES@", values).replace("@NORM@", ROLE_CONFIG_SQL))
+)""".replace("@VALUES@", values))
         selects.append("SELECT * FROM role_check")
 
     return ("WITH " + ",\n".join(parts) + "\n" +
@@ -933,12 +1037,12 @@ def main(argv: list[str]) -> int:
         print(f"-- privilege {p['priv']} on {p['obj']} for {p['role']}: "
               f"{'granted' if p['want'] else 'revoked'}", file=sys.stderr)
     for c in m.configs:
-        print(f"-- config {c['obj']}: {c['config']}", file=sys.stderr)
+        print(f"-- config {c['obj']}: {c['setting']}", file=sys.stderr)
     for r in m.rls:
         print(f"-- rls {r['table']}: "
               f"{'enabled' if r['want'] else 'disabled'}", file=sys.stderr)
     for r in m.roles:
-        print(f"-- role {r['role']}: {r['config']}", file=sys.stderr)
+        print(f"-- role {r['role']}: {r['setting']}", file=sys.stderr)
 
     if m.unverified:
         counts: dict[str, int] = {}
