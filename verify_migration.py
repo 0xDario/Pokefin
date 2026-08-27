@@ -80,6 +80,12 @@ under NOT VERIFIED; or the parser could not read it, which is refused by name.
 The exit code says which: 0 everything verified, 1 something refused, 2
 nothing verifiable at all, 3 verified what it could with the rest listed.
 
+Argument modes are honoured: an OUT parameter is excluded from both the count
+and the signature, because pronargs counts inputs only and identity arguments
+list only inputs. Two overloads sharing a name and arity are distinct
+expectations - f(text) is not f(integer), and collapsing them would leave one
+unchecked while every printed row said OK.
+
 Return types are not compared. Argument names and types are, in the dialect
 pg_get_function_identity_arguments speaks - which is why the file's spellings
 are mapped (INT to integer, VARCHAR to character varying, and so on). A
@@ -92,6 +98,13 @@ not read as drift, which means grouping is not compared. With one binary
 operator that costs nothing; with two, ((a+b)*c) and (a+(b*c)) would flatten
 together, so an expression or predicate carrying more than one is refused
 rather than certified.
+
+Quoted identifiers keep their case wherever they appear - in a body, an index
+definition, or a setting value - because "UserID" and "userid" are different
+columns and every comparison here lowercases. In a body and an index they are
+extracted and compared verbatim; in a setting value the whole setting is
+refused instead, since a quoted schema in a search_path pin is exactly the case
+that must not be certified by a blind comparison.
 
 Index definitions keep their literals: layout is stripped only outside them,
 and because lower() cannot be applied selectively in SQL the literals are also
@@ -112,9 +125,17 @@ Refused rather than guessed at: a nested dollar-quoted literal or a block
 comment inside a body (the Python and Postgres normalisations could not be
 guaranteed to agree on either), an escape-string body, a column-level grant, a
 grantee that resolves at apply time such as CURRENT_USER, SET ... FROM CURRENT
-(the value is whatever was current when it was applied), an index expression or
-predicate with more than one binary operator, and any statement the parser does
-not recognise.
+(the value is whatever was current when it was applied), a setting value naming
+a quoted identifier, an index expression or predicate with more than one
+operator, an index with INCLUDE columns (they are part of the index and are not
+read here, so the expectation would describe a different one), an index using a
+dollar-quoted constant (Postgres renders it back with ordinary quoting, so no
+expectation could match), and any statement the parser does not recognise.
+
+Operators are detected as runs of operator characters rather than from a list.
+The list was the wrong shape: the first attempt omitted the bitwise ones, so
+((a & b) | c) sailed through, and Postgres lets anyone define new operators, so
+no list could ever be complete.
 
 An expectation comes from the file you pass. If a *later* migration alters an
 object, verify against that later file - this reports drift from the file it
@@ -186,6 +207,12 @@ BODY_IDENTS_SQL = (
     "WITH ORDINALITY AS t(m, n))"
 )
 
+INDEX_IDENTS_SQL = (
+    "(SELECT coalesce(string_agg(m[1], '|' ORDER BY n), '') "
+    "FROM regexp_matches(" + INDEX_TAIL_SQL + ", '\"[^\"]*\"', 'g') "
+    "WITH ORDINALITY AS t(m, n))"
+)
+
 INDEX_LITERALS_SQL = (
     "(SELECT coalesce(string_agg(m[1], '|' ORDER BY n), '') "
     "FROM regexp_matches(" + INDEX_TAIL_SQL + ", '''[^'']*''', 'g') "
@@ -243,10 +270,15 @@ def literals_of(text: str) -> str:
     return "|".join(re.findall(r"'[^']*'", text))
 
 
+# A quoted identifier is as literal as a string: "my  column" and "my column"
+# name different columns, and "UserID" is not "userid".
+QUOTED = r"('[^']*'|\"[^\"]*\")"
+
+
 def collapse_space_outside_literals(text: str) -> str:
-    """Runs of whitespace become one space - except inside a literal, where
-    'in  progress' and 'in progress' are different values."""
-    return re.sub(r"('[^']*')|\s+", lambda m: m.group(1) or " ", text)
+    """Runs of whitespace become one space - except inside a literal or a
+    quoted identifier, where 'in  progress' and 'in progress' differ."""
+    return re.sub(QUOTED + r"|\s+", lambda m: m.group(1) or " ", text)
 
 
 def quoted_idents(text: str) -> str:
@@ -272,19 +304,33 @@ TYPE_ALIASES = {
 
 # Two or more binary operators mean the parentheses carry meaning, and this
 # comparison drops them: ((a+b)*c) and (a+(b*c)) would both flatten to a+b*c.
-BINARY_OPERATORS = re.compile(r"(?<![<>!])(\+|-|\*|/|%|\|\||\bAND\b|\bOR\b)",
-                              re.I)
+#
+# Listing the operators to look for was the wrong shape - the first attempt
+# omitted the bitwise ones, so ((a & b) | c) sailed through. Postgres also lets
+# anyone define new operators, so no list can be complete. This matches any run
+# of operator characters instead, minus the ones that are punctuation here:
+# a cast's :: and a qualified name's dot.
+OPERATOR_RUN = re.compile(r"[-+*/%^&|#~<>=!@?]+|\b(AND|OR)\b", re.I)
 
 
 def has_ambiguous_grouping(text: str) -> bool:
     bare = re.sub(r"'[^']*'", "", text)
-    return len(BINARY_OPERATORS.findall(bare)) >= 2
+    bare = bare.replace("::", " ")
+    return len(OPERATOR_RUN.findall(bare)) >= 2
 
 
-def canon_signature(arglist: str) -> str | None:
+def parse_arguments(masked_arglist: str) -> tuple[int, str | None]:
     """
-    The file's argument list in the dialect pg_get_function_identity_arguments
-    speaks, or None when the file declares none.
+    (input count, signature) for a function's argument list.
+
+    Takes the *masked* arglist, where a literal is blanked, so the comma in
+    `DEFAULT 'a,b'` is not read as an argument separator. The type text itself
+    never contains a literal once the default is stripped, so the masked copy
+    serves for both.
+
+    pronargs counts input arguments only, and identity arguments list only
+    inputs, so an OUT parameter is dropped from both - counting it would make
+    an exactly deployed function report an argument-count mismatch forever.
 
     Argument count alone cannot tell f(text) from f(integer), so a migration
     expecting one could be certified by the other. Identity arguments are used
@@ -293,7 +339,7 @@ def canon_signature(arglist: str) -> str | None:
     a mismatch here is merely reported, and names the difference.
     """
     args = []
-    for arg in split_top_level(arglist):
+    for arg in split_top_level(masked_arglist):
         arg = re.split(r"\bDEFAULT\b|=", arg, maxsplit=1, flags=re.I)[0].strip()
         mode = re.match(r"(IN|OUT|INOUT|VARIADIC)\s+", arg, re.I)
         if mode:
@@ -306,11 +352,17 @@ def canon_signature(arglist: str) -> str | None:
         for alias, canonical in TYPE_ALIASES.items():
             arg = re.sub(rf"\b{alias}\b(?!\s*\w)", canonical, arg)
         args.append(arg)
-    return ", ".join(args) if args else None
+    return len(args), (", ".join(args) if args else None)
 
 
 def lower_outside_literals(text: str) -> str:
-    return re.sub(r"('[^']*')|([^']+)",
+    """Case folding stops at a literal or a quoted identifier.
+
+    Without the second, an index on "UserID" had its identifier folded before
+    quoted_idents() could record the spelling, and the verbatim comparison then
+    reported drift against a correctly deployed index.
+    """
+    return re.sub(QUOTED + r"|([^'\"]+)",
                   lambda m: m.group(1) or m.group(2).lower(), text)
 
 
@@ -468,15 +520,44 @@ def canon_index_columns(cols: str) -> str:
     return ", ".join(out)
 
 
+def blank_returns(header: str) -> str:
+    """
+    The RETURNS clause, blanked, so its contents are not read as options.
+
+    RETURNS TABLE (stable text) declares a column named stable; matching the
+    first occurrence of the word anywhere in the header recorded the function
+    as STABLE when Postgres would default it to VOLATILE, and an exactly
+    deployed function then reported drift.
+    """
+    out = list(header)
+    for match in re.finditer(r"\bRETURNS\s+(SETOF\s+)?(TABLE\s*)?", header, re.I):
+        end = match.end()
+        if match.group(2):
+            close = match_paren(header, header.find("(", end - 1))
+            end = close if close > 0 else len(header)
+        else:
+            word = re.compile(r"\S+\s*(\([^)]*\))?").match(header, end)
+            end = word.end() if word else end
+        for i in range(match.start(), min(end, len(out))):
+            out[i] = " "
+    return "".join(out)
+
+
 def parse_options(header: str, source: str) -> dict:
     """LANGUAGE / volatility / SECURITY / SET, wherever they sit."""
-    lang = re.search(r"\bLANGUAGE\s+(\w+)", header, re.I)
-    volatile = re.search(r"\b(IMMUTABLE|STABLE|VOLATILE)\b", header, re.I)
+    clauses = blank_returns(header)
+    lang = re.search(r'\bLANGUAGE\s+(\w+|"[^"]*")', clauses, re.I)
+    volatile = re.search(r"\b(IMMUTABLE|STABLE|VOLATILE)\b", clauses, re.I)
+    language = lang.group(1) if lang else None
+    if language and language.startswith('"'):
+        language = language[1:-1]      # quoted: case-sensitive, kept as written
+    elif language:
+        language = language.lower()
     return {
-        "lang": lang.group(1).lower() if lang else None,
+        "lang": language,
         "volatile": VOLATILITY[volatile.group(1).lower()] if volatile else "v",
-        "secdef": bool(re.search(r"\bSECURITY\s+DEFINER\b", header, re.I)),
-        "config": parse_settings(header, source),
+        "secdef": bool(re.search(r"\bSECURITY\s+DEFINER\b", clauses, re.I)),
+        "config": parse_settings(clauses, source),
     }
 
 
@@ -494,23 +575,26 @@ def parse_settings(masked_text: str, source: str) -> list[tuple[str, str]]:
     settings: list[tuple[str, str]] = []
     for match in re.finditer(r"\bSET\s+(\w+)\s*(?:=|\bTO\b)", masked_text, re.I):
         key = match.group(1).lower()
-        # The value runs to the first newline, semicolon, or keyword that
-        # begins another clause - `SET search_path TO public AS $$` on one line
-        # would otherwise read as the value "public AS". All three are looked
-        # for in the masked copy, where a literal is blank, so a semicolon
-        # inside the value cannot cut it short; and the extent must be found
-        # this way rather than by matching the value itself, since against a
-        # blanked literal a trailing `\s*(...)` would backtrack onto the blanks
-        # and capture a single space.
+        # The value runs to the semicolon or to the keyword that begins the
+        # next clause - `SET search_path TO public AS $$` on one line would
+        # otherwise read as the value "public AS". A newline is deliberately
+        # NOT a terminator: `SET search_path =` with the value on the following
+        # line is ordinary formatting, and treating the break as semantic
+        # recorded an empty value. Both boundaries are looked for in the masked
+        # copy, where a literal is blank, so a semicolon inside the value
+        # cannot cut it short; and the extent must be found this way rather
+        # than by matching the value itself, since against a blanked literal a
+        # trailing `\s*(...)` would backtrack onto the blanks and capture a
+        # single space.
         end = len(masked_text)
-        for terminator in ("\n", ";"):
-            found = masked_text.find(terminator, match.end())
-            if found != -1:
-                end = min(end, found)
+        found = masked_text.find(";", match.end())
+        if found != -1:
+            end = found
         clause = NEXT_CLAUSE.search(masked_text, match.end(), end)
         if clause:
             end = clause.start()
-        value = source[match.end():end].strip().rstrip(";")
+        value = collapse_space_outside_literals(
+            source[match.end():end]).strip().rstrip(";")
         settings = [entry for entry in settings if entry[0] != key]
         settings.append((key, value))
     return settings
@@ -518,6 +602,18 @@ def parse_settings(masked_text: str, source: str) -> list[tuple[str, str]]:
 
 def render_setting(key: str, value: str) -> str:
     return re.sub(r"[\s()']", "", f"{key}={value}".lower())
+
+
+def setting_is_comparable(key: str, value: str) -> bool:
+    """
+    False when the value carries a quoted identifier.
+
+    SET search_path = "TrustedSchema" and "trustedschema" are different
+    schemas, and both sides of this comparison lowercase, so the check could
+    not tell them apart. Refusing keeps the rule that nothing is certified by
+    a comparison known to be blind to the difference.
+    """
+    return '"' not in value
 
 
 def render_settings(settings: list[tuple[str, str]]) -> str | None:
@@ -597,23 +693,34 @@ def parse_functions(sql: str, masked: str, spans, out: Migration,
                 "time, which cannot be predicted from the file")
             continue
 
+        nargs, signature = parse_arguments(arglist)
         options = parse_options(header, header_src)
+        unreadable = [k for k, v in options["config"]
+                      if not setting_is_comparable(k, v)]
+        if unreadable:
+            out.refused.append(
+                f"{name}: setting {unreadable[0]} names a quoted identifier, "
+                "which this comparison lowercases and so cannot check")
+            continue
         entry = {
             "name": name,
             "body": body_md5(text),
             # Double-quoted names survive the lowercasing that the body hash
             # applies, so they are compared on their own, verbatim.
             "idents": quoted_idents(STRIP_COMMENTS[0].sub(STRIP_COMMENTS[1], text)),
-            "nargs": len(split_top_level(arglist)),
-            "signature": canon_signature(sql[match.end():args_end - 1]),
+            "nargs": nargs,
+            "signature": signature,
             **options,
         }
         # A file that CREATE OR REPLACEs the same signature twice leaves only
         # the last body deployed, so an expectation for the earlier one could
         # never be satisfied. The later definition supersedes it.
         for previous in out.functions[first:]:
+            # Same name and arity is not the same function: f(text) and
+            # f(integer) are distinct overloads, and dropping one of them would
+            # leave it unchecked while every printed row said OK.
             if (previous["name"] == entry["name"]
-                    and previous["nargs"] == entry["nargs"]):
+                    and previous["signature"] == entry["signature"]):
                 out.functions.remove(previous)
                 break
         out.functions.append(entry)
@@ -634,6 +741,28 @@ def parse_indexes(sql: str, masked: str, out: Migration) -> None:
         stmt_end = masked.find(";", cols_end)
         tail = sql[cols_end:stmt_end if stmt_end > 0 else len(sql)]
         where = re.search(r"\bWHERE\b(.*)$", tail, re.S | re.I)
+        index_name = match.group(2).lower()
+
+        # INCLUDE columns are part of the index and are not read here, so the
+        # expectation would describe a plain index - a stale one could match it
+        # while the real covering index reported drift. Refused rather than
+        # compared against a definition known to be incomplete.
+        if re.search(r"\bINCLUDE\b", masked[cols_end:stmt_end if stmt_end > 0
+                                             else len(masked)], re.I):
+            out.refused.append(
+                f"{index_name}: INCLUDE columns are not compared, so the "
+                "expectation would describe a different index")
+            continue
+
+        # A dollar-quoted constant is rendered back by Postgres in ordinary
+        # quoting, so the two sides could never agree, and the literal-aware
+        # normalisation does not recognise it either.
+        if any(kind == "dollar" for kind, _, _ in
+               lex(sql[match.end():stmt_end if stmt_end > 0 else len(sql)])):
+            out.refused.append(
+                f"{index_name}: dollar-quoted constant, which Postgres renders "
+                "back with ordinary quoting, so no expectation could match")
+            continue
 
         method = (match.group(4) or "btree").lower()
         columns = sql[match.end():cols_end - 1]
@@ -651,18 +780,21 @@ def parse_indexes(sql: str, masked: str, out: Migration) -> None:
         if has_ambiguous_grouping(columns) or (where and
                                                has_ambiguous_grouping(where.group(1))):
             out.refused.append(
-                f"{match.group(2).lower()}: expression or predicate has more "
-                "than one binary operator, so parenthesis-blind comparison "
-                "could not tell two groupings apart")
+                f"{index_name}: expression or predicate has more than one "
+                "operator, so parenthesis-blind comparison could not tell two "
+                "groupings apart")
             continue
         out.indexes.append({
             # Unquoted identifiers are folded by the server, so the expectation
             # has to be folded too or a CREATE INDEX MixedCase reports MISSING.
-            "name": match.group(2).lower(),
+            "name": index_name,
             "table": match.group(3).lower(),
             "unique": bool(match.group(1)),
             "definition": strip_index_layout(definition),
             "literals": literals_of(definition),
+            # An index on "UserID" and one on "userid" are different indexes,
+            # and the definition comparison lowercases both.
+            "idents": quoted_idents(definition),
         })
 
 
@@ -752,18 +884,27 @@ def parse_alter_function(sql: str, masked: str, out: Migration,
     it to the earlier file would both misreport the source and, before
     settings replaced by key, build a proconfig nothing could match.
     """
-    for match in re.finditer(
-        r"ALTER\s+FUNCTION\s+(?:public\.)?(\w+)\s*(\([^)]*\))\s*"
-        r"((?:\s*SET\s+\w+\s*=\s*[^\n;]+)+);",
-        masked, re.I,
-    ):
+    for match in re.finditer(r"ALTER\s+FUNCTION\s+(?:public\.)?(\w+)\s*\(",
+                             masked, re.I):
         out.hits.add(match.start())
-        name, args = match.group(1), re.sub(r"\s+", " ", match.group(2)).strip()
-        nargs = len(split_top_level(args[1:-1]))
-        settings = parse_settings(masked[match.start(3):match.end(3)],
-                                  sql[match.start(3):match.end(3)])
+        name = match.group(1).lower()
+        # numeric(10, 2) nests, so the signature ends at the matching paren
+        # rather than at the first one - `[^)]*` stopped inside the modifier
+        # and refused a perfectly ordinary parameterised type.
+        args_end = match_paren(masked, match.end() - 1)
+        stmt_end = masked.find(";", args_end if args_end > 0 else match.end())
+        if args_end < 0 or stmt_end < 0:
+            out.refused.append(f"{name}: unterminated ALTER FUNCTION signature")
+            continue
+        args = "(" + re.sub(r"\s+", " ", masked[match.end():args_end - 1]).strip() + ")"
+        nargs, _ = parse_arguments(masked[match.end():args_end - 1])
+        settings = parse_settings(masked[args_end:stmt_end],
+                                  sql[args_end:stmt_end])
+        if not settings:
+            out.refused.append(f"{name}: ALTER FUNCTION with no SET clause")
+            continue
         defined = [f for f in out.functions[first:]
-                   if f["name"].lower() == name.lower() and f["nargs"] == nargs]
+                   if f["name"] == name and f["nargs"] == nargs]
         if defined:
             for fn in defined:
                 fn["config"] = parse_settings_merge(fn["config"], settings)
@@ -773,6 +914,11 @@ def parse_alter_function(sql: str, masked: str, out: Migration,
             # so pinning search_path on a function that already carries a
             # statement_timeout is not reported as drift.
             for key, value in settings:
+                if not setting_is_comparable(key, value):
+                    out.refused.append(
+                        f"{name}: setting {key} names a quoted identifier, "
+                        "which this comparison lowercases and so cannot check")
+                    continue
                 out.configs.append({"obj": f"public.{name}{args}".lower(),
                                     "setting": render_setting(key, value)})
 
@@ -804,6 +950,11 @@ def parse_alter_role(sql: str, masked: str, out: Migration) -> None:
             role = role.lower()
         for key, value in parse_settings(masked[match.start(2):match.end(2)],
                                          sql[match.start(2):match.end(2)]):
+            if not setting_is_comparable(key, value):
+                out.refused.append(
+                    f"{role}: setting {key} names a quoted identifier, which "
+                    "this comparison lowercases and so cannot check")
+                continue
             out.roles.append({"role": role,
                               "setting": render_setting(key, value)})
 
@@ -968,12 +1119,13 @@ fn_check AS (
 
     if m.indexes:
         values = ",\n    ".join(
-            "({}, {}, {}, {}, {}, {})".format(
+            "({}, {}, {}, {}, {}, {}, {})".format(
                 sql_str(x["src"]), sql_str(x["name"]), sql_str(x["table"]),
                 sql_str(x["unique"]), sql_str(x["definition"]),
-                sql_str(x["literals"]))
+                sql_str(x["literals"]), sql_str(x["idents"]))
             for x in m.indexes)
-        parts.append(f"""ix_expected(src, name, tbl, is_unique, definition, literals) AS (
+        parts.append(f"""ix_expected(src, name, tbl, is_unique, definition, literals,
+            idents) AS (
   VALUES
     {values}
 ),
@@ -982,7 +1134,8 @@ ix_actual AS (
          i.indisunique AS is_unique,
          (i.indisvalid AND i.indisready) AS usable,
          {NORMALIZE_INDEX_SQL} AS definition,
-         {INDEX_LITERALS_SQL} AS literals
+         {INDEX_LITERALS_SQL} AS literals,
+         {INDEX_IDENTS_SQL} AS idents
   FROM pg_index i
   JOIN pg_class c ON c.oid = i.indexrelid
   JOIN pg_class t ON t.oid = i.indrelid
@@ -993,7 +1146,8 @@ ix_check AS (
   SELECT e.src::text AS src, 'index' AS kind, e.name::text AS name,
          CASE WHEN a.name IS NULL THEN 'MISSING'
               WHEN a.definition = e.definition AND a.literals = e.literals
-               AND a.is_unique = e.is_unique AND a.tbl = e.tbl AND a.usable
+               AND a.idents = e.idents AND a.is_unique = e.is_unique
+               AND a.tbl = e.tbl AND a.usable
               THEN 'OK' ELSE 'MISMATCH' END AS status,
          CASE WHEN a.name IS NULL THEN '' ELSE
          coalesce(nullif(concat_ws(', ',
@@ -1004,6 +1158,10 @@ ix_check AS (
                  AND a.literals IS DISTINCT FROM e.literals
                 THEN 'literals differ only in case (want ' || e.literals
                      || ', got ' || a.literals || ')' END,
+           CASE WHEN a.definition = e.definition
+                 AND a.idents IS DISTINCT FROM e.idents
+                THEN 'quoted columns differ only in case (want ' || e.idents
+                     || ', got ' || a.idents || ')' END,
            CASE WHEN a.is_unique IS DISTINCT FROM e.is_unique
                 THEN 'uniqueness (want ' || CASE WHEN e.is_unique THEN 'unique'
                                                  ELSE 'non-unique' END || ')' END,

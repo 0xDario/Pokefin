@@ -377,11 +377,25 @@ could not translate is reported as a difference naming both sides, rather than
 being handed to `to_regprocedure`, which *raises* on a type it cannot parse and
 would take every other check in the query down with it.
 
+Argument modes are honoured — an `OUT` parameter is excluded from both the
+count and the signature — and two overloads sharing a name and arity stay
+distinct expectations, since `f(text)` is not `f(integer)`.
+
+Quoted identifiers keep their case wherever they appear, because `"UserID"` and
+`"userid"` are different columns and every comparison here lowercases. In a
+body and an index definition they are compared verbatim; in a *setting* value
+the whole setting is refused instead — a quoted schema in a `search_path` pin
+is precisely what must not be certified by a blind comparison.
+
 Index parentheses are dropped so Postgres's own re-parenthesising doesn't read
-as drift, which means grouping is not compared. With one binary operator that
-costs nothing; with two, `((a+b)*c)` and `(a+(b*c))` flatten together — so an
+as drift, which means grouping is not compared. With one operator that costs
+nothing; with two, `((a+b)*c)` and `(a+(b*c))` flatten together — so an
 expression or predicate carrying more than one is **refused** rather than
-certified. Function bodies remain blind to a change confined to a literal's
+certified. Operators are detected as runs of operator characters, not from a
+list: a list omitted the bitwise ones, and Postgres lets anyone define new
+operators, so no list could be complete. `INCLUDE` columns and dollar-quoted
+constants are refused for the same reason — the expectation would describe a
+different index, or one Postgres could never render back to match. Function bodies remain blind to a change confined to a literal's
 case or internal spacing.
 
 Anything it cannot read faithfully is **refused by name**, printed, and the
