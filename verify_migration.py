@@ -78,7 +78,15 @@ verified; or it is a kind deliberately out of scope - CREATE POLICY,
 constraints, triggers, column definitions, data - which is counted and printed
 under NOT VERIFIED; or the parser could not read it, which is refused by name.
 The exit code says which: 0 everything verified, 1 something refused, 2
-nothing verifiable at all, 3 verified what it could with the rest listed.
+nothing verifiable at all, 3 verified what it could with the rest listed. A
+refusal outranks an empty result - a file whose every statement was refused
+reports 1, not 2, so a caller can tell a parser failure from an ordinary
+out-of-scope migration.
+
+Within one file the last word wins, because that is all the catalogue keeps: a
+function replaced twice, or a privilege granted and then revoked, leaves one
+expectation, not two that cannot both hold. Across files it does not - an
+earlier migration superseded by a later one is expected to report MISMATCH.
 
 Argument modes are honoured: an OUT parameter is excluded from both the count
 and the signature, because pronargs counts inputs only and identity arguments
@@ -125,9 +133,13 @@ Refused rather than guessed at: a nested dollar-quoted literal or a block
 comment inside a body (the Python and Postgres normalisations could not be
 guaranteed to agree on either), an escape-string body, a column-level grant, a
 grantee that resolves at apply time such as CURRENT_USER, SET ... FROM CURRENT
-(the value is whatever was current when it was applied), a setting value naming
-a quoted identifier, an index expression or predicate with more than one
-operator, an index with INCLUDE columns (they are part of the index and are not
+(the value is whatever was current when it was applied), a setting value or an
+argument list naming a quoted identifier, a function with no AS clause in its
+own statement (the SQL-standard RETURN body is not read here), an ALTER TABLE
+carrying actions beyond the RLS one, an index expression or predicate with more
+than one operator, an index containing a function call (its parentheses are
+dropped by this comparison, so lower(a) could not be told from a column named
+lowera), an index with INCLUDE columns (they are part of the index and are not
 read here, so the expectation would describe a different one), an index using a
 dollar-quoted constant (Postgres renders it back with ordinary quoting, so no
 expectation could match), and any statement the parser does not recognise.
@@ -419,8 +431,19 @@ def lex(sql: str) -> list[tuple[str, int, int]]:
             end = len(sql) if newline == -1 else newline
             kind = "line"
         elif token == "/*":
-            close = sql.find("*/", start + 2)
-            end = len(sql) if close == -1 else close + 2
+            # Block comments nest in Postgres. Stopping at the first */ left
+            # the tail of the outer comment exposed as code, and a
+            # CREATE INDEX inside one produced an expectation for an index
+            # that does not exist and never will.
+            depth, cursor = 1, start + 2
+            while depth:
+                nxt = re.compile(r"/\*|\*/").search(sql, cursor)
+                if not nxt:
+                    cursor = len(sql)
+                    break
+                depth += 1 if nxt.group() == "/*" else -1
+                cursor = nxt.end()
+            end = cursor
             kind = "block"
         else:
             close = sql.find(token, start + len(token))
@@ -644,12 +667,21 @@ def parse_functions(sql: str, masked: str, spans, out: Migration,
         # Options may sit on either side of it: `AS $f$...$f$ LANGUAGE sql` is
         # as valid as putting LANGUAGE first, and the previous revision
         # silently skipped the whole function when it saw either.
-        as_kw = re.compile(r"\bAS\b", re.I).search(masked, args_end)
+        # Bounded to this statement. A SQL-standard body (LANGUAGE SQL RETURN
+        # expr) has no AS at all, and an unbounded search found the *next*
+        # function's AS and recorded its body as this one's - checking the
+        # wrong implementation while marking both statements accounted for.
+        limit = masked.find(";", args_end)
+        limit = len(masked) if limit < 0 else limit
+        as_kw = re.compile(r"\bAS\b", re.I).search(masked, args_end, limit)
         if not as_kw:
-            out.refused.append(f"{name}: no AS clause found")
+            out.refused.append(
+                f"{name}: no AS clause in this statement - a SQL-standard "
+                "RETURN body is not compared here")
             continue
         body = next((s for s in spans
-                     if s[0] in ("dollar", "str") and s[1] >= as_kw.end()), None)
+                     if s[0] in ("dollar", "str")
+                     and as_kw.end() <= s[1] < limit), None)
         if body is None:
             out.refused.append(f"{name}: no function body found after AS")
             continue
@@ -694,6 +726,14 @@ def parse_functions(sql: str, masked: str, spans, out: Migration,
             continue
 
         nargs, signature = parse_arguments(arglist)
+        if signature and '"' in signature:
+            # f("UserID" integer) and f("userid" integer) take different
+            # named-notation arguments, and both sides of this comparison
+            # lowercase, so the difference would be invisible.
+            out.refused.append(
+                f"{name}: argument list names a quoted identifier, which this "
+                "comparison lowercases and so cannot check")
+            continue
         options = parse_options(header, header_src)
         unreadable = [k for k, v in options["config"]
                       if not setting_is_comparable(k, v)]
@@ -777,8 +817,20 @@ def parse_indexes(sql: str, masked: str, out: Migration) -> None:
         # not read as drift, which means grouping is not compared. With one
         # binary operator that costs nothing; with two, ((a+b)*c) and (a+(b*c))
         # flatten together and a wrong index would report OK.
-        if has_ambiguous_grouping(columns) or (where and
-                                               has_ambiguous_grouping(where.group(1))):
+        # (lower(a)) strips to lowera, which is also what an ordinary index on
+        # a column named lowera strips to; f(a,b) collides with a two-column
+        # index on (fa, b). No binary operator is involved, so the grouping
+        # guard does not see it, and the catalogue side strips identically -
+        # a different index would report OK.
+        predicate = where.group(1) if where else ""
+        if re.search(r"\w\s*\(", columns) or re.search(r"\w\s*\(", predicate):
+            out.refused.append(
+                f"{index_name}: a function call's parentheses are dropped by "
+                "this comparison, so lower(a) could not be told apart from a "
+                "column named lowera")
+            continue
+
+        if has_ambiguous_grouping(columns) or has_ambiguous_grouping(predicate):
             out.refused.append(
                 f"{index_name}: expression or predicate has more than one "
                 "operator, so parenthesis-blind comparison could not tell two "
@@ -798,7 +850,8 @@ def parse_indexes(sql: str, masked: str, out: Migration) -> None:
         })
 
 
-def parse_privileges(sql: str, masked: str, out: Migration) -> None:
+def parse_privileges(sql: str, masked: str, out: Migration,
+                     first: int) -> None:
     """
     GRANT/REVOKE on functions and tables.
 
@@ -857,10 +910,17 @@ def parse_privileges(sql: str, masked: str, out: Migration) -> None:
                 break
         for role in parsed_roles:
             for priv in wanted:
-                out.privileges.append({
-                    "kind": "function" if is_function else "table",
-                    "obj": obj, "role": role, "priv": priv, "want": granted,
-                })
+                entry = {"kind": "function" if is_function else "table",
+                         "obj": obj, "role": role, "priv": priv, "want": granted}
+                # Granting and then revoking in one file leaves only the revoke
+                # deployed, so keeping both expectations made the earlier one
+                # permanently unsatisfiable.
+                for previous in out.privileges[first:]:
+                    if (previous["obj"] == obj and previous["role"] == role
+                            and previous["priv"] == priv):
+                        out.privileges.remove(previous)
+                        break
+                out.privileges.append(entry)
 
     # A GRANT the pattern did not consume - ON ALL TABLES IN SCHEMA, a role
     # grant, WITH GRANT OPTION - would otherwise vanish, and a query that
@@ -897,14 +957,17 @@ def parse_alter_function(sql: str, masked: str, out: Migration,
             out.refused.append(f"{name}: unterminated ALTER FUNCTION signature")
             continue
         args = "(" + re.sub(r"\s+", " ", masked[match.end():args_end - 1]).strip() + ")"
-        nargs, _ = parse_arguments(masked[match.end():args_end - 1])
+        nargs, signature = parse_arguments(masked[match.end():args_end - 1])
         settings = parse_settings(masked[args_end:stmt_end],
                                   sql[args_end:stmt_end])
         if not settings:
             out.refused.append(f"{name}: ALTER FUNCTION with no SET clause")
             continue
+        # Name and arity is not identity: altering f(integer) must not fold
+        # its setting into an f(text) the same file happens to create, which
+        # would leave the integer overload unaltered and unchecked.
         defined = [f for f in out.functions[first:]
-                   if f["name"] == name and f["nargs"] == nargs]
+                   if f["name"] == name and f["signature"] == signature]
         if defined:
             for fn in defined:
                 fn["config"] = parse_settings_merge(fn["config"], settings)
@@ -965,6 +1028,17 @@ def parse_rls(masked: str, out: Migration) -> None:
         r"ROW\s+LEVEL\s+SECURITY", masked, re.I,
     ):
         out.hits.add(match.start())
+        # ALTER TABLE takes a comma-separated list of actions, and marking the
+        # statement accounted for on one hit would silently drop the rest -
+        # FORCE ROW LEVEL SECURITY next to ENABLE would never be checked while
+        # the run still exited 0.
+        stmt_end = masked.find(";", match.end())
+        rest = masked[match.end():stmt_end if stmt_end > 0 else len(masked)]
+        if rest.strip().strip(";"):
+            out.refused.append(
+                f"public.{match.group(1)}: ALTER TABLE carries further actions "
+                "beyond the RLS one, and only the RLS action is read here")
+            continue
         out.rls.append({"table": f"public.{match.group(1)}",
                         "want": match.group(2).upper() == "ENABLE"})
 
@@ -1028,7 +1102,7 @@ def parse(sql: str, out: Migration, src: str = "") -> None:
     masked = mask(sql, spans)
     parse_functions(sql, masked, spans, out, before["functions"])
     parse_indexes(sql, masked, out)
-    parse_privileges(sql, masked, out)
+    parse_privileges(sql, masked, out, before["privileges"])
     parse_alter_function(sql, masked, out, before["functions"])
     parse_alter_role(sql, masked, out)
     parse_rls(masked, out)
@@ -1111,8 +1185,13 @@ fn_check AS (
          ), ''), '') END AS detail
   FROM fn_expected e
   LEFT JOIN LATERAL (
+    -- Signature first: with two overloads of equal arity and identical body
+    -- the other orderings tie, and Postgres was free to return either, so a
+    -- correctly deployed overload could report a signature MISMATCH purely
+    -- because its sibling was the one picked.
     SELECT * FROM fn_actual a WHERE a.name = e.name
-    ORDER BY (a.nargs = e.nargs) DESC, (a.body = e.body) DESC LIMIT 1
+    ORDER BY (a.signature IS NOT DISTINCT FROM e.signature) DESC,
+             (a.nargs = e.nargs) DESC, (a.body = e.body) DESC LIMIT 1
   ) a ON true
 )""")
         selects.append("SELECT * FROM fn_check")
@@ -1328,6 +1407,11 @@ def main(argv: list[str]) -> int:
 
     for refusal in m.refused:
         print(f"! REFUSED {refusal}", file=sys.stderr)
+
+    if not len(m) and m.refused:
+        print("! Everything in this input was refused; nothing could be "
+              "checked. The refusals are listed above.", file=sys.stderr)
+        return 1
 
     if not len(m):
         print("! Nothing here can be verified. This script covers functions, "

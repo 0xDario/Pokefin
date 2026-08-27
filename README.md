@@ -348,7 +348,7 @@ refused by name. The exit code says which:
 | | |
 |---|---|
 | `0` | everything in the file was verified |
-| `1` | something was refused — the parser could not read it |
+| `1` | something was refused — the parser could not read it (this outranks `2`) |
 | `2` | nothing here is verifiable (`0008`, policies only); no query is printed |
 | `3` | verified what it could; the rest is listed under `NOT VERIFIED` |
 
@@ -393,9 +393,17 @@ nothing; with two, `((a+b)*c)` and `(a+(b*c))` flatten together — so an
 expression or predicate carrying more than one is **refused** rather than
 certified. Operators are detected as runs of operator characters, not from a
 list: a list omitted the bitwise ones, and Postgres lets anyone define new
-operators, so no list could be complete. `INCLUDE` columns and dollar-quoted
-constants are refused for the same reason — the expectation would describe a
-different index, or one Postgres could never render back to match. Function bodies remain blind to a change confined to a literal's
+operators, so no list could be complete. `INCLUDE` columns, dollar-quoted
+constants and **function calls** are refused for the same reason — the
+expectation would describe a different index, or one Postgres could never
+render back to match. `lower(a)` strips to `lowera`, which is exactly what an
+ordinary index on a column of that name strips to.
+
+Within one file the last word wins, because that is all the catalogue keeps: a
+function replaced twice, or a privilege granted and then revoked, leaves one
+expectation rather than two that cannot both hold. Across files it does not —
+an earlier migration superseded by a later one is *expected* to report
+`MISMATCH`. Function bodies remain blind to a change confined to a literal's
 case or internal spacing.
 
 Anything it cannot read faithfully is **refused by name**, printed, and the
