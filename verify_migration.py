@@ -107,7 +107,9 @@ same reasoning applies to resolving a function for a privilege or a config
 check: those look it up in pg_proc by name and normalised input types, so an
 argument list this could not translate yields MISSING for that one row instead
 of an error for all of them. Only input types are used, never the declaration
-names, since a regprocedure identity takes a type list.
+names, since a regprocedure identity takes a type list - and no type
+modifiers either, since an identity stores type OIDs and renders numeric(10, 2)
+back as numeric.
 
 Index parentheses are dropped so that Postgres's own re-parenthesising does
 not read as drift, which means grouping is not compared. With one binary
@@ -141,8 +143,11 @@ Refused rather than guessed at: a nested dollar-quoted literal or a block
 comment inside a body (the Python and Postgres normalisations could not be
 guaranteed to agree on either), an escape-string body, a column-level grant, a
 grantee that resolves at apply time such as CURRENT_USER, SET ... FROM CURRENT
-(the value is whatever was current when it was applied), a setting value or an
-argument list naming a quoted identifier, a function with no AS clause in its
+(the value is whatever was current when it was applied), a setting whose value carries a quoted
+identifier or a literal whose case or spacing normalising would strip - 'Acme
+Corp' and 'acmecorp' are different values of a custom GUC, where 'public' and
+'3s' survive normalising unchanged - an argument list naming a quoted
+identifier, a function with no AS clause in its
 own statement (the SQL-standard RETURN body is not read here), an ALTER TABLE
 carrying actions beyond the RLS one, an ALTER ROLE whose target resolves at
 execution time, a privilege statement naming more than one function, an index
@@ -153,6 +158,11 @@ beyond the predicate - INCLUDE columns, a WITH storage clause, a TABLESPACE -
 since each is part of the index and dropping it would leave the expectation
 describing a different one, an index using a dollar-quoted constant (Postgres renders it back with ordinary quoting, so no
 expectation could match), and any statement the parser does not recognise.
+
+NOT counts as an operator for that purpose. It is unary, but it is exactly as
+grouping-sensitive: NOT (a AND b) and (NOT a) AND b flatten together and have
+different truth conditions. A keyword before a parenthesis opens a group rather
+than calling a function, so NOT ( is not mistaken for a call.
 
 Operators are detected as runs of operator characters rather than from a list.
 The list was the wrong shape: the first attempt omitted the bitwise ones, so
@@ -332,7 +342,20 @@ TYPE_ALIASES = {
 # anyone define new operators, so no list can be complete. This matches any run
 # of operator characters instead, minus the ones that are punctuation here:
 # a cast's :: and a qualified name's dot.
-OPERATOR_RUN = re.compile(r"[-+*/%^&|#~<>=!@?]+|\b(AND|OR)\b", re.I)
+# NOT is unary but it is exactly as grouping-sensitive: NOT (a AND b) and
+# (NOT a) AND b both flatten to notaandb and have different truth conditions.
+OPERATOR_RUN = re.compile(r"[-+*/%^&|#~<>=!@?]+|\b(AND|OR|NOT)\b", re.I)
+
+
+# A keyword before ( opens a group, not a call: NOT (a AND b) is grouping,
+# which has its own guard and its own message.
+CALL_KEYWORDS = frozenset({"not", "and", "or", "in", "exists", "all", "any",
+                           "some", "where", "values", "between", "like"})
+
+
+def is_call(text: str) -> bool:
+    return any(m.group(1).lower() not in CALL_KEYWORDS
+               for m in re.finditer(r"(\w+)\s*\(", text))
 
 
 def has_ambiguous_grouping(text: str) -> bool:
@@ -385,6 +408,11 @@ def canon_types(masked_arglist: str) -> str:
                 continue
             arg = arg[mode.end():].strip()
         arg = re.sub(r"\s+", " ", arg.strip().lower())
+        # A function identity stores type OIDs, so numeric(10, 2) is rendered
+        # back as numeric and varchar(10) as character varying. Keeping the
+        # modifier made the identity unmatchable and the lookup report the
+        # function missing.
+        arg = re.sub(r"\s*\([^)]*\)", "", arg)
         words = arg.split()
         if len(words) >= 2 and re.sub(r"[\[\]()].*", "", words[0]) not in TYPE_WORDS:
             arg = " ".join(words[1:])          # the first word was the name
@@ -424,6 +452,7 @@ def parse_arguments(masked_arglist: str) -> tuple[int, str | None]:
             if mode.group(1).upper() != "IN":
                 arg = mode.group(1).lower() + " " + arg
         arg = re.sub(r"\s+", " ", arg.strip().lower())
+        arg = re.sub(r"\s*\([^)]*\)", "", arg)      # typmods are not in the identity
         for alias, canonical in TYPE_ALIASES.items():
             arg = re.sub(rf"\b{alias}\b(?!\s*\w)", canonical, arg)
         args.append(arg)
@@ -690,16 +719,25 @@ def render_setting(key: str, value: str) -> str:
     return re.sub(r"[\s()']", "", f"{key}={value}".lower())
 
 
+SETTING_REFUSAL = ("carries a quoted identifier or a literal whose case or "
+                   "spacing this comparison strips, so it cannot be checked")
+
+
 def setting_is_comparable(key: str, value: str) -> bool:
     """
-    False when the value carries a quoted identifier.
+    False when normalising the value would destroy something that matters.
 
     SET search_path = "TrustedSchema" and "trustedschema" are different
-    schemas, and both sides of this comparison lowercase, so the check could
-    not tell them apart. Refusing keeps the rule that nothing is certified by
-    a comparison known to be blind to the difference.
+    schemas. A custom GUC is worse: SET app.tenant = 'Acme Corp' and
+    'acmecorp' are different values, and rendering strips quotes, spaces and
+    case from both. A literal survives only if it is already what normalising
+    would make of it - which is true of 'public' and '3s', and false of
+    anything carrying capitals or internal spaces.
     """
-    return '"' not in value
+    if '"' in value:
+        return False
+    return all(body == re.sub(r"[\s()]", "", body.lower())
+               for body in re.findall(r"'([^']*)'", value))
 
 
 def render_settings(settings: list[tuple[str, str]]) -> str | None:
@@ -801,9 +839,8 @@ def parse_functions(sql: str, masked: str, spans, out: Migration,
         unreadable = [k for k, v in options["config"]
                       if not setting_is_comparable(k, v)]
         if unreadable:
-            out.refused.append(
-                f"{name}: setting {unreadable[0]} names a quoted identifier, "
-                "which this comparison lowercases and so cannot check")
+            out.refused.append(f"{name}: setting {unreadable[0]} "
+                               + SETTING_REFUSAL)
             continue
         entry = {
             "offset": match.start(),
@@ -894,7 +931,7 @@ def parse_indexes(sql: str, masked: str, decommented: str,
         # guard does not see it, and the catalogue side strips identically -
         # a different index would report OK.
         predicate = where.group(1) if where else ""
-        if re.search(r"\w\s*\(", columns) or re.search(r"\w\s*\(", predicate):
+        if is_call(columns) or is_call(predicate):
             out.refused.append(
                 f"{index_name}: a function call's parentheses are dropped by "
                 "this comparison, so lower(a) could not be told apart from a "
@@ -921,8 +958,8 @@ def parse_indexes(sql: str, masked: str, decommented: str,
         })
 
 
-def parse_privileges(sql: str, masked: str, out: Migration,
-                     first: int) -> None:
+def parse_privileges(sql: str, masked: str, code_only: str,
+                     out: Migration, first: int) -> None:
     """
     GRANT/REVOKE on functions and tables.
 
@@ -995,8 +1032,14 @@ def parse_privileges(sql: str, masked: str, out: Migration,
                 # Granting and then revoking in one file leaves only the revoke
                 # deployed, so keeping both expectations made the earlier one
                 # permanently unsatisfiable.
+                # f(int) and f(integer) are the same function with different
+                # display strings, so the display string cannot be the key -
+                # the obsolete grant would survive and report MISMATCH.
                 for previous in out.privileges[first:]:
-                    if (previous["obj"] == obj and previous["role"] == role
+                    if (previous["kind"] == entry["kind"]
+                            and previous["fname"] == entry["fname"]
+                            and previous["types"] == entry["types"]
+                            and previous["role"] == role
                             and previous["priv"] == priv):
                         out.privileges.remove(previous)
                         break
@@ -1005,7 +1048,7 @@ def parse_privileges(sql: str, masked: str, out: Migration,
     # A GRANT the pattern did not consume - ON ALL TABLES IN SCHEMA, a role
     # grant, WITH GRANT OPTION - would otherwise vanish, and a query that
     # checked nothing still prints as if it checked everything.
-    for kw in re.finditer(r"\b(GRANT|REVOKE)\b", masked, re.I):
+    for kw in re.finditer(r"\b(GRANT|REVOKE)\b", code_only, re.I):
         if kw.start() not in seen:
             out.hits.add(kw.start())
             line = masked[kw.start():masked.find(";", kw.start())]
@@ -1024,6 +1067,7 @@ def parse_alter_function(sql: str, masked: str, out: Migration,
     it to the earlier file would both misreport the source and, before
     settings replaced by key, build a proconfig nothing could match.
     """
+    cfg_first = len(out.configs)
     for match in re.finditer(r"ALTER\s+FUNCTION\s+(?:public\.)?(\w+)\s*\(",
                              masked, re.I):
         out.hits.add(match.start())
@@ -1069,15 +1113,23 @@ def parse_alter_function(sql: str, masked: str, out: Migration,
             # statement_timeout is not reported as drift.
             for key, value in settings:
                 if not setting_is_comparable(key, value):
-                    out.refused.append(
-                        f"{name}: setting {key} names a quoted identifier, "
-                        "which this comparison lowercases and so cannot check")
+                    out.refused.append(f"{name}: setting {key} = {value} "
+                                       + SETTING_REFUSAL)
                     continue
-                out.configs.append({
-                    "obj": f"public.{name}{args}".lower(),
-                    "fname": name,
-                    "types": canon_types(masked[match.end():args_end - 1]),
-                    "setting": render_setting(key, value)})
+                types = canon_types(masked[match.end():args_end - 1])
+                config = {"obj": f"public.{name}{args}".lower(),
+                          "fname": name, "types": types,
+                          "setting": render_setting(key, value)}
+                # proconfig holds one value per key, so two alterations of the
+                # same setting in one file leave one expectation, not two that
+                # cannot both hold.
+                for previous in out.configs[cfg_first:]:
+                    if (previous["fname"] == name and previous["types"] == types
+                            and previous["setting"].split("=")[0]
+                                == config["setting"].split("=")[0]):
+                        out.configs.remove(previous)
+                        break
+                out.configs.append(config)
 
 
 def parse_settings_merge(existing, incoming):
@@ -1117,9 +1169,8 @@ def parse_alter_role(sql: str, masked: str, out: Migration) -> None:
         for key, value in parse_settings(masked[match.start(2):match.end(2)],
                                          sql[match.start(2):match.end(2)]):
             if not setting_is_comparable(key, value):
-                out.refused.append(
-                    f"{role}: setting {key} names a quoted identifier, which "
-                    "this comparison lowercases and so cannot check")
+                out.refused.append(f"{role}: setting {key} = {value} "
+                                   + SETTING_REFUSAL)
                 continue
             out.roles.append({"role": role,
                               "setting": render_setting(key, value)})
@@ -1204,9 +1255,13 @@ def parse(sql: str, out: Migration, src: str = "") -> None:
     spans = lex(sql)
     masked = mask(sql, spans)
     decommented = mask(sql, [sp for sp in spans if sp[0] in ("line", "block")])
+    # Quoted identifiers blanked too, so a role named "grant" is not mistaken
+    # for a statement keyword by the fallback scan.
+    code_only = mask(sql, [(("str" if k == "ident" else k), a, b)
+                           for k, a, b in spans])
     parse_functions(sql, masked, spans, out, before["functions"])
     parse_indexes(sql, masked, decommented, out)
-    parse_privileges(sql, masked, out, before["privileges"])
+    parse_privileges(sql, masked, code_only, out, before["privileges"])
     parse_alter_function(sql, masked, out, before["functions"])
     parse_alter_role(sql, masked, out)
     parse_rls(masked, out)
