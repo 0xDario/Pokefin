@@ -146,7 +146,9 @@ def _is_retryable(exc: Exception) -> bool:
         return True
     status = _http_status(exc)
     if status is not None:
-        return status == 429 or 500 <= status < 600
+        # 408 is a request timeout: transient, and this is a paginated GET, so
+        # replaying it is safe.
+        return status in (408, 429) or 500 <= status < 600
     code = _error_code(exc)
     if code is None:
         return False

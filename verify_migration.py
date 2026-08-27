@@ -85,7 +85,9 @@ out-of-scope migration.
 
 Within one file the last word wins, because that is all the catalogue keeps: a
 function replaced twice, or a privilege granted and then revoked, leaves one
-expectation, not two that cannot both hold. Source order decides it: an ALTER
+expectation, not two that cannot both hold. That holds for definitions,
+privileges, function settings, role settings and RLS alike, each keyed on the
+canonical identity rather than on display text. Source order decides it: an ALTER
 FUNCTION ... SET before a CREATE OR REPLACE of the same signature asserts
 nothing, because the create drops what it set. Across files the rule does not
 apply - an earlier migration superseded by a later one is expected to report
@@ -148,11 +150,15 @@ identifier or a literal whose case or spacing normalising would strip - 'Acme
 Corp' and 'acmecorp' are different values of a custom GUC, where 'public' and
 '3s' survive normalising unchanged - an argument list naming a quoted
 identifier, a function with no AS clause in its
-own statement (the SQL-standard RETURN body is not read here), an ALTER TABLE
+own statement (the SQL-standard RETURN body is not read here), a body whose
+dollar quote is never closed, a two-string AS clause (the C form, where prosrc
+holds the link symbol rather than a body), an ALTER TABLE
 carrying actions beyond the RLS one, an ALTER ROLE whose target resolves at
 execution time, a privilege statement naming more than one function, an index
-expression or predicate with more than one operator, an index containing a
-function call (its parentheses are dropped by this comparison, so lower(a)
+expression or predicate with more than one operator, an index containing CASE or another
+structured expression (the flattening leaves a bare run of characters that a
+column of the same name would also produce), an index containing a function
+call (its parentheses are dropped by this comparison, so lower(a)
 could not be told from a column named lowera), an index carrying any clause
 beyond the predicate - INCLUDE columns, a WITH storage clause, a TABLESPACE -
 since each is part of the index and dropping it would leave the expectation
@@ -352,6 +358,13 @@ OPERATOR_RUN = re.compile(r"[-+*/%^&|#~<>=!@?]+|\b(AND|OR|NOT)\b", re.I)
 CALL_KEYWORDS = frozenset({"not", "and", "or", "in", "exists", "all", "any",
                            "some", "where", "values", "between", "like"})
 
+# Structure that survives neither the paren stripping nor the whitespace
+# removal: (CASE WHEN a THEN b ELSE c END) flattens to casewhenathenbelsecend,
+# which is also what an ordinary index on a column of that name flattens to.
+STRUCTURED = re.compile(
+    r"\b(CASE|WHEN|THEN|ELSE|END|COALESCE|NULLIF|CAST|ARRAY|ROW"
+    r"|SELECT|DISTINCT|COLLATE)\b", re.I)
+
 
 def is_call(text: str) -> bool:
     return any(m.group(1).lower() not in CALL_KEYWORDS
@@ -539,8 +552,11 @@ def lex(sql: str) -> list[tuple[str, int, int]]:
             kind = "block"
         else:
             close = sql.find(token, start + len(token))
+            # An unterminated dollar quote is malformed input. Recorded as its
+            # own kind so the function parser refuses it rather than hashing
+            # source truncated at end of file and exiting 0.
             end = len(sql) if close == -1 else close + len(token)
-            kind = "dollar"
+            kind = "dollar" if close != -1 else "unterminated"
         spans.append((kind, start, end))
         i = end
 
@@ -572,12 +588,17 @@ def match_paren(masked: str, open_index: int) -> int:
 
 
 def split_top_level(text: str) -> list[str]:
-    """Split on commas that are not inside parentheses — NUMERIC(10,2)."""
+    """
+    Split on commas that are not nested - NUMERIC(10,2), ARRAY[1,2].
+
+    Brackets count as well as parentheses: a default of ARRAY[1,2] was being
+    read as two arguments, giving a signature no deployed function could have.
+    """
     parts, depth, current = [], 0, []
     for ch in text:
-        if ch == "(":
+        if ch in "([":
             depth += 1
-        elif ch == ")":
+        elif ch in ")]":
             depth -= 1
         if ch == "," and depth == 0:
             parts.append("".join(current))
@@ -661,8 +682,9 @@ def blank_returns(header: str) -> str:
 def parse_options(header: str, source: str) -> dict:
     """LANGUAGE / volatility / SECURITY / SET, wherever they sit."""
     clauses = blank_returns(header)
-    lang = re.search(r'\bLANGUAGE\s+(\w+|"[^"]*")', clauses, re.I)
-    volatile = re.search(r"\b(IMMUTABLE|STABLE|VOLATILE)\b", clauses, re.I)
+    options = blank_settings(clauses, source)
+    lang = re.search(r'\bLANGUAGE\s+(\w+|"[^"]*")', options, re.I)
+    volatile = re.search(r"\b(IMMUTABLE|STABLE|VOLATILE)\b", options, re.I)
     language = lang.group(1) if lang else None
     if language and language.startswith('"'):
         language = language[1:-1]      # quoted: case-sensitive, kept as written
@@ -671,9 +693,61 @@ def parse_options(header: str, source: str) -> dict:
     return {
         "lang": language,
         "volatile": VOLATILITY[volatile.group(1).lower()] if volatile else "v",
-        "secdef": bool(re.search(r"\bSECURITY\s+DEFINER\b", clauses, re.I)),
+        "secdef": bool(re.search(r"\bSECURITY\s+DEFINER\b", options, re.I)),
         "config": parse_settings(clauses, source),
     }
+
+
+def setting_spans(masked_text: str, source: str | None = None):
+    """
+    (match, end) per SET clause, sharing one rule for where a value stops.
+
+    The value runs to the semicolon or to the keyword that begins the next
+    clause - `SET search_path TO public AS $$` on one line would otherwise read
+    as the value "public AS". A keyword only counts when it starts a clause,
+    though: `SET search_path = public, stable` lists a schema called stable.
+    A newline is deliberately not a terminator, since a value written on the
+    following line is ordinary formatting.
+
+    Boundaries are found in the masked copy, where a literal is blank, so a
+    semicolon inside the value cannot cut it short; and the extent must be
+    found this way rather than by matching the value itself, since against a
+    blanked literal a trailing `\\s*(...)` would backtrack onto the blanks and
+    capture a single space.
+    """
+    found = []
+    for match in re.finditer(r"\bSET\s+([\w.]+)\s*(?:=|\bTO\b)",
+                             masked_text, re.I):
+        end = masked_text.find(";", match.end())
+        if end == -1:
+            end = len(masked_text)
+        # Read from the source, not the masked copy: against a blanked
+        # literal `before` is empty, and an empty `before` cannot be told from
+        # a keyword sitting at the very start of the value.
+        text = source if source is not None else masked_text
+        for clause in NEXT_CLAUSE.finditer(masked_text, match.end(), end):
+            before = text[match.end():clause.start()].strip()
+            if not before.endswith(","):
+                end = clause.start()
+                break
+        found.append((match, end))
+    return found
+
+
+def blank_settings(masked_text: str, source: str) -> str:
+    """
+    Every SET clause blanked, so its value is not read as another option.
+
+    `SET search_path = public, stable` names a schema; scanning the whole
+    header for the volatility keyword found it there and recorded the function
+    as STABLE when Postgres would default it to VOLATILE.
+    """
+    out = list(masked_text)
+    for match, end in setting_spans(masked_text, source):
+        for i in range(match.start(), min(end, len(out))):
+            if out[i] != "\n":
+                out[i] = " "
+    return "".join(out)
 
 
 def parse_settings(masked_text: str, source: str) -> list[tuple[str, str]]:
@@ -688,26 +762,8 @@ def parse_settings(masked_text: str, source: str) -> list[tuple[str, str]]:
     build a proconfig no correctly deployed function could ever match.
     """
     settings: list[tuple[str, str]] = []
-    for match in re.finditer(r"\bSET\s+([\w.]+)\s*(?:=|\bTO\b)", masked_text, re.I):
+    for match, end in setting_spans(masked_text, source):
         key = match.group(1).lower()
-        # The value runs to the semicolon or to the keyword that begins the
-        # next clause - `SET search_path TO public AS $$` on one line would
-        # otherwise read as the value "public AS". A newline is deliberately
-        # NOT a terminator: `SET search_path =` with the value on the following
-        # line is ordinary formatting, and treating the break as semantic
-        # recorded an empty value. Both boundaries are looked for in the masked
-        # copy, where a literal is blank, so a semicolon inside the value
-        # cannot cut it short; and the extent must be found this way rather
-        # than by matching the value itself, since against a blanked literal a
-        # trailing `\s*(...)` would backtrack onto the blanks and capture a
-        # single space.
-        end = len(masked_text)
-        found = masked_text.find(";", match.end())
-        if found != -1:
-            end = found
-        clause = NEXT_CLAUSE.search(masked_text, match.end(), end)
-        if clause:
-            end = clause.start()
         value = collapse_space_outside_literals(
             source[match.end():end]).strip().rstrip(";")
         settings = [entry for entry in settings if entry[0] != key]
@@ -781,12 +837,22 @@ def parse_functions(sql: str, masked: str, spans, out: Migration,
                 "RETURN body is not compared here")
             continue
         body = next((s for s in spans
-                     if s[0] in ("dollar", "str")
+                     if s[0] in ("dollar", "str", "unterminated")
                      and as_kw.end() <= s[1] < limit), None)
+        if body and body[0] == "unterminated":
+            out.refused.append(f"{name}: the body's dollar quote is never closed")
+            continue
         if body is None:
             out.refused.append(f"{name}: no function body found after AS")
             continue
         kind, body_start, body_end = body
+        if kind == "str" and re.match(r"\s*,", masked[body_end:]):
+            # AS '/tmp/lib.so', 'entry' is the C form: prosrc holds the link
+            # symbol, the second string, not the first.
+            out.refused.append(
+                f"{name}: a two-string AS clause is the C-language form, "
+                "where prosrc holds the link symbol rather than a body")
+            continue
         if kind == "str":
             # A single-quoted body stores doubled quotes as syntax, not
             # content: Postgres keeps SELECT 'x' in prosrc for a body written
@@ -931,6 +997,14 @@ def parse_indexes(sql: str, masked: str, decommented: str,
         # guard does not see it, and the catalogue side strips identically -
         # a different index would report OK.
         predicate = where.group(1) if where else ""
+        structured = STRUCTURED.search(columns) or STRUCTURED.search(predicate)
+        if structured:
+            out.refused.append(
+                f"{index_name}: {structured.group(1).upper()} is structure "
+                "this comparison flattens away, so the expression could not "
+                "be told from a column of the same run of characters")
+            continue
+
         if is_call(columns) or is_call(predicate):
             out.refused.append(
                 f"{index_name}: a function call's parentheses are dropped by "
@@ -1137,7 +1211,8 @@ def parse_settings_merge(existing, incoming):
     return merged + incoming
 
 
-def parse_alter_role(sql: str, masked: str, out: Migration) -> None:
+def parse_alter_role(sql: str, masked: str, out: Migration,
+                     role_first: int) -> None:
     """
     ALTER ROLE <role> SET key = value, checked against pg_roles.rolconfig.
 
@@ -1172,11 +1247,19 @@ def parse_alter_role(sql: str, masked: str, out: Migration) -> None:
                 out.refused.append(f"{role}: setting {key} = {value} "
                                    + SETTING_REFUSAL)
                 continue
-            out.roles.append({"role": role,
-                              "setting": render_setting(key, value)})
+            setting = render_setting(key, value)
+            # rolconfig keeps one value per key, so two alterations of the same
+            # setting in one file leave one expectation.
+            for previous in out.roles[role_first:]:
+                if (previous["role"] == role
+                        and previous["setting"].split("=")[0]
+                            == setting.split("=")[0]):
+                    out.roles.remove(previous)
+                    break
+            out.roles.append({"role": role, "setting": setting})
 
 
-def parse_rls(masked: str, out: Migration) -> None:
+def parse_rls(masked: str, out: Migration, rls_first: int) -> None:
     for match in re.finditer(
         r"ALTER\s+TABLE\s+(?:public\.)?(\w+)\s+(ENABLE|DISABLE)\s+"
         r"ROW\s+LEVEL\s+SECURITY", masked, re.I,
@@ -1193,7 +1276,14 @@ def parse_rls(masked: str, out: Migration) -> None:
                 f"public.{match.group(1)}: ALTER TABLE carries further actions "
                 "beyond the RLS one, and only the RLS action is read here")
             continue
-        out.rls.append({"table": f"public.{match.group(1)}",
+        table = f"public.{match.group(1)}"
+        # relrowsecurity is one flag, so enabling and later disabling in one
+        # file leaves the final state, not two expectations.
+        for previous in out.rls[rls_first:]:
+            if previous["table"] == table:
+                out.rls.remove(previous)
+                break
+        out.rls.append({"table": table,
                         "want": match.group(2).upper() == "ENABLE"})
 
 
@@ -1263,8 +1353,8 @@ def parse(sql: str, out: Migration, src: str = "") -> None:
     parse_indexes(sql, masked, decommented, out)
     parse_privileges(sql, masked, code_only, out, before["privileges"])
     parse_alter_function(sql, masked, out, before["functions"])
-    parse_alter_role(sql, masked, out)
-    parse_rls(masked, out)
+    parse_alter_role(sql, masked, out, before["roles"])
+    parse_rls(masked, out, before["rls"])
     account_for_statements(masked, out, src)
     for fn in out.functions[before["functions"]:]:
         fn["config"] = render_settings(fn["config"])
