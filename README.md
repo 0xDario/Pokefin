@@ -393,15 +393,18 @@ nothing; with two, `((a+b)*c)` and `(a+(b*c))` flatten together — so an
 expression or predicate carrying more than one is **refused** rather than
 certified. Operators are detected as runs of operator characters, not from a
 list: a list omitted the bitwise ones, and Postgres lets anyone define new
-operators, so no list could be complete. `INCLUDE` columns, dollar-quoted
-constants and **function calls** are refused for the same reason — the
+operators, so no list could be complete. Any clause beyond the predicate — `INCLUDE`
+columns, a `WITH` storage clause, a `TABLESPACE` — plus dollar-quoted constants
+and **function calls** are refused for the same reason — the
 expectation would describe a different index, or one Postgres could never
 render back to match. `lower(a)` strips to `lowera`, which is exactly what an
 ordinary index on a column of that name strips to.
 
 Within one file the last word wins, because that is all the catalogue keeps: a
 function replaced twice, or a privilege granted and then revoked, leaves one
-expectation rather than two that cannot both hold. Across files it does not —
+expectation rather than two that cannot both hold. Source order decides it — an
+`ALTER FUNCTION … SET` *before* a `CREATE OR REPLACE` of the same signature
+asserts nothing, since the create drops what it set. Across files it does not —
 an earlier migration superseded by a later one is *expected* to report
 `MISMATCH`. Function bodies remain blind to a change confined to a literal's
 case or internal spacing.

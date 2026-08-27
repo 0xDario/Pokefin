@@ -85,8 +85,11 @@ out-of-scope migration.
 
 Within one file the last word wins, because that is all the catalogue keeps: a
 function replaced twice, or a privilege granted and then revoked, leaves one
-expectation, not two that cannot both hold. Across files it does not - an
-earlier migration superseded by a later one is expected to report MISMATCH.
+expectation, not two that cannot both hold. Source order decides it: an ALTER
+FUNCTION ... SET before a CREATE OR REPLACE of the same signature asserts
+nothing, because the create drops what it set. Across files the rule does not
+apply - an earlier migration superseded by a later one is expected to report
+MISMATCH.
 
 Argument modes are honoured: an OUT parameter is excluded from both the count
 and the signature, because pronargs counts inputs only and identity arguments
@@ -99,7 +102,12 @@ pg_get_function_identity_arguments speaks - which is why the file's spellings
 are mapped (INT to integer, VARCHAR to character varying, and so on). A
 signature this could not translate is reported as a difference and names both
 sides, rather than being fed to to_regprocedure, which raises on a type it
-cannot parse and would take every other check in the query down with it.
+cannot parse and would take every other check in the query down with it. The
+same reasoning applies to resolving a function for a privilege or a config
+check: those look it up in pg_proc by name and normalised input types, so an
+argument list this could not translate yields MISSING for that one row instead
+of an error for all of them. Only input types are used, never the declaration
+names, since a regprocedure identity takes a type list.
 
 Index parentheses are dropped so that Postgres's own re-parenthesising does
 not read as drift, which means grouping is not compared. With one binary
@@ -136,12 +144,14 @@ grantee that resolves at apply time such as CURRENT_USER, SET ... FROM CURRENT
 (the value is whatever was current when it was applied), a setting value or an
 argument list naming a quoted identifier, a function with no AS clause in its
 own statement (the SQL-standard RETURN body is not read here), an ALTER TABLE
-carrying actions beyond the RLS one, an index expression or predicate with more
-than one operator, an index containing a function call (its parentheses are
-dropped by this comparison, so lower(a) could not be told from a column named
-lowera), an index with INCLUDE columns (they are part of the index and are not
-read here, so the expectation would describe a different one), an index using a
-dollar-quoted constant (Postgres renders it back with ordinary quoting, so no
+carrying actions beyond the RLS one, an ALTER ROLE whose target resolves at
+execution time, a privilege statement naming more than one function, an index
+expression or predicate with more than one operator, an index containing a
+function call (its parentheses are dropped by this comparison, so lower(a)
+could not be told from a column named lowera), an index carrying any clause
+beyond the predicate - INCLUDE columns, a WITH storage clause, a TABLESPACE -
+since each is part of the index and dropping it would leave the expectation
+describing a different one, an index using a dollar-quoted constant (Postgres renders it back with ordinary quoting, so no
 expectation could match), and any statement the parser does not recognise.
 
 Operators are detected as runs of operator characters rather than from a list.
@@ -329,6 +339,59 @@ def has_ambiguous_grouping(text: str) -> bool:
     bare = re.sub(r"'[^']*'", "", text)
     bare = bare.replace("::", " ")
     return len(OPERATOR_RUN.findall(bare)) >= 2
+
+
+# Words a type declaration can start with. Used only to tell an argument name
+# from a type when both are present: `p_id bigint` has a name, `double
+# precision` does not. A single-token argument is always a type.
+TYPE_WORDS = frozenset("""
+int int2 int4 int8 integer smallint bigint serial bigserial smallserial
+numeric decimal real double float float4 float8 money boolean bool
+text varchar character char bpchar bytea name
+date time timestamp timestamptz timetz interval
+uuid json jsonb xml inet cidr macaddr macaddr8 bit varbit tsvector tsquery
+point line lseg box path polygon circle
+oid regclass regproc regprocedure regtype regnamespace regrole
+void record trigger event_trigger internal language_handler
+anyelement anyarray anynonarray anyenum anyrange anycompatible
+""".split())
+
+
+def is_single_group(text: str) -> bool:
+    """True when text is one balanced (...) group, not two side by side.
+
+    GRANT EXECUTE ON FUNCTION f(integer), g(text) makes the argument pattern
+    swallow both, and the malformed target that results would be handed to a
+    catalogue lookup as a single object.
+    """
+    if not (text.startswith("(") and text.endswith(")")):
+        return False
+    depth = 0
+    for i, ch in enumerate(text):
+        depth += (ch == "(") - (ch == ")")
+        if depth == 0 and i < len(text) - 1:
+            return False
+    return depth == 0
+
+
+def canon_types(masked_arglist: str) -> str:
+    """The input type list alone - no names, no modes, no defaults."""
+    types = []
+    for arg in split_top_level(masked_arglist):
+        arg = re.split(r"\bDEFAULT\b|=", arg, maxsplit=1, flags=re.I)[0].strip()
+        mode = re.match(r"(IN|OUT|INOUT|VARIADIC)\s+", arg, re.I)
+        if mode:
+            if mode.group(1).upper() == "OUT":
+                continue
+            arg = arg[mode.end():].strip()
+        arg = re.sub(r"\s+", " ", arg.strip().lower())
+        words = arg.split()
+        if len(words) >= 2 and re.sub(r"[\[\]()].*", "", words[0]) not in TYPE_WORDS:
+            arg = " ".join(words[1:])          # the first word was the name
+        for alias, canonical in TYPE_ALIASES.items():
+            arg = re.sub(rf"\b{alias}\b(?!\s*\w)", canonical, arg)
+        types.append(arg)
+    return re.sub(r"\s+", "", ",".join(types))
 
 
 def parse_arguments(masked_arglist: str) -> tuple[int, str | None]:
@@ -596,7 +659,7 @@ def parse_settings(masked_text: str, source: str) -> list[tuple[str, str]]:
     build a proconfig no correctly deployed function could ever match.
     """
     settings: list[tuple[str, str]] = []
-    for match in re.finditer(r"\bSET\s+(\w+)\s*(?:=|\bTO\b)", masked_text, re.I):
+    for match in re.finditer(r"\bSET\s+([\w.]+)\s*(?:=|\bTO\b)", masked_text, re.I):
         key = match.group(1).lower()
         # The value runs to the semicolon or to the keyword that begins the
         # next clause - `SET search_path TO public AS $$` on one line would
@@ -719,7 +782,7 @@ def parse_functions(sql: str, masked: str, spans, out: Migration,
         stop = stmt_end if stmt_end > 0 else len(masked)
         header = masked[args_end:body_start] + " " + masked[body_end:stop]
         header_src = sql[args_end:body_start] + " " + sql[body_end:stop]
-        if re.search(r"\bSET\s+\w+\s+FROM\s+CURRENT\b", header, re.I):
+        if re.search(r"\bSET\s+[\w.]+\s+FROM\s+CURRENT\b", header, re.I):
             out.refused.append(
                 f"{name}: SET ... FROM CURRENT captures the value at apply "
                 "time, which cannot be predicted from the file")
@@ -743,6 +806,7 @@ def parse_functions(sql: str, masked: str, spans, out: Migration,
                 "which this comparison lowercases and so cannot check")
             continue
         entry = {
+            "offset": match.start(),
             "name": name,
             "body": body_md5(text),
             # Double-quoted names survive the lowercasing that the body hash
@@ -766,7 +830,8 @@ def parse_functions(sql: str, masked: str, spans, out: Migration,
         out.functions.append(entry)
 
 
-def parse_indexes(sql: str, masked: str, out: Migration) -> None:
+def parse_indexes(sql: str, masked: str, decommented: str,
+                  out: Migration) -> None:
     for match in re.finditer(
         r"CREATE\s+(UNIQUE\s+)?INDEX\s+(?:CONCURRENTLY\s+)?"
         r"(?:IF\s+NOT\s+EXISTS\s+)?(\w+)\s+ON\s+(?:public\.)?(\w+)\s*"
@@ -779,19 +844,25 @@ def parse_indexes(sql: str, masked: str, out: Migration) -> None:
             out.refused.append(f"{match.group(2)}: unterminated column list")
             continue
         stmt_end = masked.find(";", cols_end)
-        tail = sql[cols_end:stmt_end if stmt_end > 0 else len(sql)]
+        # Comments blanked, literals intact: pg_get_indexdef carries no
+        # comments, so `WHERE active -- current rows` would otherwise put the
+        # comment text into the expectation and never match.
+        tail = decommented[cols_end:stmt_end if stmt_end > 0 else len(sql)]
         where = re.search(r"\bWHERE\b(.*)$", tail, re.S | re.I)
         index_name = match.group(2).lower()
 
-        # INCLUDE columns are part of the index and are not read here, so the
-        # expectation would describe a plain index - a stale one could match it
-        # while the real covering index reported drift. Refused rather than
-        # compared against a definition known to be incomplete.
-        if re.search(r"\bINCLUDE\b", masked[cols_end:stmt_end if stmt_end > 0
-                                             else len(masked)], re.I):
+        # Only a WHERE predicate is read from the tail. INCLUDE columns, a
+        # WITH storage clause and TABLESPACE are all part of the index, and
+        # dropping them leaves an expectation describing a plain index - which
+        # a stale plain index matches while the real one reports drift.
+        tail_masked = masked[cols_end:stmt_end if stmt_end > 0 else len(masked)]
+        leftover = re.sub(r"\bWHERE\b.*$", "", tail_masked, flags=re.S | re.I)
+        if leftover.strip().strip(";"):
             out.refused.append(
-                f"{index_name}: INCLUDE columns are not compared, so the "
-                "expectation would describe a different index")
+                f"{index_name}: clause "
+                + repr(re.sub(r"\s+", " ", leftover).strip().strip(";")[:40])
+                + " is part of the index but is not read here, so the "
+                "expectation would describe a different one")
             continue
 
         # A dollar-quoted constant is rendered back by Postgres in ordinary
@@ -805,7 +876,7 @@ def parse_indexes(sql: str, masked: str, out: Migration) -> None:
             continue
 
         method = (match.group(4) or "btree").lower()
-        columns = sql[match.end():cols_end - 1]
+        columns = decommented[match.end():cols_end - 1]
         definition = f"using {method} ({canon_index_columns(columns)})"
         if where:
             # Literal-aware, or 'in  progress' collapses onto 'in progress'
@@ -871,10 +942,18 @@ def parse_privileges(sql: str, masked: str, out: Migration,
         is_function = bool(on_kind and on_kind.strip().upper() == "FUNCTION")
         granted = action.upper() == "GRANT"
         if is_function:
-            obj = f"public.{name}{re.sub(r'\s+', ' ', args or '()').strip()}"
+            args = re.sub(r"\s+", " ", args or "()").strip()
+            if not is_single_group(args):
+                out.refused.append(
+                    "privilege statement names more than one function target: "
+                    + re.sub(r"\s+", " ", match.group()).strip()[:90])
+                continue
+            obj = f"public.{name.lower()}{args}"
+            types = canon_types(args[1:-1])
             wanted = ["EXECUTE"]
         else:
-            obj = f"public.{name}"
+            obj = f"public.{name.lower()}"
+            types = None
             wanted = TABLE_PRIVILEGES
         if not re.search(r"\bALL\b", privs, re.I):
             wanted = [p.strip().upper() for p in privs.split(",") if p.strip()]
@@ -911,7 +990,8 @@ def parse_privileges(sql: str, masked: str, out: Migration,
         for role in parsed_roles:
             for priv in wanted:
                 entry = {"kind": "function" if is_function else "table",
-                         "obj": obj, "role": role, "priv": priv, "want": granted}
+                         "obj": obj, "fname": name.lower(), "types": types,
+                         "role": role, "priv": priv, "want": granted}
                 # Granting and then revoking in one file leaves only the revoke
                 # deployed, so keeping both expectations made the earlier one
                 # permanently unsatisfiable.
@@ -966,8 +1046,19 @@ def parse_alter_function(sql: str, masked: str, out: Migration,
         # Name and arity is not identity: altering f(integer) must not fold
         # its setting into an f(text) the same file happens to create, which
         # would leave the integer overload unaltered and unchecked.
-        defined = [f for f in out.functions[first:]
-                   if f["name"] == name and f["signature"] == signature]
+        # Source order decides. A CREATE OR REPLACE later in the same file
+        # replaces the function outright, dropping any setting an earlier
+        # ALTER had applied, so folding backwards would expect a configuration
+        # the deployed function does not have.
+        same = [f for f in out.functions[first:]
+                if f["name"] == name and f["signature"] == signature]
+        # A CREATE OR REPLACE later in the same file replaces the function
+        # outright and drops whatever this alteration set, so the alteration
+        # asserts nothing about the deployed state - emitting it either way
+        # would report drift on a migration that applied exactly.
+        if any(f["offset"] > match.start() for f in same):
+            continue
+        defined = [f for f in same if f["offset"] < match.start()]
         if defined:
             for fn in defined:
                 fn["config"] = parse_settings_merge(fn["config"], settings)
@@ -982,8 +1073,11 @@ def parse_alter_function(sql: str, masked: str, out: Migration,
                         f"{name}: setting {key} names a quoted identifier, "
                         "which this comparison lowercases and so cannot check")
                     continue
-                out.configs.append({"obj": f"public.{name}{args}".lower(),
-                                    "setting": render_setting(key, value)})
+                out.configs.append({
+                    "obj": f"public.{name}{args}".lower(),
+                    "fname": name,
+                    "types": canon_types(masked[match.end():args_end - 1]),
+                    "setting": render_setting(key, value)})
 
 
 def parse_settings_merge(existing, incoming):
@@ -1002,13 +1096,22 @@ def parse_alter_role(sql: str, masked: str, out: Migration) -> None:
     """
     for match in re.finditer(
         r'ALTER\s+ROLE\s+(\w+|"(?:[^"]|"")*")\s*'
-        r'((?:\s*SET\s+\w+\s*=\s*[^\n;]+)+);',
+        r'((?:\s*SET\s+[\w.]+\s*(?:=|\bTO\b)\s*[^\n;]+)+);',
         masked, re.I,
     ):
         out.hits.add(match.start())
         role = match.group(1).strip()
         if role.startswith('"'):
             role = role[1:-1].replace('""', '"')
+        elif role.upper() in RESERVED_ROLES:
+            # CURRENT_USER resolves at execution time, so the role that was
+            # actually altered cannot be known from the file. Taking it
+            # literally would report a role of that name missing, or check an
+            # unrelated one that happens to exist.
+            out.refused.append(
+                f"ALTER ROLE {role}: the target resolves at execution time, "
+                "so the role it altered cannot be known from the file")
+            continue
         else:
             role = role.lower()
         for key, value in parse_settings(masked[match.start(2):match.end(2)],
@@ -1100,8 +1203,9 @@ def parse(sql: str, out: Migration, src: str = "") -> None:
     out.hits = set()
     spans = lex(sql)
     masked = mask(sql, spans)
+    decommented = mask(sql, [sp for sp in spans if sp[0] in ("line", "block")])
     parse_functions(sql, masked, spans, out, before["functions"])
-    parse_indexes(sql, masked, out)
+    parse_indexes(sql, masked, decommented, out)
     parse_privileges(sql, masked, out, before["privileges"])
     parse_alter_function(sql, masked, out, before["functions"])
     parse_alter_role(sql, masked, out)
@@ -1255,11 +1359,12 @@ ix_check AS (
 
     if m.privileges:
         values = ",\n    ".join(
-            "({}, {}, {}, {}, {}, {})".format(
+            "({}, {}, {}, {}, {}, {}, {}, {})".format(
                 sql_str(p["src"]), sql_str(p["kind"]), sql_str(p["obj"]),
-                sql_str(p["role"]), sql_str(p["priv"]), sql_str(p["want"]))
+                sql_str(p["role"]), sql_str(p["priv"]), sql_str(p["want"]),
+                sql_str(p["fname"]), sql_str(p["types"]))
             for p in m.privileges)
-        parts.append(f"""pv_expected(src, objkind, obj, role, priv, want) AS (
+        parts.append(f"""pv_expected(src, objkind, obj, role, priv, want, fname, types) AS (
   VALUES
     {values}
 ),
@@ -1281,7 +1386,17 @@ pv_check AS (
               ELSE '' END AS detail
   FROM pv_expected e
   CROSS JOIN LATERAL (
-    SELECT CASE WHEN e.objkind = 'function' THEN to_regprocedure(e.obj)::oid
+    -- Resolved from the catalogue rather than with to_regprocedure, which
+    -- raises on a type list it cannot parse and would abort every other check
+    -- in this query along with itself.
+    SELECT CASE WHEN e.objkind = 'function'
+                THEN (
+    SELECT p.oid FROM pg_proc p
+    JOIN pg_namespace n ON n.oid = p.pronamespace
+    WHERE n.nspname = 'public' AND p.proname = e.fname
+      AND regexp_replace(lower(pg_catalog.oidvectortypes(p.proargtypes)),
+                         '[[:space:]]', '', 'g') = coalesce(e.types, '')
+    LIMIT 1)
                 ELSE to_regclass(e.obj)::oid END AS oid_of
   ) o
   CROSS JOIN LATERAL (
@@ -1304,30 +1419,38 @@ pv_check AS (
 
     if m.configs:
         values = ",\n    ".join(
-            "({}, {}, {})".format(sql_str(c["src"]), sql_str(c["obj"]),
-                                  sql_str(c["setting"]))
+            "({}, {}, {}, {}, {})".format(
+                sql_str(c["src"]), sql_str(c["obj"]), sql_str(c["setting"]),
+                sql_str(c["fname"]), sql_str(c["types"]))
             for c in m.configs)
-        parts.append("""cfg_expected(src, obj, setting) AS (
+        parts.append("""cfg_expected(src, obj, setting, fname, types) AS (
   VALUES
     @VALUES@
 ),
 cfg_check AS (
   SELECT e.src::text AS src, 'config' AS kind,
          (e.obj || ' ' || split_part(e.setting, '=', 1))::text AS name,
-         CASE WHEN to_regprocedure(e.obj) IS NULL THEN 'MISSING'
+         CASE WHEN o.oid_of IS NULL THEN 'MISSING'
               WHEN e.setting = ANY(a.settings) THEN 'OK'
               ELSE 'MISMATCH' END AS status,
-         CASE WHEN to_regprocedure(e.obj) IS NULL THEN 'function not found'
+         CASE WHEN o.oid_of IS NULL THEN 'function not found'
               WHEN NOT (e.setting = ANY(a.settings))
               THEN 'want ' || e.setting || ', got '
                    || coalesce(nullif(array_to_string(a.settings, ', '), ''),
                                'none')
               ELSE '' END AS detail
   FROM cfg_expected e
+  CROSS JOIN LATERAL (SELECT (
+    SELECT p.oid FROM pg_proc p
+    JOIN pg_namespace n ON n.oid = p.pronamespace
+    WHERE n.nspname = 'public' AND p.proname = e.fname
+      AND regexp_replace(lower(pg_catalog.oidvectortypes(p.proargtypes)),
+                         '[[:space:]]', '', 'g') = coalesce(e.types, '')
+    LIMIT 1) AS oid_of) o
   LEFT JOIN LATERAL (
     SELECT array(SELECT regexp_replace(lower(x), '[[:space:]()'']', '', 'g')
                    FROM unnest(coalesce(p.proconfig, '{}'::text[])) AS x) AS settings
-    FROM pg_proc p WHERE p.oid = to_regprocedure(e.obj)::oid
+    FROM pg_proc p WHERE p.oid = o.oid_of
   ) a ON true
 )""".replace("@VALUES@", values))
         selects.append("SELECT * FROM cfg_check")
