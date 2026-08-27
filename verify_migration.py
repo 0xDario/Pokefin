@@ -26,7 +26,8 @@ intent. This does.
 WHAT IT COMPARES
 ----------------
 functions    Body, plus what a body cannot carry: SECURITY DEFINER, the SET
-             search_path pin, volatility, and the argument signature. The
+             search_path pin, volatility, strictness, and the argument
+             signature. The
              first two are the ones that vanish quietly - DROP+CREATE
              discards both, and a trigger that became SECURITY INVOKER has an
              identical body and no privileges. The signature is compared
@@ -85,7 +86,9 @@ out-of-scope migration.
 
 Within one file the last word wins, because that is all the catalogue keeps: a
 function replaced twice, or a privilege granted and then revoked, leaves one
-expectation, not two that cannot both hold. That holds for definitions,
+expectation, not two that cannot both hold - except for CREATE INDEX IF NOT
+EXISTS, where the *first* definition is the one that lands, since the second
+statement is a no-op. That holds for definitions,
 privileges, function settings, role settings and RLS alike, each keyed on the
 canonical identity rather than on display text. Source order decides it: an ALTER
 FUNCTION ... SET before a CREATE OR REPLACE of the same signature asserts
@@ -151,7 +154,8 @@ Corp' and 'acmecorp' are different values of a custom GUC, where 'public' and
 '3s' survive normalising unchanged - an argument list naming a quoted
 identifier, a function with no AS clause in its
 own statement (the SQL-standard RETURN body is not read here), a body whose
-dollar quote is never closed, a two-string AS clause (the C form, where prosrc
+dollar quote is never closed, a body containing an escape-string literal (its
+backslash escapes defeat the literal-aware normalisation on both sides), a two-string AS clause (the C form, where prosrc
 holds the link symbol rather than a body), an ALTER TABLE
 carrying actions beyond the RLS one, an ALTER ROLE whose target resolves at
 execution time, a privilege statement naming more than one function, an index
@@ -681,6 +685,11 @@ def blank_returns(header: str) -> str:
 
 def parse_options(header: str, source: str) -> dict:
     """LANGUAGE / volatility / SECURITY / SET, wherever they sit."""
+    # SET clauses blanked first, so a value is never read as an option; the
+    # RETURNS clause blanked after, but only for the options that a return
+    # declaration could shadow - RETURNS NULL ON NULL INPUT *is* the
+    # strictness clause and has to be read before it goes.
+    set_blanked = blank_settings(header, source)
     clauses = blank_returns(header)
     options = blank_settings(clauses, source)
     lang = re.search(r'\bLANGUAGE\s+(\w+|"[^"]*")', options, re.I)
@@ -694,6 +703,9 @@ def parse_options(header: str, source: str) -> dict:
         "lang": language,
         "volatile": VOLATILITY[volatile.group(1).lower()] if volatile else "v",
         "secdef": bool(re.search(r"\bSECURITY\s+DEFINER\b", options, re.I)),
+        "strict": bool(re.search(r"\bSTRICT\b", options, re.I)
+                       or re.search(r"\bRETURNS\s+NULL\s+ON\s+NULL\s+INPUT\b",
+                                    set_blanked, re.I)),
         "config": parse_settings(clauses, source),
     }
 
@@ -871,6 +883,16 @@ def parse_functions(sql: str, masked: str, spans, out: Migration,
             delim = len(re.match(r"\$[A-Za-z_0-9]*\$", sql[body_start:]).group())
             text = sql[body_start + delim:body_end - delim]
 
+        # E'...' allows a backslash-escaped quote, which the literal pattern
+        # on both sides reads as the end of the string - everything after it
+        # is then treated as code and a trailing --comment discarded, so two
+        # bodies differing only there would hash alike.
+        if re.search(r"\b[EeUu]&?'", text):
+            out.refused.append(
+                f"{name}: body contains an escape-string literal, whose "
+                "backslash escapes this normalisation cannot honour")
+            continue
+
         inner = [s for s in lex(text) if s[0] in ("dollar", "block")]
         if inner:
             out.refused.append(
@@ -917,6 +939,7 @@ def parse_functions(sql: str, masked: str, spans, out: Migration,
             "idents": quoted_idents(STRIP_COMMENTS[0].sub(STRIP_COMMENTS[1], text)),
             "nargs": nargs,
             "signature": signature,
+            "types": canon_types(arglist),
             **options,
         }
         # A file that CREATE OR REPLACEs the same signature twice leaves only
@@ -934,7 +957,7 @@ def parse_functions(sql: str, masked: str, spans, out: Migration,
 
 
 def parse_indexes(sql: str, masked: str, decommented: str,
-                  out: Migration) -> None:
+                  out: Migration, ix_first: int) -> None:
     for match in re.finditer(
         r"CREATE\s+(UNIQUE\s+)?INDEX\s+(?:CONCURRENTLY\s+)?"
         r"(?:IF\s+NOT\s+EXISTS\s+)?(\w+)\s+ON\s+(?:public\.)?(\w+)\s*"
@@ -1018,6 +1041,17 @@ def parse_indexes(sql: str, masked: str, decommented: str,
                 "operator, so parenthesis-blind comparison could not tell two "
                 "groupings apart")
             continue
+        # CREATE INDEX IF NOT EXISTS is a no-op when the name is taken, so a
+        # second one in the same file never applies: the first definition is
+        # the deployed one. That is the opposite of the last-word-wins rule
+        # everywhere else, and for the same reason - it is what the catalogue
+        # ends up holding.
+        duplicate = next((x for x in out.indexes[ix_first:]
+                          if x["name"] == index_name), None)
+        if duplicate is not None:
+            if re.search(r"IF\s+NOT\s+EXISTS", match.group(), re.I):
+                continue
+            out.indexes.remove(duplicate)
         out.indexes.append({
             # Unquoted identifiers are folded by the server, so the expectation
             # has to be folded too or a CREATE INDEX MixedCase reports MISSING.
@@ -1156,6 +1190,7 @@ def parse_alter_function(sql: str, masked: str, out: Migration,
             continue
         args = "(" + re.sub(r"\s+", " ", masked[match.end():args_end - 1]).strip() + ")"
         nargs, signature = parse_arguments(masked[match.end():args_end - 1])
+        types = canon_types(masked[match.end():args_end - 1])
         settings = parse_settings(masked[args_end:stmt_end],
                                   sql[args_end:stmt_end])
         if not settings:
@@ -1168,8 +1203,12 @@ def parse_alter_function(sql: str, masked: str, out: Migration,
         # replaces the function outright, dropping any setting an earlier
         # ALTER had applied, so folding backwards would expect a configuration
         # the deployed function does not have.
+        # Canonical types, not the display signature: a CREATE writes
+        # f(x integer) and an ALTER writes f(integer) for the same overload,
+        # and comparing the rendered strings failed to fold them - leaving the
+        # function expecting no config while the deployed one had the setting.
         same = [f for f in out.functions[first:]
-                if f["name"] == name and f["signature"] == signature]
+                if f["name"] == name and f["types"] == types]
         # A CREATE OR REPLACE later in the same file replaces the function
         # outright and drops whatever this alteration set, so the alteration
         # asserts nothing about the deployed state - emitting it either way
@@ -1190,7 +1229,6 @@ def parse_alter_function(sql: str, masked: str, out: Migration,
                     out.refused.append(f"{name}: setting {key} = {value} "
                                        + SETTING_REFUSAL)
                     continue
-                types = canon_types(masked[match.end():args_end - 1])
                 config = {"obj": f"public.{name}{args}".lower(),
                           "fname": name, "types": types,
                           "setting": render_setting(key, value)}
@@ -1350,7 +1388,7 @@ def parse(sql: str, out: Migration, src: str = "") -> None:
     code_only = mask(sql, [(("str" if k == "ident" else k), a, b)
                            for k, a, b in spans])
     parse_functions(sql, masked, spans, out, before["functions"])
-    parse_indexes(sql, masked, decommented, out)
+    parse_indexes(sql, masked, decommented, out, before["indexes"])
     parse_privileges(sql, masked, code_only, out, before["privileges"])
     parse_alter_function(sql, masked, out, before["functions"])
     parse_alter_role(sql, masked, out, before["roles"])
@@ -1371,14 +1409,14 @@ def build_query(m: Migration) -> str:
 
     if m.functions:
         values = ",\n    ".join(
-            "({}, {}, {}, {}, {}, {}, {}, {}, {}, {})".format(
+            "({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})".format(
                 sql_str(f["src"]), sql_str(f["name"]), sql_str(f["body"]),
                 sql_str(f["secdef"]), sql_str(f["lang"]), sql_str(f["volatile"]),
                 sql_str(f["config"]), sql_str(f["nargs"]), sql_str(f["idents"]),
-                sql_str(f["signature"]))
+                sql_str(f["signature"]), sql_str(f["strict"]))
             for f in m.functions)
         parts.append(f"""fn_expected(src, name, body, secdef, lang, volatile, config, nargs,
-            idents, signature) AS (
+            idents, signature, strict) AS (
   VALUES
     {values}
 ),
@@ -1391,6 +1429,7 @@ fn_actual AS (
          nullif(regexp_replace(lower(array_to_string(p.proconfig, ',')),
                                '[[:space:]()'']', '', 'g'), '') AS config,
          p.pronargs::int AS nargs,
+         p.proisstrict AS strict,
          {BODY_IDENTS_SQL} AS idents,
          nullif(regexp_replace(
                   lower(pg_get_function_identity_arguments(p.oid)),
@@ -1408,6 +1447,7 @@ fn_check AS (
                AND a.config IS NOT DISTINCT FROM e.config
                AND a.idents = e.idents
                AND a.signature IS NOT DISTINCT FROM e.signature
+               AND a.strict = e.strict
                AND (e.lang IS NULL OR a.lang = e.lang)
               THEN 'OK' ELSE 'MISMATCH' END AS status,
          CASE WHEN a.name IS NULL THEN '' ELSE
@@ -1419,6 +1459,10 @@ fn_check AS (
            CASE WHEN a.signature IS DISTINCT FROM e.signature
                 THEN 'signature (want ' || coalesce(e.signature, 'none')
                      || ', got ' || coalesce(a.signature, 'none') || ')' END,
+           CASE WHEN a.strict IS DISTINCT FROM e.strict
+                THEN 'strictness (want ' || CASE WHEN e.strict THEN 'strict'
+                                                 ELSE 'called on null input'
+                                            END || ')' END,
            CASE WHEN a.secdef IS DISTINCT FROM e.secdef
                 THEN 'security (want ' || CASE WHEN e.secdef THEN 'definer'
                                                ELSE 'invoker' END || ')' END,
@@ -1692,7 +1736,7 @@ def main(argv: list[str]) -> int:
 
     for f in m.functions:
         print(f"-- function {f['name']}({f['signature'] or ''}): "
-              f"body {f['body']}, "
+              f"body {f['body']}, {'strict' if f['strict'] else 'non-strict'}, "
               f"{'security definer' if f['secdef'] else 'security invoker'}, "
               f"{f['lang'] or 'any language'}, volatility {f['volatile']}, "
               f"config {f['config'] or 'none'}", file=sys.stderr)

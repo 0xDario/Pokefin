@@ -319,7 +319,7 @@ What it checks, and why each is there rather than just the body:
 
 | | |
 |---|---|
-| **functions** | Body, `SECURITY DEFINER`, the `SET search_path` pin, volatility, and the argument signature. A `DROP`+`CREATE` discards the first two, and a trigger that became `SECURITY INVOKER` has an identical body and no privileges. The signature is compared against `pg_get_function_identity_arguments`, not by argument count — count alone cannot tell `f(text)` from `f(integer)`. Quoted identifiers in the body are compared verbatim, since the hash lowercases everything and `"UserID"` ≠ `"userid"`. |
+| **functions** | Body, `SECURITY DEFINER`, the `SET search_path` pin, volatility, strictness, and the argument signature. A `DROP`+`CREATE` discards the first two, and a trigger that became `SECURITY INVOKER` has an identical body and no privileges. The signature is compared against `pg_get_function_identity_arguments`, not by argument count — count alone cannot tell `f(text)` from `f(integer)`. Quoted identifiers in the body are compared verbatim, since the hash lowercases everything and `"UserID"` ≠ `"userid"`. |
 | **indexes** | Definition, not name. `CREATE INDEX IF NOT EXISTS` is a *no-op* against an index already holding the name with different columns, so a name-only check certifies exactly the drift worth catching. Columns, ordering, method, uniqueness, partial predicate, and validity — an index left `INVALID` by an interrupted `CONCURRENTLY` build exists, is named correctly, and is ignored by the planner. |
 | **privileges** | `GRANT`/`REVOKE` on functions and tables, as *effective* access. Revoking from `anon` while `PUBLIC` still holds the privilege changes nothing, and that reads as `MISMATCH` here. |
 | **config** | Standalone `ALTER FUNCTION ... SET`, so a `search_path` hardening migration that touches no function body is still verifiable. |
@@ -402,7 +402,9 @@ ordinary index on a column of that name strips to.
 
 Within one file the last word wins, because that is all the catalogue keeps: a
 function replaced twice, or a privilege granted and then revoked, leaves one
-expectation rather than two that cannot both hold. Source order decides it — an
+expectation rather than two that cannot both hold. `CREATE INDEX IF NOT EXISTS`
+inverts it — the *first* definition lands and the second is a no-op — for the
+same reason: it is what the catalogue ends up holding. Source order decides it — an
 `ALTER FUNCTION … SET` *before* a `CREATE OR REPLACE` of the same signature
 asserts nothing, since the create drops what it set. Across files it does not —
 an earlier migration superseded by a later one is *expected* to report
