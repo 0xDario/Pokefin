@@ -24,8 +24,10 @@ import shutil
 import json
 import statistics
 import subprocess
+import time
 from datetime import date, datetime, timedelta, timezone
 
+import httpx
 from supabase import create_client
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -74,18 +76,117 @@ PRICE_STALENESS_TOLERANCE_DAYS = 14
 # --------------------------------------------------------------------------- #
 # Data access
 # --------------------------------------------------------------------------- #
+# One page failing must not cost the whole edition. product_price_history is
+# ~104k rows at 1000 a request, so a full run is 100+ sequential calls and the
+# chance that none of them is reset is not the chance any single one succeeds.
+# The 2026-08-14 edition was lost exactly this way: httpx.ReadError, "Connection
+# reset by peer", partway through the history fetch, and no report that week.
+FETCH_MAX_ATTEMPTS = 5
+FETCH_BACKOFF_SECONDS = 2.0
+
+
+# 429 and 5xx only, plus transport faults. A 4xx is a bad request or bad
+# credentials and will fail identically five times in a row, so retrying it
+# turns a clear error into a slow one.
+#
+# postgrest-py raises APIError for every non-2xx and throws the HTTP status
+# away, so `code` is whichever of two unrelated things the response body
+# happened to contain: when the body is not JSON, generate_default_error_message
+# puts the HTTP status there as an int; when it IS JSON — which is what
+# PostgREST returns for a 500 — it is a PostgreSQL SQLSTATE ('XX000') or a
+# PostgREST identifier ('PGRST116'). Reading one as the other is why this has
+# to look at both. The library retries on its own, but only 503 and 520 on GET
+# (send_with_retry / should_retry, MAX_RETRIES=3), so 500, 502 and 504 reach us
+# unretried.
+RETRYABLE_SQLSTATE_CLASSES = frozenset({
+    "08",  # connection_exception
+    "53",  # insufficient_resources - out of memory, too many connections
+    "57",  # operator_intervention - query_canceled, admin_shutdown
+    "XX",  # internal_error
+})
+
+# PostgREST's own identifiers carry no status once APIError has dropped it, so
+# the transient ones have to be named. Group 0 is connectivity and group X is
+# an internal fault in its database driver; every other group is a request,
+# schema-cache or JWT problem that will fail the same way five times.
+# PGRST003 is the one that matters most in practice: a pool-acquisition
+# timeout, returned as 504, which the client library's own retry does not
+# cover because it only retries 503 and 520.
+RETRYABLE_PGRST_CODES = frozenset({
+    "PGRST000",  # 503 could not connect to the database
+    "PGRST001",  # 503 could not connect, internal error
+    "PGRST002",  # 503 could not connect while building the schema cache
+    "PGRST003",  # 504 timed out waiting for a pool connection
+    "PGRSTX00",  # 500 internal error in the connection library
+})
+
+
+def _http_status(exc: Exception) -> int | None:
+    """The HTTP status behind an exception, where one is recoverable."""
+    status = getattr(getattr(exc, "response", None), "status_code", None)
+    if isinstance(status, int):  # httpx.HTTPStatusError, if it ever surfaces
+        return status
+    code = getattr(exc, "code", None)
+    if isinstance(code, int) and not isinstance(code, bool):
+        return code
+    # Length is what separates a status from a SQLSTATE: '500' is three
+    # digits, '08006' and '57014' are five.
+    if isinstance(code, str) and len(code) == 3 and code.isdigit():
+        return int(code)
+    return None
+
+
+def _error_code(exc: Exception) -> str | None:
+    code = getattr(exc, "code", None)
+    return code.strip().upper() if isinstance(code, str) else None
+
+
+def _is_retryable(exc: Exception) -> bool:
+    if isinstance(exc, httpx.TransportError):
+        return True
+    status = _http_status(exc)
+    if status is not None:
+        # 408 is a request timeout: transient, and this is a paginated GET, so
+        # replaying it is safe.
+        return status in (408, 429) or 500 <= status < 600
+    code = _error_code(exc)
+    if code is None:
+        return False
+    if code.startswith("PGRST"):
+        return code in RETRYABLE_PGRST_CODES
+    # A SQLSTATE is five characters; its first two are the condition class.
+    return len(code) == 5 and code[:2] in RETRYABLE_SQLSTATE_CLASSES
+
+
+def fetch_page(sb, table, columns, order_col, start, page):
+    """One page, retried on transient failure with exponential backoff."""
+    for attempt in range(1, FETCH_MAX_ATTEMPTS + 1):
+        try:
+            resp = (
+                sb.table(table)
+                .select(columns)
+                .order(order_col)
+                .range(start, start + page - 1)
+                .execute()
+            )
+            return resp.data or []
+        except Exception as exc:  # noqa: BLE001 - re-raised below unless retryable
+            if attempt == FETCH_MAX_ATTEMPTS or not _is_retryable(exc):
+                raise
+            delay = FETCH_BACKOFF_SECONDS * (2 ** (attempt - 1))
+            print(f"    {table} rows {start}-{start + page - 1}: "
+                  f"{type(exc).__name__} ({exc}); retry {attempt}"
+                  f"/{FETCH_MAX_ATTEMPTS - 1} in {delay:.0f}s",
+                  file=sys.stderr, flush=True)
+            time.sleep(delay)
+    return []  # unreachable: the loop either returns or raises
+
+
 def fetch_all(sb, table, columns, order_col="id", page=1000):
     """Paginate a table fully (Supabase caps each request at ~1000 rows)."""
     rows, start = [], 0
     while True:
-        resp = (
-            sb.table(table)
-            .select(columns)
-            .order(order_col)
-            .range(start, start + page - 1)
-            .execute()
-        )
-        batch = resp.data or []
+        batch = fetch_page(sb, table, columns, order_col, start, page)
         rows.extend(batch)
         if len(batch) < page:
             break

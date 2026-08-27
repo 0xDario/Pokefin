@@ -161,6 +161,33 @@ it never writes to the database.
 python generate_weekly_report.py   # writes reports/pokefin_weekly_<date>.{html,pdf}
 ```
 
+The full-table fetch is retried: `product_price_history` is ~141k rows at 1000
+a request, so a run is ~142 sequential calls and a single reset used to cost
+the whole edition — the 2026-08-14 report was lost exactly that way. Transient
+transport faults, 429, 5xx and PostgREST's own connection-group errors are
+retried with exponential backoff; a 4xx is not, since a bad request fails
+identically five times. If every attempt is exhausted the exception
+propagates rather than returning a partial history,
+because half a history makes a wrong newspaper rather than an obviously
+missing one.
+
+Deciding *which* failures those are takes more care than it looks like it
+should. `postgrest-py` raises `APIError` for every non-2xx and discards the
+HTTP status, so its `code` is one of two unrelated things depending on the
+response body: the HTTP status as an int when the body is not JSON, or a
+PostgreSQL `SQLSTATE` / PostgREST identifier when it is — and PostgREST
+*does* return JSON for a 500. Reading one as the other silently classifies
+every server-side failure as permanent.
+
+A PostgREST identifier carries no status at all once `APIError` has dropped
+it, so the transient ones are named explicitly: group 0 is connectivity
+(`PGRST000`–`PGRST003`) and `PGRSTX00` is a fault in its database driver;
+every other group is a request, schema-cache or JWT problem that will fail the
+same way five times. `PGRST003` matters most in practice — a pool-acquisition
+timeout, returned as **504**, which the client library's own retry does not
+cover because it only retries 503 and 520 on GET. 500, 502 and 504 all arrive
+here unretried.
+
 Two things it needs:
 
 - **Chrome or Chromium on PATH.** The PDF is produced by `--headless
@@ -268,6 +295,145 @@ from-scratch bootstrap and cannot rebuild the database on its own:
 - Not every file is re-runnable: `0003_integrity_constraints.sql` uses bare
   `ALTER TABLE ... ADD CONSTRAINT` and errors on a second run. The rest,
   including `create_box_recipes.sql`, is idempotent.
+
+#### Verify that a migration actually applied
+
+**Do this after every apply.** On 2026-08-13 a migration was applied twice
+through the Supabase SQL editor and reported success both times while the
+database kept running an earlier revision of the same file — the editor said
+OK, the ledger gained rows, and the functions were present and working, just
+not the versions in the repo. It was caught only by reading
+`pg_get_functiondef` by hand.
+
+```bash
+python verify_migration.py migrations/0023_price_freshness_guard.sql
+```
+
+That prints one SQL statement. Run it (SQL editor, psql, or an agent's
+`execute_sql`) and every row must say `OK`; `MISMATCH` means the deployed
+object differs from the file and names the facet, `MISSING` means it is not
+there at all. Pass several files — `migrations/*.sql` works — and each row is
+labelled with the file it came from. Needs no database credentials of its own.
+
+What it checks, and why each is there rather than just the body:
+
+| | |
+|---|---|
+| **functions** | Body, `SECURITY DEFINER`, the `SET search_path` pin, volatility, strictness, and the argument signature. A `DROP`+`CREATE` discards the first two, and a trigger that became `SECURITY INVOKER` has an identical body and no privileges. The signature is compared against `pg_get_function_identity_arguments`, not by argument count — count alone cannot tell `f(text)` from `f(integer)`. Quoted identifiers in the body are compared verbatim, since the hash lowercases everything and `"UserID"` ≠ `"userid"`. |
+| **indexes** | Definition, not name. `CREATE INDEX IF NOT EXISTS` is a *no-op* against an index already holding the name with different columns, so a name-only check certifies exactly the drift worth catching. Columns, ordering, method, uniqueness, partial predicate, and validity — an index left `INVALID` by an interrupted `CONCURRENTLY` build exists, is named correctly, and is ignored by the planner. |
+| **privileges** | `GRANT`/`REVOKE` on functions and tables, as *effective* access. Revoking from `anon` while `PUBLIC` still holds the privilege changes nothing, and that reads as `MISMATCH` here. |
+| **config** | Standalone `ALTER FUNCTION ... SET`, so a `search_path` hardening migration that touches no function body is still verifiable. |
+| **roles** | `ALTER ROLE ... SET`, against `pg_roles.rolconfig` — the statement-timeout guards in `0009`. |
+| **RLS** | `ALTER TABLE ... ENABLE/DISABLE ROW LEVEL SECURITY`. |
+
+Bodies are compared by hashing the file's text and having Postgres hash its own
+`pg_proc.prosrc` the same way — both stripped of `--` comments, whitespace
+collapsed, spaces beside parens and commas removed, lowercased. The comment
+stripping respects single-quoted literals, so a body containing `'prefix--one'`
+is not truncated at the marker and cannot hash the same as one containing
+`'prefix--two'`.
+
+**Every statement is accounted for**, which matters more than any single
+check. The failure to guard against is a partial verification that reads as a
+full one: `0009` is three `statement_timeout` guards and three `search_path`
+pins, and an earlier revision checked only the pins — every printed row said
+`OK` while the half the migration is named after had never been looked at.
+
+So each top-level statement now lands in exactly one of three places. It is
+verified; or it is a kind deliberately out of scope — `CREATE POLICY`,
+constraints, triggers, column definitions, data — which is **counted and
+printed** under `NOT VERIFIED`; or the parser could not read it, and it is
+refused by name. The exit code says which:
+
+| | |
+|---|---|
+| `0` | everything in the file was verified |
+| `1` | something was refused — the parser could not read it (this outranks `2`) |
+| `2` | nothing here is verifiable (`0008`, policies only); no query is printed |
+| `3` | verified what it could; the rest is listed under `NOT VERIFIED` |
+
+An `ALTER` and a `CREATE` assert different things, so they are compared
+differently. `ALTER FUNCTION … SET` and `ALTER ROLE … SET` name one setting and
+leave the rest of the catalogue entry alone, so each is checked for *presence*
+— pinning `search_path` on a function that already carries a `statement_timeout`
+is not drift. A `CREATE OR REPLACE` assigns every property specified or implied
+and drops the ones it omits, so its config is compared *whole*: a leftover pin
+the file no longer asks for is worth knowing about, on a `SECURITY DEFINER`
+function especially.
+
+Unquoted identifiers are folded to lower case, since the server folds them too
+and `CREATE FUNCTION RebuildCache()` would otherwise report `MISSING`.
+
+Index definitions keep their literals — layout is stripped only outside them,
+and since `lower()` cannot be applied selectively in SQL the literals are also
+compared verbatim. Otherwise `WHERE status = 'ACTIVE'` and `'active'` normalise
+together, as do `'in progress'` and `'inprogress'`, and a wrong index reports
+`OK`.
+
+Return types are not compared. Argument names and types are, in the dialect
+`pg_get_function_identity_arguments` speaks — which is why the file's spellings
+are mapped (`INT` → `integer`, `VARCHAR` → `character varying`). A signature it
+could not translate is reported as a difference naming both sides, rather than
+being handed to `to_regprocedure`, which *raises* on a type it cannot parse and
+would take every other check in the query down with it.
+
+Argument modes are honoured — an `OUT` parameter is excluded from both the
+count and the signature — and two overloads sharing a name and arity stay
+distinct expectations, since `f(text)` is not `f(integer)`.
+
+Quoted identifiers keep their case wherever they appear, because `"UserID"` and
+`"userid"` are different columns and every comparison here lowercases. In a
+body and an index definition they are compared verbatim; in a *setting* value
+the whole setting is refused instead — a quoted schema in a `search_path` pin
+is precisely what must not be certified by a blind comparison.
+
+Index parentheses are dropped so Postgres's own re-parenthesising doesn't read
+as drift, which means grouping is not compared. With one operator that costs
+nothing; with two, `((a+b)*c)` and `(a+(b*c))` flatten together — so an
+expression or predicate carrying more than one is **refused** rather than
+certified. Operators are detected as runs of operator characters, not from a
+list: a list omitted the bitwise ones, and Postgres lets anyone define new
+operators, so no list could be complete. Any clause beyond the predicate — `INCLUDE`
+columns, a `WITH` storage clause, a `TABLESPACE` — plus dollar-quoted constants
+and **function calls** are refused for the same reason — the
+expectation would describe a different index, or one Postgres could never
+render back to match. `lower(a)` strips to `lowera`, which is exactly what an
+ordinary index on a column of that name strips to.
+
+Within one file the last word wins, because that is all the catalogue keeps: a
+function replaced twice, or a privilege granted and then revoked, leaves one
+expectation rather than two that cannot both hold. `CREATE INDEX IF NOT EXISTS`
+inverts it — the *first* definition lands and the second is a no-op — for the
+same reason: it is what the catalogue ends up holding. Source order decides it — an
+`ALTER FUNCTION … SET` *before* a `CREATE OR REPLACE` of the same signature
+asserts nothing, since the create drops what it set. Across files it does not —
+an earlier migration superseded by a later one is *expected* to report
+`MISMATCH`. Function bodies remain blind to a change confined to a literal's
+case or internal spacing.
+
+Anything it cannot read faithfully is **refused by name**, printed, and the
+exit code is non-zero — nothing is silently skipped, because a skip in a
+verifier reads the same as a pass. That covers a nested dollar-quoted literal
+or a block comment inside a body (the two normalisations could not be
+guaranteed to agree on them), an `E'...'` escape-string body (comparing it
+honestly would need a real decoder), a column-level grant such as
+`GRANT SELECT (email) ON ...`, a grantee resolved at apply time such as
+`CURRENT_USER`, and a `GRANT`/`REVOKE` the parser could not read at all —
+`ON ALL TABLES IN SCHEMA`, say. A single-quoted body *is*
+supported: its doubled quotes are syntax rather than content, so they are
+unescaped before hashing, and `AS 'SELECT ''x'''` produces the same
+expectation as `AS $$SELECT 'x'$$` — as it must, since Postgres stores the
+same `prosrc` for both.
+
+Expectations come from the file you pass, so when a *later* migration
+redefines an object, verify against that later file. `0002` reports a body
+`MISMATCH` for `delete_my_account` because `0010` redefines it, and
+`20260506`'s two dropped indexes report `MISSING` because `0014` drops them —
+both correct.
+
+The editor's own trap is worth knowing: it runs **the selected text** when
+there is a selection, so a stray click before Run silently applies a fragment.
+Select all first, or prefer MCP `apply_migration`.
 
 The ordering constraints that matter when applying a *new* migration, or
 replaying a subset:
