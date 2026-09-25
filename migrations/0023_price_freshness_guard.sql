@@ -477,7 +477,9 @@ SELECT
   invest_score,
   rank
 FROM ranked
-ORDER BY rank ASC, name ASC;
+-- NULLS LAST is the default for ASC, but stated explicitly: an unranked set
+-- sorting last is the point of the CASE above, not an incidental default.
+ORDER BY rank ASC NULLS LAST, name ASC;
 $$;
 
 ALTER FUNCTION public.get_set_analytics()
