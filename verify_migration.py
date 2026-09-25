@@ -190,7 +190,10 @@ for an AS body, so this is a parse failure and not an "any language" facet), a
 file with an unterminated quote (everything after it would be blanked and never
 accounted for), and any statement the parser does not recognise.
 
-NOT counts as an operator for that purpose. It is unary, but it is exactly as
+NOT counts as an operator for that purpose, and so does IS [NOT] NULL, as a
+single operator: NOT (a IS NULL) and (NOT a) IS NULL differ for a boolean
+column, while `share_code IS NOT NULL` alone is one predicate and stays
+comparable. It is unary, but it is exactly as
 grouping-sensitive: NOT (a AND b) and (NOT a) AND b flatten together and have
 different truth conditions. A keyword before a parenthesis opens a group rather
 than calling a function, so NOT ( is not mistaken for a call. A clause keyword
@@ -425,7 +428,12 @@ def is_call(text: str) -> bool:
 def has_ambiguous_grouping(text: str) -> bool:
     bare = re.sub(r"'[^']*'", "", text)
     bare = bare.replace("::", " ")
-    return len(OPERATOR_RUN.findall(bare)) >= 2
+    # IS [NOT] NULL / IS [NOT] DISTINCT FROM is a single operator, and it is
+    # grouping-sensitive: NOT (a IS NULL) and (NOT a) IS NULL differ for a
+    # boolean column. The NOT inside it must not count a second time, or
+    # `share_code IS NOT NULL` - one predicate, no ambiguity - would be refused.
+    bare = re.sub(r"\bIS\s+NOT\b", "IS", bare, flags=re.I)
+    return len(OPERATOR_RUN.findall(bare)) + len(re.findall(r"\bIS\b", bare, re.I)) >= 2
 
 
 # Words a type declaration can start with. Used only to tell an argument name
@@ -745,11 +753,37 @@ def blank_returns(header: str) -> str:
             close = match_paren(header, header.find("(", end - 1))
             end = close if close > 0 else len(header)
         else:
-            word = re.compile(r"\S+\s*(\([^)]*\))?").match(header, end)
-            end = word.end() if word else end
+            # The type runs to the next clause keyword, so a multi-word type -
+            # character varying, timestamp with time zone - is blanked whole;
+            # blanking one word left "varying" behind to be read as a stray.
+            nxt = NEXT_CLAUSE.search(header, end)
+            end = nxt.start() if nxt else len(header)
         for i in range(match.start(), min(end, len(out))):
             out[i] = " "
     return "".join(out)
+
+
+HEADER_CLAUSES = re.compile(
+    r'\bLANGUAGE\s+(?:\w+|"[^"]*")|\b(?:IMMUTABLE|STABLE|VOLATILE)\b'
+    r"|\b(?:EXTERNAL\s+)?SECURITY\s+(?:DEFINER|INVOKER)\b|\bSTRICT\b"
+    r"|\bCALLED\s+ON\s+NULL\s+INPUT\b|\bRETURNS\s+NULL\s+ON\s+NULL\s+INPUT\b"
+    r"|\bPARALLEL\s+(?:SAFE|RESTRICTED|UNSAFE)\b|\bAS\b", re.I)
+
+
+def leftover_header(header: str, source: str) -> str:
+    """
+    Whatever remains of a function header once every clause this reads has
+    been blanked - which should be nothing.
+
+    The RETURNS clause and the SET clauses go first, through the same helpers
+    the option readers use, so the two agree on what a clause is; then each
+    recognised option. A remainder is a token Postgres would reject and this
+    would otherwise have ignored.
+    """
+    rest = blank_settings(header, source)
+    rest = blank_returns(rest)
+    rest = HEADER_CLAUSES.sub(" ", rest)
+    return re.sub(r"\s+", " ", rest).strip()
 
 
 def parse_options(header: str, source: str) -> dict:
@@ -1014,6 +1048,15 @@ def parse_functions(sql: str, masked: str, spans, out: Migration,
             out.refused.append(
                 f"{name}: {planner.group(1).upper()} is not compared, so the "
                 "expectation would be silent about it")
+            continue
+        stray = leftover_header(header, header_src)
+        if stray:
+            # Postgres rejects a header it cannot parse, so a token nothing
+            # here recognised means the file would not apply - and a stale
+            # copy with the recorded body could otherwise report OK.
+            out.refused.append(
+                f"{name}: unrecognised token(s) in the function header: "
+                f"{stray!r}")
             continue
         if options["lang"] is None:
             # Postgres requires LANGUAGE for an AS body, so not finding one is
@@ -1426,10 +1469,12 @@ def parse_rls(masked: str, out: Migration, rls_first: int) -> None:
         rest = masked[match.end():stmt_end if stmt_end > 0 else len(masked)]
         if rest.strip().strip(";"):
             out.refused.append(
-                f"public.{match.group(1)}: ALTER TABLE carries further actions "
+                f"public.{match.group(1).lower()}: ALTER TABLE carries further actions "
                 "beyond the RLS one, and only the RLS action is read here")
             continue
-        table = f"public.{match.group(1)}"
+        # Folded: Postgres treats Foo and foo as one table, and without this
+        # the two spellings deduplicated as two tables.
+        table = f"public.{match.group(1).lower()}"
         # relrowsecurity is one flag, so enabling and later disabling in one
         # file leaves the final state, not two expectations.
         for previous in out.rls[rls_first:]:
