@@ -6,11 +6,14 @@ allowBuilds:
 overrides:
   picomatch@4: ^4.0.4
   postcss: '>=8.5.18'
-  sharp: '>=0.35.0'
+  # libheif advisories GHSA-g89c-p67h-r497 / GHSA-2jg2-4ch7-h545 affect <0.35.4.
+  sharp: '>=0.35.4'
   brace-expansion@1: ^1.1.12
   brace-expansion@2: ^2.0.2
   brace-expansion@5: ^5.0.9
-  fast-uri: ^3.1.5
+  # Four host-confusion / SSRF advisories in 3.0.0-3.1.5 (GHSA-5jgf-p345-68v8 et al.).
+  # Reached only via @sentry/nextjs -> webpack -> ajv, hence an override.
+  fast-uri: ^3.1.6
   # postcss pulls nanoid; <3.3.17 has a high-severity advisory. Pinned to the
   # patched 3.x line rather than left open-ended: nanoid 6 declares
   # engines node ^22 || ^24 || >=26, which would silently narrow the Node
