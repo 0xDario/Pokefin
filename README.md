@@ -319,7 +319,7 @@ What it checks, and why each is there rather than just the body:
 
 | | |
 |---|---|
-| **functions** | Body, `SECURITY DEFINER`, the `SET search_path` pin, volatility, strictness, and the argument signature. A `DROP`+`CREATE` discards the first two, and a trigger that became `SECURITY INVOKER` has an identical body and no privileges. The signature is compared against `pg_get_function_identity_arguments`, not by argument count — count alone cannot tell `f(text)` from `f(integer)`. Quoted identifiers in the body are compared verbatim, since the hash lowercases everything and `"UserID"` ≠ `"userid"`. |
+| **functions** | Body, `SECURITY DEFINER`, the `SET search_path` pin, volatility, strictness, parallel safety, and the argument signature. A `DROP`+`CREATE` discards the first two, and a trigger that became `SECURITY INVOKER` has an identical body and no privileges. The signature is compared against `pg_get_function_identity_arguments`, not by argument count — count alone cannot tell `f(text)` from `f(integer)`. Quoted identifiers in the body are compared verbatim, since the hash lowercases everything and `"UserID"` ≠ `"userid"`. |
 | **indexes** | Definition, not name. `CREATE INDEX IF NOT EXISTS` is a *no-op* against an index already holding the name with different columns, so a name-only check certifies exactly the drift worth catching. Columns, ordering, method, uniqueness, partial predicate, and validity — an index left `INVALID` by an interrupted `CONCURRENTLY` build exists, is named correctly, and is ignored by the planner. |
 | **privileges** | `GRANT`/`REVOKE` on functions and tables, as *effective* access. Revoking from `anon` while `PUBLIC` still holds the privilege changes nothing, and that reads as `MISMATCH` here. |
 | **config** | Standalone `ALTER FUNCTION ... SET`, so a `search_path` hardening migration that touches no function body is still verifiable. |
@@ -388,7 +388,13 @@ the whole setting is refused instead — a quoted schema in a `search_path` pin
 is precisely what must not be certified by a blind comparison.
 
 Index parentheses are dropped so Postgres's own re-parenthesising doesn't read
-as drift, which means grouping is not compared. With one operator that costs
+as drift, which means grouping is not compared. Whitespace *between words* is
+kept as a single space — deleting it flattened `deleted_at IS NULL` onto
+`deleted_atisnull`, which is also what an index on a boolean column of that
+name flattens to. A partial index whose predicate compares against a literal is
+refused: Postgres renders it back with a resolved cast (`'active'::text`) the
+file doesn't carry, and stripping the cast on both sides would hide a genuine
+difference of type. With one operator that costs
 nothing; with two, `((a+b)*c)` and `(a+(b*c))` flatten together — so an
 expression or predicate carrying more than one is **refused** rather than
 certified. Operators are detected as runs of operator characters, not from a

@@ -26,9 +26,9 @@ intent. This does.
 WHAT IT COMPARES
 ----------------
 functions    Body, plus what a body cannot carry: SECURITY DEFINER, the SET
-             search_path pin, volatility, strictness, and the argument
-             signature. The
-             first two are the ones that vanish quietly - DROP+CREATE
+             search_path pin, volatility, strictness, parallel safety, and
+             the argument signature. The first two are the ones that vanish
+             quietly - DROP+CREATE
              discards both, and a trigger that became SECURITY INVOKER has an
              identical body and no privileges. The signature is compared
              against pg_get_function_identity_arguments rather than by
@@ -117,7 +117,11 @@ modifiers either, since an identity stores type OIDs and renders numeric(10, 2)
 back as numeric.
 
 Index parentheses are dropped so that Postgres's own re-parenthesising does
-not read as drift, which means grouping is not compared. With one binary
+not read as drift, which means grouping is not compared. Whitespace between
+words is kept, as a single space: deleting it flattened `deleted_at IS NULL`
+onto `deleted_atisnull`, which is also what an index on a boolean column of
+that name flattens to. Only the space beside a comma goes - the rule the body
+normaliser already applies. With one binary
 operator that costs nothing; with two, ((a+b)*c) and (a+(b*c)) would flatten
 together, so an expression or predicate carrying more than one is refused
 rather than certified.
@@ -167,12 +171,20 @@ could not be told from a column named lowera), an index carrying any clause
 beyond the predicate - INCLUDE columns, a WITH storage clause, a TABLESPACE -
 since each is part of the index and dropping it would leave the expectation
 describing a different one, an index using a dollar-quoted constant (Postgres renders it back with ordinary quoting, so no
-expectation could match), and any statement the parser does not recognise.
+expectation could match), a partial index whose predicate compares against a
+literal (Postgres renders it back with a resolved cast the file does not carry,
+and stripping the cast on both sides would hide a genuine difference of type),
+a function with no LANGUAGE clause the parser could read (Postgres requires one
+for an AS body, so this is a parse failure and not an "any language" facet), a
+file with an unterminated quote (everything after it would be blanked and never
+accounted for), and any statement the parser does not recognise.
 
 NOT counts as an operator for that purpose. It is unary, but it is exactly as
 grouping-sensitive: NOT (a AND b) and (NOT a) AND b flatten together and have
 different truth conditions. A keyword before a parenthesis opens a group rather
-than calling a function, so NOT ( is not mistaken for a call.
+than calling a function, so NOT ( is not mistaken for a call. A clause keyword
+that is the whole value of a SET - `SET search_path = stable` names a schema -
+is read as the value, not as the clause it resembles.
 
 Operators are detected as runs of operator characters rather than from a list.
 The list was the wrong shape: the first attempt omitted the bitwise ones, so
@@ -234,9 +246,17 @@ INDEX_TAIL_SQL = (
     "'^CREATE (UNIQUE )?INDEX [^ ]+ ON [^ ]+ ', '')"
 )
 
+# Whitespace *between words* is kept as a single space rather than deleted:
+# deleting it flattened `deleted_at IS NULL` onto `deleted_atisnull`, which is
+# also what an ordinary index on a boolean column of that name flattens to.
+# Only parentheses go, and only the space beside a comma - the same rule the
+# body normaliser applies, for the same reason.
 NORMALIZE_INDEX_SQL = (
-    "regexp_replace(lower(" + INDEX_TAIL_SQL + "), "
-    "'(''[^'']*'')|[\\s()]', '\\1', 'g')"
+    "btrim(regexp_replace(regexp_replace(regexp_replace(lower("
+    + INDEX_TAIL_SQL + "), "
+    "'(''[^'']*'')|[()]', '\\1', 'g'), "
+    "'(''[^'']*'')|\\s+', '\\1 ', 'g'), "
+    "'(''[^'']*'')|\\s*(,)\\s*', '\\1\\2', 'g'))"
 )
 
 # Built here rather than inline in the query's f-string, where \n and \1 would
@@ -299,7 +319,11 @@ def strip_layout(text: str) -> str:
 # so the same capture-group trick used on function bodies applies here: the
 # literal branch is put back verbatim and only the layout branch is dropped.
 def strip_index_layout(text: str) -> str:
-    return re.sub(r"('[^']*')|[\s()]", r"\1", text.lower())
+    """The Python half of NORMALIZE_INDEX_SQL; the two must agree exactly."""
+    text = re.sub(r"('[^']*')|[()]", r"\1", text.lower())
+    text = re.sub(r"('[^']*')|\s+", r"\1 ", text)
+    text = re.sub(r"('[^']*')|\s*(,)\s*", r"\1\2", text)
+    return text.strip()
 
 
 def literals_of(text: str) -> str:
@@ -528,7 +552,10 @@ def lex(sql: str) -> list[tuple[str, int, int]]:
             while True:
                 close = sql.find(token, end)
                 if close == -1:
-                    return spans + [("str", start, len(sql))]
+                    # Everything after this would be blanked as literal and
+                    # never accounted for. Recorded as its own kind so parse()
+                    # refuses the file instead of silently reading half of it.
+                    return spans + [("unterminated", start, len(sql))]
                 if sql[close + 1:close + 2] == token:  # doubled is an escape
                     end = close + 2
                     continue
@@ -694,6 +721,7 @@ def parse_options(header: str, source: str) -> dict:
     options = blank_settings(clauses, source)
     lang = re.search(r'\bLANGUAGE\s+(\w+|"[^"]*")', options, re.I)
     volatile = re.search(r"\b(IMMUTABLE|STABLE|VOLATILE)\b", options, re.I)
+    parallel = re.search(r"\bPARALLEL\s+(SAFE|RESTRICTED|UNSAFE)\b", options, re.I)
     language = lang.group(1) if lang else None
     if language and language.startswith('"'):
         language = language[1:-1]      # quoted: case-sensitive, kept as written
@@ -703,6 +731,7 @@ def parse_options(header: str, source: str) -> dict:
         "lang": language,
         "volatile": VOLATILITY[volatile.group(1).lower()] if volatile else "v",
         "secdef": bool(re.search(r"\bSECURITY\s+DEFINER\b", options, re.I)),
+        "parallel": parallel.group(1)[0].lower() if parallel else "u",
         "strict": bool(re.search(r"\bSTRICT\b", options, re.I)
                        or re.search(r"\bRETURNS\s+NULL\s+ON\s+NULL\s+INPUT\b",
                                     set_blanked, re.I)),
@@ -739,7 +768,11 @@ def setting_spans(masked_text: str, source: str | None = None):
         text = source if source is not None else masked_text
         for clause in NEXT_CLAUSE.finditer(masked_text, match.end(), end):
             before = text[match.end():clause.start()].strip()
-            if not before.endswith(","):
+            # Nothing before it means the keyword is the value itself -
+            # `SET search_path = stable` names a schema - and so does a
+            # trailing comma. The source is read, not the masked copy, so a
+            # blanked literal is not mistaken for nothing.
+            if before and not before.endswith(","):
                 end = clause.start()
                 break
         found.append((match, end))
@@ -924,6 +957,12 @@ def parse_functions(sql: str, masked: str, spans, out: Migration,
                 "comparison lowercases and so cannot check")
             continue
         options = parse_options(header, header_src)
+        if options["lang"] is None:
+            # Postgres requires LANGUAGE for an AS body, so not finding one is
+            # a parse failure - and recording it as "any language" would turn
+            # a facet this claims to check into one it silently does not.
+            out.refused.append(f"{name}: no LANGUAGE clause could be read")
+            continue
         unreadable = [k for k, v in options["config"]
                       if not setting_is_comparable(k, v)]
         if unreadable:
@@ -950,7 +989,7 @@ def parse_functions(sql: str, masked: str, spans, out: Migration,
             # f(integer) are distinct overloads, and dropping one of them would
             # leave it unchecked while every printed row said OK.
             if (previous["name"] == entry["name"]
-                    and previous["signature"] == entry["signature"]):
+                    and previous["types"] == entry["types"]):
                 out.functions.remove(previous)
                 break
         out.functions.append(entry)
@@ -1020,6 +1059,17 @@ def parse_indexes(sql: str, masked: str, decommented: str,
         # guard does not see it, and the catalogue side strips identically -
         # a different index would report OK.
         predicate = where.group(1) if where else ""
+        # WHERE status = 'active' is deparsed as status = 'active'::text - a
+        # cast the file cannot be expected to carry - so the two sides could
+        # never agree and the index would report drift forever. Refused rather
+        # than stripped: stripping the cast on both sides would hide a genuine
+        # difference of type, which for a predicate is a difference of meaning.
+        if re.search(r"'[^']*'", predicate):
+            out.refused.append(
+                f"{index_name}: the predicate compares against a literal, which "
+                "Postgres renders back with a resolved cast the file does not "
+                "carry, so no expectation could match")
+            continue
         structured = STRUCTURED.search(columns) or STRUCTURED.search(predicate)
         if structured:
             out.refused.append(
@@ -1381,6 +1431,13 @@ def parse(sql: str, out: Migration, src: str = "") -> None:
     before = {k: len(getattr(out, k)) for k in Migration.KINDS}
     out.hits = set()
     spans = lex(sql)
+    broken = next((sp for sp in spans if sp[0] == "unterminated"), None)
+    if broken:
+        line = sql.count("\n", 0, broken[1]) + 1
+        out.refused.append(
+            f"{src}: unterminated quote at line {line}; nothing after it can "
+            "be read, so the file is refused rather than half-verified")
+        return
     masked = mask(sql, spans)
     decommented = mask(sql, [sp for sp in spans if sp[0] in ("line", "block")])
     # Quoted identifiers blanked too, so a role named "grant" is not mistaken
@@ -1409,14 +1466,15 @@ def build_query(m: Migration) -> str:
 
     if m.functions:
         values = ",\n    ".join(
-            "({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})".format(
+            "({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})".format(
                 sql_str(f["src"]), sql_str(f["name"]), sql_str(f["body"]),
                 sql_str(f["secdef"]), sql_str(f["lang"]), sql_str(f["volatile"]),
                 sql_str(f["config"]), sql_str(f["nargs"]), sql_str(f["idents"]),
-                sql_str(f["signature"]), sql_str(f["strict"]))
+                sql_str(f["signature"]), sql_str(f["strict"]),
+                sql_str(f["parallel"]))
             for f in m.functions)
         parts.append(f"""fn_expected(src, name, body, secdef, lang, volatile, config, nargs,
-            idents, signature, strict) AS (
+            idents, signature, strict, parallel) AS (
   VALUES
     {values}
 ),
@@ -1430,6 +1488,7 @@ fn_actual AS (
                                '[[:space:]()'']', '', 'g'), '') AS config,
          p.pronargs::int AS nargs,
          p.proisstrict AS strict,
+         p.proparallel::text AS parallel,
          {BODY_IDENTS_SQL} AS idents,
          nullif(regexp_replace(
                   lower(pg_get_function_identity_arguments(p.oid)),
@@ -1447,7 +1506,7 @@ fn_check AS (
                AND a.config IS NOT DISTINCT FROM e.config
                AND a.idents = e.idents
                AND a.signature IS NOT DISTINCT FROM e.signature
-               AND a.strict = e.strict
+               AND a.strict = e.strict AND a.parallel = e.parallel
                AND (e.lang IS NULL OR a.lang = e.lang)
               THEN 'OK' ELSE 'MISMATCH' END AS status,
          CASE WHEN a.name IS NULL THEN '' ELSE
@@ -1463,6 +1522,8 @@ fn_check AS (
                 THEN 'strictness (want ' || CASE WHEN e.strict THEN 'strict'
                                                  ELSE 'called on null input'
                                             END || ')' END,
+           CASE WHEN a.parallel IS DISTINCT FROM e.parallel
+                THEN 'parallel (want ' || e.parallel || ', got ' || a.parallel || ')' END,
            CASE WHEN a.secdef IS DISTINCT FROM e.secdef
                 THEN 'security (want ' || CASE WHEN e.secdef THEN 'definer'
                                                ELSE 'invoker' END || ')' END,
@@ -1662,7 +1723,11 @@ rls_check AS (
               THEN 'want ' || CASE WHEN e.want THEN 'enabled' ELSE 'disabled' END
               ELSE '' END AS detail
   FROM rls_expected e
+  -- Only an ordinary or partitioned table can carry RLS. A view, sequence or
+  -- index of the same name has relrowsecurity = false and would otherwise
+  -- satisfy a DISABLE expectation while the table itself was missing.
   LEFT JOIN pg_class c ON c.oid = to_regclass(e.tbl)::oid
+                      AND c.relkind IN ('r', 'p')
 )""")
         selects.append("SELECT * FROM rls_check")
 
@@ -1737,6 +1802,7 @@ def main(argv: list[str]) -> int:
     for f in m.functions:
         print(f"-- function {f['name']}({f['signature'] or ''}): "
               f"body {f['body']}, {'strict' if f['strict'] else 'non-strict'}, "
+              f"parallel {f['parallel']}, "
               f"{'security definer' if f['secdef'] else 'security invoker'}, "
               f"{f['lang'] or 'any language'}, volatility {f['volatile']}, "
               f"config {f['config'] or 'none'}", file=sys.stderr)

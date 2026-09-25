@@ -77,7 +77,7 @@ PRICE_STALENESS_TOLERANCE_DAYS = 14
 # Data access
 # --------------------------------------------------------------------------- #
 # One page failing must not cost the whole edition. product_price_history is
-# ~104k rows at 1000 a request, so a full run is 100+ sequential calls and the
+# ~141k rows at 1000 a request, so a full run is ~142 sequential calls and the
 # chance that none of them is reset is not the chance any single one succeeds.
 # The 2026-08-14 edition was lost exactly this way: httpx.ReadError, "Connection
 # reset by peer", partway through the history fetch, and no report that week.
