@@ -329,9 +329,9 @@ What it checks, and why each is there rather than just the body:
 Bodies are compared by hashing the file's text and having Postgres hash its own
 `pg_proc.prosrc` the same way — both stripped of `--` comments, whitespace
 collapsed, spaces beside parens and commas removed, lowercased. The comment
-stripping respects single-quoted literals, so a body containing `'prefix--one'`
-is not truncated at the marker and cannot hash the same as one containing
-`'prefix--two'`.
+stripping respects single-quoted literals and double-quoted identifiers, so a
+body containing `'prefix--one'` or `"a--b"` is not truncated at the marker and
+cannot hash the same as one containing `'prefix--two'` or `"a--c"`.
 
 **Every statement is accounted for**, which matters more than any single
 check. The failure to guard against is a partial verification that reads as a
@@ -340,9 +340,9 @@ pins, and an earlier revision checked only the pins — every printed row said
 `OK` while the half the migration is named after had never been looked at.
 
 So each top-level statement now lands in exactly one of three places. It is
-verified; or it is a kind deliberately out of scope — `CREATE POLICY`,
-constraints, triggers, column definitions, data — which is **counted and
-printed** under `NOT VERIFIED`; or the parser could not read it, and it is
+verified; or it is a kind deliberately out of scope — `CREATE POLICY`, `ALTER DEFAULT
+PRIVILEGES`, constraints, triggers, column definitions, data — which is
+**counted and printed** under `NOT VERIFIED`; or the parser could not read it, and it is
 refused by name. The exit code says which:
 
 | | |

@@ -64,7 +64,11 @@ a leftover pin the file no longer asks for is exactly the kind of thing worth
 knowing about, on a SECURITY DEFINER function especially.
 
 Unquoted identifiers are folded to lower case, because the server folds them
-too and CREATE FUNCTION RebuildCache would otherwise report MISSING. A quoted
+too and CREATE FUNCTION RebuildCache would otherwise report MISSING. Ordering
+keywords are stripped from index columns only outside quotes, so a column named
+"asc" keeps its name. FLOAT(p) resolves by precision - real up to 24, double
+precision above - before type modifiers are dropped, since it is the one type
+whose modifier selects the identity type. A quoted
 object name is not parsed at all and lands in the refused pile.
 
 EVERY STATEMENT IS ACCOUNTED FOR
@@ -75,8 +79,9 @@ pins, of which an earlier revision checked only the pins - every printed row
 said OK while the half the migration is named after had never been looked at.
 
 So each top-level statement now ends up in exactly one of three places. It is
-verified; or it is a kind deliberately out of scope - CREATE POLICY,
-constraints, triggers, column definitions, data - which is counted and printed
+verified; or it is a kind deliberately out of scope - CREATE POLICY, ALTER
+DEFAULT PRIVILEGES, constraints, triggers, column definitions, data - which is
+counted and printed
 under NOT VERIFIED; or the parser could not read it, which is refused by name.
 The exit code says which: 0 everything verified, 1 something refused, 2
 nothing verifiable at all, 3 verified what it could with the rest listed. A
@@ -142,9 +147,10 @@ index reports OK.
 Body comparison is deliberately blind to formatting, which costs a little
 precision inside string literals: it is case-insensitive and removes
 whitespace next to parens and commas, so a change confined to a literal's case
-or internal spacing is invisible. Comment stripping, however, does respect
-single-quoted literals - a body containing 'prefix--one' is not truncated at
-the marker, which would otherwise hash identically to 'prefix--two'. A
+or internal spacing is invisible. Comment stripping, however, respects
+single-quoted literals and double-quoted identifiers alike - a body containing
+'prefix--one' or "a--b" is not truncated at the marker, which would otherwise
+hash identically to 'prefix--two' or "a--c". A
 single-quoted body has its doubled quotes unescaped first, because Postgres
 stores the unescaped form in prosrc.
 
@@ -153,12 +159,17 @@ comment inside a body (the Python and Postgres normalisations could not be
 guaranteed to agree on either), an escape-string body, a column-level grant, a
 grantee that resolves at apply time such as CURRENT_USER, SET ... FROM CURRENT
 (the value is whatever was current when it was applied), a setting whose value carries a quoted
-identifier or a literal whose case or spacing normalising would strip - 'Acme
+identifier, an escaped apostrophe ('it''s' and 'its' would render alike), or a
+literal whose case or spacing normalising would strip, a setting assigned
+DEFAULT (a reset, not a value - Postgres removes the entry), a function
+declaring COST, ROWS, LEAKPROOF, SUPPORT, TRANSFORM or WINDOW (none is
+compared, and a copy differing only there would otherwise report OK) - 'Acme
 Corp' and 'acmecorp' are different values of a custom GUC, where 'public' and
 '3s' survive normalising unchanged - an argument list naming a quoted
 identifier, a function with no AS clause in its
 own statement (the SQL-standard RETURN body is not read here), a body whose
-dollar quote is never closed, a body containing an escape-string literal (its
+dollar quote is never closed, a file whose block comment is never closed, a
+body containing an escape-string literal (its
 backslash escapes defeat the literal-aware normalisation on both sides), a two-string AS clause (the C form, where prosrc
 holds the link symbol rather than a body), an ALTER TABLE
 carrying actions beyond the RLS one, an ALTER ROLE whose target resolves at
@@ -217,17 +228,24 @@ import sys
 # The branches begin with disjoint characters (a quote, whitespace, a hyphen,
 # a paren), so Postgres's leftmost-longest rule and Python's leftmost-first
 # rule cannot pick different branches.
-STRIP_COMMENTS = (re.compile(r"('[^']*')|--[^\n]*"), r"\1")
-COLLAPSE_SPACE = (re.compile(r"('[^']*')|\s+"), r"\1 ")
-TIGHTEN_PUNCT = (re.compile(r"('[^']*')|\s*([(),])\s*"), r"\1\2")
+# A double-quoted identifier is protected alongside the string literal. It is
+# code, not content, but it can contain anything: SELECT "a--b" would otherwise
+# lose its tail to comment stripping on both sides and hash the same as
+# SELECT "a--c", with the identifier extraction running after the same cut.
+PROTECTED = r"('[^']*'|\"[^\"]*\")"
+PROTECTED_SQL = "(''[^'']*''|\"[^\"]*\")"
+
+STRIP_COMMENTS = (re.compile(PROTECTED + r"|--[^\n]*"), r"\1")
+COLLAPSE_SPACE = (re.compile(PROTECTED + r"|\s+"), r"\1 ")
+TIGHTEN_PUNCT = (re.compile(PROTECTED + r"|\s*([(),])\s*"), r"\1\2")
 
 NORMALIZE_BODY_SQL = (
     "md5(lower(btrim("
     "regexp_replace("
     "regexp_replace("
-    "regexp_replace({col}, '(''[^'']*'')|--[^\\n]*', '\\1', 'g')"
-    ", '(''[^'']*'')|\\s+', '\\1 ', 'g')"
-    ", '(''[^'']*'')|\\s*([(),])\\s*', '\\1\\2', 'g')"
+    "regexp_replace({col}, '" + PROTECTED_SQL + "|--[^\\n]*', '\\1', 'g')"
+    ", '" + PROTECTED_SQL + "|\\s+', '\\1 ', 'g')"
+    ", '" + PROTECTED_SQL + "|\\s*([(),])\\s*', '\\1\\2', 'g')"
     ")))"
 )
 
@@ -265,7 +283,7 @@ NORMALIZE_INDEX_SQL = (
 BODY_IDENTS_SQL = (
     "(SELECT coalesce(string_agg(m[1], '|' ORDER BY n), '') "
     "FROM regexp_matches(regexp_replace(p.prosrc, "
-    "'(''[^'']*'')|--[^\\n]*', '\\1', 'g'), '\"[^\"]*\"', 'g') "
+    "'" + PROTECTED_SQL + "|--[^\\n]*', '\\1', 'g'), '\"[^\"]*\"', 'g') "
     "WITH ORDINALITY AS t(m, n))"
 )
 
@@ -345,6 +363,11 @@ def collapse_space_outside_literals(text: str) -> str:
     """Runs of whitespace become one space - except inside a literal or a
     quoted identifier, where 'in  progress' and 'in progress' differ."""
     return re.sub(QUOTED + r"|\s+", lambda m: m.group(1) or " ", text)
+
+
+def sub_outside_quotes(pattern: str, repl: str, text: str) -> str:
+    return re.sub(QUOTED + "|" + pattern,
+                  lambda m: m.group(1) if m.group(1) else repl, text)
 
 
 def quoted_idents(text: str) -> str:
@@ -438,6 +461,29 @@ def is_single_group(text: str) -> bool:
     return depth == 0
 
 
+def resolve_float(arg: str) -> str:
+    """FLOAT(p) is the one type whose modifier selects the identity type:
+    p <= 24 is real, otherwise double precision, and bare FLOAT is double
+    precision. Stripping the modifier first left every FLOAT as "float",
+    which no identity ever renders."""
+    def pick(m):
+        p = int(m.group(1)) if m.group(1) else 53
+        return "real" if p <= 24 else "double precision"
+    return re.sub(r"\bfloat\b\s*(?:\(\s*(\d+)\s*\))?", pick, arg)
+
+
+def strip_typmods(arg: str) -> str:
+    """A function identity stores type OIDs, so numeric(10, 2) is rendered
+    back as numeric and varchar(10) as character varying."""
+    return re.sub(r"\s*\([^)]*\)", "", arg)
+
+
+def apply_aliases(arg: str) -> str:
+    for alias, canonical in TYPE_ALIASES.items():
+        arg = re.sub(rf"\b{alias}\b(?!\s*\w)", canonical, arg)
+    return arg
+
+
 def canon_types(masked_arglist: str) -> str:
     """The input type list alone - no names, no modes, no defaults."""
     types = []
@@ -448,18 +494,11 @@ def canon_types(masked_arglist: str) -> str:
             if mode.group(1).upper() == "OUT":
                 continue
             arg = arg[mode.end():].strip()
-        arg = re.sub(r"\s+", " ", arg.strip().lower())
-        # A function identity stores type OIDs, so numeric(10, 2) is rendered
-        # back as numeric and varchar(10) as character varying. Keeping the
-        # modifier made the identity unmatchable and the lookup report the
-        # function missing.
-        arg = re.sub(r"\s*\([^)]*\)", "", arg)
+        arg = strip_typmods(resolve_float(re.sub(r"\s+", " ", arg.strip().lower())))
         words = arg.split()
         if len(words) >= 2 and re.sub(r"[\[\]()].*", "", words[0]) not in TYPE_WORDS:
             arg = " ".join(words[1:])          # the first word was the name
-        for alias, canonical in TYPE_ALIASES.items():
-            arg = re.sub(rf"\b{alias}\b(?!\s*\w)", canonical, arg)
-        types.append(arg)
+        types.append(apply_aliases(arg))
     return re.sub(r"\s+", "", ",".join(types))
 
 
@@ -493,10 +532,7 @@ def parse_arguments(masked_arglist: str) -> tuple[int, str | None]:
             if mode.group(1).upper() != "IN":
                 arg = mode.group(1).lower() + " " + arg
         arg = re.sub(r"\s+", " ", arg.strip().lower())
-        arg = re.sub(r"\s*\([^)]*\)", "", arg)      # typmods are not in the identity
-        for alias, canonical in TYPE_ALIASES.items():
-            arg = re.sub(rf"\b{alias}\b(?!\s*\w)", canonical, arg)
-        args.append(arg)
+        args.append(apply_aliases(strip_typmods(resolve_float(arg))))
     return len(args), (", ".join(args) if args else None)
 
 
@@ -580,7 +616,10 @@ def lex(sql: str) -> list[tuple[str, int, int]]:
                 depth += 1 if nxt.group() == "/*" else -1
                 cursor = nxt.end()
             end = cursor
-            kind = "block"
+            # Depth never returning to zero means the comment never closed;
+            # masking the remainder as a comment would let the file verify
+            # while Postgres would reject it outright.
+            kind = "block" if depth == 0 else "unterminated"
         else:
             close = sql.find(token, start + len(token))
             # An unterminated dollar quote is malformed input. Recorded as its
@@ -678,11 +717,14 @@ def canon_index_columns(cols: str) -> str:
     for col in split_top_level(cols):
         col = collapse_space_outside_literals(
             lower_outside_literals(col.strip()))
-        col = re.sub(r"\basc\b", "", col).strip()
-        if re.search(r"\bdesc\b", col):
-            col = re.sub(r"\bnulls first\b", "", col)
+        # Only outside quotes: a column named "asc" or "nulls last" keeps its
+        # name in pg_get_indexdef, and stripping it out of the identifier
+        # produced an expectation of `""` that could never match.
+        col = sub_outside_quotes(r"\basc\b", "", col).strip()
+        if re.search(r"\bdesc\b", re.sub(QUOTED, "", col)):
+            col = sub_outside_quotes(r"\bnulls first\b", "", col)
         else:
-            col = re.sub(r"\bnulls last\b", "", col)
+            col = sub_outside_quotes(r"\bnulls last\b", "", col)
         out.append(collapse_space_outside_literals(col).strip())
     return ", ".join(out)
 
@@ -820,25 +862,31 @@ def render_setting(key: str, value: str) -> str:
     return re.sub(r"[\s()']", "", f"{key}={value}".lower())
 
 
-SETTING_REFUSAL = ("carries a quoted identifier or a literal whose case or "
-                   "spacing this comparison strips, so it cannot be checked")
-
-
-def setting_is_comparable(key: str, value: str) -> bool:
+def setting_problem(key: str, value: str) -> str | None:
     """
-    False when normalising the value would destroy something that matters.
+    Why a setting cannot be compared, or None when it can.
 
     SET search_path = "TrustedSchema" and "trustedschema" are different
     schemas. A custom GUC is worse: SET app.tenant = 'Acme Corp' and
     'acmecorp' are different values, and rendering strips quotes, spaces and
     case from both. A literal survives only if it is already what normalising
     would make of it - which is true of 'public' and '3s', and false of
-    anything carrying capitals or internal spaces.
+    anything carrying capitals or internal spaces. A doubled quote inside a
+    literal is an apostrophe that rendering would also strip, so 'it''s' and
+    'its' would agree. And = DEFAULT is not a value at all but a reset:
+    Postgres removes the entry, so recording "default" could never match.
     """
+    if re.fullmatch(r"default", value.strip(), re.I):
+        return "is a reset (DEFAULT removes the entry) rather than a value"
     if '"' in value:
-        return False
-    return all(body == re.sub(r"[\s()]", "", body.lower())
-               for body in re.findall(r"'([^']*)'", value))
+        return "names a quoted identifier, which this comparison lowercases"
+    if "''" in value:
+        return "carries an escaped apostrophe, which rendering strips"
+    for body in re.findall(r"'([^']*)'", value):
+        if body != re.sub(r"[\s()]", "", body.lower()):
+            return ("carries a literal whose case or spacing this comparison "
+                    "strips")
+    return None
 
 
 def render_settings(settings: list[tuple[str, str]]) -> str | None:
@@ -957,17 +1005,27 @@ def parse_functions(sql: str, masked: str, spans, out: Migration,
                 "comparison lowercases and so cannot check")
             continue
         options = parse_options(header, header_src)
+        planner = re.search(r"\b(COST|ROWS|LEAKPROOF|SUPPORT|TRANSFORM|WINDOW)\b",
+                            blank_settings(blank_returns(header), header_src), re.I)
+        if planner:
+            # None of these is compared, and a function is not "consumed" by
+            # reading the attributes it happens to have: a deployed copy with
+            # a different cost, row estimate or leakproof flag would report OK.
+            out.refused.append(
+                f"{name}: {planner.group(1).upper()} is not compared, so the "
+                "expectation would be silent about it")
+            continue
         if options["lang"] is None:
             # Postgres requires LANGUAGE for an AS body, so not finding one is
             # a parse failure - and recording it as "any language" would turn
             # a facet this claims to check into one it silently does not.
             out.refused.append(f"{name}: no LANGUAGE clause could be read")
             continue
-        unreadable = [k for k, v in options["config"]
-                      if not setting_is_comparable(k, v)]
-        if unreadable:
-            out.refused.append(f"{name}: setting {unreadable[0]} "
-                               + SETTING_REFUSAL)
+        problems = [(k, setting_problem(k, v)) for k, v in options["config"]]
+        problems = [(k, why) for k, why in problems if why]
+        if problems:
+            out.refused.append(f"{name}: setting {problems[0][0]} "
+                               + problems[0][1])
             continue
         entry = {
             "offset": match.start(),
@@ -1131,6 +1189,12 @@ def parse_privileges(sql: str, masked: str, code_only: str,
         r"(\([^;]*?\))?\s*(?:TO|FROM)\s+([^;]+);",
         masked, re.S | re.I,
     ):
+        # ALTER DEFAULT PRIVILEGES ... GRANT SELECT ON TABLES TO anon carries a
+        # GRANT that is not a statement of its own. Read from the inner
+        # keyword it became a grant on a table named "tables", and the whole
+        # statement was marked accounted for.
+        if masked[masked.rfind(";", 0, match.start()) + 1:match.start()].strip():
+            continue
         seen.add(match.start())
         out.hits.add(match.start())
         action, privs, on_kind, name, args, roles = match.groups()
@@ -1207,6 +1271,9 @@ def parse_privileges(sql: str, masked: str, code_only: str,
     # grant, WITH GRANT OPTION - would otherwise vanish, and a query that
     # checked nothing still prints as if it checked everything.
     for kw in re.finditer(r"\b(GRANT|REVOKE)\b", code_only, re.I):
+        stmt_start = masked.rfind(";", 0, kw.start()) + 1
+        if re.match(r"\s*ALTER\s+DEFAULT\s+PRIVILEGES\b", masked[stmt_start:kw.start()], re.I):
+            continue                       # counted as out of scope, below
         if kw.start() not in seen:
             out.hits.add(kw.start())
             line = masked[kw.start():masked.find(";", kw.start())]
@@ -1275,9 +1342,8 @@ def parse_alter_function(sql: str, masked: str, out: Migration,
             # so pinning search_path on a function that already carries a
             # statement_timeout is not reported as drift.
             for key, value in settings:
-                if not setting_is_comparable(key, value):
-                    out.refused.append(f"{name}: setting {key} = {value} "
-                                       + SETTING_REFUSAL)
+                if (why := setting_problem(key, value)):
+                    out.refused.append(f"{name}: setting {key} = {value} {why}")
                     continue
                 config = {"obj": f"public.{name}{args}".lower(),
                           "fname": name, "types": types,
@@ -1331,9 +1397,8 @@ def parse_alter_role(sql: str, masked: str, out: Migration,
             role = role.lower()
         for key, value in parse_settings(masked[match.start(2):match.end(2)],
                                          sql[match.start(2):match.end(2)]):
-            if not setting_is_comparable(key, value):
-                out.refused.append(f"{role}: setting {key} = {value} "
-                                   + SETTING_REFUSAL)
+            if (why := setting_problem(key, value)):
+                out.refused.append(f"{role}: setting {key} = {value} {why}")
                 continue
             setting = render_setting(key, value)
             # rolconfig keeps one value per key, so two alterations of the same
@@ -1386,6 +1451,7 @@ UNVERIFIABLE = (
     (r"CREATE\s+(OR\s+REPLACE\s+)?TRIGGER", "CREATE TRIGGER"),
     (r"DROP\s+(TRIGGER|INDEX|FUNCTION|TABLE|VIEW|TYPE|SEQUENCE)", "DROP object"),
     (r"ALTER\s+TABLE", "ALTER TABLE (other than RLS enablement)"),
+    (r"ALTER\s+DEFAULT\s+PRIVILEGES", "ALTER DEFAULT PRIVILEGES"),
     (r"COMMENT\s+ON", "COMMENT ON"),
     (r"(INSERT|UPDATE|DELETE|TRUNCATE)\b", "data statement"),
     (r"DO\b", "DO block"),
@@ -1435,8 +1501,9 @@ def parse(sql: str, out: Migration, src: str = "") -> None:
     if broken:
         line = sql.count("\n", 0, broken[1]) + 1
         out.refused.append(
-            f"{src}: unterminated quote at line {line}; nothing after it can "
-            "be read, so the file is refused rather than half-verified")
+            f"{src}: unterminated quote or comment at line {line}; nothing "
+            "after it can be read, so the file is refused rather than "
+            "half-verified")
         return
     masked = mask(sql, spans)
     decommented = mask(sql, [sp for sp in spans if sp[0] in ("line", "block")])
