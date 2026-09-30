@@ -2,7 +2,7 @@
 
 - **Findings covered**
   - F020 (full): `export_my_data()` is declared `STABLE` but runs an `INSERT` into `auth_events`, so every call fails and "Export my data" has never worked in production.
-  - F134 (full): after `0014`, `portfolio_holdings(portfolio_id)` and `portfolio_lots(holding_id)` have no usable index in a database built from the repo, while the app's holdings/lots reads, `export_my_data()` and the account-deletion cascade all filter on both. F134 has no verifier verdict (status UNVERIFIED); the production index list is therefore read by the owner before `0025` is applied (Owner actions, step 5).
+  - F134 (full): after `0014`, `portfolio_holdings(portfolio_id)` and `portfolio_lots(holding_id)` have no usable index in a database built from the repo, while the app's holdings read (`frontend/app/lib/portfolio.ts:279`, `.eq("portfolio_id", ...)`), the `holdings_self` RLS policy, `export_my_data()` and the account-deletion cascade filter on them. (The app does not read `portfolio_lots` today; it only inserts. Lots are filtered by `holding_id` in `export_my_data()` and in the cascade from `portfolio_holdings`.) F134 has no verifier verdict (status UNVERIFIED); the production index list is therefore read by the owner before `0025` is applied (Owner actions, step 5).
 - **Priority rationale**: a compliance feature (GDPR Art. 15/20 export) has failed for 100% of users since 2026-05-27 and the fix is one keyword in a new migration.
 - **Effort**: S (2 to 3 hours for the executor, plus about 15 minutes of owner time in Supabase).
 - **Depends on**: none. Needs no frontend build, so WP00 is not required.
@@ -12,7 +12,7 @@
 
 ## Why
 
-Clicking "Export my data" on `/account` shows "Preparing..." and then the red message "Failed to export data" for every user, and no file downloads. The cause is in the database: `migrations/0011_export_my_data.sql:10` declares the function `STABLE`, and Postgres refuses the audit `INSERT` at `0011:84-85` inside a non-volatile function (`ERROR: INSERT is not allowed in a non-volatile function`). The route at `frontend/app/api/account/export/route.ts:65-68` turns that into HTTP 500. The production catalog was read on 2026-09-25: the deployed function has `provolatile = 's'`, `proacl` still includes `anon=X`, and `auth_events` holds zero `data_exported` rows, so no export has ever succeeded. Separately, any database rebuilt from `migrations/` (staging, branch, disaster restore) has no index on the two foreign keys that the portfolio reads (`WHERE portfolio_id = ...`, `WHERE holding_id = ...`), `export_my_data()` and every account-deletion cascade filter on, so those become sequential scans over all users' rows. After this PR and the owner applying two migrations, the export downloads a JSON file and writes its audit row, anon can no longer call the RPC, and both foreign keys are indexed everywhere without duplicating production's legacy index.
+Clicking "Export my data" on `/account` shows "Preparing..." and then the red message "Failed to export data" for every user, and no file downloads. The cause is in the database: `migrations/0011_export_my_data.sql:10` declares the function `STABLE`, and Postgres refuses the audit `INSERT` at `0011:84-85` inside a non-volatile function (`ERROR: INSERT is not allowed in a non-volatile function`). The route at `frontend/app/api/account/export/route.ts:65-68` turns that into HTTP 500. The production catalog was read on 2026-09-25: the deployed function has `provolatile = 's'`, `proacl` still includes `anon=X`, and `auth_events` holds zero `data_exported` rows, so no export has ever succeeded. Separately, any database rebuilt from `migrations/` (staging, branch, disaster restore) has no index on the two foreign keys that the holdings read (`WHERE portfolio_id = ...`), `export_my_data()` (`WHERE portfolio_id = ...` and `WHERE holding_id = ...`) and every account-deletion cascade filter on, so those become sequential scans over all users' rows. After this PR and the owner applying two migrations, the export downloads a JSON file and writes its audit row, anon can no longer call the RPC, and both foreign keys are indexed everywhere without duplicating production's legacy index.
 
 ## Before you start
 
@@ -170,9 +170,10 @@ Write this file exactly:
 -- (0003), is partial (WHERE client_idempotency_key IS NOT NULL), so the
 -- planner cannot use it for a plain portfolio_id lookup.
 --
--- The app reads holdings by portfolio_id and lots by holding_id,
--- export_my_data() (0011/0024) filters on both, and the ON DELETE CASCADE
--- chain that delete_my_account() relies on (0002) walks both foreign keys.
+-- The app reads holdings by portfolio_id, export_my_data() (0011/0024)
+-- filters holdings by portfolio_id and lots by holding_id, and the
+-- ON DELETE CASCADE chain that delete_my_account() relies on (0002) walks
+-- both foreign keys.
 -- Without an index each of those is a sequential scan over every user's rows.
 --
 -- Each index is created only when the table has no valid, non-partial btree
@@ -546,6 +547,7 @@ Do not write "applied" yourself: you have no production access.
 - **Do not put both changes in one file.** Keeping `0024` free of `DO` blocks lets `verify_migration.py` certify it fully (exit 0); combining them drops the exit code to 3 and hides the function check behind a "NOT VERIFIED" line.
 - **Do not suggest `supabase db push`.** The repo has no `supabase/` project directory. Use MCP `apply_migration` or the SQL editor.
 - **Do not change `frontend/app/api/account/export/route.ts`.** The route is correct; the bug is in SQL. CSRF dedupe belongs to WP20 (F051) and error hygiene to WP02.
+- **Do not change `frontend/app/account/page.tsx`.** The export handler and its error text (`:115-140`, `:331-339`) already behave correctly once the RPC works. WP02's spec says WP01 "edits the export handler and export error text"; that is not the case, and WP02 already tells its executor to keep whatever text is there. WP02 (`role="alert"`), WP04 and WP15 own this file's later edits.
 - **Do not end an owner SQL snippet with `ROLLBACK` or `RESET`** if its result must be read: the Supabase SQL editor shows only the last statement's output. The owner snippets in this spec are written to end on the statement that matters; keep them that way.
 - **Do not claim the jest test proves the fix.** It mocks the RPC. The proof is the owner's SQL check and a real download in production.
 - **Do not apply either migration to production yourself** or mark them applied in `HARDENING_FOLLOWUPS.md`.
@@ -569,9 +571,9 @@ Do not write "applied" yourself: you have no production access.
 From the repo root:
 
 ```bash
-python3 verify_migration.py migrations/0024_export_my_data_volatile.sql > /tmp/wp01_0024_check.sql; echo "exit=$?"
+python3 verify_migration.py migrations/0024_export_my_data_volatile.sql > /dev/null; echo "exit=$?"
 # expect exit=0; stderr lists volatility v, body 80ef079f70454e8ae2ba9a00bbbb7781,
-# and 4 privilege lines. Keep /tmp/wp01_0024_check.sql for the owner (or tell them to regenerate it).
+# and 4 privilege lines. (The owner regenerates the SQL itself in Owner actions step 3.)
 
 python3 verify_migration.py migrations/0025_portfolio_fk_indexes.sql; echo "exit=$?"
 # expect exit=2 ("Nothing here can be verified"). Correct for a DO-only file.
@@ -589,8 +591,9 @@ grep -n $'\xe2\x80\x94' migrations/0024_export_my_data_volatile.sql migrations/0
   tests/test_migration_volatility.py frontend/app/api/account/export/__tests__/route.test.ts
 # expect no output (house style: no em dashes)
 
-git diff --stat origin/master -- migrations/0011_export_my_data.sql verify_migration.py frontend/app/api/account/export/route.ts
-# expect no output
+git diff --stat "$(git merge-base HEAD origin/master)" -- migrations/0011_export_my_data.sql verify_migration.py \
+  frontend/app/api/account/export/route.ts frontend/app/account/page.tsx
+# expect no output (compares the working tree with the point this branch left master)
 ```
 
 From `frontend/`:
@@ -614,6 +617,8 @@ If WP00 has landed, also run `pnpm build:stub` from `frontend/` and expect a suc
 Manual checks happen in production after the owner applies the migrations (see Owner actions).
 
 ## Owner actions
+
+Do these after the WP01 PR is merged to master, so the files you apply are the ones `verify_migration.py` checks. Neither migration depends on a frontend deploy, and no frontend deploy depends on them; apply them the same day as the merge.
 
 Run every SQL snippet below in the Supabase SQL editor of the production project with **no text selected** (the editor runs only the selection when there is one). The editor shows the result of the last statement only, so each snippet below ends with the statement whose output you need.
 
@@ -660,9 +665,9 @@ Run every SQL snippet below in the Supabase SQL editor of the production project
 
    Save the output (it names any legacy index 0025 will skip). Then apply `0025` the same way as step 2 (MCP name `0025_portfolio_fk_indexes`). If the tool shows `NOTICE` lines, each says "created index ..." or "... already has a leading-column btree index; skipped". If it does not show notices (MCP and the editor may hide them), step 6 tells you what happened.
 
-6. **Verify `0025`.** Run the verification query from the `0025` file header (remove the leading `--` from each line). Expect at least one row for `portfolio_holdings` and one for `portfolio_lots`, all with `valid = true`. Compare with the list saved in step 5: any `index_name` that was not there before is one 0025 created. Then open Supabase Dashboard > Advisors > Performance and confirm there is no `duplicate_index` warning and no `unindexed_foreign_keys` warning for either table. An `unused_index` INFO on a newly created index is expected until the index has been used; do not drop it.
+6. **Verify `0025`.** Run the verification query from the `0025` file header (remove the leading `--` from each line). Expect at least one row for `portfolio_holdings` and one for `portfolio_lots`, all with `valid = true`. Compare with the list saved in step 5: any `index_name` that was not there before is one 0025 created. If a row named `portfolio_holdings_portfolio_id_idx` or `portfolio_lots_holding_id_idx` shows `valid = false` (a leftover from an interrupted build; 0025 ignores invalid indexes but `IF NOT EXISTS` then skips the name), run `DROP INDEX public.<that name>;` and apply `0025` again. Then open Supabase Dashboard > Advisors > Performance, click Refresh, and confirm: no `duplicate_index` warning for `portfolio_holdings` or `portfolio_lots`, and no `unindexed_foreign_keys` warning naming `portfolio_holdings_portfolio_id_fkey` or `portfolio_lots_holding_id_fkey`. An `unindexed_foreign_keys` warning for `portfolio_holdings_product_id_fkey` is a different foreign key, out of scope here; leave it. An `unused_index` INFO on a newly created index is expected until the index has been used; do not drop it.
 
-7. **Record it.** In `audits/HARDENING_FOLLOWUPS.md` section 7, change the bullet "**Migrations 0024 and 0025: pending apply**" to "**Migrations 0024 and 0025 applied** (YYYY-MM-DD, via Supabase MCP)" (or "via SQL editor") and add the index names 0025 created or skipped (from step 6). If 0025 skipped `portfolio_holdings`, add the legacy index name from step 5 to the README bullet added in step 5a. Commit that doc change directly to master or ask the next work package to include it.
+7. **Record it.** In `audits/HARDENING_FOLLOWUPS.md` section 7, change the bullet "**Migrations 0024 and 0025: pending apply**" to "**Migrations 0024 and 0025 applied** (YYYY-MM-DD, via Supabase MCP)" (or "via SQL editor") and add the index names 0025 created or skipped (from step 6). For each table 0025 skipped, add the legacy index name from step 5 to the README bullet added in step 5a (for example "production's legacy index is `idx_portfolio_holdings_portfolio_id`"). Commit both doc edits directly to master in one commit, `docs: record migrations 0024 and 0025 as applied`.
 
 8. **Check alerting (ops note from the verifier).** `logSupabaseError('export_my_data_failed')` fired on every export attempt for four months unnoticed. Check whether Sentry or Vercel log alerts exist for it; if not, track it under WP17 (F108, observability).
 
@@ -670,7 +675,7 @@ Run every SQL snippet below in the Supabase SQL editor of the production project
 
 - [ ] `migrations/0024_export_my_data_volatile.sql` exists, contains no `STABLE`/`IMMUTABLE`/`VOLATILE` keyword outside comments, and `verify_migration.py` on it exits 0 reporting body hash `80ef079f70454e8ae2ba9a00bbbb7781`, volatility `v`, config `search_path=public,auth`, PUBLIC and anon revoked, authenticated and service_role granted.
 - [ ] `migrations/0025_portfolio_fk_indexes.sql` exists, contains only comments and one `DO` block, and uses no `CONCURRENTLY`.
-- [ ] `migrations/0011_export_my_data.sql`, `verify_migration.py` and `frontend/app/api/account/export/route.ts` are unchanged (`git diff --stat origin/master -- <path>` is empty for each).
+- [ ] `migrations/0011_export_my_data.sql`, `verify_migration.py`, `frontend/app/api/account/export/route.ts` and `frontend/app/account/page.tsx` are unchanged (the `git diff --stat "$(git merge-base HEAD origin/master)" -- ...` command in Verification prints nothing).
 - [ ] `frontend/app/api/account/export/__tests__/route.test.ts` exists and its 5 tests pass.
 - [ ] `tests/test_migration_volatility.py` passes, and fails (2 failed) when pointed via `POKEFIN_MIGRATIONS_DIR` at a copy of `migrations/` without `0024`.
 - [ ] `README.md` and `audits/HARDENING_FOLLOWUPS.md` carry the four edits from step 5, with 0024/0025 marked "pending apply".
@@ -683,7 +688,7 @@ Run every SQL snippet below in the Supabase SQL editor of the production project
 ## Rollback
 
 - **Code**: revert the PR commit. Nothing at runtime depends on the new test files or docs.
-- **0024**: do not roll back to `STABLE`; that re-breaks the export. If `0024` itself must be undone (it should not need to be), apply `migrations/0011_export_my_data.sql` again, which restores the `STABLE` definition via `CREATE OR REPLACE`, then restore anon's grant only if something demonstrably needs it: `GRANT EXECUTE ON FUNCTION public.export_my_data() TO anon;` (nothing in the repo calls it as anon). Add any such undo as a new numbered migration, never by editing 0024.
+- **0024**: do not roll back. Restoring `STABLE` (for example by re-running `0011`) re-breaks the export for every user, and nothing in the repo calls the RPC as anon. If the ACL change ever turns out to block a legitimate caller, add a new numbered migration that grants EXECUTE to that specific role; never edit `0024` and never re-run `0011`.
 - **0025**: the indexes are additive and safe to keep. To remove only what 0025 created, drop by name, and only the names Owner actions step 6 identified as created (absent from the step 5 list):
 
   ```sql
