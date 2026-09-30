@@ -11,7 +11,7 @@
 
 ## Why
 
-Today nothing measures what a PR costs a visitor. `pnpm build:stub` proves the app builds, but against an empty catalog, so a route's HTML and flight data are unrealistically small, and nobody reads the chunk sizes anyway. A stub build of master in this workspace shows how easy it is to lose track: `/prices` loads 15 scripts, 232 kB gzip (1 kB = 1024 bytes) plus a 39.5 kB `noModule` polyfill that modern browsers skip, and the floor every route pays is 145.5 kB, of which 3.6 kB is `@sentry/nextjs` pulled in statically by `error.tsx` and `global-error.tsx` even though no DSN is set. Speed Insights is installed but unconfigured and nobody looks at it, and the only check of production is a human visiting the site. After this PR a realistic synthetic catalog (306 products, 55 sets, a year of history for the pages Lighthouse visits) feeds a CI build; a script prints each route's JS, CSS, document and flight bytes in the job summary and fails on a breach; Lighthouse CI fails on layout shift, bfcache loss, byte growth and oversized catalog images; production is measured after each deploy, smoke-tested every morning (including a signed-in portfolio load and data export), and checked weekly against real-user p75 targets. Evidence and the exact design come from `audits/remediation/research/performance-excellence.md` §3 (targets), §4 (budgets), §5 (CI enforcement, fixture, pipeline), §6 (Speed Insights and weekly alerting), §9 and §15 (lazy Sentry), §17 (owner measurements), and from `01-PRODUCT-DIRECTION.md` §6.1 (the rules every Track 2 package follows).
+Today nothing measures what a PR costs a visitor. `pnpm build:stub` proves the app builds, but against an empty catalog, so a route's HTML and flight data are unrealistically small, and nobody reads the chunk sizes anyway. A stub build of master in this workspace shows how easy it is to lose track: `/prices` loads 15 scripts, 232 kB gzip (1 kB = 1024 bytes) plus a 39.5 kB `noModule` polyfill that modern browsers skip, and the floor every route pays is 210 kB, of which 64.6 kB is supabase-js (WP12 moves it off the first load) and 3.6 kB is `@sentry/nextjs`, pulled in statically by `error.tsx` and `global-error.tsx` even though no DSN is set. The measurement method in this spec was checked against that build: the client-reference-manifest route of `/prices` lists exactly the scripts of its HTML. Speed Insights is installed but unconfigured and nobody looks at it, and the only check of production is a human visiting the site. After this PR a realistic synthetic catalog (306 products, 55 sets, a year of history for the pages Lighthouse visits) feeds a CI build; a script prints each route's JS, CSS, document and flight bytes in the job summary and fails on a breach; Lighthouse CI fails on layout shift, bfcache loss, byte growth and oversized catalog images; production is measured after each deploy, smoke-tested every morning (including a signed-in portfolio load and data export), and checked weekly against real-user p75 targets. Evidence and the exact design come from `audits/remediation/research/performance-excellence.md` §3 (targets), §4 (budgets), §5 (CI enforcement, fixture, pipeline), §6 (Speed Insights and weekly alerting), §9 and §15 (lazy Sentry), §17 (owner measurements), and from `01-PRODUCT-DIRECTION.md` §6.1 (the rules every Track 2 package follows).
 
 ## Design
 
@@ -242,7 +242,7 @@ grep -n '"build:stub"\|"test:scripts"' package.json            # WP00: 2 lines. 
 grep -n 'catalog:' scripts/supabase-stub.mjs                   # WP08: 1 line. Missing: stop.
 grep -n 'SUPABASE_STUB_FIXTURE' scripts/build-with-stub.mjs    # WP08: at least 1 line. Missing: stop.
 ls app/lib/supabaseLoader.ts                                   # WP12. Missing: stop (limits recorded before WP12 would be 66 kB too loose).
-grep -c 'continue-on-error' ../.github/workflows/ci.yml        # WP17: expect 0 in the frontend job (WP21's drift step has one; see next line)
+grep -c 'continue-on-error' ../.github/workflows/ci.yml        # WP17 removed the lint step's; expect 1 if WP21 landed (its informational drift step), else 0
 grep -n 'name: Lint$' ../.github/workflows/ci.yml              # WP17: 1 line. Missing: stop.
 ls instrumentation-client.ts                                    # WP17. Missing: stop.
 grep -n 'Database replay and Python tests' ../.github/workflows/ci.yml   # WP21: 1 line. Missing: continue (placement allows it), but rebase before merge if WP21 lands first.
@@ -2329,11 +2329,19 @@ async function visit(page, url) {
   return { status: res?.status() ?? 0, finalPath: new URL(page.url()).pathname, text, html: await page.content() };
 }
 
-async function withRetry(run) {
-  const first = await run();
+// A thrown navigation (timeout, DNS) counts as a failed check, not a crash.
+async function withRetry(name, run) {
+  const attempt = async () => {
+    try {
+      return await run();
+    } catch (err) {
+      return { name, ok: false, detail: `threw: ${String(err.message).split("\n")[0]}` };
+    }
+  };
+  const first = await attempt();
   if (first.ok) return first;
   await new Promise((resolve) => setTimeout(resolve, 30_000));
-  return { ...(await run()), retried: true };
+  return { ...(await attempt()), retried: true };
 }
 
 async function signedInLeg(browser) {
@@ -2382,7 +2390,7 @@ async function runChecks() {
     let pricesHtml = "";
     for (const check of lib.PUBLIC_CHECKS) {
       result.checks.push(
-        await withRetry(async () => {
+        await withRetry(check.path, async () => {
           const seen = await visit(page, ORIGIN + check.path);
           if (check.path === "/prices") pricesHtml = seen.html;
           return lib.judgePage({ ...check, ...seen });
@@ -2393,20 +2401,27 @@ async function runChecks() {
     if (productId) {
       const productPath = `/product/${productId}`;
       result.checks.push(
-        await withRetry(async () => lib.judgePage({ path: productPath, minPrices: lib.PRODUCT_MIN_PRICES, ...(await visit(page, ORIGIN + productPath)) }))
+        await withRetry(productPath, async () => lib.judgePage({ path: productPath, minPrices: lib.PRODUCT_MIN_PRICES, ...(await visit(page, ORIGIN + productPath)) }))
       );
     } else {
       result.checks.push({ name: "/product/<id>", ok: false, detail: "no product link on /prices and SMOKE_PRODUCT_ID unset" });
     }
-    const sitemap = await context.request.get(`${ORIGIN}/sitemap.xml`);
-    const products = lib.countSitemapProducts(await sitemap.text());
-    result.checks.push({
-      name: "/sitemap.xml",
-      ok: sitemap.status() === 200 && products >= lib.SITEMAP_MIN_PRODUCTS,
-      detail: `HTTP ${sitemap.status()}, ${products} product URLs (needs ${lib.SITEMAP_MIN_PRODUCTS})`,
-    });
+    result.checks.push(
+      await withRetry("/sitemap.xml", async () => {
+        const sitemap = await context.request.get(`${ORIGIN}/sitemap.xml`);
+        const products = lib.countSitemapProducts(await sitemap.text());
+        return {
+          name: "/sitemap.xml",
+          ok: sitemap.status() === 200 && products >= lib.SITEMAP_MIN_PRODUCTS,
+          detail: `HTTP ${sitemap.status()}, ${products} product URLs (needs ${lib.SITEMAP_MIN_PRODUCTS})`,
+        };
+      })
+    );
     await context.close();
-    result.auth = await signedInLeg(browser);
+    result.auth = await signedInLeg(browser).catch((err) => ({
+      status: "failed",
+      detail: `signed-in leg threw: ${String(err.message).split("\n")[0]}`,
+    }));
   } finally {
     await browser.close();
   }
@@ -2862,6 +2877,8 @@ Stop the server (`kill %1` or `pkill -f scripts/perf-serve.mjs`) and check `git 
 3. In `lighthouserc.json`, replace each URL's two placeholders with `["error", { "maxNumericValue": <suggested bytes>, "aggregationMethod": "median" }]`.
 4. In the same table check: CLS below 0.05 and bf-cache "3/3 pass" on all four URLs, and 0 oversized images on `/` and `/prices`. If a URL fails bf-cache or CLS, find the cause in the uploaded report (`perf-reports` artifact, `lhci-reports/*.html`, "Page prevented back/forward cache restoration" or "Avoid large layout shifts"). A real defect in the page is out of scope: switch only that URL's assertion to `warn`, open a follow-up issue with the reason and the report, and list it in the PR. Do the same if `uses-responsive-images` fails on `/` or `/prices`. Never raise the CLS threshold.
 5. Push. The Lighthouse step must now pass with every remaining assertion at `error`.
+
+If the table shows `0/3 pass` for bf-cache on every URL and the uploaded report has no "back/forward cache" audit at all, the audit was not run under `onlyCategories: ["performance"]` in this Lighthouse version: delete the `"onlyCategories"` setting (the runs get a few seconds slower) and push again. Do not remove the assertion.
 
 `grep -c '"maxNumericValue": 1,' lighthouserc.json` must print 0 before merge.
 
