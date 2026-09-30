@@ -65,10 +65,12 @@ grep -n "RETURNS SETOF public.box_recipes" ../migrations/0005_box_recipes_share_
 # numbers its files 0027-0029 assuming it).
 ls ../migrations | grep '^002[4-9]'
 # expect: 0024_export_my_data_volatile.sql and 0025_portfolio_fk_indexes.sql
-# (WP01), and no 0026_ file. Everywhere below, NNNN means 0026. Only if a
-# 0026_ file already exists: use the next free number, replace 0026 in the
-# comments of steps 1, 2 and 6, and say in the PR body which number you used
-# so WP10's executor renumbers its files.
+# (WP01), and no 0026_ file. Everywhere below, NNNN means 0026. 0026 is a
+# fixed reservation (WP10 0027-0029, WP16 0030, WP21 0031-0032): use it even
+# if WP10's or WP16's files are already present. Only if a 0026_ file that is
+# not this package's already exists: stop and ask the owner for the number
+# (do not take "the next free" one, it may be reserved), replace 0026 in the
+# comments of steps 1, 2 and 6, and say in the PR body which number you used.
 
 # 8. What WP04 and WP05 left behind. Record the answers; steps branch on them.
 grep -n "sessionStatus" app/context/AuthContext.tsx | head -3
@@ -2623,7 +2625,7 @@ Seed legacy rows (after the four migrations, before NNNN): one private row with 
 2. **Apply `migrations/NNNN_box_recipes_sharing_and_currency.sql`** to production via Supabase MCP `apply_migration` (preferred) or the SQL editor with the whole file selected. Do this **before** the Vercel deployment of this PR goes live.
 3. **Verify:** run `python3 verify_migration.py migrations/NNNN_box_recipes_sharing_and_currency.sql`, execute the printed query: all 9 rows `OK`. Then run the three queries in the migration header: 3 constraint rows, 1 trigger row with `tgenabled = 'O'`, and `currency` default `'USD'::text`, not nullable. `verify_migration.py` on `0005` now reports a body `MISMATCH` for `get_shared_recipe`; that is correct, because NNNN redefines it.
 4. **Run the Supabase security advisor** (Dashboard, Advisors, Security, or MCP `get_advisors` type `security`). Expect no new finding for `box_recipes_share_code_guard` (its `search_path` is pinned) or `get_shared_recipe`.
-5. **Record it** in `audits/HARDENING_FOLLOWUPS.md` section 7 as a bullet in the existing style: "**Migration NNNN applied** (date, via Supabase MCP). Server-owned box recipe share codes (trigger + format/visibility CHECKs), `box_recipes.currency`, and `get_shared_recipe` without owner id. `public_bad_code` before apply: N." Add a second bullet: "**Open:** `export_my_data` (0011, redefined by WP01's 0024) does not export `box_recipes.currency`; add it the next time that function is redefined."
+5. **Record it** in `audits/HARDENING_FOLLOWUPS.md` section 7 as a bullet in the existing style, placed newest-first in the run of migration bullets: directly above WP01's "**Migrations 0024 and 0025" bullet (or, if that is absent, directly above "**Migration 0022 applied**"), and below any WP10 "**Migrations 0027, 0028 and 0029" bullet if WP10 merged first. WP16's docs step finds it by the text "**Migration 0026". Text: "**Migration NNNN applied** (date, via Supabase MCP). Server-owned box recipe share codes (trigger + format/visibility CHECKs), `box_recipes.currency`, and `get_shared_recipe` without owner id. `public_bad_code` before apply: N." Add a second bullet: "**Open:** `export_my_data` (0011, redefined by WP01's 0024) does not export `box_recipes.currency`; add it the next time that function is redefined."
 6. **After deploy**, run manual checks 1 to 9 from "Manual checks" under Verification on production with a test account.
 
 ## Acceptance criteria

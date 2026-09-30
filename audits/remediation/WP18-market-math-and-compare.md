@@ -8,7 +8,7 @@
   - F003 (full): the Collectr import (`lib/import.ts`) has its own naive CSV parser that splits on newlines before handling quotes, so a multi-line or quoted note is truncated and loses its quote characters.
 - **Priority rationale**: pure maintainability and consistency debt with one user-visible inconsistency (volatility units), scheduled after the caching and lint gates so the refactor lands under blocking lint and on settled code.
 - **Effort**: L, about 12 hours (3 h market math and its five consumers, 1.5 h PriceChart, 4 h compare split with tabs, 1 h import parser, 2.5 h tests and verification).
-- **Depends on**: WP07 (`app/lib/format.ts`: `parseRecordedAt`, `formatMoney`, `formatDateOnly`, `formatMonthDay`; offset-less `recorded_at` already parsed as UTC in the files this package edits), WP11 (`app/compare/page.tsx` is a server component rendering `app/compare/CompareDashboard.tsx`; `app/compare/marketProducts.ts` exports `MarketProduct` and `buildMarketProductMap`). Also assumes the packages that run before it in plan order have merged: WP14 (compare search `aria-label`, file input `sr-only`, gain/loss tokens), WP15 (compare error copy `MARKET_DATA_UNAVAILABLE`), WP17 (lint blocks CI; `MarketView/buildRows.ts` exists; `PriceTooltip` and `PriceDot` are already module-scope exports of `PriceChart.tsx`).
+- **Depends on**: WP17 (hard: step 4 edits `app/components/MarketView/buildRows.ts`, which WP17 step 13 creates; step 8 expects `PriceTooltip`/`PriceDot` already at module scope from WP17 step 8), WP07 (`app/lib/format.ts`: `parseRecordedAt`, `formatMoney`, `formatDateOnly`, `formatMonthDay`; offset-less `recorded_at` already parsed as UTC in the files this package edits), WP11 (`app/compare/page.tsx` is a server component rendering `app/compare/CompareDashboard.tsx`; `app/compare/marketProducts.ts` exports `MarketProduct` and `buildMarketProductMap`). Also assumes the packages that run before it in plan order have merged: WP14 (compare search `aria-label`, file input `sr-only`, gain/loss tokens), WP15 (compare error copy `MARKET_DATA_UNAVAILABLE`), WP17 (lint blocks CI; `MarketView/buildRows.ts` exists; `PriceTooltip` and `PriceDot` are already module-scope exports of `PriceChart.tsx`).
 - **Unblocks**: WP19 (MarketView decomposition builds on `lib/marketMath.ts`, `lib/sorting.ts` and `components/SortableTable`), WP20 (types move and currency context; the compare page's local `DEFAULT_EXCHANGE_RATE = 1.35` is left for it).
 - **Suggested branch name**: `remediation/wp18-market-math-and-compare`
 - **Risk level**: medium. It touches the numbers shown on `/market`, `/product/[id]`, `/stats` (fallback path), the catalog cards, every price chart and `/compare`; the new code was proven number-for-number equal to the old on randomised histories, and the tests below pin that.
@@ -19,7 +19,7 @@ The same finance formulas live in four files and have already needed a hand back
 
 ## Before you start
 
-All paths are relative to `frontend/` unless they start with `.github/` or `audits/`.
+All paths are relative to `frontend/` unless they start with `.github/`, `audits/` or `migrations/`, or are `schema.sql`; those four are at the repo root.
 
 Read these files in full first:
 
@@ -61,7 +61,7 @@ grep -n 'csvContent.split("\\n")' app/lib/import.ts                       # 1 hi
 grep -n "returns.test.ts" ../.github/workflows/ci.yml                    # WP07 zone step: 2 hits (0 if WP07 skipped step 10)
 ```
 
-If `buildRows.ts` does not exist (WP17 not merged), make the step 4 edits inside the `rows` useMemo of `MarketView.tsx` instead, and replace MarketView's own `DAY_MS` and `getReleaseMs` with imports from `../../lib/marketMath` (`DAY_MS`, `releaseDateUtcMs`). If `PriceTooltip`/`PriceDot` are not module-scope exports, do step 8e. Any other missing dependency: stop and report.
+If `buildRows.ts` does not exist (WP17 not merged), make the step 4c edits inside the `rows` useMemo of `MarketView.tsx` instead (its `todayUtcMs` is the `const todayUtcMs = utcMidnightMs();` at the top of that memo), delete MarketView's own `const DAY_MS` and `function getReleaseMs`, and add `import { DAY_MS, releaseDateUtcMs as getReleaseMs } from "../../lib/marketMath";` so `filteredProducts` keeps compiling unchanged; step 4a's import then goes into `MarketView.tsx` in place of its `"./returns"` import. If `PriceTooltip`/`PriceDot` are not module-scope exports, do step 8e. Any other missing dependency: stop and report.
 
 Record the lint state of the files you will touch (lint is blocking since WP17; it must stay at 0 errors):
 
@@ -80,7 +80,7 @@ Do the steps in order. Steps 1 to 3 add new modules and their tests and change n
 ### Decisions baked into this spec (do not re-open them)
 
 1. **One module, `app/lib/marketMath.ts`, USD only.** No `convertPrice` parameter anywhere (F005 verifier correction 2): every metric here is a percentage or a ratio, and FX is a single multiply, so converting first cannot change a result. Callers convert prices for display only. This was checked: old and new implementations agree to 2e-14 relative on 300 random histories, including CAD conversion.
-2. **Volatility keeps each page's current number and states its unit.** `volatilityPercent(prices, unit)` has no default unit, so every caller writes `"daily"` or `"annualised"`. `/market` and `/product` stay annualised (the daily figure times the square root of 365) and say so; `/stats` stays daily, because it is fed by the SQL `get_set_analytics` (`stddev_pop`, raw daily; `migrations/20260506_market_performance_functions.sql:113-118`) and changing it needs a migration outside this package (F005 verifier correction 3). The UI labels are the fix, not the maths.
+2. **Volatility keeps each page's current number and states its unit.** `volatilityPercent(prices, unit)` has no default unit, so every caller writes `"daily"` or `"annualised"`. `/market` and `/product` stay annualised (the daily figure times the square root of 365) and say so; `/stats` stays daily, because it is fed by the SQL `get_set_analytics`, which averages `get_market_product_metrics().volatility_90d` (`migrations/0023_price_freshness_guard.sql:378`), a raw daily `stddev_pop` of daily percent changes (`migrations/20260506_market_performance_functions.sql:113-118`) and changing it needs a migration outside this package (F005 verifier correction 3). The UI labels are the fix, not the maths.
 3. **Lookback is in daily points, not calendar days**, exactly as both old implementations did (`returns.ts:120` `slice(-Math.max(lookbackDays, 3))`, server `buildDailySeries(history, 90)`). Switching to calendar days would change numbers; note it as a follow-up.
 4. **Day keys come from the string** (`recorded_at.split("T")[0].split(" ")[0]`), as `returns.ts:13` and `marketPulse.ts` `toRecordedDateKey` do, not from `new Date(...)` (F005 verifier: unify on the string slice).
 5. **PriceChart's chips stay on the charted (downsampled) series** and are labelled as range figures with a `title` (F005 verifier correction 1). Moving them to daily points would change the displayed drawdown and ROI.
@@ -160,8 +160,10 @@ export function dateKeyUtcMs(dateKey: string | null | undefined): number | null 
 /**
  * A set's release_date ("2026-03-27", or with a time part) as UTC-midnight
  * epoch ms. Replaces the four getReleaseMs / getReleaseUtcMs copies.
+ * The parameter is optional, like the old getReleaseMs(releaseDate?), so
+ * WP17's buildRows.test.ts keeps compiling through the getReleaseMs re-export.
  */
-export function releaseDateUtcMs(releaseDate: string | null | undefined): number | null {
+export function releaseDateUtcMs(releaseDate?: string | null): number | null {
   if (!releaseDate) return null;
   return dateKeyUtcMs(releaseDate.split("T")[0].split(" ")[0]);
 }
@@ -371,7 +373,13 @@ export function getVolatilityPercent(
 }
 ```
 
-Then add `app/lib/__tests__/marketMath.test.ts` (Tests section) and run it before continuing: `pnpm exec jest app/lib/__tests__/marketMath.test.ts`.
+Then create the test by moving the old one, so git keeps its history (do it here, not in step 7: `git mv` refuses to overwrite an existing destination):
+
+```bash
+git mv app/components/MarketView/__tests__/returns.test.ts app/lib/__tests__/marketMath.test.ts
+```
+
+Before overwriting it, list its `it(` titles (`grep -n "it(" app/lib/__tests__/marketMath.test.ts`). Replace the file's whole content with the Tests-section version (test 1). If the moved file had a case whose title is not in the Tests-section version, port it into the new file: drop its `identityConvert` argument, import from `../marketMath`, keep its expectation. Then run `pnpm exec jest app/lib/__tests__/marketMath.test.ts`; it must pass before you continue. `returns.ts` itself stays until step 7c.
 
 ### Step 2. `app/lib/csv.ts` (new)
 
@@ -543,6 +551,8 @@ export function compareSortValues(
  * components/SortableTable and lives in lib/sorting.ts; it is re-exported
  * here so existing imports keep working.
  */
+import type { SortDirection } from "../../lib/sorting";
+
 export {
   compareSortValues,
   isMissingSortValue,
@@ -550,8 +560,6 @@ export {
   type SortValue,
   type StringComparator,
 } from "../../lib/sorting";
-
-import type { SortDirection } from "../../lib/sorting";
 
 /**
  * Default direction for a freshly clicked column header. Columns where a
@@ -768,7 +776,7 @@ Keep the comment above it. In the `setStats` mapping, replace the `releaseMs` / 
 
 7b. `app/components/ProductPrices/cards/ProductCard.tsx`: in both `<ReturnMetrics` elements delete the `selectedCurrency={selectedCurrency}` and `exchangeRate={exchangeRate}` lines. The card keeps both props (the chart uses them).
 
-7c. Delete `app/components/MarketView/returns.ts` and move its test: `git mv app/components/MarketView/__tests__/returns.test.ts app/lib/__tests__/marketMath.test.ts`, then replace the moved file's content with the Tests-section version (it keeps every existing case, including WP07's F122 cases, with the new signatures). If the moved file has a case that the Tests-section version lacks, port it too: drop the `identityConvert` argument and import from `../marketMath`.
+7c. Delete the old module: `git rm app/components/MarketView/returns.ts`. Its test was already moved to `app/lib/__tests__/marketMath.test.ts` in step 1; confirm `test -f app/components/MarketView/__tests__/returns.test.ts` fails (the file must not exist).
 
 After step 7: `grep -rn "MarketView/returns\|from \"./returns\"" app` prints nothing, and `pnpm exec tsc --noEmit` passes.
 
@@ -1808,7 +1816,7 @@ export default function CompareTabs({
 
 13a. Delete from the module scope: the types `ShopifyProduct`, `ComparisonRow`, `SortDirection`, `CompareSortKey`, `ShopifyProfitSortKey`, `MarketProfitSortKey`, `SortState`; the constants `DAY_MS` and `MISSING`; the functions `parseCsv`, `parseNumber`, `parseShopifyCsv`, `formatCurrency`, `formatSignedCurrency`, `formatPercent`, `getReleaseUtcMs`, `formatReleaseDate` (if still present), `getTodayUtcStartMs`, `calculateProfit`, `calculateMargin`, `compareValues` and the `SortButton` component. Keep `DEFAULT_EXCHANGE_RATE`, `MARKET_DATA_UNAVAILABLE` (WP15), `CompareDashboardProps` (WP11).
 
-13b. Inside the component: keep every existing `useState` and the mount `useEffect` exactly as they are (WP11/WP15 versions). Rename the sort states for the new key types (`shopifyProfitSort` becomes `shopifyMarginSort` of type `SortState<ShopifyMarginSortKey>`, `marketProfitSort` becomes `marketMarginSort` of type `SortState<MarketMarginSortKey>`), keep their initial values (`differencePct` / `shopifyMargin` / `marketMargin`, all `"asc"`), and add `const [activeTab, setActiveTab] = useState<CompareTabId>("comparison");`.
+13b. Inside the component: keep every existing `useState`, the `needsProducts`/`needsRate` lines and the mount `useEffect` exactly as they are (WP11/WP15 versions). In particular `needsProducts` stays `initialMarketProducts === undefined`: an empty map must not trigger a browser fetch (WP11 pitfall; WP11's `CompareDashboard.test.tsx` case "with `initialMarketProducts={{}}` ... `fetchMarketProductsClient` is not called" guards it). Rename the sort states for the new key types (`shopifyProfitSort` becomes `shopifyMarginSort` of type `SortState<ShopifyMarginSortKey>`, `marketProfitSort` becomes `marketMarginSort` of type `SortState<MarketMarginSortKey>`), keep their initial values (`differencePct` / `shopifyMargin` / `marketMargin`, all `"asc"`), and add `const [activeTab, setActiveTab] = useState<CompareTabId>("comparison");`.
 
 13c. Replace `comparisonRows`, `filteredRows`, the three `sorted*Rows` memos and `summaryStats` with the memos in the reference file below (`buildComparisonRows`, `useDeferredValue` + `filterComparisonRows`, `summarizeComparison`, and the two column memos). Sorting now happens inside `SortableTable`, only for the visible table.
 
@@ -1816,7 +1824,7 @@ export default function CompareTabs({
 
 13e. Imports: `useDeferredValue` from React; the new modules; remove every import that is now unused (`formatMoney`, `CurrencyCode`, `utcMidnightMs` if unused, etc.). `pnpm exec eslint app/compare` must report 0 problems.
 
-Reference: the complete file after this step, assuming WP07, WP11, WP14 and WP15 landed exactly as specified. Where the current file's kept blocks (the state, the effect, the header card between the `KEEP-1` markers, the search input marked `KEEP-2`) differ from this reference, the current file wins for those blocks. Delete the three `KEEP` marker comments when done.
+Reference: the complete file after this step, assuming WP07, WP11, WP14 and WP15 landed exactly as specified. Where the current file's kept blocks (the props type, the state, the `needsProducts`/`needsRate` lines, the effect, the header card between the `KEEP-1` markers, the search input marked `KEEP-2`) differ from this reference, the current file wins for those blocks. Delete the three `KEEP` marker comments when done. Build the file by editing the current one (steps 13a to 13e); do not paste this reference over it wholesale.
 
 ```tsx
 "use client";
@@ -1860,7 +1868,12 @@ const MARKET_DATA_UNAVAILABLE =
   "We couldn't load current market prices. Refresh the page to try again.";
 
 type CompareDashboardProps = {
-  /** sku map built on the server (buildMarketProductMap). Empty or absent: fetched in the browser. */
+  /**
+   * sku map built on the server (buildMarketProductMap). Absent when the
+   * server had no catalog (failed read or empty stub): fetched in the
+   * browser. Present but empty means "the catalog has no sku products", which
+   * a browser fetch would not change.
+   */
   initialMarketProducts?: Record<string, MarketProduct>;
   /** Server-cached rate. Absent when the server only had the hard-coded fallback: fetched in the browser. */
   initialExchangeRate?: ExchangeRateSnapshot;
@@ -1873,9 +1886,11 @@ export default function CompareDashboard({
   const [shopifyProducts, setShopifyProducts] = useState<
     Record<string, ShopifyProduct>
   >({});
-  const needsProducts =
-    initialMarketProducts === undefined ||
-    Object.keys(initialMarketProducts).length === 0;
+  // page.tsx passes undefined when it had no catalog at all (the stub build,
+  // or the summaries failed), so only then does the browser fetch. Do not
+  // gate on the map being empty: a catalog with no sku products legitimately
+  // builds {}, and refetching it in every browser would bring back F143.
+  const needsProducts = initialMarketProducts === undefined;
   const needsRate = initialExchangeRate === undefined;
 
   const [marketProducts, setMarketProducts] = useState<
@@ -1928,6 +1943,7 @@ export default function CompareDashboard({
         }
       } catch (err: unknown) {
         if (cancelled) return;
+        // Never show err.message: it carries PostgREST / fetch wording.
         logCaughtError("compare_market_data_failed", err);
         setErrorMessage(MARKET_DATA_UNAVAILABLE);
       } finally {
@@ -2026,7 +2042,7 @@ export default function CompareDashboard({
               </div>
             </div>
             <div className="flex flex-col gap-2">
-              <label className="flex w-full cursor-pointer flex-col gap-1 rounded-xl border border-dashed border-slate-300 bg-white px-4 py-3 text-sm text-slate-600 transition hover:border-slate-400 focus-within:ring-2 focus-within:ring-[var(--pf-pokeblue)]">
+              <label className="relative flex w-full cursor-pointer flex-col gap-1 rounded-xl border border-dashed border-slate-300 bg-white px-4 py-3 text-sm text-slate-600 transition hover:border-slate-400 focus-within:ring-2 focus-within:ring-[var(--pf-pokeblue)]">
                 <span className="font-semibold text-slate-700">
                   Upload Shopify CSV
                 </span>
@@ -2213,7 +2229,15 @@ The `const row: CollectrCSVRow = {...}` mapping and everything after it stay as 
 
 ### Step 15. CI: the moved test in the timezone step
 
-In `.github/workflows/ci.yml`, in WP07's "Timezone-sensitive tests" step, replace `app/components/MarketView/__tests__/returns.test.ts` with `app/lib/__tests__/marketMath.test.ts` on both lines (`sed -i 's#app/components/MarketView/__tests__/returns.test.ts#app/lib/__tests__/marketMath.test.ts#g' .github/workflows/ci.yml` from the repo root). A path that no longer exists makes jest exit 1 with "No tests found". If the step does not exist, skip this step.
+In `.github/workflows/ci.yml`, in WP07's "Timezone-sensitive tests" step, replace `app/components/MarketView/__tests__/returns.test.ts` on both lines with the moved test plus this package's two other zone-sensitive tests. From the repo root:
+
+```bash
+sed -i 's#app/components/MarketView/__tests__/returns.test.ts#app/lib/__tests__/marketMath.test.ts app/compare/__tests__/compareMath.test.ts app/components/__tests__/PriceChart.memo.test.tsx#g' .github/workflows/ci.yml
+grep -c "app/lib/__tests__/marketMath.test.ts app/compare/__tests__/compareMath.test.ts app/components/__tests__/PriceChart.memo.test.tsx" .github/workflows/ci.yml   # expect 2
+grep -c "MarketView/__tests__/returns.test.ts" .github/workflows/ci.yml                          # expect 0
+```
+
+A path that no longer exists makes jest exit 1 with "No tests found", which is why the old path must go. If the step does not exist (WP07 skipped its step 10), skip this step and say so in the PR.
 
 ## Pitfalls: do not do this
 
@@ -2232,6 +2256,11 @@ In `.github/workflows/ci.yml`, in WP07's "Timezone-sensitive tests" step, replac
 - **Do not import `DEFAULT_EXCHANGE_RATE` from `lib/marketData` into the compare page or change `1.35`** here. WP11 recorded that WP20 owns it; the verifier showed the fallback is near-dead anyway.
 - **Do not put `compareMath.ts` in `app/lib/`.** It would import from `app/compare/`, inverting the dependency direction (F048).
 - **Do not expect a bundle-size or LCP change from the compare split** (F043 verifier correction 5). The win is testability and keystroke cost.
+- **Do not change how `CompareDashboard` decides to fetch.** `needsProducts` is `initialMarketProducts === undefined` (WP11). Adding an "or the map is empty" condition makes every browser refetch the catalog when it has no sku products (F143) and fails WP11's `CompareDashboard.test.tsx`.
+- **Do not paste the step 13 reference file over `CompareDashboard.tsx`.** Edit the current file; the reference only shows the target shape.
+- **Do not `git mv` the returns test in step 7.** Step 1 already moved it; a second `git mv` onto an existing file fails.
+- **Do not drop `matchProduct` from the `import.test.ts` import line** (WP17 added it and its cases); only add `CSV_MAX_ROWS`.
+- **Do not paste a literal byte order mark into test sources.** Write `"\uFEFF..."`; an invisible character is lost or doubled by editors and the test then checks nothing.
 - **Do not render all three tables and hide two with CSS.** Hidden tables still lay out on every update; only the active tab's table is mounted.
 - **Do not move MarketView's sort switch, columns or JSX** beyond the two volatility edits. That is WP19.
 - **Do not edit the SQL migrations.** `get_set_analytics` stays the source of truth for `/stats`.
@@ -2548,7 +2577,8 @@ describe("parseCsv (RFC 4180)", () => {
   });
 
   it("strips a UTF-8 byte order mark", () => {
-    expect(parseCsv("﻿Handle,Title\nh,t")[0]).toEqual(["Handle", "Title"]);
+    // Write the BOM as the \uFEFF escape, never as a pasted invisible character.
+    expect(parseCsv("\uFEFFHandle,Title\nh,t")[0]).toEqual(["Handle", "Title"]);
   });
 
   it("returns a blank line as a one-field row (callers filter it)", () => {
@@ -2559,7 +2589,7 @@ describe("parseCsv (RFC 4180)", () => {
 
 ### 3. `app/lib/__tests__/import.test.ts` (update)
 
-Keep every existing case unchanged (in particular `:31`, the trimmed product name). Change the import line to `import { parseCollectrCSV, calculateImportSummary, CSV_MAX_ROWS } from "../import";` and append:
+Keep every existing case unchanged (in particular `:31`, the trimmed product name, and the `matchProduct` cases WP17 appended). Add `CSV_MAX_ROWS` to the existing value import from `"../import"`; do not drop any name already there. After WP17 that line reads `import { matchProduct, parseCollectrCSV, calculateImportSummary } from "../import";`, so it becomes `import { matchProduct, parseCollectrCSV, calculateImportSummary, CSV_MAX_ROWS } from "../import";`. Keep the `jest.mock` lines at the top as they are. Append:
 
 ```ts
 describe("parseCollectrCSV with RFC 4180 quoting (F003)", () => {
@@ -2857,7 +2887,8 @@ describe("parseShopifyCsv", () => {
   });
 
   it("reads headers with a byte order mark and padding", () => {
-    const { products } = parseShopifyCsv("﻿ Handle , Variant SKU , Variant Price \nh, S1 , 5 ");
+    // \uFEFF is the byte order mark; keep it as an escape in the source.
+    const { products } = parseShopifyCsv("\uFEFF Handle , Variant SKU , Variant Price \nh, S1 , 5 ");
     expect(products.S1?.shopifyPrice).toBe(5);
   });
 });
@@ -3189,9 +3220,10 @@ grep -rn "convertPrice" app/lib/marketMath.ts app/components/ProductPrices/share
 grep -n "toLocale\|CustomTooltip\|CustomDot\|}, \[data, currency, exchangeRate\]" app/components/PriceChart.tsx
 grep -c "<table" app/compare/CompareDashboard.tsx | grep -v "^0$"
 
-# Exactly one DAY_MS definition in app code:
+# One DAY_MS definition in the market-math files:
 grep -rn "const DAY_MS = " app --include=*.ts --include=*.tsx | grep -v __tests__
-# expect: app/lib/marketMath.ts only
+# expect exactly two lines: app/lib/marketMath.ts and app/lib/portfolio.ts (WP05's copy;
+# portfolio day arithmetic is out of scope, decision 12). Any other file is a missed copy.
 
 # One CSV parser, two consumers:
 grep -rn "parseCsv(" app --include=*.ts --include=*.tsx | grep -v __tests__
@@ -3207,7 +3239,7 @@ Manual checks (on the Vercel preview of the PR, which reads real data; the stub 
 1. `/market`, click "Show all columns" (or the equivalent toggle): the header reads "Vol 30D (ann.)"; hovering it shows the annualised explanation; values have no "+" sign and are neutral grey, not green. Sort by it: ascending puts the calmest products first and "--" rows last. The numbers equal the production site's "Vol 30D" for the same product.
 2. `/product/<any id>`: the tile reads "Volatility 30D (annualised)" with the note under the grid; CAGR, Max Drawdown and Volatility values equal production.
 3. `/stats` (or `/analytics`): headers read "Volatility 90D (daily)"; the definition text mentions "daily, not annualised"; values equal production.
-4. `/prices`: open a card's chart, note ROI, CAGR and Max DD on 1Y, toggle USD/CAD: the chips do not change and the axis switches between `$` and `C$`. Hover a chip: the "charted ... range" title appears. In Chrome DevTools device mode (iPhone 12), reload and open a chart: it appears at its final 150 px height with no jump (Performance panel, "Layout shifts" track shows no shift for the chart).
+4. `/prices`: open a card's chart, note ROI, CAGR and Max DD on 1Y, toggle USD/CAD: the chips do not change and the axis switches between `$` and `C$`. Hover a chip: the "charted ... range" title appears. In Chrome DevTools device mode (iPhone 12), reload and open a chart: inspect the element that wraps `.recharts-responsive-container`; it carries `h-[150px]` and its computed height is 150 px from the first frame (no 200 px render followed by a 150 px one). The chip row above the plot still appears when the chart mounts; that pre-existing shift is not in scope.
 5. `/compare`: upload a real Shopify `products_export.csv`. Only one table is visible; the tabs "Price comparison", "Shopify margin", "Market margin" switch it; Left/Right arrow keys move between tabs when one is focused. Sort the comparison table by Title, switch tabs and back: the Title sort is kept. Type quickly in the search box: every character appears immediately and the table dims briefly while filtering. Summary tiles count all matched rows regardless of the search. On a 390 px wide viewport the table scrolls horizontally instead of squashing columns. Compare margin, profit and profit/day against production for three SKUs: identical.
 6. `/portfolio` import (signed in): paste a Collectr CSV whose last column holds `"line one` newline `line two"` and a note with `""quoted""` text: the preview shows the full two-line note and the quotes; prices and quantities are the same as before.
 

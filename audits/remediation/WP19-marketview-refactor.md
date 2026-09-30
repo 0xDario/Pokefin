@@ -1,205 +1,125 @@
 # WP19: MarketView decomposition and row memoisation
 
 - **Findings covered**
-  - F045 (full for `/market`): `MarketView.tsx` (862 lines at review) mixes row derivation, a 16-way sort `switch`, a hand-written 16-`<th>` header and a hand-maintained column count; adding one column touches 5 to 7 places and a missing `case` silently sorts as "missing". Its item (3) (URL state) is resolved for `/prices` by WP08 and is deliberately NOT applied to `/market` (verifier correction); its item (4) (ProductCard prop threading on `/prices`) is superseded by WP20's CurrencyContext (F051) and is not touched here.
-  - F125 (full): every history fetch state change rebuilds all ~306 rows and their derived stats and reconciles every inline row; `toDailyPoints` runs twice per product. After this PR one product's loading/history change re-renders one `memo` row, and the daily series is built once per product.
+  - F045 (item 2 and the verifier's additions, for `/market`): `MarketView.tsx` (862 lines at review) mixes row derivation, a 16-way sort `switch`, a hand-written 16-`<th>` header and a hand-maintained column count; adding one column touches 5 to 7 places and a missing `case` silently sorts as "missing". Item (1) (pure `buildMarketRows` plus tests for the row maths) was done by WP17 step 13 and WP18 (`lib/marketMath.ts` and its tests); this PR adds the column table (item 2), derives the column count from it and types the default sort direction by column (verifier additions). Item (3) (URL state) is resolved for `/prices` by WP08 and is deliberately NOT applied to `/market` (verifier correction). Item (4) (one settings object or context for the 11 `ProductCard` props on `/prices`) is NOT done here and no other package does it (WP20's CurrencyContext removes the `initialExchangeRate` prop plumbing, not the `ProductCard` props); it is listed as a follow-up in the PR body (see "Commit and PR") and under Owner actions.
+  - F125 (full): every history fetch state change rebuilds all ~306 rows and their derived stats and reconciles every inline row; the daily series is built twice per product (once for drawdown, once for volatility). After this PR one product's loading/history change re-renders one `memo` row, and the daily series is built once per product.
 - **Priority rationale**: last structural refactor of the heaviest client table; it lands after WP09 (loading store, SVG sparkline) and WP18 (shared market math) so it does not fight them, and it is low severity with no user-visible defect, so it comes late.
 - **Effort**: M (5 to 7 hours, including tests).
-- **Depends on**: WP09 (per-product loading store `useLoadingProductIds`, `MiniSparkline` without currency props), WP18 (market math consolidation; may have moved `returns.ts`/`sorting.ts`). Also assumes the in-order landing of WP07 (`lib/format.ts`), WP13 (`NoResults` in MarketView), WP14 (contrast classes), WP15 (promo removed from MarketView, link colour token) and WP17 (`MarketView/buildRows.ts` with `buildMarketRow`/`buildMarketRows` and tests, lint blocking in CI).
+- **Depends on**: WP18 (hard: `app/lib/marketMath.ts` with `toDailyPoints`, `maxDrawdownPercent`, `volatilityPercent`; `app/lib/sorting.ts`; `MarketView/returns.ts` deleted; `MarketView/sorting.ts` reduced to a re-export plus `getDefaultSortDirection`; the "Vol 30D (ann.)" header and `renderVolatilityValue` in `MarketView.tsx`), WP17 (hard: `MarketView/buildRows.ts` with `buildMarketRow`/`buildMarketRows` and `buildRows.test.ts`, lint blocking in CI), WP09 (per-product loading store `useLoadingProductIds`, `MiniSparkline` without currency props). Also assumes the in-order landing of WP07 (`lib/format.ts`), WP13 (`NoResults` in MarketView), WP14 (contrast classes) and WP15 (promo removed from MarketView, link colour token).
 - **Unblocks**: nothing directly; WP20 (CurrencyContext) will touch `MarketView.tsx` props that this PR leaves in one place (`MarketTableRow` props).
 - **Suggested branch name**: `remediation/wp19-marketview-refactor`
-- **Risk level**: medium. Pure client refactor with no data or API change, but the file carries edits from six earlier packages that must be carried into the new modules exactly (class strings, formatters, copy); a mistake shows as a wrong column, not a crash.
+- **Risk level**: medium. Pure client refactor with no data or API change, but the file carries edits from seven earlier packages (WP07, WP09, WP13, WP14, WP15, WP17, WP18) that must be carried into the new modules exactly (class strings, formatters, copy); a mistake shows as a wrong column, not a crash.
 
 ## Why
 
-`/market` renders a ~306-row table from one 862-line component. Sorting is a 16-case `switch` (`MarketView.tsx:366-401`) mirroring a `SortKey` union (`:70-86`), the header repeats the same button markup 16 times (`:695-853`), and the expanded row's `colSpan` comes from a hard-coded `showAllColumns ? 19 : 10` (`:244`), so adding a column means editing five places and a forgotten `case` compiles and silently sorts the column as empty. On the performance side, the whole `<tbody>` is one `useMemo` keyed on `loadingProductIds` and `priceHistory` (`:617-629`) with inline rows, so clicking "Show" on one product rebuilds and reconciles every row twice (loading on, then history plus loading off), and each rebuild recomputes drawdown and volatility with two separate `toDailyPoints` passes per product (`:322-323`, `returns.ts:90`, `:117`); phone users feel this as a sluggish expand. After this PR the table is driven by one column descriptor list (header, cells, sort accessor, default direction and column count all derive from it), rows are a `memo` component fed stable row objects, and an expand/collapse or history arrival re-renders only the affected row(s). Nothing visible changes: same columns, labels, order, default sort and behaviour.
+`/market` renders a ~306-row table from one 862-line component. Sorting is a 16-case `switch` (`MarketView.tsx:366-401`) mirroring a `SortKey` union (`:70-86`), the header repeats the same button markup 16 times (`:695-853`), and the expanded row's `colSpan` comes from a hard-coded `showAllColumns ? 19 : 10` (`:244`), so adding a column means editing five places and a forgotten `case` compiles and silently sorts the column as empty. On the performance side, the whole `<tbody>` is one `useMemo` keyed on `loadingProductIds` and `priceHistory` (`:617-629`) with inline rows, so clicking "Show" on one product rebuilds and reconciles every row twice (loading on, then history plus loading off), and each rebuild recomputes drawdown and volatility with two separate `toDailyPoints` passes per product (`:322-323`, `returns.ts:90`, `:117` at review; after WP18 the same two passes happen inside `getMaxDrawdownPercent` and `getVolatilityPercent` in `lib/marketMath.ts`); phone users feel this as a sluggish expand. After this PR the table is driven by one column descriptor list (header, cells, sort accessor, default direction and column count all derive from it), rows are a `memo` component fed stable row objects, and an expand/collapse or history arrival re-renders only the affected row(s). Nothing visible changes: same columns, labels, order, default sort and behaviour.
 
 ## Before you start
 
-Read these files fully, in their CURRENT state (line numbers below are from review HEAD `a188fea`; earlier packages have moved them):
+Read these files fully, in their CURRENT state (line numbers below are from review HEAD `a188fea`; earlier packages have moved them, so find every edit by the quoted code, never by the number alone):
 
 - `frontend/app/components/MarketView/MarketView.tsx`
-- `frontend/app/components/MarketView/buildRows.ts` (added by WP17 step 13) and `frontend/app/components/MarketView/__tests__/buildRows.test.ts`
-- `frontend/app/components/MarketView/returns.ts` and `sorting.ts` (or wherever WP18 moved them), with their `__tests__`
+- `frontend/app/components/MarketView/buildRows.ts` (added by WP17 step 13, rewired by WP18 step 4) and `frontend/app/components/MarketView/__tests__/buildRows.test.ts`
+- `frontend/app/lib/marketMath.ts` (WP18 step 1) and `frontend/app/lib/__tests__/marketMath.test.ts`
+- `frontend/app/components/MarketView/sorting.ts` (after WP18 step 3b: a re-export of `lib/sorting.ts` plus `getDefaultSortDirection`) and `frontend/app/components/MarketView/__tests__/sorting.test.ts`
 - `frontend/app/components/MarketView/MiniSparkline.tsx` (WP09 rewrote it)
 - `frontend/app/components/ProductPrices/hooks/useProductData.ts` and `frontend/app/components/ProductPrices/hooks/historyLoadingStore.ts` (WP09)
 - `frontend/app/components/MarketView/__tests__/MarketView.emptyState.test.tsx` (WP13; its mock block is reused)
-- `frontend/app/product/[id]/page.tsx:9-12,196-198` (second consumer of the drawdown/volatility helpers)
 - `frontend/app/market/page.tsx` (renders `<MarketView>` with no Suspense boundary; must stay that way)
-- `audits/remediation/WP17-lint-tests-observability-ci-gate.md` "Step 13" and `audits/remediation/WP09-prices-card-rendering.md` steps 2, 4d and 6c (what they put in this file)
+- `audits/remediation/WP18-market-math-and-compare.md` steps 1, 3, 4 and 5a, `audits/remediation/WP17-lint-tests-observability-ci-gate.md` "Step 13" and `audits/remediation/WP09-prices-card-rendering.md` steps 2, 4d and 6c (what they put in these files)
 
 Run from `frontend/` and record the output in the PR description:
 
 ```bash
 wc -l app/components/MarketView/MarketView.tsx
 grep -c '        case "' app/components/MarketView/MarketView.tsx      # expect 16 (the sort switch)
-grep -n 'showAllColumns ? 19 : 10\|visibleColumnCount' app/components/MarketView/MarketView.tsx   # expect hits
+grep -n 'showAllColumns ? 19 : 10' app/components/MarketView/MarketView.tsx                          # expect 1 hit
 grep -n 'Fragment key={product.id}' app/components/MarketView/MarketView.tsx                        # inline rows, expect 1
 grep -rn 'useSearchParams\|useRouter\|next/navigation' app/components/MarketView                    # expect no output
-ls app/components/MarketView/buildRows.ts                                                            # must exist (WP17)
-grep -rn 'export function compareSortValues\|export function getDefaultSortDirection\|function toDailyPoints\|export function getMaxDrawdown\|export function getVolatility' app
-grep -rn 'getDefaultSortDirection\|getMaxDrawdownPercent\|getVolatilityPercent\|toDailyPoints' app --include=*.ts --include=*.tsx | grep -v __tests__
-grep -n 'useLoadingProductIds\|loadingProductIds\|historyLoadingStore' app/components/MarketView/MarketView.tsx
-grep -n 'lib/format\|NoResults\|CardRinkPromo' app/components/MarketView/MarketView.tsx
+grep -rn 'getDefaultSortDirection' app --include=*.ts --include=*.tsx | grep -v __tests__           # expect exactly 3: MarketView/sorting.ts (definition), MarketView.tsx (import line and handleSort call)
+grep -n 'useLoadingProductIds\|loadingProductIds' app/components/MarketView/MarketView.tsx
+grep -n -A2 '<MiniSparkline' app/components/MarketView/MarketView.tsx                              # WP09: history prop only
+grep -n 'lib/format\|NoResults\|CardRinkPromo\|pf-gain-text\|pf-pokeblue' app/components/MarketView/MarketView.tsx
+grep -n '\.\.\.priceHistoryRef.current' app/components/ProductPrices/hooks/useProductData.ts         # expect 1 hit
+```
+
+Preconditions. Run these too; if any one prints something other than the expected result, stop and report it in the PR instead of improvising (WP17 and WP18 are hard dependencies):
+
+```bash
+test -f app/components/MarketView/buildRows.ts && echo ok                                            # ok (WP17)
+test -e app/components/MarketView/returns.ts || echo ok                                              # ok (WP18 step 7c deleted it)
+grep -c 'export function toDailyPoints\|export function maxDrawdownPercent\|export function volatilityPercent' app/lib/marketMath.ts   # 3 (WP18)
+grep -c 'export function compareSortValues' app/lib/sorting.ts                                       # 1 (WP18)
+grep -n 'from "../../lib/marketMath"' app/components/MarketView/buildRows.ts                        # 2 hits: the import and the DAY_MS/getReleaseMs re-export (WP18 4a, 4b)
+grep -n 'getMaxDrawdownPercent(history)\|lookbackPoints: 30' app/components/MarketView/buildRows.ts  # 2 hits (WP18 4c)
+grep -n 'renderVolatilityValue\|Vol 30D (ann.)' app/components/MarketView/MarketView.tsx            # 3 hits: the function, the cell, the header (WP18 5a)
 ```
 
 Assumptions to check, and what to do if one is false:
 
-1. **`buildRows.ts` exists** with `buildMarketRow(product, history, volume, convertPrice, todayUtcMs)`, `buildMarketRows(...)`, `MarketRow`, `RETURN_WINDOWS`, `DAY_MS`, `getReleaseMs`, `ReturnWindowLabel`. If it is missing, WP17 did not land its step 13: do that step first, exactly as written in the WP17 spec, as the first commit of this PR.
-2. **Where the math lives.** At review HEAD `toDailyPoints` is a private function in `app/components/MarketView/returns.ts:5-22`, and `compareSortValues` is in `app/components/MarketView/sorting.ts:180-197`. WP18 (F005, F043) may have moved them to `app/lib/finance.ts` and `app/lib/sorting.ts` and may have dropped the `convertPrice` parameter from the percent helpers. Everywhere this spec says `./returns` or `./sorting`, import from the module the grep above found. If WP18 dropped `convertPrice`, drop it from the calls in step 2 too (call `toDailyPoints(history)`), and keep passing `convertPrice` only to the price conversion.
-3. **Loading ids come from WP09's store.** Expect `const loadingProductIds = useLoadingProductIds(historyLoadingStore);` in MarketView. If WP09 did not land and `loadingProductIds` is still a `number[]` from `useProductData`, the code below works unchanged (`new Set(loadingProductIds)` accepts both).
-4. **`priceHistory` keeps per-product array identity.** `useProductData.ts:134-139` builds `{ ...priceHistoryRef.current, [productId]: history }`, so only the loaded product's array is new. WP09 keeps that spread. Confirm with `grep -n '\.\.\.priceHistoryRef.current' app/components/ProductPrices/hooks/useProductData.ts`. If the hook now rebuilds every array on each load, row reuse in step 2 cannot work: stop and report it in the PR instead of adding deep comparisons.
+1. **`buildMarketRow` keeps WP17's signature** `buildMarketRow(product, history, volume, convertPrice, todayUtcMs)` after WP18 (WP18 4c keeps `convertPrice` because `price` still uses it) and `buildRows.ts` still exports `buildMarketRows`, `MarketRow`, `RETURN_WINDOWS`, `ReturnWindowLabel`, plus the re-exported `DAY_MS` and `getReleaseMs`. Check with `grep -n '^export' app/components/MarketView/buildRows.ts`. If the argument list differs, keep the real one everywhere this spec calls `buildMarketRow`/`buildRows`.
+2. **Loading ids come from WP09's store.** Expect `const loadingProductIds = useLoadingProductIds(historyLoadingStore);` in MarketView. If WP09 did not land and `loadingProductIds` is still a `number[]` from `useProductData`, the code below works unchanged (`new Set(loadingProductIds)` accepts both).
+3. **`priceHistory` keeps per-product array identity.** `useProductData.ts:134-137` (review HEAD) builds `{ ...priceHistoryRef.current, [productId]: history }`, so only the loaded product's array is new. WP09 keeps that spread. If the grep above finds no hit because the hook now rebuilds every array on each load, row reuse in step 2 cannot work: stop and report it in the PR instead of adding deep comparisons.
 
 ## Implementation steps
 
-Order: 1, 2, 3, 4, 5, 6, then tests (7). Steps 1 to 4 add code without breaking the build; step 5 switches MarketView over; step 6 deletes the now-dead helper.
+Order: 1, 2, 3, 4, 5, 6, then tests (7). Steps 1 to 4 keep the build green (step 1 changes only how two `buildMarketRow` values are computed; steps 2 to 4 add code); step 5 switches MarketView over; step 6 deletes the now-dead helper.
 
 ### Step 1. Build the daily series once per product (F125)
 
-File: `app/components/MarketView/returns.ts` (or its WP18 location; see assumption 2).
+File: `app/components/MarketView/buildRows.ts`. No change to `lib/marketMath.ts`: WP18 already exports the series builder `toDailyPoints(history, maxPoints?)` and the series-level functions `maxDrawdownPercent(prices)` and `volatilityPercent(prices, unit)`; the history-level `getMaxDrawdownPercent` and `getVolatilityPercent` each call `toDailyPoints` themselves, which is the double pass.
 
-If the module already exports a daily-points builder and drawdown/volatility functions that take points (WP18 may have done this per F005's recommendation), skip this step and use those names in step 2.
-
-Otherwise:
-
-1a. Replace the private `function toDailyPoints(` block (`returns.ts:5-22`) with an exported, typed version. Body unchanged:
+1a. In the `import { ... } from "../../lib/marketMath";` block (WP18 4a), remove `getMaxDrawdownPercent` and `getVolatilityPercent` and add `maxDrawdownPercent`, `toDailyPoints` and `volatilityPercent`, keeping the list alphabetical. The block becomes:
 
 ```ts
-export interface DailyPoint {
-  /** UTC calendar day, `YYYY-MM-DD` (the first 10 chars of recorded_at). */
-  dateKey: string;
-  price: number;
-}
-
-/**
- * One converted price per calendar day, oldest first (the first entry seen
- * for a day wins). Build it once per product and hand it to the
- * `...FromPoints` helpers; each call is a Map plus a sort.
- */
-export function toDailyPoints(
-  history: PriceHistoryEntry[] | undefined,
-  convertPrice: (usdPrice: number) => number
-): DailyPoint[] {
-  if (!history || history.length === 0) return [];
-
-  const byDay = new Map<string, number>();
-  for (const entry of history) {
-    const dayKey = entry.recorded_at.slice(0, 10);
-    if (!byDay.has(dayKey)) {
-      byDay.set(dayKey, convertPrice(entry.usd_price));
-    }
-  }
-
-  return Array.from(byDay.entries())
-    .map(([dateKey, price]) => ({ dateKey, price }))
-    .sort((a, b) => a.dateKey.localeCompare(b.dateKey));
-}
+import {
+  daysSinceUtcMs,
+  getCagrPercent,
+  getReturnPercent,
+  maxDrawdownPercent,
+  perDay,
+  releaseDateUtcMs,
+  toDailyPoints,
+  volatilityPercent,
+} from "../../lib/marketMath";
 ```
 
-1b. Split `getMaxDrawdownPercent` (`:86-110`) and `getVolatilityPercent` (`:112-140`) into a points function plus a thin wrapper. The loop bodies move unchanged; the wrappers keep the old signatures because `app/product/[id]/page.tsx:197-198` still calls them:
+(If WP18 left a different set of names in that import, keep its other names and only make the two removals and three additions.)
+
+1b. In `buildMarketRow`, replace the drawdown line and the volatility statement WP18 wrote:
 
 ```ts
-/** Largest peak-to-trough fall over the points, as a positive percent. */
-export function getMaxDrawdownFromPoints(
-  points: readonly DailyPoint[]
-): number | null {
-  if (points.length < 2) return null;
-
-  let peak = points[0].price;
-  let maxDrawdown = 0;
-
-  for (const point of points) {
-    if (point.price > peak) {
-      peak = point.price;
-      continue;
-    }
-
-    if (peak <= 0) continue;
-    const drawdown = ((point.price - peak) / peak) * 100;
-    if (drawdown < maxDrawdown) {
-      maxDrawdown = drawdown;
-    }
-  }
-
-  return Math.abs(maxDrawdown);
-}
-
-export function getMaxDrawdownPercent(
-  history: PriceHistoryEntry[] | undefined,
-  convertPrice: (usdPrice: number) => number
-): number | null {
-  return getMaxDrawdownFromPoints(toDailyPoints(history, convertPrice));
-}
-
-/** Annualised volatility of daily % changes over the last `lookbackDays` points. */
-export function getVolatilityFromPoints(
-  points: readonly DailyPoint[],
-  lookbackDays = 30
-): number | null {
-  if (points.length < 3) return null;
-
-  const recentPoints = points.slice(-Math.max(lookbackDays, 3));
-  const dailyChanges: number[] = [];
-
-  for (let i = 1; i < recentPoints.length; i += 1) {
-    const prev = recentPoints[i - 1].price;
-    const curr = recentPoints[i].price;
-    if (prev <= 0) continue;
-    dailyChanges.push(((curr - prev) / prev) * 100);
-  }
-
-  if (dailyChanges.length < 2) return null;
-
-  const mean =
-    dailyChanges.reduce((sum, change) => sum + change, 0) / dailyChanges.length;
-  const variance =
-    dailyChanges.reduce((sum, change) => sum + (change - mean) ** 2, 0) /
-    dailyChanges.length;
-  const dailyVolatility = Math.sqrt(variance);
-
-  return dailyVolatility * Math.sqrt(365);
-}
-
-export function getVolatilityPercent(
-  history: PriceHistoryEntry[] | undefined,
-  convertPrice: (usdPrice: number) => number,
-  lookbackDays = 30
-): number | null {
-  return getVolatilityFromPoints(toDailyPoints(history, convertPrice), lookbackDays);
-}
-```
-
-If WP18 changed the annualisation (for example an `{ annualize }` option) or the day keying, keep WP18's maths and only perform the split: the goal is "same numbers, one `toDailyPoints` per product". `getCagrPercent` and `getReturnPercent` do not use daily points; leave them alone.
-
-### Step 2. `app/components/MarketView/buildRows.ts`: one series per row, and stable row objects
-
-2a. Imports: replace `getMaxDrawdownPercent` and `getVolatilityPercent` in the `./returns` import with `getMaxDrawdownFromPoints`, `getVolatilityFromPoints` and `toDailyPoints`.
-
-2b. In `buildMarketRow`, replace the two lines
-
-```ts
-  const maxDrawdown = getMaxDrawdownPercent(history, convertPrice);
-  const volatility30d = getVolatilityPercent(history, convertPrice, 30);
+  const maxDrawdown = getMaxDrawdownPercent(history);
+  // Annualised (daily std-dev times sqrt(365)); the column header says so.
+  const volatility30d = getVolatilityPercent(history, {
+    lookbackPoints: 30,
+    unit: "annualised",
+  });
 ```
 
 with
 
 ```ts
   // One daily series per product, shared by drawdown and volatility (F125).
-  const dailyPoints = toDailyPoints(history, convertPrice);
-  const maxDrawdown = getMaxDrawdownFromPoints(dailyPoints);
-  const volatility30d = getVolatilityFromPoints(dailyPoints, 30);
+  // Same numbers as the history-based helpers in lib/marketMath: those build
+  // this series themselves, and volatility takes its newest 30 points.
+  const dailyPrices = toDailyPoints(history).map((point) => point.price);
+  const maxDrawdown = maxDrawdownPercent(dailyPrices);
+  // Annualised (daily std-dev times sqrt(365)); the column header says so.
+  const volatility30d = volatilityPercent(dailyPrices.slice(-30), "annualised");
 ```
 
-Keep the comment above them about drawdown and volatility staying ungated. Change nothing else in `buildMarketRow`; WP17's `buildRows.test.ts` must pass unchanged.
+Why this is exact: `getMaxDrawdownPercent(history)` is `maxDrawdownPercent(toDailyPoints(history).map(p => p.price))`, and `getVolatilityPercent(history, { lookbackPoints: 30, unit })` is `volatilityPercent(prices.slice(-Math.max(30, 3)), unit)` over the same prices. Keep the comment above these lines about drawdown and volatility staying ungated. Change nothing else in `buildMarketRow`; `buildRows.test.ts` must pass unchanged. Do not touch `app/product/[id]/page.tsx`: after WP18 it calls the `lib/marketMath` helpers directly and computes each metric once per page render.
 
-2c. Append at the end of the file:
+### Step 2. `app/components/MarketView/buildRows.ts`: stable row objects
+
+Append at the end of the file:
 
 ```ts
 interface CachedMarketRow {
   product: Product;
   history: PriceHistoryEntry[] | undefined;
-  // Whatever volume type buildMarketRow takes (WP11 may have renamed it).
+  // Whatever volume type buildMarketRow takes (WP11/WP17 narrowed it).
   volume: Parameters<typeof buildMarketRow>[2];
   convertPrice: (usdPrice: number) => number;
   todayUtcMs: number;
@@ -260,13 +180,13 @@ export function createMarketRowsBuilder(): MarketRowsBuilder {
 }
 ```
 
-If WP18 removed `convertPrice` from `buildMarketRow`'s signature, remove it from `CachedMarketRow` and the comparison too. Why a builder and not a ref: eslint-plugin-react-hooks 7.1.1 (shipped with eslint-config-next 16, blocking since WP17) reports `react-hooks/refs` for reading `ref.current` during render; a builder held in lazy `useState` is invisible to that rule and is guaranteed to survive re-renders (a `useMemo(() => create(), [])` is not).
+`Product` and `PriceHistoryEntry` are already imported as types at the top of `buildRows.ts` (WP17); do not add a second import. `convertPrice` stays in the cache key even though, after WP18, only `price` and `pricePerDay` depend on it: a currency toggle must rebuild every row. Why a builder and not a ref: eslint-plugin-react-hooks 7.1.1 (shipped with eslint-config-next 16, blocking since WP17) reports `react-hooks/refs` for reading `ref.current` during render; a builder held in lazy `useState` is invisible to that rule and is guaranteed to survive re-renders (a `useMemo(() => create(), [])` is not).
 
 ### Step 3. New file `app/components/MarketView/columns.tsx`: the column descriptor table (F045)
 
-This replaces the `SortKey` union (`MarketView.tsx:70-86`), `KEY_RETURN_WINDOWS` (`:90`), the cell helpers (`:113-188`), the sort `switch` (`:354-413`), `getSortIndicator` (`:438-441`), the per-cell JSX (`:471-562`), the header (`:695-853`) and `visibleColumnCount` (`:244`).
+This replaces the `SortKey` union (`MarketView.tsx:70-86`), `KEY_RETURN_WINDOWS` (`:90`), the cell helpers (`:113-188`, plus WP18's `renderVolatilityValue`), the sort `switch` (`:354-413`), `getSortIndicator` (`:438-441`), the per-cell JSX (`:471-562`), the header (`:695-853`) and `visibleColumnCount` (`:244`).
 
-Class strings and formatter calls: move them from the CURRENT `MarketView.tsx`, cell by cell. The code below shows the state expected after WP07 (`formatDateOnly`, `formatMoney`), WP09 (`<MiniSparkline history={...} />`), WP14 (`--pf-gain-text`/`--pf-loss-text`, `text-slate-500` on the rank cell and the "Loading..."/"Open chart" text) and WP15. Where the current file differs from this snippet (a class, a label, a `title`/tooltip WP18 added to "Vol 30D", an `aria-label`), the current file wins: copy it into the matching descriptor. If WP18 added a header hint, put it in the optional `headerHint` field (rendered as `title` on the header button in step 5).
+Class strings and formatter calls: move them from the CURRENT `MarketView.tsx`, cell by cell. The code below shows the state expected after WP07 (`formatDateOnly`, `formatMoney`), WP09 (`<MiniSparkline history={...} />`), WP14 (`--pf-gain-text`/`--pf-loss-text`, `text-slate-500` on the rank cell and the "Loading..."/"Open chart" text), WP15 and WP18 (step 5a: the volatility header reads "Vol 30D (ann.)" with a `title` on its button, and the volatility cell uses `renderVolatilityValue`, not `renderReturnValue`). Where the current file differs from this snippet (a class, a label, the `title` text, an `aria-label`), the current file wins: copy it into the matching descriptor. A header button `title` goes in the descriptor's optional `headerHint` field (rendered as `title` on the header button in step 5h).
 
 ```tsx
 import type { ReactNode } from "react";
@@ -353,6 +273,15 @@ function renderReturnValue(value: number | null) {
       {value.toFixed(2)}%
     </span>
   );
+}
+
+// Moved from MarketView.tsx (WP18 step 5a). Volatility is a size, not a gain
+// or a loss: no sign and no gain/loss colour.
+function renderVolatilityValue(value: number | null) {
+  if (value === null || Number.isNaN(value)) {
+    return <span className="text-slate-400">--</span>;
+  }
+  return <span className="font-semibold text-slate-700">{value.toFixed(2)}%</span>;
 }
 
 function getProductTypeLabel(product: Product) {
@@ -533,14 +462,17 @@ export const MARKET_COLUMNS = [
   },
   {
     id: "volatility_30d",
-    label: "Vol 30D",
+    label: "Vol 30D (ann.)",
+    // WP18's header title, verbatim.
+    headerHint:
+      "Annualised volatility: standard deviation of daily price changes over the last 30 priced days, times the square root of 365. The Stats page shows the daily figure, which is about 19 times smaller.",
     keyColumn: false,
     sortable: true,
     defaultDirection: "asc",
     headerClassName: TH,
     cellClassName: TD,
     accessor: (row) => row.volatility30d,
-    render: (row) => renderReturnValue(row.volatility30d),
+    render: (row) => renderVolatilityValue(row.volatility30d),
   },
   returnColumn("return_7d", "7D", true),
   returnColumn("return_1m", "1M", true),
@@ -669,10 +601,11 @@ export function sortMarketRows(
 Notes for this file:
 
 - The display order and the key/all split reproduce review HEAD exactly: key view (10) is `# Product Set Price 7D 1M 3M Vol(30d) VolΔ Chart`; all view (19) inserts `Release, Days Since, Price/Day, CAGR, Max DD, Vol 30D` after Price, `6M, 1Y` after 3M and `Last 7D` before Chart (`MarketView.tsx:482-552`, `:734-851`).
-- The `accessor`s reproduce the 16 `case`s of `MarketView.tsx:366-398` one for one; `defaultDirection` reproduces `getDefaultSortDirection` (`sorting.ts:63-68`): asc for product, set, days_since_release, max_drawdown, volatility_30d; desc for the rest.
-- If `lib/format.ts` does not export `formatDateOnly`/`formatMoney` (WP07 missing), keep the original `formatReleaseDate` and `formatRatio` helpers from `MarketView.tsx:113-116,139-142` in this file instead, with `formatRatio(row.pricePerDay, ctx.currency === "CAD" ? "C$" : "$")`.
+- The `accessor`s reproduce the 16 `case`s of `MarketView.tsx:366-398` one for one; `defaultDirection` reproduces `getDefaultSortDirection` (in `MarketView/sorting.ts`, `:63-68` at review HEAD): asc for product, set, days_since_release, max_drawdown, volatility_30d; desc for the rest.
+- `./sorting` still re-exports `compareSortValues`, `SortDirection` and `SortValue` from `lib/sorting.ts` after step 6, so this import stays valid. `compareSortValues`'s optional fourth argument (WP18's string comparator) is not passed: the Market table keeps plain `localeCompare`, as today.
 - If `MiniSparkline` still takes `currency`/`exchangeRate` (WP09 missing), add `exchangeRate: number` to `MarketCellContext`, pass it from `MarketTableRow`, and render `<MiniSparkline history={row.history} currency={ctx.currency} exchangeRate={ctx.exchangeRate} />`.
-- `as const satisfies` keeps each `id` as a literal (so `SortKey` is the exact 16-member union) while still type-checking every entry and contextually typing the `render`/`accessor` parameters. Verified with TypeScript 6.0.3 against this repo's `tsconfig.json`.
+- `as const satisfies` keeps each `id` as a literal (so `SortKey` is the exact 16-member union) while still type-checking every entry and contextually typing the `render`/`accessor` parameters. Verified with TypeScript 6.0.3 against this repo's `tsconfig.json`, including the `headerHint` on one entry only.
+- No `"use client"` in this file: it is imported only by `MarketView.tsx` and `MarketTableRow.tsx`, which are client modules.
 
 ### Step 4. New file `app/components/MarketView/MarketTableRow.tsx`: the memoised row (F125)
 
@@ -810,13 +743,13 @@ function MarketTableRow({
 export default memo(MarketTableRow);
 ```
 
-If WP18 (F073) changed the `PriceChart` props or how it is loaded, copy the current call from `MarketView.tsx`, not the one above.
+WP18 (F073) only added an optional `heightClassName` prop to `PriceChart` and passes it from `ResponsivePriceChart`, not from MarketView. If the current `MarketView.tsx` call or its `next/dynamic` block still differs from the one above (a later package changed it), copy the current version, not the one above.
 
 ### Step 5. `app/components/MarketView/MarketView.tsx`: switch to the new modules
 
 Do these edits in order, then run `pnpm exec eslint app/components/MarketView/MarketView.tsx` and delete every import it reports as unused.
 
-5a. **Imports.** Remove `Fragment` from the React import (keep `useCallback, useDeferredValue, useEffect, useMemo, useState`). Remove `import dynamic from "next/dynamic";`, the `PriceChart` dynamic block and its comment (moved in step 4), and the imports of `ProductImage`, `ExpansionTypeBadge`, `VariantBadge`, `MiniSparkline`, the `./returns` functions (if any are left after WP17), `compareSortValues`, `getDefaultSortDirection`, `SortValue`, and `formatDateOnly`/`formatMoney` from `lib/format` (only if nothing else in the file uses them). Change the `./buildRows` import to `import { createMarketRowsBuilder, DAY_MS, getReleaseMs } from "./buildRows";` (drop `buildMarketRows`, `RETURN_WINDOWS`, `ReturnWindowLabel` if now unused). Add:
+5a. **Imports.** Remove `Fragment` from the React import (keep `useCallback, useDeferredValue, useEffect, useMemo, useState`). Remove `import dynamic from "next/dynamic";`, the `PriceChart` dynamic block and its comment (moved in step 4), and the imports of `ProductImage`, `ExpansionTypeBadge`, `VariantBadge`, `MiniSparkline` and `formatDateOnly`/`formatMoney` from `lib/format` (only if nothing else in the file uses them). Replace the whole `import { ... } from "./sorting";` statement (it imports `compareSortValues`, `getDefaultSortDirection`, `type SortDirection`, `type SortValue`) with the single `import type { SortDirection } from "./sorting";` shown below, so the file has exactly one `./sorting` import. Change the `./buildRows` import to `import { createMarketRowsBuilder, DAY_MS, getReleaseMs } from "./buildRows";` (drop `buildMarketRows`, `RETURN_WINDOWS`, `ReturnWindowLabel`). Add:
 
 ```ts
 import {
@@ -832,7 +765,7 @@ import type { SortDirection } from "./sorting";
 
 Keep `utcMidnightMs`, `NoResults` (WP13), `useLoadingProductIds` (WP09), `ControlBar`, the three hooks, `filterProducts`/`getAvailableGenerations` and the types import.
 
-5b. **Delete module-level code now in `columns.tsx`:** the `SortKey` union, `KEY_RETURN_WINDOWS`, `renderReturnValue`, `formatRatio` (if still present), `renderProductCell`, `renderSetCell`, `formatReleaseDate` (if still present). Keep `AGE_FILTER_OPTIONS`, `AgeFilterValue`, `MarketViewProps`, `EMPTY_PRODUCTS`.
+5b. **Delete module-level code now in `columns.tsx`:** the `SortKey` union, `KEY_RETURN_WINDOWS`, `renderReturnValue`, `renderVolatilityValue` (WP18), `formatRatio` (if still present), `renderProductCell`, `renderSetCell`, `formatReleaseDate` (if still present). Keep `AGE_FILTER_OPTIONS`, `AgeFilterValue`, `MarketViewProps`, `EMPTY_PRODUCTS`.
 
 5c. **Column set.** Replace
 
@@ -975,11 +908,33 @@ If WP14 changed the header button classes or the indicator, keep WP14's version.
 
 ### Step 6. Remove `getDefaultSortDirection`
 
-Only if the grep in "Before you start" shows `MarketView.tsx` as its only non-test caller: delete the function and its doc comment (`sorting.ts:59-68` at review HEAD), and delete the `describe("getDefaultSortDirection", ...)` block (`__tests__/sorting.test.ts:84-97`) plus `getDefaultSortDirection,` from that test's import. Its cases move to `columns.test.ts` (step 7). If anything else imports it (for example `/compare` after WP18), leave it in place and unused by MarketView.
+The "Before you start" grep showed `MarketView.tsx` as its only non-test user (WP18 added no other). After step 5 nothing imports or calls it.
+
+6a. Replace the whole content of `app/components/MarketView/sorting.ts` with the block below. This deletes `getDefaultSortDirection`, its doc comment, and the `import type { SortDirection } from "../../lib/sorting";` line WP18 added for it (left behind, that import is an unused-variable lint error, and lint blocks CI). The re-export stays because `columns.tsx`, `MarketView.tsx` and `__tests__/sorting.test.ts` import from `./sorting` / `../sorting`.
+
+```ts
+/**
+ * The null-sinking comparator for the Market View table. It is shared with
+ * components/SortableTable and lives in lib/sorting.ts; it is re-exported
+ * here so existing imports keep working. Default sort directions live on the
+ * column descriptors in ./columns.tsx.
+ */
+export {
+  compareSortValues,
+  isMissingSortValue,
+  type SortDirection,
+  type SortValue,
+  type StringComparator,
+} from "../../lib/sorting";
+```
+
+If WP18's re-export list differs, keep WP18's list and only drop the import line and `getDefaultSortDirection`.
+
+6b. In `app/components/MarketView/__tests__/sorting.test.ts`, delete the whole `describe("getDefaultSortDirection", ...)` block (`:84-97` at review HEAD; WP18 appended its comparator block after it, keep that) and remove `getDefaultSortDirection,` from the file's import. Its cases move to `columns.test.ts` (step 7).
 
 ### Step 7. Tests
 
-Add the four new test files and one update listed under Tests. Write them after step 5 so they run against the finished code.
+Add the four new test files and the one update listed under Tests, exactly as written there. Write them after step 6 so they run against the finished code.
 
 ## Pitfalls: do not do this
 
@@ -991,9 +946,10 @@ Add the four new test files and one update listed under Tests. Write them after 
 - **Do not pass inline arrow functions or new objects as `MarketTableRow` props** (`onToggle={() => ...}`, `columns={MARKET_COLUMNS.filter(...)}`, a context object). Each would be a new reference per parent render and re-render all 306 rows. `toggleExpanded` is `useCallback`'d; `KEY_COLUMNS`/`ALL_COLUMNS` are module constants.
 - **Do not move the `ensureHistoryLoaded` call out of `toggleExpanded`'s state updater "for purity".** It starts the load in the same render batch as the expansion; relying only on the effect at `:348-352` would paint one frame of "Price history not available yet." before "Loading price history...". Leave `toggleExpanded` and that effect exactly as they are.
 - **Do not subscribe each row to the loading store with `useIsHistoryLoading`.** The plan keeps `MarketTableRow` a pure function of props (`isLoading` boolean derived from the Set), which keeps it testable without a store; the Set rebuild costs microseconds.
-- **Do not add a `MarketViewSettingsContext` or change `ProductCard`/`ProductPrices` props** (F045 item 4). The verifier warned an un-memoised provider value defeats `memo` for every card; WP20's CurrencyContext (F051) owns that change.
-- **Do not force MarketView onto a generic table/column helper WP18 may have added for `/compare`** (F043 `SortableTable`). MarketView's columns need sticky classes, a render context and a key/all split the compare tables do not have. Reuse only `compareSortValues`.
-- **Do not change any maths, rounding, labels, column order, default sort (`release_date` desc) or copy.** This PR is behaviour-preserving; `buildRows.test.ts` (WP17) and `returns.test.ts` must pass unchanged. In particular do not annualise or de-annualise volatility here (F005 is WP18's).
+- **Do not add a `MarketViewSettingsContext` or change `ProductCard`/`ProductPrices`/`RecentlyReleased` props** (F045 item 4). The verifier warned an un-memoised provider value defeats `memo` for every card, and those files carry WP08/WP09 memo boundaries this package does not own. Item 4 is recorded as an open follow-up (Owner actions), not done here.
+- **Do not force MarketView onto WP18's `components/SortableTable`** (F043, used by `/compare`). MarketView's columns need sticky classes, a render context, an expandable second row per product and a key/all split the compare tables do not have. Reuse only `compareSortValues`.
+- **Do not change any maths, rounding, labels, column order, default sort (`release_date` desc) or copy.** This PR is behaviour-preserving; `buildRows.test.ts` (WP17) and `app/lib/__tests__/marketMath.test.ts` (WP18) must pass unchanged. In particular do not annualise or de-annualise volatility here (F005 is WP18's), and do not edit `lib/marketMath.ts` at all.
+- **Do not replace `dailyPrices.slice(-30)` with `toDailyPoints(history, 30)` for both metrics.** `maxPoints` would also cut the drawdown series to 30 days and change every Max DD value; drawdown uses the full series, only volatility uses the newest 30 points.
 - **Do not drop or re-offset the sticky `#` column on phones** (F125 "consider" item). It changes the phone layout, the gain is unmeasured and the plan owner did not ask for it; leave both sticky columns as they are.
 - **Do not use `getDefaultSortDirection(key: string)` with a `SortKey` cast.** The verifier asked for the parameter to be typed as `SortKey`; putting `defaultDirection` on the column descriptor gives the same guarantee without making the shared sorting module depend on a MarketView type.
 - **Do not put shared test fixtures in a non-test file under `__tests__/`.** Jest's default `testMatch` treats every file in `__tests__` as a suite and fails one with no tests. Inline the small `makeProduct`/`makeRow` helpers per file as shown.
@@ -1001,17 +957,11 @@ Add the four new test files and one update listed under Tests. Write them after 
 
 ## Tests
 
-All files under `frontend/app/components/MarketView/__tests__/`. Default jsdom environment; no `@jest-environment` docblock needed.
+All files under `frontend/app/components/MarketView/__tests__/`. Default jsdom environment; no `@jest-environment` docblock needed. Write each new file exactly as below. All four were type-checked and linted clean (`tsc --noEmit`, `eslint app/components/MarketView`) in a copy of review HEAD plus WP17 step 13, WP18's `lib/marketMath.ts`, `lib/sorting.ts` and step 4 `buildRows.ts` edits (with a stand-in `lib/format.ts` exposing WP07's signatures), and steps 1 to 6 of this spec. Earlier versions of these files passed under jest (47 MarketView tests); the WP18-specific cases (the "Vol 30D (ann.)" label, the drawdown/volatility equivalence block) were type-checked but not run. The equivalence block must pass as written: if it fails, step 1 does not match WP18's helpers, so fix step 1, not the test. If the label case fails, the header text in the current `MarketView.tsx` before this PR is the truth: fix the descriptor if it was copied wrong, or the test if the label really changed upstream.
 
 ### New: `columns.test.ts`
 
-Cases:
-- `KEY_COLUMNS` ids in order: `rank, product, set, price, return_7d, return_1m, return_3m, vol_30d, vol_trend, chart` (10).
-- `ALL_COLUMNS` ids in order: `rank, product, set, price, release_date, days_since_release, price_per_day, cagr, max_drawdown, volatility_30d, return_7d, return_1m, return_3m, return_6m, return_1y, vol_30d, vol_trend, sparkline, chart` (19).
-- Labels in order: `#, Product, Set, Price, Release, Days Since, Price/Day, CAGR, Max DD, Vol 30D, 7D, 1M, 3M, 6M, 1Y, Vol (30d), Vol Δ, Last 7D, Chart`. If WP18 renamed a label, assert the current label.
-- ids are unique; exactly 16 columns are sortable.
-- Default directions (moved from `sorting.test.ts`): asc for product, set, days_since_release, max_drawdown, volatility_30d; desc for the other 11.
-- `sortMarketRows`: price desc `[2,1,3]` and asc `[1,2,3]` with product 3 unpriced (missing sinks in both directions); product column sorts by lower-cased type label plus variant; ties keep input order and the input array is not mutated; returned elements are the same objects (`toBe`).
+Covers: key view ids in order (10); all view ids in order (19); every label (WP18's "Vol 30D (ann.)"; if a later edit in the current file changed another label, assert the current label); unique ids; the default directions moved from `sorting.test.ts` (asc for product, set, days_since_release, max_drawdown, volatility_30d; desc for the other 11); exactly 16 sortable columns; `sortMarketRows` sinks a missing price in both directions, sorts the product column by lower-cased type label plus variant, keeps input order on ties, does not mutate its input and returns the same row objects.
 
 ```ts
 import {
@@ -1048,6 +998,53 @@ function makeRow(id: number, overrides: Partial<Product> = {}): MarketRow {
 
 const ids = (columns: readonly { id: string }[]) => columns.map((c) => c.id);
 
+describe("market column table", () => {
+  it("keeps the key-column view in the order and count the table had (10)", () => {
+    expect(ids(KEY_COLUMNS)).toEqual([
+      "rank", "product", "set", "price",
+      "return_7d", "return_1m", "return_3m",
+      "vol_30d", "vol_trend", "chart",
+    ]);
+  });
+
+  it("keeps the all-columns view in the order and count the table had (19)", () => {
+    expect(ids(ALL_COLUMNS)).toEqual([
+      "rank", "product", "set", "price",
+      "release_date", "days_since_release", "price_per_day",
+      "cagr", "max_drawdown", "volatility_30d",
+      "return_7d", "return_1m", "return_3m", "return_6m", "return_1y",
+      "vol_30d", "vol_trend", "sparkline", "chart",
+    ]);
+  });
+
+  it("keeps the header labels", () => {
+    expect(MARKET_COLUMNS.map((c) => c.label)).toEqual([
+      "#", "Product", "Set", "Price", "Release", "Days Since", "Price/Day",
+      "CAGR", "Max DD", "Vol 30D (ann.)", "7D", "1M", "3M", "6M", "1Y",
+      "Vol (30d)", "Vol Δ", "Last 7D", "Chart",
+    ]);
+  });
+
+  it("has unique ids", () => {
+    expect(new Set(ids(MARKET_COLUMNS)).size).toBe(MARKET_COLUMNS.length);
+  });
+
+  it("opens name-like and lower-is-better columns ascending (was getDefaultSortDirection)", () => {
+    const asc: SortKey[] = ["product", "set", "days_since_release", "max_drawdown", "volatility_30d"];
+    for (const key of asc) expect(getSortColumn(key).defaultDirection).toBe("asc");
+    const desc: SortKey[] = [
+      "price", "release_date", "price_per_day", "cagr",
+      "return_7d", "return_1m", "return_3m", "return_6m", "return_1y",
+      "vol_30d", "vol_trend",
+    ];
+    for (const key of desc) expect(getSortColumn(key).defaultDirection).toBe("desc");
+  });
+
+  it("exposes exactly 16 sort keys, one per former switch case", () => {
+    expect(MARKET_COLUMNS.filter((c) => c.sortable)).toHaveLength(16);
+  });
+});
+
 describe("sortMarketRows", () => {
   const cheap = makeRow(1, { usd_price: 50 });
   const dear = makeRow(2, { usd_price: 300 });
@@ -1065,25 +1062,30 @@ describe("sortMarketRows", () => {
     const c = makeRow(6, { product_types: { id: 2, name: "bb", label: "Booster Box" } });
     expect(sortMarketRows([a, b, c], "product", "asc").map((r) => r.product.id)).toEqual([6, 5, 4]);
   });
-  // ...plus the id/label/default-direction cases listed above, e.g.
-  // const asc: SortKey[] = ["product", "set", "days_since_release", "max_drawdown", "volatility_30d"];
-  // for (const key of asc) expect(getSortColumn(key).defaultDirection).toBe("asc");
+
+  it("keeps input order for ties and does not mutate the input", () => {
+    const x = makeRow(7, { usd_price: 10 });
+    const y = makeRow(8, { usd_price: 10 });
+    const input: MarketRow[] = [x, y];
+    expect(sortMarketRows(input, "price", "desc")).toEqual([x, y]);
+    expect(input).toEqual([x, y]);
+  });
+
+  it("returns the same row objects (identity matters for memo rows)", () => {
+    const sorted = sortMarketRows([cheap, dear], "price", "desc");
+    expect(sorted[0]).toBe(dear);
+    expect(sorted[1]).toBe(cheap);
+  });
 });
 ```
 
-If WP13/WP14 made `hasCurrentPrice` depend on `price_recorded_at` freshness relative to the real clock and the unpriced/priced split misbehaves, add `jest.useFakeTimers({ now: new Date("2026-09-25T12:00:00Z") })` in `beforeEach` and `jest.useRealTimers()` in `afterEach`, as WP17's `buildRows.test.ts` does.
-
 ### New: `buildRows.reuse.test.ts`
 
-Cases for `createMarketRowsBuilder`:
-- First call returns the same data as `buildMarketRows` (products in order, `history` wired, missing history `undefined`).
-- Second call with a NEW `priceHistory` object that keeps product 1's array and adds product 2's: row 0 is `toBe` the previous row 0; row 1 is a new object with the new history.
-- Changing `convertPrice` (a new function, as a currency toggle produces) rebuilds every row and `price` scales.
-- Changing `todayUtcMs`, the product object (`{ ...p1 }`) or the product's volume entry rebuilds that row.
-- A product filtered out (search) and back in gets its cached row back (`toBe`).
+Covers `createMarketRowsBuilder` (first call matches `buildMarketRows`; a row whose inputs did not change is the same object after another product's history lands; a new `convertPrice`, a new UTC day, a new product object or a new volume entry rebuilds the row; a product filtered out and back in gets its cached row back) and step 1 (drawdown and volatility from the one daily series equal WP18's history-based helpers exactly, including past the 30-point lookback).
 
 ```ts
 import { buildMarketRow, createMarketRowsBuilder } from "../buildRows";
+import { getMaxDrawdownPercent, getVolatilityPercent } from "../../../lib/marketMath";
 import type { PriceHistoryEntry, Product } from "../../ProductPrices/types";
 
 // The volume type buildMarketRow accepts, whatever WP11 named it.
@@ -1118,47 +1120,102 @@ const h1 = makeHistory([100, 110, 90, 120]);
 const h2 = makeHistory([50, 55, 60]);
 const NO_VOLUME: Record<number, Volume> = {};
 
-it("reuses a row object when none of its inputs changed", () => {
-  const build = createMarketRowsBuilder();
-  const first = build([p1, p2], { 1: h1 }, NO_VOLUME, identity, TODAY_UTC_MS);
-  // History loads for product 2 only: new priceHistory object, same h1 array.
-  const second = build([p1, p2], { 1: h1, 2: h2 }, NO_VOLUME, identity, TODAY_UTC_MS);
-  expect(second[0]).toBe(first[0]);
-  expect(second[1]).not.toBe(first[1]);
-  expect(second[1].history).toBe(h2);
-  expect(second[1].maxDrawdown).toBe(0);
+describe("createMarketRowsBuilder", () => {
+  it("returns the same rows as buildMarketRows on first call", () => {
+    const build = createMarketRowsBuilder();
+    const rows = build([p1, p2], { 1: h1 }, NO_VOLUME, identity, TODAY_UTC_MS);
+    expect(rows.map((r) => r.product)).toEqual([p1, p2]);
+    expect(rows[0].history).toBe(h1);
+    expect(rows[1].history).toBeUndefined();
+  });
+
+  it("reuses a row object when none of its inputs changed", () => {
+    const build = createMarketRowsBuilder();
+    const first = build([p1, p2], { 1: h1 }, NO_VOLUME, identity, TODAY_UTC_MS);
+    // History loads for product 2 only: new priceHistory object, same h1 array.
+    const second = build([p1, p2], { 1: h1, 2: h2 }, NO_VOLUME, identity, TODAY_UTC_MS);
+    expect(second[0]).toBe(first[0]);
+    expect(second[1]).not.toBe(first[1]);
+    expect(second[1].history).toBe(h2);
+    expect(second[1].maxDrawdown).toBe(0);
+  });
+
+  it("rebuilds every row when convertPrice changes (currency toggle)", () => {
+    const build = createMarketRowsBuilder();
+    const first = build([p1, p2], { 1: h1 }, NO_VOLUME, identity, TODAY_UTC_MS);
+    const toCad = (usd: number) => usd * 1.5;
+    const second = build([p1, p2], { 1: h1 }, NO_VOLUME, toCad, TODAY_UTC_MS);
+    expect(second[0]).not.toBe(first[0]);
+    expect(second[0].price).toBeCloseTo(first[0].price! * 1.5);
+  });
+
+  it("rebuilds when the UTC day, the product object or its volume entry changes", () => {
+    const build = createMarketRowsBuilder();
+    const first = build([p1], { 1: h1 }, NO_VOLUME, identity, TODAY_UTC_MS);
+    expect(build([p1], { 1: h1 }, NO_VOLUME, identity, TODAY_UTC_MS + 86_400_000)[0]).not.toBe(first[0]);
+
+    const build2 = createMarketRowsBuilder();
+    const a = build2([p1], { 1: h1 }, NO_VOLUME, identity, TODAY_UTC_MS);
+    expect(build2([{ ...p1 }], { 1: h1 }, NO_VOLUME, identity, TODAY_UTC_MS)[0]).not.toBe(a[0]);
+
+    const build3 = createMarketRowsBuilder();
+    const b = build3([p1], { 1: h1 }, NO_VOLUME, identity, TODAY_UTC_MS);
+    const volume = { 1: { product_id: 1, units_sold_30d: 5, units_sold_prior_30d: 4 } as Volume };
+    const c = build3([p1], { 1: h1 }, volume, identity, TODAY_UTC_MS);
+    expect(c[0]).not.toBe(b[0]);
+    expect(c[0].unitsSold30d).toBe(5);
+  });
+
+  it("keeps cached rows for products filtered out and back in", () => {
+    const build = createMarketRowsBuilder();
+    const all = build([p1, p2], { 1: h1 }, NO_VOLUME, identity, TODAY_UTC_MS);
+    build([p2], { 1: h1 }, NO_VOLUME, identity, TODAY_UTC_MS); // search hides p1
+    const again = build([p1, p2], { 1: h1 }, NO_VOLUME, identity, TODAY_UTC_MS);
+    expect(again[0]).toBe(all[0]);
+  });
 });
 
-it("rebuilds when the product's volume entry changes", () => {
-  const build = createMarketRowsBuilder();
-  const before = build([p1], { 1: h1 }, NO_VOLUME, identity, TODAY_UTC_MS);
-  const volume = { 1: { product_id: 1, units_sold_30d: 5, units_sold_prior_30d: 4 } as Volume };
-  const after = build([p1], { 1: h1 }, volume, identity, TODAY_UTC_MS);
-  expect(after[0]).not.toBe(before[0]);
-  expect(after[0].unitsSold30d).toBe(5);
+describe("buildMarketRow drawdown and volatility (one daily series, F125)", () => {
+  // One reading per UTC day from 2026-07-01, so more than 30 days is valid.
+  function makeDailyHistory(prices: number[]): PriceHistoryEntry[] {
+    return prices.map((usd_price, index) => ({
+      usd_price,
+      recorded_at: new Date(Date.UTC(2026, 6, 1) + index * 86_400_000).toISOString(),
+    }));
+  }
+
+  it("matches the history-based helpers exactly (short series)", () => {
+    const history = makeDailyHistory([100, 120, 80, 90, 95, 70, 110]);
+    const row = buildMarketRow(p1, history, undefined, identity, TODAY_UTC_MS);
+    expect(row.maxDrawdown).not.toBeNull();
+    expect(row.volatility30d).not.toBeNull();
+    expect(row.maxDrawdown).toBe(getMaxDrawdownPercent(history));
+    expect(row.volatility30d).toBe(
+      getVolatilityPercent(history, { lookbackPoints: 30, unit: "annualised" })
+    );
+  });
+
+  it("matches them exactly past the 30-point volatility lookback", () => {
+    const prices = Array.from({ length: 45 }, (_, i) => 100 + ((i * 37) % 23) - (i === 10 ? 40 : 0));
+    const history = makeDailyHistory(prices);
+    const row = buildMarketRow(p1, history, undefined, identity, TODAY_UTC_MS);
+    expect(row.maxDrawdown).toBe(getMaxDrawdownPercent(history));
+    expect(row.volatility30d).toBe(
+      getVolatilityPercent(history, { lookbackPoints: 30, unit: "annualised" })
+    );
+  });
+
+  it("is null for both when there is no history", () => {
+    const row = buildMarketRow(p1, undefined, undefined, identity, TODAY_UTC_MS);
+    expect(row.maxDrawdown).toBeNull();
+    expect(row.volatility30d).toBeNull();
+  });
 });
 ```
 
-(Drop `identity`/`convertPrice` arguments if WP18 removed them from `buildMarketRow`.)
-
-### New: `returns.points.test.ts` (or add a `describe` to the file WP18 moved the math tests to)
-
-Cases (history with a duplicate same-day entry and one out-of-order entry: 09-01 100, 09-01T18 999, 09-03 80, 09-02 120, 09-04 90):
-- `toDailyPoints` keeps the first price per UTC day and sorts oldest first: `[{2026-09-01,100},{2026-09-02,120},{2026-09-03,80},{2026-09-04,90}]`; applies `convertPrice`; returns `[]` for `undefined` and `[]`.
-- `getMaxDrawdownFromPoints` is `33.333...` (120 to 80) and `null` for one point.
-- `getMaxDrawdownFromPoints(points)` `toBe` `getMaxDrawdownPercent(history, identity)`, and `getVolatilityFromPoints(points, 30)` `toBe` `getVolatilityPercent(history, identity, 30)` (the wrappers are exact).
-- `getVolatilityFromPoints` is `null` for two points and non-null for four.
-
-This also closes the verifier's gap "returns.test.ts covers only getReturnPercent" for drawdown and volatility. Skip any case WP18 already covers in its moved test file.
-
 ### New: `MarketTableRow.test.tsx`
 
-Render rows inside `<table><tbody>` with a probe column passed as `columns` (the row renders cells only through `columns`, so a probe's `render` counts real renders). Cases:
-- Changing one row's `isLoading` re-renders exactly that row (probe called once, with that id).
-- Replacing one row object (history landed) re-renders exactly that row.
-- Re-rendering the parent with identical props re-renders no row.
-- Expanded + loading shows "Loading price history..." in a `td` whose `colspan` equals `columns.length`; expanded with no history shows "Price history not available yet.".
-- `ctx.onToggle` calls the `onToggle` prop with the row's product id.
+Renders rows inside `<table><tbody>` with a probe column passed as `columns` (the row renders cells only through `columns`, so a probe's `render` counts real renders). Covers: one row's `isLoading` change re-renders exactly that row; replacing one row object re-renders exactly that row; an identical parent re-render re-renders no row; the expanded row's `td` spans `columns.length` and shows the loading and empty messages; `ctx.onToggle` calls `onToggle` with the row's product id.
 
 ```tsx
 import { fireEvent, render, screen } from "@testing-library/react";
@@ -1251,64 +1308,219 @@ beforeEach(() => {
   onToggle.mockClear();
 });
 
-it("re-renders only the row whose loading flag changed", () => {
-  const { rerender } = render(<Table />);
-  expect(mockProbe).toHaveBeenCalledTimes(3);
-  mockProbe.mockClear();
+describe("MarketTableRow memoisation (F125)", () => {
+  it("re-renders only the row whose loading flag changed", () => {
+    const { rerender } = render(<Table />);
+    expect(mockProbe).toHaveBeenCalledTimes(3);
+    mockProbe.mockClear();
 
-  rerender(<Table loadingId={2} />);
-  expect(mockProbe).toHaveBeenCalledTimes(1);
-  expect(mockProbe).toHaveBeenCalledWith(2);
-  expect(screen.getByText("2:2:loading")).toBeInTheDocument();
+    rerender(<Table loadingId={2} />);
+    expect(mockProbe).toHaveBeenCalledTimes(1);
+    expect(mockProbe).toHaveBeenCalledWith(2);
+    expect(screen.getByText("2:2:loading")).toBeInTheDocument();
+  });
+
+  it("re-renders only the row whose row object changed (history landed)", () => {
+    const { rerender } = render(<Table />);
+    mockProbe.mockClear();
+
+    const withHistory = [ROWS[0], makeRow(2, [
+      { usd_price: 90, recorded_at: "2026-09-01T00:00:00Z" },
+      { usd_price: 100, recorded_at: "2026-09-02T00:00:00Z" },
+    ]), ROWS[2]];
+    rerender(<Table rows={withHistory} />);
+    expect(mockProbe).toHaveBeenCalledTimes(1);
+    expect(mockProbe).toHaveBeenCalledWith(2);
+  });
+
+  it("re-renders nothing when the parent re-renders with identical props", () => {
+    const { rerender } = render(<Table />);
+    mockProbe.mockClear();
+    rerender(<Table />);
+    expect(mockProbe).not.toHaveBeenCalled();
+  });
 });
 
-it("spans every visible column and shows the loading message while loading", () => {
-  render(<Table expandedId={1} loadingId={1} />);
-  const cell = screen.getByText("Loading price history...").closest("td");
-  expect(cell).toHaveAttribute("colspan", String(PROBE_COLUMNS.length));
+describe("MarketTableRow expanded row", () => {
+  it("spans every visible column and shows the loading message while loading", () => {
+    render(<Table expandedId={1} loadingId={1} />);
+    const cell = screen.getByText("Loading price history...").closest("td");
+    expect(cell).toHaveAttribute("colspan", String(PROBE_COLUMNS.length));
+  });
+
+  it("shows the empty message when there is no usable history", () => {
+    render(<Table expandedId={3} />);
+    expect(screen.getByText("Price history not available yet.")).toBeInTheDocument();
+  });
+
+  it("passes a toggle bound to the row's product id to its cells", () => {
+    const toggleColumns: readonly MarketTableColumn[] = [
+      {
+        id: "chart",
+        label: "Chart",
+        keyColumn: true,
+        sortable: false,
+        headerClassName: "",
+        cellClassName: "",
+        render: (_row, ctx) => (
+          <button type="button" onClick={ctx.onToggle}>
+            toggle
+          </button>
+        ),
+      },
+    ];
+    render(
+      <table>
+        <tbody>
+          <MarketTableRow
+            row={ROWS[1]}
+            rank={2}
+            columns={toggleColumns}
+            isExpanded={false}
+            isLoading={false}
+            chartTimeframe="1Y"
+            currency="USD"
+            exchangeRate={1.36}
+            formatPrice={formatPrice}
+            onToggle={onToggle}
+          />
+        </tbody>
+      </table>
+    );
+    fireEvent.click(screen.getByRole("button", { name: "toggle" }));
+    expect(onToggle).toHaveBeenCalledWith(2);
+  });
 });
 ```
 
-Write the remaining cases (row object replaced, identical rerender, empty-history message, toggle id via a column whose `render` returns `<button onClick={ctx.onToggle}>toggle</button>` then `fireEvent.click` and `expect(onToggle).toHaveBeenCalledWith(2)`) in the same style.
-
 ### New: `MarketView.table.test.tsx`
 
-Copy the mock block from WP13's `MarketView.emptyState.test.tsx` (and any mock that file gained later), plus the ChartBundle stub above. Products: id 1 price 50 released 2025-01-01, id 2 price 300 released 2026-01-01, id 3 price 120 released 2024-01-01, labels `Type 1..3`, sets `Set 1..3`, `price_recorded_at: new Date().toISOString()` (so the price guard keeps them priced). Helper `rowOrder()` reads the Set cell (third cell) of each body row. Cases:
-- 10 `columnheader`s; after clicking "Show all columns", 19.
-- Default order is newest release first: `["Set 2", "Set 1", "Set 3"]`.
-- Clicking "Price" sorts descending (`aria-sort="descending"` on that header, order `2,3,1`); clicking again sorts ascending (`aria-sort="ascending"`, order `1,3,2`).
-- Clicking "Set" opens ascending (`1,2,3`).
-- Mock `fetchProductHistoryClient` to resolve two points; click the first "Show" inside `act(async () => ...)`; `await screen.findByTestId("price-chart")`; history fetched exactly once; the chart's `td` has `colspan="10"`; clicking "Hide" removes it.
+Renders the real `MarketView`. Covers: 10 `columnheader`s, 19 after "Show all columns"; default order newest release first; "Price" opens descending with `aria-sort="descending"` and flips to ascending; "Set" opens ascending; "Show" loads history once, shows the chart in a `td` with `colspan="10"`, "Hide" removes it.
 
 ```tsx
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
+import "@testing-library/jest-dom";
+
+// Same mock block as WP13's MarketView.emptyState.test.tsx. If that file has
+// grown extra mocks since (WP09/WP12/WP15), copy them here too. The
+// CardRinkPromo mock is harmless after WP15 removed the import.
+jest.mock("../../../lib/clientMarketData", () => ({
+  fetchMarketProductsClient: jest.fn().mockResolvedValue([]),
+  fetchProductHistoryClient: jest.fn().mockResolvedValue([]),
+  fetchVolumeMetrics: jest.fn().mockResolvedValue({}),
+}));
+jest.mock("../../../lib/exchangeRate", () => ({
+  fetchLatestExchangeRateClient: jest.fn().mockResolvedValue({ rate: 1.36, date: null }),
+}));
+jest.mock("../MiniSparkline", () => ({ __esModule: true, default: () => null }));
+jest.mock("../../ProductPrices/shared/ProductImage", () => ({ __esModule: true, default: () => null }));
+jest.mock("../../CardRinkPromo", () => ({ __esModule: true, default: () => null }));
+jest.mock("../../charts/ChartBundle", () => ({
+  PriceChart: function MockPriceChart() {
+    return <div data-testid="price-chart" />;
+  },
+}));
+
+import MarketView from "../MarketView";
+import { fetchProductHistoryClient } from "../../../lib/clientMarketData";
+import type { Product } from "../../ProductPrices/types";
+
+const fetchHistoryMock = fetchProductHistoryClient as jest.MockedFunction<
+  typeof fetchProductHistoryClient
+>;
+
+function makeProduct(id: number, usdPrice: number, releaseDate: string): Product {
+  return {
+    id,
+    usd_price: usdPrice,
+    url: `https://example.test/p/${id}`,
+    last_updated: "2026-09-25T00:00:00Z",
+    price_recorded_at: new Date().toISOString(),
+    sets: { name: `Set ${id}`, code: `S${id}`, release_date: releaseDate },
+    product_types: { id: 1, name: "booster_box", label: `Type ${id}` },
+    returns: null,
+  };
+}
+
+const PRODUCTS = [
+  makeProduct(1, 50, "2025-01-01"),
+  makeProduct(2, 300, "2026-01-01"),
+  makeProduct(3, 120, "2024-01-01"),
+];
+
+function renderView() {
+  return render(
+    <MarketView initialProducts={PRODUCTS} initialExchangeRate={1.36} initialVolumeMetrics={{}} />
+  );
+}
+
+/** The set name of each body row, top to bottom ("Set 2", ...). */
 function rowOrder() {
   const rows = within(screen.getByRole("table")).getAllByRole("row").slice(1);
   return rows.map((row) => within(row).getAllByRole("cell")[2].textContent?.slice(0, 5));
 }
 
-it("sorts by price descending on first click and ascending on the second", () => {
-  renderView();
-  const priceButton = screen.getByRole("button", { name: /^Price/ });
-  fireEvent.click(priceButton);
-  expect(screen.getByRole("columnheader", { name: /Price/ })).toHaveAttribute("aria-sort", "descending");
-  expect(rowOrder()).toEqual(["Set 2", "Set 3", "Set 1"]);
-  fireEvent.click(priceButton);
-  expect(screen.getByRole("columnheader", { name: /Price/ })).toHaveAttribute("aria-sort", "ascending");
-  expect(rowOrder()).toEqual(["Set 1", "Set 3", "Set 2"]);
+beforeEach(() => jest.clearAllMocks());
+
+describe("MarketView table", () => {
+  it("renders the 10 key columns, and 19 after 'Show all columns'", () => {
+    renderView();
+    expect(screen.getAllByRole("columnheader")).toHaveLength(10);
+    fireEvent.click(screen.getByRole("button", { name: "Show all columns" }));
+    expect(screen.getAllByRole("columnheader")).toHaveLength(19);
+  });
+
+  it("defaults to newest release first", () => {
+    renderView();
+    expect(rowOrder()).toEqual(["Set 2", "Set 1", "Set 3"]);
+  });
+
+  it("sorts by price descending on first click and ascending on the second", () => {
+    renderView();
+    const priceButton = screen.getByRole("button", { name: /^Price/ });
+    fireEvent.click(priceButton);
+    expect(screen.getByRole("columnheader", { name: /Price/ })).toHaveAttribute("aria-sort", "descending");
+    expect(rowOrder()).toEqual(["Set 2", "Set 3", "Set 1"]);
+    fireEvent.click(priceButton);
+    expect(screen.getByRole("columnheader", { name: /Price/ })).toHaveAttribute("aria-sort", "ascending");
+    expect(rowOrder()).toEqual(["Set 1", "Set 3", "Set 2"]);
+  });
+
+  it("opens the Set column ascending on first click", () => {
+    renderView();
+    fireEvent.click(screen.getByRole("button", { name: /^Set/ }));
+    expect(rowOrder()).toEqual(["Set 1", "Set 2", "Set 3"]);
+  });
+
+  it("expands a row, loads its history once, and collapses it again", async () => {
+    fetchHistoryMock.mockResolvedValue([
+      { usd_price: 90, recorded_at: "2026-09-01T00:00:00Z" },
+      { usd_price: 100, recorded_at: "2026-09-02T00:00:00Z" },
+    ]);
+    renderView();
+    const [firstShow] = screen.getAllByRole("button", { name: "Show" });
+    await act(async () => {
+      fireEvent.click(firstShow);
+    });
+    expect(await screen.findByTestId("price-chart")).toBeInTheDocument();
+    expect(fetchHistoryMock).toHaveBeenCalledTimes(1);
+    const expandedCell = screen.getByTestId("price-chart").closest("td");
+    expect(expandedCell).toHaveAttribute("colspan", "10");
+    fireEvent.click(screen.getByRole("button", { name: "Hide" }));
+    expect(screen.queryByTestId("price-chart")).not.toBeInTheDocument();
+  });
 });
 ```
 
-If WP09's history batching means `fetchProductHistoryClient` is no longer what `ensureHistoryLoaded` calls, mock whatever `useProductData` now calls (read the hook) and assert on that instead. If this file cannot be made to render in jsdom within about 30 minutes, keep the other three new files, cover `/market` with the manual checks, and say so in the PR (same escape hatch WP13 used).
+If `MarketView.emptyState.test.tsx` (WP13) mocks more modules than this file's block, add the same mocks here. If WP09's history batching means `fetchProductHistoryClient` is no longer what `ensureHistoryLoaded` calls, mock whatever `useProductData` now calls (read the hook) and assert on that instead. If this file cannot be made to render in jsdom within about 30 minutes, keep the other three new files, cover `/market` with manual checks 1 to 3, and say so in the PR (same escape hatch WP13 used).
 
 ### Update: `sorting.test.ts`
 
-Delete the `getDefaultSortDirection` describe block and import (step 6). Every `compareSortValues`/`isMissingSortValue` case stays unchanged.
+Step 6b: delete the `getDefaultSortDirection` describe block and its import name. Every `compareSortValues`/`isMissingSortValue` case, including WP18's "compareSortValues with a string comparator" block, stays unchanged.
 
 ### Must pass unchanged
 
-`buildRows.test.ts` (WP17), `returns.test.ts`, `useProductData.test.tsx`, `MarketView.emptyState.test.tsx` (WP13), `MiniSparkline*.test.tsx` (WP09), and every other suite.
-
-A prototype of steps 1 to 5 and these tests was type-checked, linted and run against review HEAD `a188fea` plus WP17 step 13 (47 MarketView tests passing, `tsc` and `eslint app/components/MarketView` clean); only the upstream class/formatter edits were not present in that prototype.
+`buildRows.test.ts` (WP17, as updated by WP18), `app/lib/__tests__/marketMath.test.ts` (WP18), `useProductData.test.tsx`, `MarketView.emptyState.test.tsx` (WP13), `MiniSparkline*.test.tsx` (WP09), and every other suite.
 
 ## Verification
 
@@ -1317,14 +1529,14 @@ From `frontend/`:
 ```bash
 pnpm install --frozen-lockfile
 pnpm exec tsc --noEmit                                   # exit 0
-pnpm exec eslint app/components/MarketView "app/product/[id]/page.tsx"   # 0 problems
+pnpm exec eslint app/components/MarketView            # 0 problems
 pnpm test --ci app/components/MarketView                 # all suites pass, including the 4 new files
 pnpm test --ci                                           # full suite green
 pnpm run lint                                            # 0 errors (CI blocks on this since WP17)
 pnpm build:stub                                          # exit 0 (do not run while another agent builds in this checkout)
 ```
 
-In the `pnpm build:stub` route table, `/market` must show the same rendering symbol and revalidate value as on `main` before this PR (static/ISR, not `ƒ Dynamic`), and the build log must have no "useSearchParams() should be wrapped in a suspense boundary" error.
+In the `pnpm build:stub` route table, `/market` must show the same rendering symbol and revalidate value as on the base branch (`master`) before this PR (static/ISR, not `ƒ Dynamic`), and the build log must have no "useSearchParams() should be wrapped in a suspense boundary" error.
 
 Greps that must hold:
 
@@ -1332,6 +1544,11 @@ Greps that must hold:
 grep -n 'switch (key)\|visibleColumnCount\|showAllColumns ? 19 : 10\|Fragment\|next/dynamic' app/components/MarketView/MarketView.tsx   # no output
 grep -rn 'useSearchParams\|useRouter\|next/navigation' app/components/MarketView                              # no output
 grep -c 'toDailyPoints(' app/components/MarketView/buildRows.ts                                              # 1
+grep -n 'getMaxDrawdownPercent\|getVolatilityPercent' app/components/MarketView/buildRows.ts                  # no output
+grep -rn 'getDefaultSortDirection' app                                                                       # no output
+grep -n '^import' app/components/MarketView/sorting.ts                                                       # no output (re-export only)
+grep -rn 'MarketView/returns\|from "./returns"' app                                                          # no output (WP18 deleted it; nothing re-adds it)
+git diff --stat "$(git merge-base HEAD origin/master)" -- app/lib/marketMath.ts "app/product/[id]/page.tsx"   # no output (untouched)
 grep -n 'export default memo(MarketTableRow)' app/components/MarketView/MarketTableRow.tsx                   # 1 hit
 wc -l app/components/MarketView/MarketView.tsx                                                               # well under 862 (about 330-380)
 ```
@@ -1339,7 +1556,7 @@ wc -l app/components/MarketView/MarketView.tsx                                  
 Manual checks (on the Vercel preview for this PR, which has real data; the local stub build has an empty catalog):
 
 1. Open `/market`. The table looks identical to production: same 10 columns in the same order, newest release first, same row numbers, same colours. Click "Show all columns": 19 columns, same order as production. Toggle back.
-2. Click every sortable header once and again: first click direction matches production (Product, Set, Days Since, Max DD, Vol 30D ascending; the rest descending); "--" values stay at the bottom in both directions; the sorted header shows ` v`/` ^`.
+2. Click every sortable header once and again: first click direction matches production (Product, Set, Days Since, Max DD, Vol 30D (ann.) ascending; the rest descending); "--" values stay at the bottom in both directions; the sorted header shows ` v`/` ^`. Hovering "Vol 30D (ann.)" shows WP18's annualised-volatility tooltip; its cells show an unsigned slate value, not green/red.
 3. Click "Show" on a row: "Loading price history..." then the chart; "Hide" collapses it. Expand a second row: the first collapses. Switch USD/CAD with a row open: prices and the chart update.
 4. Type in the search box quickly: characters never lag; the count updates; clear it. Pick an age filter and a generation: rows filter as before. A search with no match shows the WP13 "No products match" panel.
 5. Render check (the F125 fix): open React DevTools, Profiler, enable "Highlight updates when components render", record, click "Show" on one row, wait for the chart, stop. Correct: the commits for the loading flag and the history arrival each render one or two `MarketTableRow`s (the toggled row, plus the previously expanded row on expansion), not ~306. Before this PR (production), the same recording shows the whole table flashing.
@@ -1347,7 +1564,9 @@ Manual checks (on the Vercel preview for this PR, which has real data; the local
 
 ## Owner actions
 
-None required. The executor cannot open the Vercel preview with real data only if preview protection blocks them; in that case the owner performs manual checks 1 to 6 on the preview and replies on the PR with the result.
+- No migrations, env vars or dashboard changes.
+- If Vercel preview protection stops the executor from opening the preview with real data, the owner performs manual checks 1 to 6 on the preview and replies on the PR with the result.
+- F045 item (4) (the 11 `ProductCard` props threaded through three `/prices` call sites and `RecentlyReleased`) is not done by this package or by WP20. After merging, the owner decides whether to open a follow-up for it (the verifier's lower-risk option is a single memoised `cardSettings` object prop rather than a context). Until then F045 stays partially open for `/prices` in the tracker.
 
 ## Acceptance criteria
 
@@ -1355,15 +1574,16 @@ None required. The executor cannot open the Vercel preview with real data only i
 - [ ] `MarketView.tsx` contains no `switch (key)`, no `visibleColumnCount`, no `19 : 10`, no per-cell JSX, no `Fragment`, no `next/dynamic`, and no `useSearchParams`/`useRouter`.
 - [ ] `MarketTableRow.tsx` default-exports `memo(MarketTableRow)`; MarketView passes it only primitives and stable references.
 - [ ] `createMarketRowsBuilder` exists in `buildRows.ts` and MarketView creates it with `useState(createMarketRowsBuilder)`.
-- [ ] `buildMarketRow` calls `toDailyPoints` exactly once and derives drawdown and volatility from that series; `/product/[id]` still uses the history-based wrappers with identical numbers.
-- [ ] `getDefaultSortDirection` is removed (or, if another module uses it, MarketView no longer does).
-- [ ] New tests `columns.test.ts`, `buildRows.reuse.test.ts`, `returns.points.test.ts`, `MarketTableRow.test.tsx`, `MarketView.table.test.tsx` pass (or the last is replaced by the documented manual check); `buildRows.test.ts`, `returns.test.ts`, `sorting.test.ts` (minus the moved block) pass unchanged.
+- [ ] `buildMarketRow` calls `toDailyPoints` exactly once and derives drawdown (`maxDrawdownPercent`) and 30-point annualised volatility (`volatilityPercent`) from that series, with values identical to WP18's `getMaxDrawdownPercent`/`getVolatilityPercent`; `lib/marketMath.ts` and `/product/[id]` are unchanged.
+- [ ] `getDefaultSortDirection` is removed; `MarketView/sorting.ts` is only the re-export of `lib/sorting.ts`.
+- [ ] The volatility column keeps WP18's label "Vol 30D (ann.)", its `title` and `renderVolatilityValue`.
+- [ ] New tests `columns.test.ts`, `buildRows.reuse.test.ts`, `MarketTableRow.test.tsx`, `MarketView.table.test.tsx` pass (or the last is replaced by the documented manual check); `buildRows.test.ts`, `app/lib/__tests__/marketMath.test.ts` and `sorting.test.ts` (minus the moved block) pass unchanged.
 - [ ] `pnpm exec tsc --noEmit`, `pnpm run lint`, `pnpm test --ci` and `pnpm build:stub` exit 0; `/market` keeps its static/ISR status.
 - [ ] On the preview, `/market` looks and sorts exactly as production, and the Profiler shows one or two row renders per expand/history commit.
 
 ## Rollback
 
-Code only; no migrations, env vars or data. Revert the PR's merge commit (`git revert -m 1 <merge-sha>`) and redeploy. The revert restores the inline table, the switch, `getDefaultSortDirection` and its tests together; `returns.ts`'s new exports disappear with it, and nothing outside `app/components/MarketView/` imports them (verify with `grep -rn "FromPoints\|createMarketRowsBuilder\|MarketTableRow\|from \"./columns\"" app` before reverting if later PRs have landed). Partial rollback is not supported: `MarketView.tsx`, `columns.tsx` and `MarketTableRow.tsx` change together.
+Code only; no migrations, env vars or data. Revert the PR's merge commit (`git revert -m 1 <merge-sha>`) and redeploy. The revert restores the inline table, the switch, `getDefaultSortDirection` and its tests, and the two-pass drawdown/volatility calls in `buildRows.ts` together; `createMarketRowsBuilder`, `columns.tsx` and `MarketTableRow.tsx` disappear with it, and nothing outside `app/components/MarketView/` imports them (verify with `grep -rn "createMarketRowsBuilder\|MarketTableRow\|MarketView/columns" app | grep -v "app/components/MarketView/"` before reverting if later PRs have landed; it must print nothing). Partial rollback is not supported: `MarketView.tsx`, `columns.tsx` and `MarketTableRow.tsx` change together.
 
 ## Commit and PR
 
@@ -1380,11 +1600,12 @@ refactor(market): drive the table from a column list; memoise rows
   createMarketRowsBuilder, so a history load or expand re-renders one
   row instead of ~306 (F125).
 - buildMarketRow builds the daily series once and derives drawdown and
-  volatility from it (was two toDailyPoints passes per product).
+  volatility from it with lib/marketMath's series functions (was two
+  toDailyPoints passes per product); numbers unchanged.
 - getDefaultSortDirection folded into the column descriptors.
 - /market stays statically rendered: no URL state added.
 ```
 
 PR title: `refactor(market): column-driven table and memoised rows (WP19: F045, F125)`
 
-PR body summary: link `audits/remediation/WP19-marketview-refactor.md`; list F045 (full for `/market`; item 3 deliberately not applied to `/market` per the verifier, item 4 left to WP20's CurrencyContext) and F125 (full; sticky `#` column intentionally unchanged); state that nothing user-visible changes; paste the "Before you start" grep output next to the Verification grep output; paste the `pnpm build:stub` route-table line for `/market`; attach a before/after React Profiler screenshot of one expand; note that `aria-sort` now follows the sorted column and header cells gained `scope="col"`.
+PR body summary: link `audits/remediation/WP19-marketview-refactor.md`; list F045 (items 1 and 2 plus the verifier's additions done for `/market`, item 1 via WP17/WP18; item 3 deliberately not applied to `/market` per the verifier; item 4, the `ProductCard` prop threading on `/prices`, NOT done and listed as an open follow-up for the owner) and F125 (full; sticky `#` column intentionally unchanged); state that nothing user-visible changes; paste the "Before you start" grep output next to the Verification grep output; paste the `pnpm build:stub` route-table line for `/market`; attach a before/after React Profiler screenshot of one expand; note that `aria-sort` now follows the sorted column and header cells gained `scope="col"`.

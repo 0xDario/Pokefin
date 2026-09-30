@@ -12,7 +12,8 @@
 - **Priority rationale**: these are the only findings in the Python pipeline that writes every price the site shows; two are medium-severity data-integrity bugs (F083, F084) and the rest are cheap defence in depth with no user-visible risk.
 - **Effort**: M (6 to 8 hours for the executor, plus about 30 minutes of owner time: one migration and a scraper-host deploy with a Chrome smoke test).
 - **Depends on**: WP00 (plan order only; this package changes no frontend file). It is written against the code after WP11, which adds `revalidate_hook.py`, `run_jobs_once()` and return values to `main.py`; see "Before you start" for how to handle either state.
-- **Unblocks**: WP21 (its least-privilege scraper role must be granted on the new `product_price_pending` table, and its schema baseline must include migration 0030).
+- **Unblocks**: WP21 (its least-privilege scraper role must be granted on the new `product_price_pending` table, and its schema baseline must include migration 0030) and WP20 (its generated `Database` types must contain `product_price_pending`, so 0030 must be applied in production before WP20 starts).
+- **Parallel execution**: this package touches no `frontend/` file. It may run on its own branch in parallel with WP12 to WP19, but start it only after WP11 has merged (WP11 step 12 edits `main.py`, `tests/test_main.py` and adds `revalidate_hook.py` and `tests/test_revalidate_hook.py`, which this spec is written against).
 - **Suggested branch name**: `remediation/wp16-python-pipeline-hardening`
 - **Risk level**: medium. It changes the scraper's write path for every price and the flags Chrome starts with on the production host; a Chrome that cannot sandbox itself on that host would stop starting until the owner applies the documented escape hatch.
 
@@ -81,7 +82,7 @@ grep -n "run_jobs_once\|revalidate_hook\|return updated_count" main.py; ls reval
 
 Assumptions to check, with the default to pick:
 
-1. **Migration number.** The plan expects WP01 to add `0024`/`0025`, WP06 `0026`, WP10 `0027` to `0029`, so this package adds `0030`. If `ls migrations` shows a higher number already used, take the next free number and substitute it everywhere this spec says `0030` (file name, `load_pending_prices` log text, README, HARDENING_FOLLOWUPS). The test globs `*_price_plausibility_guard.sql`, so it needs no change.
+1. **Migration number.** The plan expects WP01 to add `0024`/`0025`, WP06 `0026`, WP10 `0027` to `0029`, so this package adds `0030`. `0030` is reserved for this package in the plan-wide numbering (WP21 takes `0031`/`0032`), so use it whether or not `0024`-`0029` are already present; do not derive it from the highest file in `migrations/`. Only if a `0030_*` file that is not this package's already exists, stop and ask the owner for the number, then substitute it everywhere this spec says `0030` (file name, `load_pending_prices` log text, README, HARDENING_FOLLOWUPS) and say so in the PR body for WP21. The test globs `*_price_plausibility_guard.sql`, so it needs no change.
 2. **WP11 landed or not.** If `run_jobs_once` exists, leave it and `revalidate_hook.py` untouched; `update_prices` already returns `0` / `updated_count` and the replacement below keeps those returns. If WP11 has not landed, still add the two returns (they are harmless) and do not create `run_jobs_once`.
 3. **`--no-sandbox` must stay available.** Chrome refuses to start as root without it. The code below keeps it for root and for an explicit `POKEFIN_CHROME_NO_SANDBOX=1` override; do not remove the flag unconditionally.
 4. **The scraper host is Linux with util-linux `flock`** (`run_weekly_report.sh:5` names "the Linux scraper host"). macOS has no `flock`; the script degrades to running without a lock and logs a WARN.
@@ -1107,7 +1108,7 @@ The lock is taken before the env file is sourced, so a skipped run never loads s
 
 ### Step 13. `migrations/0030_price_plausibility_guard.sql` (new, F083)
 
-Create the file with exactly this content (replace `0030` with the next free number if needed, see "Before you start"):
+Create the file with exactly this content (keep `0030` unless the owner assigned another number, see "Before you start"):
 
 ```sql
 -- Migration: plausibility guard for scraped prices (review 2026-09-25, F083).
@@ -1200,7 +1201,7 @@ copy of the environment with every `SUPABASE_*`, `SMTP_*`, `SHOPIFY_*`,
 `REVALIDATE_*` and other secret-looking variable removed.
 ```
 
-15c. `audits/HARDENING_FOLLOWUPS.md` section 7 (`## 7. Round-2 follow-ups`, `:139`). The first bullet of that section is the old bullet about migrations 0008 to 0014; leave it first. The newest-first run of migration bullets starts right below it. Insert this bullet directly above the topmost bullet added by WP10, WP06 or WP01 (their text starts with "**Migrations 0027, 0028 and 0029", "**Migration 0026" or "**Migrations 0024 and 0025"), whichever is highest in the file. If none of those is present, insert it directly above the bullet that starts with `- **Migration 0022 applied**`:
+15c. `audits/HARDENING_FOLLOWUPS.md` section 7 (`## 7. Round-2 follow-ups`, `:139`). The old bullet about migrations 0008 to 0014 stays where it is (WP04 put its "Signed-in data ran as anon" bullet above it; leave that too). The newest-first run of migration bullets starts right below the 0008-0014 bullet. Insert this bullet directly above the topmost bullet added by WP10, WP06 or WP01 (their text starts with "**Migrations 0027, 0028 and 0029", "**Migration 0026" or "**Migrations 0024 and 0025"), whichever is highest in the file. If none of those is present, insert it directly above the bullet that starts with `- **Migration 0022 applied**`:
 
 ```markdown
 - **Migration 0030: pending apply** (WP16, review finding F083). Adds

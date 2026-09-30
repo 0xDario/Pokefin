@@ -4,11 +4,11 @@
   - F056 (full; members F039, F065, F114, F120): seven components are declared inside render (HoldingsTable `SortButton`, the chart `CustomTooltip`s, plus PriceChart's `CustomTooltip`/`CustomDot` that lint misses behind `memo()`), so they remount on every parent render and the sort buttons drop keyboard focus.
   - F050 (full; member F042): `proxy.ts`, `csrf.ts`, `cookieOptions.ts`, `routeSupabase.ts`, the account delete route, `matchProduct`, `calculateNav` and MarketView's row derivation have no tests; `proxy.ts` is outside `collectCoverageFrom` and every `page.tsx` (including client pages) is excluded from coverage.
   - F108 (full; member F049): raw `console.*` calls bypass `app/lib/logger.ts`, `no-console` is not enforced, the promised Sentry hook in the logger was never written, and there is no `instrumentation.ts`, so the server and edge Sentry configs never load (and under Turbopack `sentry.client.config.ts` never loads either).
-  - F128 (full): CSP `connect-src` has no Sentry ingest origin, so browser events would be blocked the moment a DSN is set; `'unsafe-inline'` in `script-src` is undocumented.
+  - F128 (full): CSP `connect-src` has no Sentry ingest origin, so browser events would be blocked the moment a DSN is set; `'unsafe-inline'` in `script-src` is undocumented; no CSP violation is ever reported anywhere (the verifiers' corrected recommendation: report from the enforced policy, not from a strict Report-Only one).
   - F076 (partial; members F037, F052, F064, F139): only the remaining part, "make lint blocking once clean". The build gate and the pnpm pin were WP00.
 - **Priority rationale**: this is the last gate before the large refactors (WP18 to WP21), so it turns lint and the critical-path tests into merge blockers first and makes production errors observable before code starts moving.
-- **Effort**: L (about 10 hours: lint fixes 2 h, logger and Sentry wiring 2 h, tests 5 h, config and verification 1 h).
-- **Depends on**: WP05, WP06, WP09, WP14 (they remove most of the set-state-in-effect errors and rewrite the files whose `console.*` calls this package converts). Also assumes WP00 (`pnpm build:stub`), WP01 (export route test), WP02 (`proxy.rateLimit.test.ts`, auth route tests), WP07 (`app/lib/format.ts` with `formatMoney`) and WP15 (CardRinkPromo rewrite, `deleteLoading` put to use, SortButton `aria-pressed`) have merged; the plan runs packages in order.
+- **Effort**: L (about 11 hours: lint fixes 2 h, logger, Sentry wiring and event scrubbing 3 h, tests 5 h, config and verification 1 h).
+- **Depends on**: WP05, WP06, WP09, WP14 (they remove most of the set-state-in-effect errors and rewrite the files whose `console.*` calls this package converts). Also assumes WP00 (`pnpm build:stub`, which sets `NEXT_PUBLIC_SENTRY_DSN=""` for the build), WP01 (export route test), WP02 (`proxy.rateLimit.test.ts`, auth route tests), WP05 (`rejectIfNotAppRequest` in `csrf.ts`, `import.holdings.test.ts` covering `importHoldings` and `processCollectrImport`), WP06 (`useBoxRecipes.ts` already imports `logCaughtError`), WP07 (`app/lib/format.ts` with `formatMoney`), WP11 (`VolumeMetricsSummary`: `useVolumeMetrics` returns `Record<number, VolumeMetricsSummary>`, which is why `buildRows.ts` types the volume argument as a `Pick`), WP13 (`app/auth/login/page.tsx` is a server component) and WP15 (CardRinkPromo rewrite, `deleteLoading` put to use, SortButton `aria-pressed`) have merged; the plan runs packages in order.
 - **Unblocks**: WP18 and WP19 (they refactor MarketView and the market math under blocking lint and on top of the `buildRows.ts` module and tests added here; WP19's "extract buildRows.ts" step is done by this package), WP20 (the new delete-route and `csrf.ts` tests guard its CSRF dedupe, F034), WP21. Every later PR is lint-gated.
 - **Suggested branch name**: `remediation/wp17-lint-tests-observability-ci-gate`
 - **Risk level**: low. Runtime changes are limited to component identity (same markup), a hook that derives instead of syncing state, and Sentry/CSP code paths that stay inert until the owner sets a DSN.
@@ -24,7 +24,7 @@ Read these files fully:
 - `frontend/eslint.config.mjs` (after WP04 to WP07 it has `ANON_CLIENT_FORBIDDEN_FILES`, `no-restricted-imports`, `no-restricted-syntax` and `no-restricted-properties` blocks)
 - `frontend/jest.config.js`, `.github/workflows/ci.yml`
 - `frontend/app/lib/logger.ts`, `frontend/app/lib/__tests__/logger.test.ts`
-- `frontend/sentry.client.config.ts`, `frontend/sentry.server.config.ts`, `frontend/sentry.edge.config.ts`, `frontend/next.config.ts`, `frontend/app/error.tsx`, `frontend/app/global-error.tsx`
+- `frontend/sentry.client.config.ts`, `frontend/sentry.server.config.ts`, `frontend/sentry.edge.config.ts`, `frontend/next.config.ts`, `frontend/app/error.tsx`, `frontend/app/global-error.tsx`, `frontend/.env.example`, `audits/HARDENING_FOLLOWUPS.md` (section 7, lines 181-184)
 - `frontend/proxy.ts`, `frontend/app/lib/cookieOptions.ts`, `frontend/app/lib/csrf.ts`, `frontend/app/lib/routeSupabase.ts`, `frontend/app/lib/rateLimit.ts`
 - `frontend/app/api/account/delete/route.ts`, `frontend/app/api/account/export/__tests__/route.test.ts` (WP01, the pattern to copy)
 - `frontend/app/components/Portfolio/cards/HoldingsTable.tsx`, `frontend/app/components/charts/AllocationChartImpl.tsx`, `frontend/app/components/charts/PortfolioChartImpl.tsx`, `frontend/app/components/PriceChart.tsx`
@@ -61,6 +61,15 @@ grep -n "continue-on-error" ../.github/workflows/ci.yml
 
 # 5. Coverage config: expect 'app/**/*' and '!app/**/page.tsx', no 'proxy.ts'.
 grep -n "collectCoverageFrom" -A6 jest.config.js
+
+# 6. Test-suite baseline. Write the "Test Suites: N passed" number down; the
+#    Verification section compares against it.
+pnpm test --ci 2>&1 | grep -E "^Tests?( Suites)?:" | tee /tmp/wp17-jest-before.txt
+
+# 7. Dependencies this spec relies on by name. Expect 1 hit each.
+grep -n "export function rejectIfNotAppRequest" app/lib/csrf.ts                 # WP05
+grep -n "export type VolumeMetricsSummary" app/components/ProductPrices/types/index.ts  # WP11
+grep -n 'from "../../../lib/logger"' app/components/BoxCalculator/hooks/useBoxRecipes.ts  # WP06
 ```
 
 Expected lint residue from step 2 if WP00 to WP16 landed as specified (at `a188fea` there were 16 errors and 17 warnings; the other packages remove most of them):
@@ -99,12 +108,13 @@ for (const page of ["index","prices","market","portfolio"]) {
 Assumptions to check:
 
 - `NEXT_PUBLIC_SENTRY_DSN` is unset in production (HARDENING_FOLLOWUPS.md section 7 lists it as "Optional"). Nothing in this PR changes runtime behaviour until it is set.
-- `next build` uses Turbopack (Next 16 default; `package.json` `"build": "next build"`). Under Turbopack `@sentry/nextjs` 10.69 ignores `sentry.client.config.ts` (see `node_modules/@sentry/nextjs/build/cjs/config/webpack.js:210-215`, "When using Turbopack ... will no longer work"), which is why step 5 moves it.
+- `next build` uses Turbopack (Next 16 default; `package.json` `"build": "next build"`). Under Turbopack `@sentry/nextjs` 10.69 ignores `sentry.client.config.ts` (see `node_modules/@sentry/nextjs/build/cjs/config/webpack.js:210-215`, "When using Turbopack ... will no longer work"), which is why step 5 moves it. That deprecation warning is printed only by the webpack code path, so a Turbopack build never shows it; do not use its absence as proof of anything.
+- Sentry's server SDK copies the incoming request's headers, including the raw `cookie` header, onto every event it captures (`@sentry/core` `integrations/requestdata.js`, `extractNormalizedRequestData`; with `sendDefaultPii` off it drops the header only for span attributes, not for events). The existing server `beforeSend` deletes `event.request.cookies` but not `event.request.headers.cookie`, and the edge config has no `beforeSend` at all. The Supabase session cookie (`sb-<ref>-auth-token`) carries the access and refresh tokens, so the moment this package turns on server reporting (`onRequestError`, the logger), a signed-in user's error would ship their tokens to Sentry. Step 5e closes that before anything can report.
 - `next/jest` maps `server-only` to an empty module (`node_modules/next/dist/build/jest/jest.js:191-192`), so tests may import `routeSupabase.ts` without mocking `server-only`.
 
 ## Implementation steps
 
-Order: steps 1 to 3 (logger, then call sites) before step 4 (the `no-console` rule would fail otherwise). Steps 5 and 6 (Sentry, CSP) are independent. Steps 7 to 10 clear the remaining lint. Steps 11 to 13 are small extractions that the tests need. Step 14 is coverage config. Step 15 flips CI only after `pnpm run lint` exits 0. Write the tests from the Tests section alongside the step they cover.
+Order: steps 1 to 3 (logger, then call sites) before step 4 (the `no-console` rule would fail otherwise). Steps 5 and 6 (Sentry, CSP) are independent of the lint work; inside step 5, do 5e (event scrubbing) in the same commit as 5a so no commit can report unscrubbed events. Steps 7 to 10 clear the remaining lint. Steps 11 to 13 are small extractions that the tests need. Step 14 is coverage config. Step 15 flips CI only after `pnpm run lint` exits 0. Write the tests from the Tests section alongside the step they cover.
 
 ### Step 1. Correction to the plan: how the logger reports to Sentry
 
@@ -131,9 +141,9 @@ Replace the whole file with:
  * imported lazily, so nothing is downloaded while no DSN is configured and a
  * page that never logs an error never loads it. The SDK is initialised by
  * instrumentation.ts (server, edge) and instrumentation-client.ts (browser);
- * before that runs, the capture calls are no-ops. The beforeSend hooks in
- * sentry.*.config.ts and instrumentation-client.ts strip emails, IPs,
- * cookies and any details/hint extras.
+ * before that runs, the capture calls are no-ops. Every runtime's beforeSend
+ * runs scrubSentryEvent (app/lib/sentryScrub.ts), which strips emails, IPs,
+ * cookies, the cookie/authorization headers and any details/hint extras.
  */
 
 type SentryModule = typeof import("@sentry/nextjs");
@@ -245,7 +255,7 @@ Re-run the grep from "Before you start" step 3 and convert every hit with this t
 Concrete edits for the known sites:
 
 - `app/api/account/delete/route.ts`: add `import { logSupabaseError } from "../../../lib/logger";` after the `cookieOptions` import; line 70 becomes `logSupabaseError("delete_my_account_failed", rpcError);`. Change nothing else in this route (WP20 dedupes its CSRF block).
-- `app/components/BoxCalculator/hooks/useBoxRecipes.ts`: `import { logCaughtError, logHttpFailure } from "../../../lib/logger";`; `console.error("recipe_request_failed", { status: res.status })` becomes `logHttpFailure("recipe_request_failed", res.status)`, and the same for `recipes_load_failed` and `recipe_delete_failed`.
+- `app/components/BoxCalculator/hooks/useBoxRecipes.ts`: WP06 already imports `{ logCaughtError } from "../../../lib/logger"`; change that one line to `import { logCaughtError, logHttpFailure } from "../../../lib/logger";` (do not add a second import of the same module); `console.error("recipe_request_failed", { status: res.status })` becomes `logHttpFailure("recipe_request_failed", res.status)`, and the same for `recipes_load_failed` and `recipe_delete_failed`.
 - `app/lib/supabase.ts` lines 13-21 become:
 
 ```ts
@@ -305,19 +315,27 @@ This clears `import/no-anonymous-default-export`. Keep `ANON_CLIENT_FORBIDDEN_FI
 
 ### Step 5. Sentry actually starts: `instrumentation.ts` and `instrumentation-client.ts`
 
-Correction to the plan: it lists only `instrumentation.ts`. The browser side needs `instrumentation-client.ts` too, because under Turbopack (the Next 16 default for `next build`) `@sentry/nextjs` no longer loads `sentry.client.config.ts`. Without this, the logger's browser reports and F128's CSP change would have nothing to serve.
+Corrections to the plan: it lists only `instrumentation.ts`. The browser side needs `instrumentation-client.ts` too, because under Turbopack (the Next 16 default for `next build`) `@sentry/nextjs` no longer loads `sentry.client.config.ts`. Without this, the logger's browser reports and F128's CSP change would have nothing to serve. Both files load the SDK only when a DSN is set, and step 5e makes every runtime scrub the session cookie header before this package lets anything report.
 
-5a. New file `frontend/instrumentation.ts`:
+5a. New file `frontend/instrumentation.ts`. It loads nothing from Sentry unless a DSN is set: a static `import * as Sentry from "@sentry/nextjs"` here (the snippet in Sentry's docs and in the F108 verifier note) would load the whole Node SDK, OpenTelemetry included, on every serverless cold start even with no DSN, which breaks the "inert until the owner sets a DSN" promise.
 
 ```ts
 /**
  * Next 16 calls register() once per server runtime at startup. It is the only
  * place the server and edge Sentry configs are loaded; without this file they
- * never run (review F108). Both configs are no-ops while no DSN is set.
+ * never run (review F108).
+ *
+ * Nothing from @sentry/nextjs is imported while no DSN is set, so a deployment
+ * without Sentry pays no cold-start cost for it.
  */
-import * as Sentry from "@sentry/nextjs";
+import type { Instrumentation } from "next";
+
+function sentryDsnConfigured(): boolean {
+  return Boolean(process.env.NEXT_PUBLIC_SENTRY_DSN || process.env.SENTRY_DSN);
+}
 
 export async function register() {
+  if (!sentryDsnConfigured()) return;
   if (process.env.NEXT_RUNTIME === "nodejs") {
     await import("./sentry.server.config");
   }
@@ -326,11 +344,23 @@ export async function register() {
   }
 }
 
-// Reports errors thrown by server components, route handlers and proxy.ts.
-export const onRequestError = Sentry.captureRequestError;
+// Reports errors thrown by server components, route handlers, server actions
+// and proxy.ts. register() has already loaded the SDK when a DSN is set, so
+// this import resolves from the module cache.
+export const onRequestError: Instrumentation.onRequestError = async (
+  error,
+  request,
+  context
+) => {
+  if (!sentryDsnConfigured()) return;
+  const Sentry = await import("@sentry/nextjs");
+  Sentry.captureRequestError(error, request, context);
+};
 ```
 
-5b. New file `frontend/instrumentation-client.ts`, carrying the options of `sentry.client.config.ts` unchanged, but loading the SDK lazily and only when a DSN was set at build time:
+`Instrumentation` is exported by `next` (`node_modules/next/dist/types.d.ts:19`); Next's request and context types are assignable to `captureRequestError`'s parameters (`node_modules/@sentry/nextjs/build/types/common/captureRequestError.d.ts`).
+
+5b. New file `frontend/instrumentation-client.ts`, carrying the options of `sentry.client.config.ts` unchanged except that `beforeSend` calls the shared scrubber from step 5e, and loading the SDK lazily and only when a DSN was set at build time:
 
 ```ts
 /**
@@ -339,12 +369,15 @@ export const onRequestError = Sentry.captureRequestError;
  * Turbopack (review F108).
  *
  * The SDK is imported only when NEXT_PUBLIC_SENTRY_DSN was set at build time,
- * so builds without a DSN ship none of it, and builds with one load it as a
- * separate chunk instead of growing every page's first-load JS.
+ * so visitors of a build without a DSN download none of it, and a build with
+ * one loads it as a separate chunk instead of growing every page's first-load
+ * JS. Errors thrown before that chunk arrives are not reported.
  *
- * PII scrubbing in beforeSend strips Supabase error `details`/`hint`, email
- * addresses, IPs and cookies.
+ * scrubSentryEvent strips Supabase error `details`/`hint`, email addresses,
+ * IPs, cookies and the cookie/authorization headers.
  */
+import { scrubSentryEvent } from "./app/lib/sentryScrub";
+
 type RouterTransitionHook = (href: string, navigationType: string) => void;
 
 let routerTransitionHook: RouterTransitionHook | null = null;
@@ -359,18 +392,11 @@ if (dsn) {
         enabled: true,
         environment: process.env.NODE_ENV,
         beforeSend(event) {
-          if (event.user) {
-            delete event.user.email;
-            delete event.user.ip_address;
-          }
-          if (event.request?.cookies) {
-            delete event.request.cookies;
-          }
-          // Drop any extra fields named details/hint (Supabase error shape).
-          if (event.extra) {
-            delete (event.extra as Record<string, unknown>).details;
-            delete (event.extra as Record<string, unknown>).hint;
-          }
+          scrubSentryEvent(event);
+          return event;
+        },
+        beforeSendTransaction(event) {
+          scrubSentryEvent(event);
           return event;
         },
       });
@@ -380,39 +406,118 @@ if (dsn) {
 }
 
 // Next calls this on every client-side navigation. It forwards to Sentry once
-// the SDK has loaded, and is a no-op before that or without a DSN.
+// the SDK has loaded, and is a no-op before that or without a DSN. The name
+// must appear in this file: withSentryConfig greps for it and prints an
+// "ACTION REQUIRED" warning at build time when it is missing.
 export function onRouterTransitionStart(href: string, navigationType: string) {
   routerTransitionHook?.(href, navigationType);
 }
 ```
 
-5c. Delete `frontend/sentry.client.config.ts` (`git rm`). Keep `sentry.server.config.ts` and `sentry.edge.config.ts` unchanged; `eslint.config.mjs` still ignores `sentry.*.config.ts`.
+5c. Delete `frontend/sentry.client.config.ts` (`git rm`). `eslint.config.mjs` still ignores `sentry.*.config.ts`; the two remaining config files change only as step 5e says.
 
-5d. `frontend/app/error.tsx:14`: change the comment to `// No-op until NEXT_PUBLIC_SENTRY_DSN is set (see instrumentation-client.ts).` Keep the static `@sentry/nextjs` import in `error.tsx` and `global-error.tsx` as they are (they already ship today; changing them is out of scope).
+5d. `frontend/app/error.tsx`: change the comment directly above `Sentry.captureException(error);` (`:14` at `a188fea`; WP15 restyled the file, so find it by text) to `// No-op until NEXT_PUBLIC_SENTRY_DSN is set (see instrumentation-client.ts).` Keep the static `@sentry/nextjs` import in `error.tsx` and `global-error.tsx` as they are (they already ship today; changing them is out of scope).
 
-### Step 6. `frontend/next.config.ts`: Sentry origin in `connect-src`, and the `'unsafe-inline'` rationale (F128)
+5e. One event scrubber for every runtime. New file `frontend/app/lib/sentryScrub.ts`:
+
+```ts
+/**
+ * beforeSend / beforeSendTransaction body shared by the browser, Node.js and
+ * edge Sentry configs (review F108).
+ *
+ * Sentry's server SDK copies the incoming request headers, including the raw
+ * `cookie` header, onto every event. The Supabase session cookie carries the
+ * access and refresh tokens, so the header must go, not just
+ * `event.request.cookies`. Supabase error `details`/`hint` extras can carry
+ * schema fragments (the reason logSupabaseError exists).
+ *
+ * Typed structurally so it accepts Sentry's ErrorEvent and TransactionEvent
+ * without importing Sentry types (the merged @sentry/nextjs type entry
+ * re-exports client and server copies of them).
+ */
+export interface SentryEventLike {
+  user?: { email?: unknown; ip_address?: unknown };
+  request?: { cookies?: unknown; headers?: Record<string, unknown> };
+  extra?: Record<string, unknown>;
+}
+
+const SENSITIVE_HEADER =
+  /^(cookie|authorization|proxy-authorization|forwarded|x-forwarded-for|x-real-ip|x-vercel-forwarded-for|x-vercel-proxied-for|cf-connecting-ip|true-client-ip)$/i;
+
+/** Mutates the event in place. */
+export function scrubSentryEvent(event: SentryEventLike): void {
+  if (event.user) {
+    delete event.user.email;
+    delete event.user.ip_address;
+  }
+  if (event.request) {
+    delete event.request.cookies;
+    const headers = event.request.headers;
+    if (headers) {
+      for (const name of Object.keys(headers)) {
+        if (SENSITIVE_HEADER.test(name)) delete headers[name];
+      }
+    }
+  }
+  if (event.extra) {
+    delete event.extra.details;
+    delete event.extra.hint;
+  }
+}
+```
+
+In `frontend/sentry.server.config.ts`: add `import { scrubSentryEvent } from "./app/lib/sentryScrub";` below the `@sentry/nextjs` import, replace the whole `beforeSend(event) { ... }` method (lines 12-26) with the same two methods as in 5b:
+
+```ts
+    beforeSend(event) {
+      scrubSentryEvent(event);
+      return event;
+    },
+    beforeSendTransaction(event) {
+      scrubSentryEvent(event);
+      return event;
+    },
+```
+
+In `frontend/sentry.edge.config.ts`: add the same import, and add the same two methods after `environment: process.env.NODE_ENV,` (the edge config has no `beforeSend` today). Change nothing else in either file (DSN resolution and sample rates stay).
+
+### Step 6. `frontend/next.config.ts`: Sentry origin in `connect-src`, CSP violation reports, and the `'unsafe-inline'` rationale (F128)
+
+Line numbers below are at `a188fea`. WP02 (images) and WP13 (`redirects()`) edited other parts of this file, so find each spot by the quoted text.
 
 6a. Above `const csp = [` add:
 
 ```ts
-// Browser Sentry events are POSTed to the ingest host named in the DSN. Allow
-// exactly that origin, and only when a DSN is configured: NEXT_PUBLIC_* values
-// are inlined at build time and these headers are fixed when the config is
-// loaded, so adding a DSN in Vercel needs a redeploy either way (review F128).
-function sentryIngestOrigin(dsn: string | undefined): string | null {
+// Sentry, derived from the DSN and only when one is configured (review F128).
+// NEXT_PUBLIC_* values are inlined at build time and these headers are fixed
+// when the config is loaded, so adding a DSN in Vercel needs a redeploy either
+// way. A DSN looks like https://<key>@o<org>.ingest.<region>.sentry.io/<project>.
+function parseSentryDsn(
+  dsn: string | undefined
+): { origin: string; key: string; projectId: string } | null {
   if (!dsn) return null;
   try {
     const url = new URL(dsn);
-    return url.protocol === "https:" ? url.origin : null;
+    if (url.protocol !== "https:") return null;
+    const projectId = url.pathname.split("/").filter(Boolean).pop() ?? "";
+    if (!url.username || !/^\d+$/.test(projectId)) return null;
+    return { origin: url.origin, key: url.username, projectId };
   } catch {
     return null;
   }
 }
 
-const sentryOrigin = sentryIngestOrigin(process.env.NEXT_PUBLIC_SENTRY_DSN);
+const sentryDsn = parseSentryDsn(process.env.NEXT_PUBLIC_SENTRY_DSN);
+// Browser events are POSTed to the DSN's ingest host: allow exactly that origin.
+const sentryOrigin = sentryDsn?.origin ?? null;
+// CSP violation reports go to the project's security endpoint. Report
+// submissions are not governed by connect-src.
+const cspReportUrl = sentryDsn
+  ? `${sentryDsn.origin}/api/${sentryDsn.projectId}/security/?sentry_key=${sentryDsn.key}`
+  : null;
 ```
 
-6b. Replace the `connect-src` entry (line 25) with:
+6b. Replace the `connect-src` entry (`"connect-src 'self' https://*.supabase.co https://challenges.cloudflare.com",`, line 25) with:
 
 ```ts
   `connect-src 'self' https://*.supabase.co https://challenges.cloudflare.com${
@@ -420,7 +525,25 @@ const sentryOrigin = sentryIngestOrigin(process.env.NEXT_PUBLIC_SENTRY_DSN);
   }`,
 ```
 
-A DSN looks like `https://<key>@o<org>.ingest.<region>.sentry.io/<project>`; `url.origin` drops the key and path, giving the org-specific host, not a wildcard.
+`url.origin` drops the key and the path, giving the org-specific host, not a wildcard.
+
+Then make the enforced policy report its violations (F128 verifiers: report from the enforced CSP, never from a strict Report-Only policy). After the last entry of the array (`"upgrade-insecure-requests",`) and before `].join("; ");`, add:
+
+```ts
+  // Legacy report-uri for browsers without the Reporting API, report-to for
+  // the rest (its endpoint is named in the Reporting-Endpoints header below).
+  ...(cspReportUrl ? [`report-uri ${cspReportUrl}`, "report-to csp-endpoint"] : []),
+```
+
+and in `securityHeaders`, directly after the `{ key: "Content-Security-Policy", value: csp },` line, add:
+
+```ts
+  ...(cspReportUrl
+    ? [{ key: "Reporting-Endpoints", value: `csp-endpoint="${cspReportUrl}"` }]
+    : []),
+```
+
+Without a DSN the CSP string and the header list are byte-identical to today.
 
 6c. Insert this comment directly above the `script-src` template literal (line 15), after the existing dev-allowance comment:
 
@@ -442,7 +565,7 @@ A DSN looks like `https://<key>@o<org>.ingest.<region>.sentry.io/<project>`; `ur
   // /((?!_next/static|_next/image|favicon.ico).*).
 ```
 
-6d. Docs. In `audits/HARDENING_FOLLOWUPS.md` section 7, replace the bullet starting `- **Optional**: create a Sentry project` with:
+6d. Docs. In `audits/HARDENING_FOLLOWUPS.md` section 7, replace the whole four-line bullet that starts `- **Optional**: create a Sentry project` and ends `set.` (lines 181-184) with:
 
 ```markdown
 - **Optional**: create a Sentry project, add `NEXT_PUBLIC_SENTRY_DSN`
@@ -450,9 +573,13 @@ A DSN looks like `https://<key>@o<org>.ingest.<region>.sentry.io/<project>`; `ur
   if you want source-map upload), then redeploy. Since WP17 the DSN
   switches on server, edge and browser reporting (instrumentation.ts,
   instrumentation-client.ts), the logger's error helpers report to Sentry,
-  and next.config.ts adds the DSN's ingest origin to CSP `connect-src`.
-  All of it is inert until the DSN is set, and a DSN added later only
-  takes effect after a redeploy (it is read at build time).
+  and next.config.ts adds the DSN's ingest origin to CSP `connect-src`
+  and sends CSP violation reports to the project's security endpoint.
+  Every runtime scrubs cookies, auth/IP headers, emails and Supabase
+  `details`/`hint` before sending (app/lib/sentryScrub.ts); keep Sentry's
+  server-side Data Scrubbing on as well. All of it is inert until the DSN
+  is set, and a DSN added later only takes effect after a redeploy (it is
+  read at build time).
 ```
 
 In `frontend/.env.example`, change the Sentry comment line to `# Sentry: DSN is safe to expose; the auth token is build-only and secret. Redeploy after changing the DSN (read at build time).`
@@ -697,7 +824,7 @@ Add `import { DEFAULT_EXCHANGE_RATE } from "../../../lib/marketData";` (it is `1
 
 ### Step 10. Remaining warnings, and fallbacks for leftovers
 
-10a. `app/lib/validation.ts`: delete the line `// eslint-disable-next-line no-control-regex` above `stripControlChars`'s `return` (`:63`). `no-control-regex` is not enabled by `eslint-config-next`, so the directive is unused.
+10a. `app/lib/validation.ts`: if lint still reports the unused directive, delete the line `// eslint-disable-next-line no-control-regex` above `stripControlChars`'s `return` (`:63` at `a188fea`; WP02 and WP05 edited this file). `no-control-regex` is not enabled by `eslint-config-next`, so the directive is unused.
 
 10b. `app/auth/signup/page.tsx`: if lint still reports `'router' is assigned a value but never used`, delete `const router = useRouter();` (`:42`) and the `useRouter` import (`:4`).
 
@@ -726,7 +853,7 @@ const [dismissedNow, setDismissedNow] = useState(false);
 const bannerDismissed = variant === "banner" && (dismissedNow || storedDismissed);
 ```
 
-  and in `handleDismissBanner` call `setDismissedNow(true)` instead of `setBannerDismissed(true)`.
+  Add `useSyncExternalStore` to the file's `react` import and drop `useEffect` from it if nothing else uses it. In `handleDismissBanner` call `setDismissedNow(true)` instead of `setBannerDismissed(true)`; the existing `if (bannerDismissed) return null;` in the banner branch keeps working with the new constant.
 - `PortfolioDashboard.tsx` `deleteLoading` unused (WP15 not merged): change the destructure to `const [, setDeleteLoading] = useState...`.
 - Any other new error from a file added by WP10 to WP16: fix it minimally with the same patterns (derive during render, set state only in promise callbacks or event handlers, module-scope components). Never add `eslint-disable` for `react-hooks/*` rules.
 
@@ -796,6 +923,16 @@ export type ReturnWindowLabel = (typeof RETURN_WINDOWS)[number]["label"];
 
 export type ReturnMap = Record<ReturnWindowLabel, number | null>;
 
+/**
+ * The only volume fields a row reads. Equal to WP11's VolumeMetricsSummary
+ * (what useVolumeMetrics returns after WP11); full ProductVolumeMetrics rows
+ * satisfy it too.
+ */
+export type RowVolumeMetrics = Pick<
+  ProductVolumeMetrics,
+  "units_sold_30d" | "units_sold_prior_30d"
+>;
+
 export function getReleaseMs(releaseDate?: string | null): number | null {
   // body moved verbatim from MarketView.tsx
 }
@@ -819,7 +956,7 @@ export interface MarketRow {
 export function buildMarketRow(
   product: Product,
   history: PriceHistoryEntry[] | undefined,
-  volume: ProductVolumeMetrics | undefined,
+  volume: RowVolumeMetrics | undefined,
   convertPrice: (usdPrice: number) => number,
   todayUtcMs: number
 ): MarketRow {
@@ -833,7 +970,7 @@ export function buildMarketRow(
 export function buildMarketRows(
   products: readonly Product[],
   priceHistory: Readonly<Record<number, PriceHistoryEntry[]>>,
-  volumeMetrics: Readonly<Record<number, ProductVolumeMetrics>>,
+  volumeMetrics: Readonly<Record<number, RowVolumeMetrics>>,
   convertPrice: (usdPrice: number) => number,
   todayUtcMs: number
 ): MarketRow[] {
@@ -932,13 +1069,14 @@ Do not rename the job (`Frontend (lint + typecheck + tests)`): branch protection
 
 - **Do not pass Recharts content as an inline function** (`content={(p) => <Tip {...p} />}`). Recharts calls `React.createElement(content, props)` for functions, so a new arrow each render is a new component type and remounts exactly like the bug being fixed. Pass an element of a module-scope component.
 - **Do not add `eslint-disable` comments for `react-hooks/static-components`, `set-state-in-effect` or `preserve-manual-memoization`**, and do not downgrade those rules in `eslint.config.mjs`. Fix the code.
-- **Do not statically import `@sentry/nextjs` in `logger.ts` or `instrumentation-client.ts`** (F108 verifier correction 1). The logger sits on the first-load path of `/prices` and `/portfolio`; a static import ships the SDK to every visitor even with no DSN.
+- **Do not statically import `@sentry/nextjs` in `logger.ts`, `instrumentation-client.ts` or `instrumentation.ts`** (F108 verifier correction 1). The logger sits on the first-load path of `/prices` and `/portfolio`; a static import ships the SDK to every visitor even with no DSN. In `instrumentation.ts` it would load the Node SDK on every cold start. `app/lib/sentryScrub.ts` must not import Sentry either (it is statically imported by `instrumentation-client.ts`).
+- **Do not keep the old `beforeSend` bodies that delete only `event.request.cookies`.** Sentry's server SDK also copies the raw `cookie` header into `event.request.headers`, and that header holds the Supabase access and refresh tokens. Every runtime must call `scrubSentryEvent` from both `beforeSend` and `beforeSendTransaction`.
 - **Do not call `captureException` with the sanitized plain object** from `logSupabaseError` (F108 verifier correction 2). It creates stackless "Non-Error exception captured" events. Use `captureMessage` with `extra`.
 - **Do not also enable Sentry's `captureConsoleIntegration`.** The logger already reports; both together double every event.
 - **Do not keep `sentry.client.config.ts` next to `instrumentation-client.ts`.** Under webpack both would initialise the SDK; under Turbopack the old file is dead code that misleads readers.
 - **Do not add a wildcard (`https://*.ingest.sentry.io`) or an unconditional Sentry host to `connect-src`** (F128 verifier). Derive the exact origin from the DSN, and only when one is set.
-- **Do not add nonces, hashes, `'strict-dynamic'` or a Report-Only strict policy** (F128 verifiers). With static/ISR pages there is no per-response nonce; any nonce or hash makes CSP3 browsers ignore `'unsafe-inline'` and blocks Next's inline flight scripts; a strict Report-Only policy would report every page load as a violation.
-- **Do not add `tunnelRoute` to `withSentryConfig` in this PR.** The plan chose the `connect-src` route; a tunnel adds a same-origin function route and changes the Sentry build config, which is a separate decision for the owner.
+- **Do not add nonces, hashes, `'strict-dynamic'` or a `Content-Security-Policy-Report-Only` header** (F128 verifiers). Reporting goes on the enforced policy (step 6b), only when a DSN is set. With static/ISR pages there is no per-response nonce; any nonce or hash makes CSP3 browsers ignore `'unsafe-inline'` and blocks Next's inline flight scripts; a strict Report-Only policy would report every page load as a violation.
+- **Do not add `tunnelRoute` to `withSentryConfig` in this PR.** The F128 verifiers preferred a tunnel, but they also accepted the org-specific origin in `connect-src`, and the plan chose that route: a tunnel adds a same-origin function route (invocations billed per event) and changes the Sentry build config, which is a separate decision for the owner. Mention it in the PR body as the alternative.
 - **Do not make warnings fail CI** (`--max-warnings=0`). `no-console` is deliberately `warn` for `scripts/`, and the `<img>` warnings are accepted.
 - **Do not convert the `<img>` thumbnails to `next/image` or disable `@next/next/no-img-element`.** They are 40 to 48 px product thumbnails and WP02 disabled the image optimizer (`images.unoptimized: true`), so `next/image` would add markup and nothing else; changing them is out of scope.
 - **Do not remove the `"@typescript-eslint/no-explicit-any": "off"` override** (F037 suggested it). Turning it on adds dozens of new errors unrelated to this package.
@@ -947,7 +1085,7 @@ Do not rename the job (`Frontend (lint + typecheck + tests)`): branch protection
 - **Do not delete the whole `page.tsx` coverage exclusion** (F050 verifier correction 7). Exclude only server pages; there is no `coverageThreshold`, so this cannot break CI.
 - **Route, proxy and next.config tests need `/** @jest-environment node */` as their first line** (F050 verifier correction 3): `next/server` throws `ReferenceError: Request is not defined` under jsdom.
 - **`jest.mock` factories may only reference variables whose names start with `mock`**, and should read them lazily (`(...a) => mockFn(...a)`), because the factory is hoisted above the `const` declarations.
-- **Do not change `useCurrencyConversion`'s return shape or `formatPrice`.** Five components use the hook, and WP20 later replaces it with a context.
+- **Do not change `useCurrencyConversion`'s return shape or `formatPrice`.** Four components use the hook (`BoxCalculator`, `ProductPrices/index.tsx`, `dashboard/RecentlyReleased`, `MarketView`), and WP20 later replaces it with a context.
 - **Do not move or rename MarketView's sort code, columns or JSX.** Only the per-row derivation moves; the rest is WP19.
 
 ## Tests
@@ -1270,7 +1408,8 @@ Cases:
 - `isAllowedOrigin`: `null` false; `"https://pokefin.ca"` and `"https://www.pokefin.ca"` true; the `NEXT_PUBLIC_SITE_URL` value (`"https://preview.example"`) true only when loaded with it; `"https://evil.example"` and `"https://pokefin.ca.evil.example"` false; `"http://localhost:3000"` true under `NODE_ENV=test` and false after `Object.assign(process.env, { NODE_ENV: "production" })`.
 - `rejectIfCsrfFails`: no `x-pokefin-request` gives 403 with body `{ error: "Forbidden" }`; `x-pokefin-request: "true"` gives 403; correct header without `origin` gives 403; correct header plus `origin: https://pokefin.ca` returns `null`.
 - `rejectIfBodyTooLarge(req, 1024)`: `content-length: 2048` gives 413 `{ error: "Payload too large" }`; `1024`, a missing header and `"abc"` return `null`.
-- If `rejectIfNotAppRequest` is exported (WP05): missing or wrong header gives 403; correct header with no `origin` returns `null`.
+- `rejectIfNotAppRequest` (WP05 step 6a): missing header and `x-pokefin-request: "true"` give 403 `{ error: "Forbidden" }`; the correct header with no `origin` returns `null` (it deliberately skips the Origin check, for same-origin GETs).
+- Restore `NEXT_PUBLIC_SITE_URL` to its original value in `afterAll`.
 
 ### 6. `frontend/app/api/account/delete/__tests__/route.test.ts` (new)
 
@@ -1301,9 +1440,11 @@ jest.mock("@supabase/ssr", () => ({
     rpc: (...a: unknown[]) => mockRpc(...a),
   }),
 }));
+// Keep the real helpers (csrf.ts or routeSupabase.ts may import others after
+// WP20) and spy only on the one this route calls.
 jest.mock("../../../../lib/logger", () => ({
+  ...jest.requireActual("../../../../lib/logger"),
   logSupabaseError: (...a: unknown[]) => mockLogSupabaseError(...a),
-  logCaughtError: jest.fn(),
 }));
 
 import { DELETE } from "../route";
@@ -1501,12 +1642,15 @@ Mock `../../../lib/exchangeRate` (`fetchLatestExchangeRateClient: (...a) => mock
 - `useCurrencyConversion(1.4)`: `exchangeRate 1.4`, `exchangeRateLoading false`, `mockFetchRate` never called.
 - `useCurrencyConversion()`: first render `exchangeRate 1.36` and `exchangeRateLoading true`; after `mockFetchRate` resolves `{ rate: 1.5, date: null }`, `exchangeRate 1.5` and `exchangeRateLoading false`.
 - Rejection: `exchangeRate 1.36`, `exchangeRateLoading false`, `mockLogCaughtError` called with `"exchange_rate_load_failed"`.
-- `convertPrice(10)` is `14` with rate 1.4 in CAD; after `act(() => result.current.setSelectedCurrency("USD"))` it is `10`.
+- `convertPrice(10)` is close to `14` (`toBeCloseTo`) with rate 1.4 in CAD; after `act(() => result.current.setSelectedCurrency("USD"))` it is `10`.
+- For the "first render" case make `mockFetchRate` return a promise you resolve by hand (`let resolve!: (v: { rate: number; date: null }) => void; mockFetchRate.mockReturnValue(new Promise((r) => { resolve = r; }))`), assert, then `await act(async () => resolve({ rate: 1.5, date: null }))`.
 
 ### 13. `frontend/app/lib/__tests__/instrumentation.test.ts` (new)
 
 ```ts
 /** @jest-environment node */
+import type { Instrumentation } from "next";
+
 const mockServerConfigLoaded = jest.fn();
 const mockEdgeConfigLoaded = jest.fn();
 const mockCaptureRequestError = jest.fn();
@@ -1523,38 +1667,70 @@ jest.mock("@sentry/nextjs", () => ({
   captureRequestError: (...a: unknown[]) => mockCaptureRequestError(...a),
 }));
 
-const savedRuntime = process.env.NEXT_RUNTIME;
+const ENV_KEYS = ["NEXT_RUNTIME", "NEXT_PUBLIC_SENTRY_DSN", "SENTRY_DSN"] as const;
+const savedEnv = Object.fromEntries(ENV_KEYS.map((k) => [k, process.env[k]]));
+const DSN = "https://k@o1.ingest.us.sentry.io/2";
+
+// Fresh module per case: the sentry.*.config mocks count how often they load.
+function load() {
+  return import("../../../instrumentation");
+}
+
 beforeEach(() => {
   jest.resetModules();
-  mockServerConfigLoaded.mockClear();
-  mockEdgeConfigLoaded.mockClear();
+  jest.clearAllMocks();
+  for (const k of ENV_KEYS) delete process.env[k];
 });
-afterEach(() => {
-  if (savedRuntime === undefined) delete process.env.NEXT_RUNTIME;
-  else process.env.NEXT_RUNTIME = savedRuntime;
+afterAll(() => {
+  for (const k of ENV_KEYS) {
+    if (savedEnv[k] === undefined) delete process.env[k];
+    else process.env[k] = savedEnv[k];
+  }
+});
+
+it("loads no Sentry config while no DSN is set", async () => {
+  process.env.NEXT_RUNTIME = "nodejs";
+  await (await load()).register();
+  expect(mockServerConfigLoaded).not.toHaveBeenCalled();
+  expect(mockEdgeConfigLoaded).not.toHaveBeenCalled();
 });
 
 it("loads the server Sentry config in the Node.js runtime", async () => {
   process.env.NEXT_RUNTIME = "nodejs";
-  const { register } = await import("../../../instrumentation");
-  await register();
+  process.env.SENTRY_DSN = DSN; // a server-only DSN is enough
+  await (await load()).register();
   expect(mockServerConfigLoaded).toHaveBeenCalledTimes(1);
   expect(mockEdgeConfigLoaded).not.toHaveBeenCalled();
 });
 
 it("loads the edge Sentry config in the edge runtime", async () => {
   process.env.NEXT_RUNTIME = "edge";
-  const { register } = await import("../../../instrumentation");
-  await register();
+  process.env.NEXT_PUBLIC_SENTRY_DSN = DSN;
+  await (await load()).register();
   expect(mockEdgeConfigLoaded).toHaveBeenCalledTimes(1);
   expect(mockServerConfigLoaded).not.toHaveBeenCalled();
 });
 
-it("forwards request errors to Sentry", async () => {
-  const { onRequestError } = await import("../../../instrumentation");
+it("forwards request errors to Sentry only when a DSN is set", async () => {
+  const { onRequestError } = await load();
   const err = new Error("boom");
-  onRequestError(err, {} as never, {} as never);
-  expect(mockCaptureRequestError).toHaveBeenCalledWith(err, {}, {});
+  const request: Parameters<Instrumentation.onRequestError>[1] = {
+    path: "/api/x",
+    method: "GET",
+    headers: {},
+  };
+  const context: Parameters<Instrumentation.onRequestError>[2] = {
+    routerKind: "App Router",
+    routePath: "/api/x",
+    routeType: "route",
+    revalidateReason: undefined,
+  };
+  await onRequestError(err, request, context);
+  expect(mockCaptureRequestError).not.toHaveBeenCalled();
+
+  process.env.SENTRY_DSN = DSN;
+  await onRequestError(err, request, context);
+  expect(mockCaptureRequestError).toHaveBeenCalledWith(err, request, context);
 });
 ```
 
@@ -1566,7 +1742,9 @@ import type { NextConfig } from "next";
 
 jest.mock("@sentry/nextjs", () => ({ withSentryConfig: (config: unknown) => config }));
 
-async function cspFor(dsn: string | undefined): Promise<string> {
+type HeaderList = Array<{ key: string; value: string }>;
+
+async function headersFor(dsn: string | undefined): Promise<HeaderList> {
   if (dsn === undefined) delete process.env.NEXT_PUBLIC_SENTRY_DSN;
   else process.env.NEXT_PUBLIC_SENTRY_DSN = dsn;
   let config: NextConfig | undefined;
@@ -1574,33 +1752,56 @@ async function cspFor(dsn: string | undefined): Promise<string> {
     config = (await import("../../../next.config")).default;
   });
   const rules = await config!.headers!();
-  const rule = rules.find((r) => r.source === "/:path*")!;
-  return rule.headers.find((h) => h.key === "Content-Security-Policy")!.value;
+  return rules.find((r) => r.source === "/:path*")!.headers;
+}
+async function cspFor(dsn: string | undefined): Promise<string> {
+  const headers = await headersFor(dsn);
+  return headers.find((h) => h.key === "Content-Security-Policy")!.value;
 }
 const directive = (csp: string, name: string) =>
   csp.split("; ").find((d) => d.startsWith(`${name} `)) ?? "";
 
-afterEach(() => delete process.env.NEXT_PUBLIC_SENTRY_DSN);
+const SAVED_DSN = process.env.NEXT_PUBLIC_SENTRY_DSN;
+afterEach(() => {
+  if (SAVED_DSN === undefined) delete process.env.NEXT_PUBLIC_SENTRY_DSN;
+  else process.env.NEXT_PUBLIC_SENTRY_DSN = SAVED_DSN;
+});
 
-it("has no Sentry origin without a DSN", async () => {
-  expect(directive(await cspFor(undefined), "connect-src")).toBe(
+const DSN = "https://abc123@o4507.ingest.us.sentry.io/4508";
+const REPORT_URL = "https://o4507.ingest.us.sentry.io/api/4508/security/?sentry_key=abc123";
+
+it("has no Sentry origin and no reporting without a DSN", async () => {
+  const csp = await cspFor(undefined);
+  expect(directive(csp, "connect-src")).toBe(
     "connect-src 'self' https://*.supabase.co https://challenges.cloudflare.com"
   );
+  expect(csp).not.toMatch(/report-uri|report-to/);
+  expect((await headersFor(undefined)).some((h) => h.key === "Reporting-Endpoints")).toBe(false);
 });
 
 it("allows exactly the DSN's ingest origin", async () => {
-  const connect = directive(
-    await cspFor("https://abc123@o4507.ingest.us.sentry.io/4508"),
-    "connect-src"
-  );
+  const connect = directive(await cspFor(DSN), "connect-src");
   expect(connect.endsWith(" https://o4507.ingest.us.sentry.io")).toBe(true);
   expect(connect).not.toContain("*.ingest");
   expect(connect).not.toContain("abc123");
 });
 
-it("ignores a malformed or non-https DSN", async () => {
-  for (const dsn of ["not a url", "http://k@o1.ingest.sentry.io/2", ""]) {
-    expect(directive(await cspFor(dsn), "connect-src")).not.toContain("sentry");
+it("reports violations of the enforced policy to the project's security endpoint", async () => {
+  const csp = await cspFor(DSN);
+  expect(directive(csp, "report-uri")).toBe(`report-uri ${REPORT_URL}`);
+  expect(directive(csp, "report-to")).toBe("report-to csp-endpoint");
+  expect(await headersFor(DSN)).toContainEqual({
+    key: "Reporting-Endpoints",
+    value: `csp-endpoint="${REPORT_URL}"`,
+  });
+  expect((await headersFor(DSN)).some((h) => h.key === "Content-Security-Policy-Report-Only")).toBe(false);
+});
+
+it("ignores a malformed, non-https or empty DSN", async () => {
+  for (const dsn of ["not a url", "http://k@o1.ingest.sentry.io/2", "https://o1.ingest.sentry.io/2", ""]) {
+    const csp = await cspFor(dsn);
+    expect(directive(csp, "connect-src")).not.toContain("sentry");
+    expect(csp).not.toMatch(/report-uri|report-to/);
   }
 });
 
@@ -1608,6 +1809,89 @@ it("keeps script-src on 'unsafe-inline' without nonces or hashes", async () => {
   const script = directive(await cspFor(undefined), "script-src");
   expect(script).toContain("'unsafe-inline'");
   expect(script).not.toMatch(/'nonce-|'sha(256|384|512)-|strict-dynamic/);
+});
+```
+
+### 15. `frontend/app/lib/__tests__/sentryScrub.test.ts` (new)
+
+```ts
+/** @jest-environment node */
+import { scrubSentryEvent, type SentryEventLike } from "../sentryScrub";
+
+const mockInit = jest.fn();
+jest.mock("@sentry/nextjs", () => ({ init: (...a: unknown[]) => mockInit(...a) }));
+
+function dirtyEvent(): SentryEventLike & { message: string } {
+  return {
+    message: "holding_insert_failed",
+    user: { email: "a@b.c", ip_address: "203.0.113.5" },
+    request: {
+      cookies: { "sb-ref-auth-token": "secret" },
+      headers: {
+        cookie: "sb-ref-auth-token=secret",
+        Authorization: "Bearer secret",
+        "x-forwarded-for": "203.0.113.5",
+        "user-agent": "jest",
+      },
+    },
+    extra: { code: "23505", details: "schema fragment", hint: "use ON CONFLICT" },
+  };
+}
+
+describe("scrubSentryEvent", () => {
+  it("removes identity, cookies, auth and IP headers and Supabase details/hint", () => {
+    const event = dirtyEvent();
+    scrubSentryEvent(event);
+    expect(event).toEqual({
+      message: "holding_insert_failed",
+      user: {},
+      request: { headers: { "user-agent": "jest" } },
+      extra: { code: "23505" },
+    });
+  });
+
+  it("accepts an event without user, request or extra", () => {
+    const event: SentryEventLike = {};
+    expect(() => scrubSentryEvent(event)).not.toThrow();
+    expect(event).toEqual({});
+  });
+});
+
+describe("server and edge configs install the scrubber", () => {
+  const saved = { pub: process.env.NEXT_PUBLIC_SENTRY_DSN, srv: process.env.SENTRY_DSN };
+  beforeEach(() => {
+    mockInit.mockClear();
+    delete process.env.NEXT_PUBLIC_SENTRY_DSN;
+    process.env.SENTRY_DSN = "https://k@o1.ingest.us.sentry.io/2";
+  });
+  afterAll(() => {
+    if (saved.pub === undefined) delete process.env.NEXT_PUBLIC_SENTRY_DSN;
+    else process.env.NEXT_PUBLIC_SENTRY_DSN = saved.pub;
+    if (saved.srv === undefined) delete process.env.SENTRY_DSN;
+    else process.env.SENTRY_DSN = saved.srv;
+  });
+
+  type Hook = (event: SentryEventLike) => SentryEventLike | null;
+  async function initOptions(load: () => Promise<unknown>) {
+    await jest.isolateModulesAsync(async () => {
+      await load();
+    });
+    expect(mockInit).toHaveBeenCalledTimes(1);
+    return mockInit.mock.calls[0][0] as { beforeSend: Hook; beforeSendTransaction: Hook };
+  }
+
+  it.each([
+    ["server", () => import("../../../sentry.server.config")],
+    ["edge", () => import("../../../sentry.edge.config")],
+  ])("%s config scrubs errors and transactions", async (_name, load) => {
+    const options = await initOptions(load);
+    for (const hook of [options.beforeSend, options.beforeSendTransaction]) {
+      const out = hook(dirtyEvent());
+      expect(out?.request?.headers).toEqual({ "user-agent": "jest" });
+      expect(out?.request?.cookies).toBeUndefined();
+      expect(out?.extra).toEqual({ code: "23505" });
+    }
+  });
 });
 ```
 
@@ -1641,25 +1925,37 @@ pnpm test --ci app/lib/__tests__/logger.test.ts app/lib/__tests__/proxy.test.ts 
   app/components/Portfolio/__tests__/HoldingsTable.test.tsx \
   app/components/charts/__tests__/chartTooltips.test.tsx \
   app/components/ProductPrices/__tests__/useCurrencyConversion.test.tsx \
-  app/lib/__tests__/instrumentation.test.ts app/lib/__tests__/nextConfig.csp.test.ts
+  app/lib/__tests__/instrumentation.test.ts app/lib/__tests__/nextConfig.csp.test.ts \
+  app/lib/__tests__/sentryScrub.test.ts
 # expect: all suites pass
 
-pnpm test --ci
-# expect: all suites pass; suite count = baseline + 11 new files
+pnpm test --ci 2>&1 | grep -E "^Tests?( Suites)?:"
+# expect: all suites pass; "Test Suites" count = the number in /tmp/wp17-jest-before.txt + 12
+# (12 new files: proxy, cookieOptions, routeSupabase, csrf, delete route, nav, buildRows,
+# chartTooltips, useCurrencyConversion, instrumentation, nextConfig.csp, sentryScrub).
 
 # Coverage config: proxy.ts included, server pages excluded, client pages included.
 pnpm exec jest --showConfig | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const j=JSON.parse(s);console.log((j.globalConfig.collectCoverageFrom||j.configs[0].collectCoverageFrom).join("\n"))})'
-# expect: 'proxy.ts', '!app/page.tsx', '!app/prices/page.tsx', '!app/product/\[id\]/page.tsx' and the other
-# server pages; no '!app/**/page.tsx'; no entry for app/auth/login/page.tsx or other "use client" pages.
+# expect: 'proxy.ts'; no '!app/**/page.tsx'; '!app/page.tsx', '!app/prices/page.tsx', '!app/product/\[id\]/page.tsx'
+# and one '!' entry for every other server page. Cross-check against the client pages:
+grep -rlE "^\s*[\"']use client[\"']" app --include=page.tsx
+# expect: none of the paths printed here appears as a '!' entry above (at the time of writing:
+# app/account, app/portfolio and the auth pages other than login; WP11 made compare/page.tsx
+# and WP13 made auth/login/page.tsx server components, so those two ARE excluded).
 pnpm test:coverage --ci --coverageReporters=text 2>/dev/null | grep -E "proxy.ts|csrf.ts|cookieOptions.ts|buildRows.ts|nav.ts"
 # expect: a row for each; csrf.ts, cookieOptions.ts, buildRows.ts and nav.ts at or near 100% lines.
 
-pnpm build:stub
-# expect: build succeeds; no "[@sentry/nextjs] DEPRECATION WARNING ... sentry.client.config" line
+pnpm build:stub 2>&1 | tee /tmp/wp17-build.log | tail -40
+grep -c "\[@sentry/nextjs\] ACTION REQUIRED" /tmp/wp17-build.log
+# expect: build succeeds; the grep prints 0 (withSentryConfig found onRouterTransitionStart
+# in instrumentation-client.ts). The old client-config deprecation warning is webpack-only
+# and never appears under Turbopack, so its absence proves nothing.
 ls .next/server | grep -i instrumentation
 # expect: at least one instrumentation*.js file
 grep -o "connect-src[^;]*" .next/routes-manifest.json | sort -u
 # expect: connect-src 'self' https://*.supabase.co https://challenges.cloudflare.com   (no sentry, stub build has no DSN)
+grep -c "report-uri\|Reporting-Endpoints" .next/routes-manifest.json
+# expect: 0 (no DSN, no reporting)
 
 # Bundle: rerun the measurement snippet from "Before you start" and compare.
 # expect: every page within 1 kB gzip of /tmp/wp17-bundle-before.txt (Sentry is not in first-load JS).
@@ -1683,6 +1979,7 @@ Manual checks (local, `pnpm dev` with the stub or real env):
 2. `/market`: expand a row, hover the chart, switch currency. The tooltip shows the same text as before this PR, and on the 7D range the dots render.
 3. `/portfolio` allocation and history charts: hover shows the same tooltip content as before.
 4. Browser devtools Network with no DSN configured: no request to any `sentry.io` host and no Sentry chunk loaded on any page.
+5. With a fake DSN: `NEXT_PUBLIC_SENTRY_DSN=https://abc123@o1.ingest.us.sentry.io/2 pnpm dev` (plus your usual Supabase env), then `curl -sI http://localhost:3000/ | grep -io "connect-src[^;]*"` shows `https://o1.ingest.us.sentry.io` at the end, and the same headers contain `report-uri https://o1.ingest.us.sentry.io/api/2/security/?sentry_key=abc123` and `Reporting-Endpoints`. In the browser console run `setTimeout(() => { throw new Error("wp17 probe") })`: the Network tab shows a POST to `o1.ingest.us.sentry.io/api/2/envelope/` (Sentry rejects the fake key; that is fine) and the console shows no "Refused to connect" CSP error. Stop the server; do not commit any env file.
 
 ## Owner actions
 
@@ -1693,8 +1990,9 @@ Optional, to turn on error reporting (the reason for F108 and F128):
 1. Create a Sentry project (platform: Next.js). Copy its DSN (`https://<key>@o<org>.ingest.<region>.sentry.io/<project>`).
 2. Vercel, project settings, Environment Variables: add `NEXT_PUBLIC_SENTRY_DSN` with that value for Production and Preview. Optionally add `SENTRY_AUTH_TOKEN`, `SENTRY_ORG`, `SENTRY_PROJECT` for source-map upload.
 3. Redeploy (the DSN and the CSP are read at build time; a variable change alone does nothing).
-4. Confirm: `curl -sI https://pokefin.ca | grep -i content-security-policy` shows your `https://o<org>.ingest.<region>.sentry.io` origin inside `connect-src`. Open the site, open devtools console, run `setTimeout(() => { throw new Error("sentry smoke test") })`. In the Network tab a POST to `.../api/<project>/envelope/` returns 200 with no CSP violation in the console, and the Sentry project shows a "sentry smoke test" issue within a minute.
-5. Branch protection needs no change: lint is a step inside the already-required "Frontend (lint + typecheck + tests)" job. Confirm under GitHub, Settings, Branches (or Rules), rule for `master`, that this job is still listed as required.
+4. Confirm: `curl -sI https://pokefin.ca | grep -i content-security-policy` shows your `https://o<org>.ingest.<region>.sentry.io` origin at the end of `connect-src`, plus `report-uri https://o<org>.ingest.<region>.sentry.io/api/<project>/security/?sentry_key=<key>` and `report-to csp-endpoint`; `curl -sI https://pokefin.ca | grep -i reporting-endpoints` prints the same URL. Open the site, open devtools console, run `setTimeout(() => { throw new Error("sentry smoke test") })`. In the Network tab a POST to `.../api/<project>/envelope/` returns 200 with no CSP violation in the console, and the Sentry project shows a "sentry smoke test" issue within a minute.
+5. In the Sentry project settings, leave "Data Scrubber" and "Use Default Scrubbers" on (they are on by default); the app already strips cookies, auth and IP headers, emails and Supabase `details`/`hint`, and the server-side scrubber is the second layer. Add an alert rule ("A new issue is created", notify by email) so handled failures such as `export_my_data_failed` (the WP01 ops note) reach you instead of sitting in the dashboard. CSP violation reports arrive as their own event type and count against the quota; if browser extensions flood them, add an Inbound Filter for the offending source instead of removing `report-uri`.
+6. Branch protection needs no change: lint is a step inside the already-required "Frontend (lint + typecheck + tests)" job. Confirm under GitHub, Settings, Branches (or Rules), rule for `master`, that this job is still listed as required.
 
 ## Acceptance criteria
 
@@ -1703,12 +2001,13 @@ Optional, to turn on error reporting (the reason for F108 and F128):
 - [ ] `eslint.config.mjs` enforces `no-console: error` for `app/**`, `proxy.ts` and the instrumentation files (except `app/lib/logger.ts` and tests) and `warn` for `scripts/**`; its default export is a named constant.
 - [ ] No `console.*` call exists in `app/` (outside tests and `logger.ts`) or `proxy.ts`.
 - [ ] `logger.ts` exports `logSupabaseError`, `logCaughtError`, `logHttpFailure`, `logWarning`; with a DSN set it reports through a lazily imported `@sentry/nextjs` (`captureMessage` for sanitized fields, `captureException` for Error instances, nothing for AbortError or HTTP 4xx); without a DSN it imports nothing.
-- [ ] `frontend/instrumentation.ts` and `frontend/instrumentation-client.ts` exist; `frontend/sentry.client.config.ts` does not; the stub build prints no Sentry client-config deprecation warning.
-- [ ] With `NEXT_PUBLIC_SENTRY_DSN` set, CSP `connect-src` contains exactly the DSN's https origin; without it, `connect-src` is unchanged. `next.config.ts` documents why `script-src` keeps `'unsafe-inline'`.
+- [ ] `frontend/instrumentation.ts` and `frontend/instrumentation-client.ts` exist and import nothing from `@sentry/nextjs` while no DSN is set; `frontend/sentry.client.config.ts` does not exist; the stub build prints no `[@sentry/nextjs] ACTION REQUIRED` line.
+- [ ] `app/lib/sentryScrub.ts` exists and is the `beforeSend` and `beforeSendTransaction` of the browser, server and edge inits; it removes the `cookie`, `authorization` and IP headers, `request.cookies`, `user.email`, `user.ip_address` and the `details`/`hint` extras.
+- [ ] With `NEXT_PUBLIC_SENTRY_DSN` set, CSP `connect-src` contains exactly the DSN's https origin, the CSP ends with `report-uri <security endpoint>` and `report-to csp-endpoint`, and a `Reporting-Endpoints` header names the same URL; without it, the CSP and header list are unchanged. No `Content-Security-Policy-Report-Only` header exists. `next.config.ts` documents why `script-src` keeps `'unsafe-inline'`.
 - [ ] `SortButton`, `AllocationTooltip`, `PortfolioTooltip`, `PriceTooltip` and `PriceDot` are declared at module scope; the HoldingsTable focus test passes.
 - [ ] `useCurrencyConversion` has no setState call in an effect body.
 - [ ] `calculateNav` lives in `BoxCalculator/nav.ts`, `matchProduct` is exported, MarketView rows are built by `MarketView/buildRows.ts`; each has the tests listed above.
-- [ ] New tests exist and pass for `proxy.ts`, `cookieOptions.ts`, `routeSupabase.ts`, `csrf.ts`, the account delete route, `instrumentation.ts` and the CSP.
+- [ ] New tests exist and pass for `proxy.ts`, `cookieOptions.ts`, `routeSupabase.ts`, `csrf.ts`, the account delete route, `instrumentation.ts`, the CSP and `sentryScrub.ts` (including the server and edge configs).
 - [ ] `collectCoverageFrom` includes `proxy.ts` and every `"use client"` page, and excludes only server pages.
 - [ ] `tsc --noEmit`, the full Jest suite and `pnpm build:stub` pass; first-load JS per page is within 1 kB gzip of the baseline.
 - [ ] `audits/HARDENING_FOLLOWUPS.md`, `frontend/.env.example` and `audits/remediation/00-PLAN.md` are updated as in steps 6d and 16.
@@ -1718,7 +2017,7 @@ Optional, to turn on error reporting (the reason for F108 and F128):
 No migrations, no data changes, no environment variables. Revert the merge commit (`git revert -m 1 <merge-sha>`) and redeploy. Partial rollbacks are safe per area:
 
 - CI gate only: restore `continue-on-error: true` on the lint step (only if an urgent fix is blocked by a lint regression; fix the lint in the next PR and remove it again).
-- Sentry only: revert `instrumentation.ts`, `instrumentation-client.ts`, restore `sentry.client.config.ts`, and revert the `logger.ts` Sentry lines; the console output is unchanged either way. If the DSN is already set in Vercel, removing it and redeploying disables all reporting and the CSP entry.
+- Sentry only: revert `instrumentation.ts`, `instrumentation-client.ts`, `app/lib/sentryScrub.ts` and its test, the `sentry.server.config.ts`/`sentry.edge.config.ts` edits, restore `sentry.client.config.ts`, and revert the `logger.ts` Sentry lines; the console output is unchanged either way. If the DSN is already set in Vercel, removing it and redeploying disables all reporting, the `connect-src` entry and the CSP reporting.
 - Component hoisting, `useCurrencyConversion`, and the three extractions (`nav.ts`, `buildRows.ts`, `matchProduct` export) are behaviour-preserving and independent; revert the file and its test together.
 
 ## Commit and PR
@@ -1736,16 +2035,19 @@ chore(quality): zero lint errors, critical-path tests, Sentry wiring, blocking l
 - Logger reports to Sentry via a lazy import when a DSN is set; add
   instrumentation.ts and instrumentation-client.ts (replaces
   sentry.client.config.ts, which Turbopack ignores) (F108)
-- CSP connect-src allows the DSN's ingest origin only when a DSN is set;
-  document why script-src keeps 'unsafe-inline' (F128)
+- Scrub cookies, auth/IP headers, emails and Supabase details/hint from
+  every Sentry event in all three runtimes (app/lib/sentryScrub.ts)
+- CSP connect-src allows the DSN's ingest origin and the enforced CSP
+  reports violations to the project's security endpoint, both only when a
+  DSN is set; document why script-src keeps 'unsafe-inline' (F128)
 - Tests for proxy.ts, cookieOptions, routeSupabase, csrf, the account
   delete route, matchProduct, calculateNav (moved to nav.ts), MarketView
   row derivation (moved to buildRows.ts), chart tooltips, the currency
-  hook, instrumentation and the CSP (F050)
+  hook, instrumentation, the CSP and the Sentry scrubber (F050)
 - Coverage includes proxy.ts and client pages; excludes only server pages
 - CI: lint is blocking (F076)
 ```
 
 PR title: `WP17: zero lint errors, critical-path tests, Sentry wiring, blocking lint`
 
-PR body summary: link `audits/remediation/WP17-lint-tests-observability-ci-gate.md`; list F056, F050, F108, F128 and F076 (lint part) with one line each from the metadata above; state the two corrections to the plan (logger uses a lazy import with `captureMessage` for sanitized fields; `instrumentation-client.ts` is also required because Turbopack ignores `sentry.client.config.ts`; `calculateNav` moved to `nav.ts` rather than exported from the component file); paste the lint rule counts before and after, the targeted and full Jest summaries, the coverage-config output, the `build:stub` result and the bundle comparison; list the optional owner action (set `NEXT_PUBLIC_SENTRY_DSN`, redeploy, smoke test). Note for WP19 that `buildRows.ts` and its tests already exist, and for WP20 that the delete-route test must keep passing after the CSRF dedupe.
+PR body summary: link `audits/remediation/WP17-lint-tests-observability-ci-gate.md`; list F056, F050, F108, F128 and F076 (lint part) with one line each from the metadata above; state the corrections to the plan (the logger uses a lazy import with `captureMessage` for sanitized fields; `instrumentation-client.ts` is also required because Turbopack ignores `sentry.client.config.ts`; `instrumentation.ts` imports Sentry only when a DSN is set; every Sentry runtime scrubs the session cookie header, which the server SDK would otherwise send; CSP violation reporting was added to the enforced policy per the F128 verifiers; `calculateNav` moved to `nav.ts` rather than exported from the component file; MarketView rows moved to `buildRows.ts`); paste the lint rule counts before and after, the targeted and full Jest summaries, the coverage-config output, the `build:stub` result and the bundle comparison; list the optional owner action (set `NEXT_PUBLIC_SENTRY_DSN`, redeploy, smoke test). Note for WP19 that `buildRows.ts` and its tests already exist, and for WP20 that the delete-route test must keep passing after the CSRF dedupe.

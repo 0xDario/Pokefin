@@ -7,7 +7,8 @@
 - **Priority rationale**: the metrics RPC is behind every catalog page and already times out in production; this is the cheapest change that removes the timeouts before WP11 changes caching.
 - **Effort**: M (6 to 8 hours: 3 migrations and a check script, one route, repo/client additions, 4 new and 2 updated Jest files plus one pytest file, docs).
 - **Depends on**: WP01 (migrations 0024/0025, including `portfolio_holdings_portfolio_id_idx`), WP05 (`/api/portfolio` routes, `lib/server/portfolioRepo.ts`, `lib/portfolioApi.ts`, `lib/portfolioInput.ts`, the rewritten `usePortfolioData.ts`). WP06 is not a dependency, but it claims migration number 0026 (see "Before you start" for numbering).
-- **Unblocks**: WP11 (caching and revalidation build on the bounded RPCs), WP21 (database hardening and least-privilege role).
+- **Unblocks**: WP11 (caching and revalidation build on the bounded RPCs), WP20 (its generated `Database` types must contain `get_portfolio_history` and the new `get_market_product_metrics`, so 0027-0029 must be applied before WP20 starts), WP21 (database hardening and least-privilege role).
+- **Parallel execution**: this package does not depend on WP06 to WP09 and shares no source file with them except `app/lib/portfolioInput.ts` (WP07 edits `PRICE_MESSAGE`, this package adds the `days` parser; different lines) and the docs (`README.md`, `audits/HARDENING_FOLLOWUPS.md`). It may run in parallel with WP06 to WP09 once WP05 has merged; it must merge, with 0027-0029 applied, before WP11 starts. Keep the reserved numbers 0027-0029 whichever order the PRs merge in.
 - **Suggested branch name**: `remediation/wp10-db-rpc-performance`
 - **Risk level**: medium. It replaces the SQL behind every catalog page; the risk is contained by an exact old-versus-new equivalence proof (script provided) and by leaving the return shape, ACL and the 0023 freshness gates untouched.
 
@@ -58,7 +59,7 @@ ls migrations | sort
 
 Assumptions to check, and what to do if one fails:
 
-- **Migration numbers.** This spec uses `0027`, `0028`, `0029`, assuming WP01 added `0024`/`0025` and WP06 added `0026`. If `ls migrations` shows a different highest number N, use N+1, N+2, N+3 in order (index, market functions, portfolio history) and substitute them everywhere this spec says 0027/0028/0029, including the comments inside the SQL files, the check script header, the README and HARDENING_FOLLOWUPS text.
+- **Migration numbers.** `0027`, `0028` and `0029` are reserved for this package in the plan-wide numbering (WP01 `0024`/`0025`, WP06 `0026`, WP10 `0027`-`0029`, WP16 `0030`, WP21 `0031`/`0032` plus `0000_baseline.sql`). Use them even if `0026` (WP06) or `0030` (WP16) is not in `migrations/` yet, or is already there: those packages can merge before or after this one. Do NOT derive the numbers from the highest file present. Only if a file named `0027_*`, `0028_*` or `0029_*` already exists and is not one of this package's files, stop and ask the owner which numbers to use; then substitute them everywhere this spec says 0027/0028/0029, including the comments inside the SQL files, the check script header, the README and HARDENING_FOLLOWUPS text, and tell WP16 and WP21 in the PR body.
 - **WP05 missing.** If `findPortfolioId`, `PortfolioApiError`, `Parsed`, `requireRouteUser`/`jsonNoStore` (`app/lib/routeAuth.ts`) or the WP05 hook call are absent, stop: this package extends WP05's files and must not recreate them. The migrations (steps 1-4) and the Python test (step 11) do not depend on WP05 and may be done first.
 - **The GET gate helper.** WP05 step 6 adds `rejectIfNotAppRequest` to `csrf.ts` unless WP04 already added an equivalent. Use whatever name `frontend/app/api/portfolio/route.ts` imports for its GET gate.
 - **The price-history index.** The new anchors depend on an index on `product_price_history (product_id, recorded_at DESC)`. `0023:133-134` creates `idx_price_history_product_recorded`; production also carries an equivalent under another name. The owner confirms it in Owner actions step 2.
@@ -1777,7 +1778,7 @@ Apply in this order, and apply 0027-0029 **before merging** this PR (Vercel depl
 
 7. **After 24 hours.** Re-run the step 1 `pg_stat_statements` query (optionally `SELECT pg_stat_statements_reset();` right after step 4 so the means cover only the new body). Expect `get_market_product_summaries` and `get_set_analytics` mean well under 300 ms and max under 1 s. In Dashboard > Logs > Postgres, search "canceling statement due to statement timeout": expect none for these functions.
 
-8. **Record it.** In `audits/HARDENING_FOLLOWUPS.md` section 7, change "**Migrations 0027, 0028 and 0029: pending apply**" to "**Migrations 0027, 0028 and 0029 applied** (YYYY-MM-DD, via Supabase MCP)" and paste the equivalence result row and the before/after Execution Time. Commit that doc change directly or have the next package include it.
+8. **Record it.** In `audits/HARDENING_FOLLOWUPS.md` section 7, change "**Migrations 0027, 0028 and 0029: pending apply**" to "**Migrations 0027, 0028 and 0029 applied** (YYYY-MM-DD, via Supabase MCP)" and paste the equivalence result row and the before/after Execution Time. Commit that doc change directly to master as `docs: record migrations 0027-0029 as applied` (same convention as WP01's owner step 7), so later packages that anchor on these bullets (WP16, WP21) find the final text.
 
 ## Acceptance criteria
 

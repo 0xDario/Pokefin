@@ -6,9 +6,9 @@
   - F048 (full): `app/lib` imports its domain types from `components/*/types` (six lib modules); `"use client"` sits on two plain lib modules; `serverSupabase.ts`, three exported interfaces and `PriceChart`'s duplicate types are dead or duplicated.
   - F051 (full; cluster members F051, F105): currency and exchange rate are prop-drilled with a literal `1.36` default in 12 places (`1.35` in `/compare`), `/portfolio` has its own toggle, and the chosen currency does not carry between pages.
   - F107 (full; cluster members F107, F109): `.github/copilot-instructions.md` describes an architecture that no longer exists, and dead modules/exports remain (`ExchangeRateService.ts`, `fetchSalesHistory` and its cache, the `Portfolio/index.ts` barrel, `searchProductsBySet`, `formatScore`).
-- **Priority rationale**: no user-facing defect except currency persistence, so it runs last, after every package that edits these files has landed, and it prevents the next column rename or CSRF fix from silently missing half the code.
+- **Priority rationale**: no user-facing defect except currency persistence, so it runs after every package that edits these files has landed (only WP21 follows it), and it prevents the next column rename or CSRF fix from silently missing half the code.
 - **Effort**: L, about 15 hours (F034 2 h, F048 2.5 h, F051 4 h, F047 4 h plus the wait for the owner's generated types file, F107 1.5 h, tests and verification 1 h).
-- **Depends on**: WP05 (`app/lib/server/portfolioRepo.ts`, `app/lib/portfolioApi.ts`, the portfolio route handlers), WP06 (`app/lib/boxRecipes.ts`, `app/lib/routeAuth.ts`, box-recipe routes, `useBoxRecipes` rewrite), WP11 (`getCachedExchangeRate` never throws and returns `date: null` for the fallback; `/compare` and `/box-calculator` are server-fed). Also assumes every package before it in plan order has merged, in particular WP00 (`pnpm build:stub`), WP02 (callback route collects cookies and headers), WP07 (`app/lib/format.ts`), WP08 (`/prices` URL state), WP12 (`app/lib/supabaseLoader.ts`), WP13 (`app/lib/redirects.ts`), WP17 (blocking lint, `logger.ts` helpers, delete-route and proxy tests, `useCurrencyConversion` test), WP18 (`app/lib/marketMath.ts`, `app/compare/CompareDashboard.tsx`).
+- **Depends on**: WP05 (`app/lib/server/portfolioRepo.ts`, `app/lib/portfolioApi.ts`, `app/lib/routeAuth.ts`, `rejectIfNotAppRequest` in `app/lib/csrf.ts`, the portfolio route handlers), WP06 (`app/lib/boxRecipes.ts`, box-recipe routes, `sharedRecipe.ts`, `useBoxRecipes` rewrite, migration 0026), WP11 (`getCachedExchangeRate` never throws and returns `date: null` for the fallback; `/compare` and `/box-calculator` are server-fed). Also assumes every package before it in plan order has merged, in particular WP00 (`pnpm build:stub`), WP02 (callback route collects cookies and headers), WP07 (`app/lib/format.ts`), WP08 (`/prices` URL state), WP12 (`app/lib/supabaseLoader.ts`), WP13 (`app/lib/redirects.ts`), WP17 (blocking lint, `logger.ts` helpers, delete-route and proxy tests, `useCurrencyConversion` test), WP18 (`app/lib/marketMath.ts`, `app/compare/CompareDashboard.tsx`). Database prerequisite for step 4: the owner has applied the migrations of WP06 (0026), WP10 (0027-0029) and WP16 (0030) in production, because the generated `app/types/database.ts` must contain `box_recipes.currency`, `get_portfolio_history`, `get_market_product_metrics` and `product_price_pending` (step 4.2 stops otherwise). WP19 must also have merged (step 3 relies on its `columns.tsx`/`MarketTableRow.tsx` receiving currency values as props).
 - **Unblocks**: nothing in the plan depends on it. WP21 (and every later migration PR) should regenerate `frontend/app/types/database.ts` with the `pnpm types:db` script this package adds.
 - **Suggested branch name**: `remediation/wp20-types-currency-csrf-docs`
 - **Risk level**: medium. It touches the root layout (every page renders the new `CurrencyProvider`), the session-cookie code in `proxy.ts` and the OAuth callback, and the type of every Supabase query; the behaviour of each is pinned by existing and new tests.
@@ -22,7 +22,7 @@ The account delete and export endpoints and the email-link callback each carry t
 Read these files in full (paths relative to `frontend/` unless they start with `/` or `.github`):
 
 - `app/api/account/delete/route.ts` (80 lines at `a188fea`; WP17 changed only line 70 to `logSupabaseError`), `app/api/account/export/route.ts` (79 lines), `app/api/auth/sign-in/route.ts` (the pattern to copy), `app/lib/csrf.ts` (61 lines at `a188fea`; WP05 appended `rejectIfNotAppRequest`), `app/lib/routeSupabase.ts` (38 lines), `app/lib/cookieOptions.ts`, `app/auth/callback/route.ts` (as rewritten by WP02 step 10 and WP13 step 2b: collects `pendingCookies`/`pendingHeaders`, then writes them onto the chosen redirect), `proxy.ts` (101 lines at `a188fea`; WP02 changed the rate-limit block only).
-- `app/lib/supabase.ts`, `app/lib/supabaseLoader.ts` (WP12), `app/lib/serverSupabase.ts`, `app/lib/serverMarketData.ts` (client factory at `:42-49` at `a188fea`), `app/lib/clientMarketData.ts`, `app/lib/marketData.ts`, `app/lib/exchangeRate.ts`, `app/lib/portfolio.ts`, `app/lib/server/portfolioRepo.ts` (WP05), `app/lib/boxRecipes.ts` and `app/lib/routeAuth.ts` (WP06), `app/components/BoxCalculator/sharedRecipe.ts` (WP06).
+- `app/lib/supabase.ts`, `app/lib/supabaseLoader.ts` (WP12), `app/lib/serverSupabase.ts`, `app/lib/serverMarketData.ts` (client factory at `:42-49` at `a188fea`), `app/lib/clientMarketData.ts`, `app/lib/marketData.ts`, `app/lib/exchangeRate.ts`, `app/lib/portfolio.ts`, `app/lib/server/portfolioRepo.ts` (WP05), `app/lib/routeAuth.ts` (WP05), `app/lib/boxRecipes.ts` (WP06), `app/components/BoxCalculator/sharedRecipe.ts` (WP06).
 - `app/components/ProductPrices/types/index.ts` (106 lines at `a188fea`, plus WP11's `VolumeMetricsSummary`), `app/components/Portfolio/types/index.ts` (192 lines at `a188fea`, plus WP05's `NewHoldingInput`), `app/components/PriceChart.tsx` (`:18-25` local `PriceHistoryEntry` and `Currency`), `app/components/ProductPrices/shared/ReturnMetrics.tsx:27` (a local `ReturnData` with a different shape from the exported one).
 - `app/layout.tsx`, `app/context/AuthContext.tsx` (provider pattern), `app/components/ProductPrices/hooks/useCurrencyConversion.ts` (as rewritten by WP07 step 6a and WP17 step 9), `app/components/ProductPrices/controls/CurrencySelector.tsx`, `app/components/ProductPrices/index.tsx` (WP08 version: `useCurrencyConversion(initialExchangeRate, initialUrlState.currency)` and `onCurrencyChange={(currency) => updateUrlState({ currency })}`), `app/components/MarketView/MarketView.tsx`, `app/components/BoxCalculator/BoxCalculator.tsx`, `app/components/dashboard/RecentlyReleased.tsx`, `app/portfolio/page.tsx`, `app/components/Portfolio/PortfolioDashboard.tsx`, `app/compare/CompareDashboard.tsx` (WP18), and the pages that pass `initialExchangeRate`: `app/page.tsx`, `app/prices/page.tsx`, `app/market/page.tsx`, `app/box-calculator/page.tsx`.
 - `eslint.config.mjs` (WP04 `ANON_CLIENT_FORBIDDEN_FILES`, WP05/WP06 `no-restricted-syntax`, WP12 repo-wide `no-restricted-imports`, WP17 `no-console` and the named export), `jest.config.js`, `package.json`, `.github/workflows/ci.yml`, `/home/user/Pokefin/.github/copilot-instructions.md` (101 lines), `/home/user/Pokefin/audits/HARDENING_FOLLOWUPS.md` (section 7), `/home/user/Pokefin/audits/authentication-flow.md:406-412` (F-15).
@@ -61,7 +61,7 @@ Assumptions to check before writing code. If one fails, stop and report instead 
 
 ## Implementation steps
 
-Order: step 1 (F034) and step 2 (F048) are independent; step 3 (F051) needs step 2's `app/types/market.ts`; step 4 (F047) needs steps 1 to 3 and the generated file; step 5 (ESLint) needs steps 1, 2 and 4; step 6 (F107) goes last because the documentation describes the result. Run `pnpm exec tsc --noEmit` after each numbered step; it must be clean before you move on (step 4 is the exception: it is clean at the end of 4.6).
+Order: step 1 (F034) and step 2 (F048) are independent; step 3 (F051) needs step 2's `app/types/market.ts`; do step 6.1 (dead-code deletion) right after step 3, before step 4, so you do not type the queries of functions you are about to delete; step 4 (F047) needs steps 1 to 3 and the generated file; step 5 (ESLint import rules) needs steps 1 and 2 only; the rest of step 6 (6.2, 6.3) goes last because the documentation describes the result. Run `pnpm exec tsc --noEmit` after each numbered step; it must be clean before you move on (step 4 is the exception: it is clean at the end of 4.6). If you are waiting for the generated types (assumption 5), do steps 5 and 6 anyway and leave only step 4 for later.
 
 The new modules in 1.1, 1.3, 3.1, 3.3 and 3.5 and the mapper code in 4.4c/4.4e were type-checked with the installed TypeScript 6.0.3, `@types/react` 19, `@supabase/ssr` 0.12.4 and Next 16.3.6 while writing this spec (strict mode, no errors).
 
@@ -213,9 +213,9 @@ Keep WP02's `rateLimit` import and the rate-limit block unchanged. Replace every
 }
 ```
 
-`PROTECTED_PATTERNS`, `tooManyRequests` and `config.matcher` stay as they are. Visible difference: when Supabase rotates the session during `getUser`, the response now also carries `Cache-Control: private, no-cache, no-store, must-revalidate, max-age=0` (the library's instruction for any response that sets auth cookies). Only matched paths (`/account`, `/portfolio`, `/api`, `/auth`) are affected.
+`PROTECTED_PATTERNS`, `tooManyRequests` and `config.matcher` stay as they are. Visible difference: when Supabase rotates the session during `getUser`, the proxy response now also sets `Cache-Control: private, no-cache, no-store, must-revalidate, max-age=0` (the library's instruction for any response that sets auth cookies; `@supabase/ssr` 0.12.4 passes it as the second argument of `setAll`). Only matched paths (`/account`, `/portfolio`, `/api`, `/auth`) are affected. `import "server-only"` in `requestSupabase.ts` is allowed in `proxy.ts`: Next puts the proxy in its server-only layer group (`next/dist/lib/constants.js`, `WEBPACK_LAYERS.GROUP.serverOnly` includes `middleware`).
 
-1.5. `app/auth/callback/route.ts` (WP02/WP13 version). Remove the `createServerClient`/`CookieOptions` import from `@supabase/ssr`, the `hardenCookieOptions` import and the `PendingCookie` type. Add `import { createRequestSupabaseClient } from "../../lib/requestSupabase";`. Inside `GET`, replace the block from `const pendingCookies: PendingCookie[] = [];` through the closing `);` of the `createServerClient(...)` call with:
+1.5. `app/auth/callback/route.ts` (WP02/WP13 version). Remove the `createServerClient`/`CookieOptions` import from `@supabase/ssr`, the `hardenCookieOptions` import and the `PendingCookie` type. Add `import { createRequestSupabaseClient } from "../../lib/requestSupabase";`. Inside `GET`, replace the block from WP02's two comment lines above it (`// Collect cookies and no-cache headers during the exchange, then write` / `// them onto whichever redirect we decide on afterwards.`) and `const pendingCookies: PendingCookie[] = [];` through the closing `);` of the `createServerClient(...)` call with:
 
 ```ts
   // Cookies and no-cache headers set during the exchange are collected and
@@ -229,9 +229,16 @@ and replace the tail (from `const response = NextResponse.redirect(new URL(targe
   return applyTo(NextResponse.redirect(new URL(target, request.url)));
 ```
 
-Everything between (the `flowId` read, `exchangeCodeForSession`, the `redirectType` read, the `target` decision, `RESET_PASSWORD_PATH`, `AUTH_LINK_FAILED_PATH`, the `safeNextPath` import from `app/lib/redirects.ts`) stays byte for byte. Delete WP02's comment "Keep the inline `createServerClient`; WP20 consolidates it" if it was copied into the file.
+Everything between (the `flowId` read, `exchangeCodeForSession`, the `target` decision, `RESET_PASSWORD_PATH`, `AUTH_LINK_FAILED_PATH`, the `safeNextPath` import from `app/lib/redirects.ts`) stays byte for byte, with one exception: WP02's `redirectType` read is a double cast (`(data as unknown as { redirectType?: string | null } | null)?.redirectType`), which step 4.5 must not find. Replace that statement (keep WP02's two comment lines above it) with:
 
-1.6. `app/api/account/delete/route.ts`. Replace lines 1-55 at `a188fea` (every import, `ALLOWED_ORIGINS`, `isAllowedOrigin`, and the handler body down to and including the inline `createServerClient(...)` call) so the file starts:
+```ts
+  const redirectType: unknown =
+    "redirectType" in data ? data.redirectType : undefined;
+```
+
+`data` is always an object here (auth-js types it `{ user, session }` on success and `{ user: null, session: null }` on error), so the `in` check narrows it without a cast; this was type-checked against the installed `@supabase/auth-js` 2.112.2. The later `redirectType === "recovery"` comparison works unchanged on `unknown`. Delete WP02's comment "Keep the inline `createServerClient`; WP20 consolidates it" if it was copied into the file.
+
+1.6. `app/api/account/delete/route.ts`. Replace everything from line 1 down to and including the `);` that closes the inline `createServerClient(` call (every import, `ALLOWED_ORIGINS`, `isAllowedOrigin`, the inline header, origin and content-length checks, `const cookieStore = await cookies();` and the client construction; lines 1-55 at `a188fea`, one line more if WP17 added its `logger` import) so the file starts:
 
 ```ts
 import { NextRequest, NextResponse } from "next/server";
@@ -253,7 +260,7 @@ export async function DELETE(request: NextRequest) {
 
 The rest (`getUser` and the 401, the `delete_my_account` RPC with its comment, `logSupabaseError("delete_my_account_failed", rpcError)` and the 500, `signOut`, `{ success: true }`) stays unchanged. If WP17 did not land and line 70 still reads `console.error("delete_my_account_failed", { code: rpcError.code });`, change it to `logSupabaseError("delete_my_account_failed", rpcError);`.
 
-1.7. `app/api/account/export/route.ts`. Same change: replace lines 1-55 at `a188fea` with
+1.7. `app/api/account/export/route.ts`. Same change: replace everything from line 1 down to and including the `);` that closes the inline `createServerClient(` call (lines 1-55 at `a188fea`) with
 
 ```ts
 import { NextRequest, NextResponse } from "next/server";
@@ -376,6 +383,8 @@ grep -rnE "(ProductPrices|Portfolio)/types\"|from \"\.\.?/types\"" app --include
 # expect no output (BoxCalculator/types.ts is a different, component-local module and stays)
 ```
 
+If a hit remains, open it: an import of a component-local `types.ts` that an earlier package added (for example under `MarketView/`) is fine and stays; an import that still resolves to `ProductPrices/types` or `Portfolio/types` means the codemod missed a spelling, so fix it by hand to `app/types/market.ts` or `app/types/portfolio.ts`.
+
 2.4. Recreate the old paths as temporary re-export shims for branches in flight. `app/components/ProductPrices/types/index.ts`:
 
 ```ts
@@ -389,10 +398,20 @@ export * from "../../../types/market";
 
 `app/components/Portfolio/types/index.ts`: the same comment naming `app/types/portfolio.ts`, and `export * from "../../../types/portfolio";`.
 
-2.5. Remove the dead exported types. For each name, run `grep -rnw "<Name>" app --include=*.ts --include=*.tsx` and delete the declaration only when the only hits are the declaration itself (and, for `ReturnData`, the unrelated local interface at `app/components/ProductPrices/shared/ReturnMetrics.tsx:27`, which stays):
+2.5. Remove the dead exported types:
 
-- `app/types/market.ts`: `ProductSet`, `ProductType`, `ReturnData` (the exported one was a misleading namesake of ReturnMetrics' local `{ percent }` shape). Keep `Generation` if anything references it; delete it too if not.
-- `app/types/portfolio.ts`: `PortfolioLot`, `ImportSummary`.
+- `app/types/market.ts`: `ProductSet`, `ProductType`, `ReturnData` (the exported one was a misleading namesake of ReturnMetrics' local `{ percent }` shape) and `Generation` (its only user is `ProductSet.generations`).
+- `app/types/portfolio.ts`: `PortfolioLot`, `ImportSummary` (`calculateImportSummary` in `lib/import.ts` returns its own inline type).
+
+Check first, and delete only if the output is exactly what is described:
+
+```bash
+grep -rnwE "ProductSet|ProductType|ReturnData|Generation|PortfolioLot|ImportSummary" app --include=*.ts --include=*.tsx | grep -v "^app/types/"
+# expected at a188fea: app/components/ProductPrices/shared/ReturnMetrics.tsx:27 and :35 (its own
+# local ReturnData, which stays) and app/components/ProductPrices/controls/GenerationFilter.tsx:15
+# (the JSX label text "Generation", not a type reference). Any other hit is a real user added by
+# an earlier package: keep that one type and list it in the PR body.
+```
 
 2.6. `app/components/PriceChart.tsx`: delete the local `type PriceHistoryEntry = { ... }` and `type Currency = "USD" | "CAD";` (lines 20-25 at `a188fea`; WP18 may have moved them, find them with `grep -n "^type PriceHistoryEntry\|^type Currency" app/components/PriceChart.tsx`) and import them instead, merged into the existing type import that the codemod pointed at `../types/market`:
 
@@ -421,9 +440,7 @@ Leave `"use client"` on the hook modules under `app/components/**/hooks/` untouc
     '^client-only$': require.resolve('next/dist/build/jest/__mocks__/empty.js'),
 ```
 
-(`require.resolve('next/dist/build/jest/__mocks__/empty.js')` resolves from `frontend/`; verified against the installed Next 16.3.6.) If `pnpm build:stub` later fails with "Module not found: client-only", run `pnpm add client-only@0.0.1` and commit the lockfile change; do not revert to `"use client"`.
-
-2.8. In `app/lib/exchangeRate.ts`, if it imports `DEFAULT_EXCHANGE_RATE` or `ExchangeRateSnapshot` from `./marketData`, point that import at `./currency` after step 3.1 (keeps `marketData.ts` and `priceGuard.ts` out of the lazily loaded rate chunk).
+(`require.resolve('next/dist/build/jest/__mocks__/empty.js')` resolves from `frontend/`; verified against the installed Next 16.3.6.) If `pnpm build:stub` later fails with "Module not found: client-only", run `pnpm add client-only@0.0.1` and commit the lockfile change; do not revert to `"use client"`. If it fails with "'client-only' cannot be imported from a Server Component module", the marker did its job: a server component or route handler reaches `exchangeRate.ts` or `clientMarketData.ts` (possibly through `lib/portfolio.ts` or `lib/import.ts`). Do not remove the marker; the build output names the import trace. Stop and report that trace in the PR instead of rewiring the server code here.
 
 ### Step 3. F051: one currency preference, one fallback rate
 
@@ -510,6 +527,8 @@ export type { ExchangeRateSnapshot } from "./currency";
 ```
 
 Nothing else in `marketData.ts` uses either name (checked at `a188fea`); if `tsc` says otherwise, add a normal `import { DEFAULT_EXCHANGE_RATE } from "./currency";` as well.
+
+3.2b. `app/lib/exchangeRate.ts` (WP11 version) imports `DEFAULT_EXCHANGE_RATE, ExchangeRateSnapshot` from `./marketData`. Point that import at `./currency` instead: `import { DEFAULT_EXCHANGE_RATE, type ExchangeRateSnapshot } from "./currency";`. This keeps `marketData.ts` and `priceGuard.ts` out of the lazily loaded rate chunk that `CurrencyProvider` imports.
 
 3.3. New file `app/context/CurrencyContext.tsx`:
 
@@ -703,7 +722,7 @@ import { CurrencyProvider } from "./context/CurrencyContext";
 import { getCachedExchangeRate } from "./lib/serverMarketData";
 ```
 
-Make the layout async, read the rate once, and wrap the tree inside `AuthProvider`. Replace the `RootLayout` function (lines 38-58 at `a188fea`; keep any attribute or child WP13/WP14 added to `<html>`/`<body>`) with:
+Make the layout async, read the rate once, and wrap the tree inside `AuthProvider`. Make exactly three edits to the `RootLayout` function (lines 38-58 at `a188fea`), and leave every other line of the file (the metadata WP03 and WP13 changed, any attribute or child an earlier package added to `<html>` or `<body>`) as it is: (1) `export default function RootLayout(` becomes `export default async function RootLayout(`; (2) insert the comment and `const exchangeRate = await getCachedExchangeRate();` as the first statement of the body, before `return (`; (3) wrap the children of `<AuthProvider>` in `<CurrencyProvider initialRate={exchangeRate}>...</CurrencyProvider>`. With the `a188fea` body the result is:
 
 ```tsx
 export default async function RootLayout({
@@ -736,7 +755,7 @@ export default async function RootLayout({
 }
 ```
 
-Consequence to state in the PR: pages that had no data dependency (`/auth/*`, `/account`) now depend on the exchange-rate cache entry, so they regenerate on the same daily backstop and tag as the market pages. That is harmless (the render is cheap) and it is what makes the rate available everywhere without a client request.
+Consequence to state in the PR: every page, including those that had no data dependency (`/auth/*`, `/account`, `/privacy`), now reads the exchange-rate cache entry, so every ISR page carries the `exchange-rate` tag and is regenerated on its next visit after each scraper revalidation (WP11 `SCRAPE_REVALIDATED_TAGS` includes that tag) and on the daily backstop. That is harmless (the render is cheap and the rate read is one cached row) and it is what makes the rate available everywhere without a client request. Do not add `export const dynamic` or any other segment config to the layout.
 
 3.5. Rewrite `app/components/ProductPrices/hooks/useCurrencyConversion.ts` entirely. It becomes the hook for pages whose currency is decided by the page, not by the preference; the rate comes from the provider. The signature changes from `(initialExchangeRate?, initialCurrency = "CAD")` to `(initialCurrency?)`, so `tsc` flags every old call site.
 
@@ -850,7 +869,14 @@ Swap the `useCurrencyConversion` import for `import { useCurrency } from "../../
         }}
 ```
 
-`loadRecipeIntoState` keeps calling only `setSelectedCurrency(recipe.currency)`: a loaded (possibly shared) recipe changes this page, not the visitor's preference. `app/box-calculator/page.tsx`: delete the `initialExchangeRate=...` prop and its comment, and remove `getCachedExchangeRate` from its `Promise.all` and import (keep `getCachedMarketProductSummaries`; the destructure becomes `const [products] = await Promise.all([...])` or a plain `await`).
+`loadRecipeIntoState` keeps calling only `setSelectedCurrency(recipe.currency)`: a loaded (possibly shared) recipe changes this page, not the visitor's preference. `app/box-calculator/page.tsx` (WP11 version): delete the `initialExchangeRate=...` prop and its comment, remove `getCachedExchangeRate` from the import, and replace the two-element `Promise.all` with a plain await of the one remaining read, keeping WP11's comment above it and its `.catch`:
+
+```tsx
+  const products = await getCachedMarketProductSummaries().catch((error: unknown) => {
+    logCaughtError("box_calculator_initial_products_failed", error);
+    return null;
+  });
+```
 
 3.11. `/portfolio`. In `app/portfolio/page.tsx` (WP04/WP13 version):
 
@@ -913,11 +939,12 @@ grep -rn "initialExchangeRate" app --include=*.ts --include=*.tsx | grep -v "com
 ```bash
 grep -c "export type Database = " app/types/database.ts                        # 1
 grep -c "export type Tables<" app/types/database.ts                             # 1
-grep -cE "get_market_product_summaries|get_set_analytics|export_my_data|delete_my_account|get_shared_recipe" app/types/database.ts   # 5 or more
-grep -cE "get_portfolio_history|get_market_product_metrics|product_price_pending" app/types/database.ts   # 3 or more: migrations 0028 to 0030 applied
+grep -oE "get_market_product_summaries|get_set_analytics|export_my_data|delete_my_account|get_shared_recipe" app/types/database.ts | sort -u | wc -l   # 5
+grep -oE "get_portfolio_history|get_market_product_metrics|product_price_pending" app/types/database.ts | sort -u | wc -l   # 3: migrations 0028 to 0030 applied
+grep -c "currency" app/types/database.ts                                        # 1 or more: migration 0026 (box_recipes.currency) applied
 ```
 
-If the last check is below 3, the production database is missing migrations from WP10 or WP16; stop and ask the owner to apply them and regenerate. Do not edit the generated file. Add `"app/types/database.ts",` to the `ignores` list of the first object in `eslint.config.mjs` (generated code).
+The counts are of distinct names (`sort -u`), because one name appears on several lines of the generated file. If the fourth check prints less than 3 or the last prints 0, the production database is missing migrations from WP06, WP10 or WP16; stop and ask the owner to apply them and regenerate. Do not edit the generated file. Add `"app/types/database.ts",` to the `ignores` list of the first object in `eslint.config.mjs` (generated code).
 
 4.3. Type the four factories. Add `import type { Database } from "../types/database";` to each file in `app/lib` below and pass the generic:
 
@@ -957,7 +984,28 @@ return ((data || []) as any[]).map((row) => ({
 return (data ?? []).map((row) => ({
 ```
 
-b. **When the annotation fails because the domain type is wrong, fix the domain type to match the database** and null-guard its consumers. Known case: `HoldingProduct.url` in `app/types/portfolio.ts` is `string` but `products.url` is nullable (`schema.sql:65`); change it to `url: string | null;` (no component reads it: `grep -rn "products\.url\|products?\.url" app` returns nothing at `a188fea`).
+Two more known sites in WP05's `portfolioRepo.ts` that the step 4.5 greps would otherwise miss:
+
+```ts
+// before: guardOne takes unknown and casts
+async function guardOne(row: unknown): Promise<HoldingWithProduct> {
+  const [holding] = await guardHoldings(
+    [row as HoldingWithProduct],
+// after: the parameter is the domain type, so each caller's typed `data` /
+// `existing` (selected with HOLDING_SELECT) is checked at the call
+async function guardOne(row: HoldingWithProduct): Promise<HoldingWithProduct> {
+  const [holding] = await guardHoldings(
+    [row],
+```
+
+```ts
+// before (findPortfolioId)
+return data ? (data as { id: number }).id : null;
+// after: .select("id") is typed { id: number }
+return data ? data.id : null;
+```
+
+b. **When the annotation fails because the domain type is wrong, fix the domain type to match the database** and null-guard its consumers. Known case: `HoldingProduct.url` in `app/types/portfolio.ts` is `string` but `products.url` is nullable (`schema.sql:68`); change it to `url: string | null;` (no component reads it: `grep -rn "products\.url\|products?\.url" app` returns nothing at `a188fea`; the `product.url` reads in `ProductCard.tsx`, `MarketView.tsx` and `product/[id]/page.tsx` are the market `Product` type, which `mapMarketSummaryRowToProduct` and the 4.4e mapper fill with `""`).
 
 c. **When a column is wider than the domain type, narrow it at runtime in one named mapper**, never with a cast. Two known cases:
 
@@ -982,7 +1030,24 @@ export function toSalesHistoryEntries(
 }
 ```
 
-- `product_price_history.product_id` and `.recorded_at` are nullable (`schema.sql:48,50`). Widen `groupHistoryRowsByProduct`'s parameter in `app/lib/marketData.ts` and skip incomplete rows:
+- `get_shared_recipe` rows (WP06 `app/components/BoxCalculator/sharedRecipe.ts`, `return (row as SharedRecipeRow | undefined) ?? null;`): `box_recipes.currency` is `text` in the generated types while `SharedRecipeRow.currency` is `RecipeCurrency`. Replace the cast with a field-by-field build that narrows the currency the same way WP06's `rowToRecipe` does:
+
+```ts
+  const row = Array.isArray(data) ? data[0] : data;
+  if (!row) return null;
+  return {
+    name: row.name,
+    retail_price: row.retail_price,
+    promo_value: row.promo_value,
+    packs: row.packs,
+    // text in the schema (CHECK-constrained); anything but "CAD" is USD, as in rowToRecipe.
+    currency: row.currency === "CAD" ? "CAD" : "USD",
+  };
+```
+
+  If `tsc` reports that `row` has no `currency` or `packs` field, the generated file predates migration 0026: stop (step 4.2's last check should have caught it).
+
+- `product_price_history.product_id` and `.recorded_at` are nullable (`schema.sql:51,53`). Widen `groupHistoryRowsByProduct`'s parameter in `app/lib/marketData.ts` and skip incomplete rows:
 
 ```ts
 export function groupHistoryRowsByProduct(
@@ -1089,9 +1154,9 @@ f. **Last resort, only when the generated type genuinely cannot express the shap
 4.5. Sweep the remaining boundary casts. Every hit of this grep is either fixed by 4.4 or explained by a comment on the line above it:
 
 ```bash
-grep -rnE "\b(data|rows|existing|created|winner|salesRows|fallbackData)\b[^;]*\)? as [A-Z]" app --include=*.ts --include=*.tsx | grep -v __tests__
-grep -rnE "as unknown as|as any\b|: any\b|any\[\]|<any>" app proxy.ts --include=*.ts --include=*.tsx | grep -v __tests__
-# second grep: expect no output
+grep -rnE "\b(data|rows|row|existing|created|winner|salesRows|historyRows|fallbackData)\b[^;]*\)? as (\{|[A-Z])" app --include=*.ts --include=*.tsx | grep -v __tests__
+grep -rnE "as unknown as|as any\b|: any\b|any\[\]|<any>|, any>" app proxy.ts --include=*.ts --include=*.tsx | grep -v __tests__
+# second grep: expect no output (WP02's callback cast was removed in step 1.5)
 ```
 
 Known `any` sites at `a188fea` and their fixes, in case an earlier package left one: `app/lib/marketData.ts:351-352` (step 4.4e); `app/lib/serverMarketData.ts:864` (4.4a); `useBoxRecipes.ts:78` (rewritten by WP06); chart tooltips in `PriceChart.tsx`, `PortfolioChartImpl.tsx`, `AllocationChartImpl.tsx` (WP17 step 8 typed them with `ChartTooltipProps`; if `PriceChart`'s `CustomDot (props: any)` survived, type it `(props: { cx?: number; cy?: number; payload?: unknown })` with the fields it reads); `catch (err: any)` (use `catch (err: unknown)` and narrow with `err instanceof Error`).
@@ -1123,26 +1188,32 @@ jobs:
     runs-on: ubuntu-latest
     env:
       SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
-    defaults:
-      run:
-        working-directory: frontend
     steps:
+      # No job-level working-directory: this step runs before checkout, when
+      # frontend/ does not exist yet, and a missing working directory fails
+      # the step.
       - name: Skip without a token
         if: env.SUPABASE_ACCESS_TOKEN == ''
         run: echo "::notice::SUPABASE_ACCESS_TOKEN is not set; database type drift check skipped."
       - uses: actions/checkout@v7
         if: env.SUPABASE_ACCESS_TOKEN != ''
-      # Copy the pnpm/action-setup and actions/setup-node steps from the
-      # frontend job in ci.yml exactly as WP00 left them (same versions,
-      # same pnpm pin), each with the same `if:` as the checkout above.
+      - uses: pnpm/action-setup@v6
+        if: env.SUPABASE_ACCESS_TOKEN != ''
+        with:
+          package_json_file: frontend/package.json
+      - uses: actions/setup-node@v7
+        if: env.SUPABASE_ACCESS_TOKEN != ''
+        with:
+          node-version: "22"
       - name: Regenerate and compare
         if: env.SUPABASE_ACCESS_TOKEN != ''
+        working-directory: frontend
         run: |
           pnpm run types:db
           git diff --exit-code -- app/types/database.ts
 ```
 
-Replace the comment block with the two copied steps (add `if: env.SUPABASE_ACCESS_TOKEN != ''` to each). If WP00 pinned actions by SHA in `ci.yml`, pin the same SHAs here.
+The `pnpm/action-setup` and `actions/setup-node` steps must match the frontend job in `ci.yml` as WP00 left it: same action versions (or the same pinned SHAs, if WP00 pinned them) and the same `package_json_file: frontend/package.json` input instead of `version:`. If `ci.yml` differs from the block above, copy its values. No `pnpm install` is needed: `types:db` runs the CLI through `pnpm dlx`.
 
 ### Step 5. ESLint guards for F034 and F048
 
@@ -1230,8 +1301,8 @@ Run `pnpm run lint`. Expected: 0 errors. If the `app/lib` object reports a real 
 
 6.1. Dead code. Delete each only after its grep prints nothing outside the definition (and outside tests you are about to update):
 
-- `fetchSalesHistory` in `app/lib/clientMarketData.ts` (`:358-433` at `a188fea`, with its doc comment) and its two caches `salesHistoryCache` and `salesHistoryPromiseCache` (`:64-68`). Remove `SalesHistoryEntry` from that file's type import if it becomes unused, and remove any line in a cache-reset test helper that clears those two maps. Check: `grep -rn "fetchSalesHistory\|salesHistoryCache\|salesHistoryPromiseCache" app`. WP12's `app/lib/__tests__/supabaseLazyLoad.test.ts` has a case "`fetchSalesHistory(1, 30)` resolves `[]`": delete that case (the function no longer exists; the other never-throw cases still cover the loader).
-- `searchProductsBySet` in `app/lib/portfolio.ts` (`:784-821` at `a188fea`). Check: `grep -rn "searchProductsBySet" app`.
+- `fetchSalesHistory` in `app/lib/clientMarketData.ts` (`:358-433` at `a188fea`, with its doc comment) and its two caches `salesHistoryCache` and `salesHistoryPromiseCache` (`:64-68`). Remove `SalesHistoryEntry` from that file's type import if it becomes unused, and remove any line in a cache-reset test helper that clears those two maps. Check: `grep -rn "fetchSalesHistory\|salesHistoryCache\|salesHistoryPromiseCache" app`. WP12's `app/lib/__tests__/supabaseLazyLoad.test.ts` uses it inside the single case "never-throw readers return their fallback": delete only the `fetchSalesHistory,` line from that case's `await import("../clientMarketData")` destructure and the line `await expect(fetchSalesHistory(1, 30)).resolves.toEqual([]);`. Keep the case and its other assertions.
+- `searchProductsBySet` in `app/lib/portfolio.ts` (`:784-821` at `a188fea`; WP05 deleted lines 167-430 of that file, so find it with `grep -n "export async function searchProductsBySet" app/lib/portfolio.ts`), with its `/** Search products by set name */` doc comment. Check: `grep -rn "searchProductsBySet" app`. Leave `getAllProducts` (used by `lib/import.ts`).
 - `formatScore` in `app/stats/page.tsx` (`:55-58` at `a188fea`) if WP17 step 10c did not already delete it.
 - Already handled above: `ExchangeRateService.ts` and `Portfolio/index.ts` (2.1), `serverSupabase.ts` (1.8), the unused exported types (2.5).
 - Verify only, do not redo: `/analytics` versus `/stats` duplication is WP13's (a `redirects()` entry); `deleteLoading` in `PortfolioDashboard.tsx` is WP15/WP17's; the pnpm version in CI is WP00's. If any is still open, list it in the PR body.
@@ -1308,7 +1379,7 @@ The browser calls these routes with the header `x-pokefin-request: 1` (see `FETC
 
 ## Components
 
-Feature folders under `app/components/<Feature>/` hold `hooks/`, `cards/`, `controls/`, `shared/`, `utils/` and `__tests__/`. There are no component barrels: import the file you need. Put `"use client"` only on components and hooks that need it; a plain module that must stay in the browser starts with `import "client-only"`, one that must stay on the server with `import "server-only"`.
+Feature folders under `app/components/<Feature>/` hold `hooks/`, `cards/`, `controls/`, `shared/`, `utils/` and `__tests__/`. Import the file you need; do not add `index.ts` re-export barrels (`components/Portfolio/hooks/index.ts` is the only one left). Domain types go in `app/types/`, not in a component folder. Put `"use client"` only on components and hooks that need it; a plain module that must stay in the browser starts with `import "client-only"`, one that must stay on the server with `import "server-only"`.
 
 Styling: Tailwind CSS 4, mobile first, `md:` for desktop variants (`p-3 md:p-6`). Brand colours are CSS variables in `app/globals.css` (`--pf-*`).
 
@@ -1359,7 +1430,7 @@ Type generation (local or CI secret): `SUPABASE_ACCESS_TOKEN`.
   reports drift).
 ```
 
-Also check section 4: if it still says `frontend/middleware.ts`, change it to `frontend/proxy.ts` (F109; WP02 step 18 should already have done this).
+Also check section 4 ("Rate limiting"): at `a188fea` it names the file twice, `frontend/middleware.ts` (line 101) and `middleware.ts` (line 114). If either is still there, change it to `frontend/proxy.ts` and `proxy.ts` respectively (F109; WP02 step 18 should already have done this). Check: `grep -n "middleware.ts" /home/user/Pokefin/audits/HARDENING_FOLLOWUPS.md` prints nothing.
 
 ## Pitfalls: do not do this
 
@@ -1378,6 +1449,9 @@ Also check section 4: if it still says `frontend/middleware.ts`, change it to `f
 - **Do not remove the array-or-object normalisation from `mapProductsQueryResultToProducts`** (F047 verifier correction), even though the typed client infers objects.
 - **Do not hand-write or edit `app/types/database.ts`.** Only `pnpm types:db` writes it. A hand-written file is a fourth hand-maintained shape, which is the problem F047 describes.
 - **Do not add `eslint-disable` for `no-explicit-any` or `no-restricted-imports`** to get green.
+- **Do not keep WP02's `as unknown as` cast in the callback's `redirectType` read.** Use the `in` narrowing from step 1.5; the step 4.5 grep and the acceptance criteria require zero `as unknown as` outside tests.
+- **Do not remove `import "client-only"` to make the build pass.** A build error naming it means a server module imports a browser-only module; report the import trace (step 2.7).
+- **Do not give `db-types.yml` a job-level `working-directory: frontend`.** The skip step runs before checkout, when the directory does not exist, and the job would fail instead of printing the notice.
 - **Do not put the drift check in `ci.yml`.** It depends on the production schema, which changes when the owner applies a migration, not when a PR changes; it must not block unrelated pull requests.
 - **Do not redo other packages' work**: `/analytics` redirect (WP13), `deleteLoading` (WP15/WP17), CI pnpm pin (WP00), `delete` route logging beyond the one fallback line (WP17).
 
@@ -1452,7 +1526,7 @@ it("writes collected cookies hardened and the no-cache headers onto the chosen r
 });
 ```
 
-Remaining cases: two `setAll` calls for the same cookie name leave the second value on the response; `setAll` called with one argument (no headers) does not throw and sets no `cache-control`; with `NEXT_PUBLIC_SUPABASE_URL`/`KEY` deleted from `process.env`, `mockCreateServerClient` receives `"https://placeholder.supabase.invalid"` and `"placeholder-key"`, and with them set it receives the set values (read at call time: set them after the import). Add one `describe("supabaseEnv")` in the same file for `hasSupabaseEnv()` (false when either variable is missing or empty, true when both are set).
+Remaining cases: two `setAll` calls for the same cookie name leave the second value on the response; `setAll` called with one argument (no headers) does not throw and sets no `cache-control`; with `NEXT_PUBLIC_SUPABASE_URL`/`KEY` deleted from `process.env`, `mockCreateServerClient` receives `"https://placeholder.supabase.invalid"` and `"placeholder-key"`, and with them set it receives the set values (read at call time: set them after the import). Save both variables before the first case and restore them in `afterAll` (delete the key when the saved value was `undefined`), as WP17's `proxy.test.ts` does. Add one `describe("supabaseEnv")` in the same file for `hasSupabaseEnv()` (false when either variable is missing or empty, true when both are set).
 
 ### 2. `app/context/__tests__/CurrencyContext.test.tsx` (new, jsdom)
 
@@ -1533,7 +1607,7 @@ Remaining cases:
 - a non-finite or non-positive seed rate (`{ rate: NaN, date: "x" }`, `{ rate: 0, date: "x" }`) shows 1.36.
 - default currency is CAD; clicking "usd" shows USD in every consumer and writes `"USD"` to `localStorage[CURRENCY_STORAGE_KEY]`; unmounting and mounting a fresh provider shows USD.
 - a stored `"EUR"` is ignored (CAD).
-- `jest.spyOn(Storage.prototype, "setItem").mockImplementation(() => { throw new Error("blocked"); })`: clicking "usd" still switches to USD.
+- `jest.spyOn(Storage.prototype, "setItem").mockImplementation(() => { throw new Error("blocked"); })`: clicking "usd" still switches to USD. Add `afterEach(() => jest.restoreAllMocks());` to the file so the spy does not leak into later cases.
 - a `StorageEvent` dispatched on `window` with `key: CURRENCY_STORAGE_KEY, newValue: "USD"` switches consumers to USD (another tab).
 - `render(<Probe />)` with no provider: CAD, 1.36, `loading` "false", and clicking "usd" changes nothing.
 
@@ -1560,9 +1634,10 @@ Mock `next/navigation` (`useRouter: () => ({ push: jest.fn(), replace: jest.fn()
 
 ### 7. Existing tests to update
 
-- Every test that renders `ProductPrices`, `MarketView`, `RecentlyReleased` or `BoxCalculator` with an `initialExchangeRate` prop (for example WP08's `initialExchangeRate={1.36}`): delete the prop. `grep -rn "initialExchangeRate" app --include=*.test.tsx | grep -v compare` must print nothing afterwards. Their `jest.mock(".../lib/exchangeRate")` lines may stay (harmless) or go.
+- Every test that renders `ProductPrices`, `MarketView`, `RecentlyReleased` or `BoxCalculator` with an `initialExchangeRate` prop (for example WP08's `initialExchangeRate={1.36}`): delete the prop. `grep -rn "initialExchangeRate" app --include=*.test.tsx | grep -v compare` must print nothing afterwards. Their `jest.mock(".../lib/exchangeRate")` lines may stay (harmless) or go. Known files at the time of writing: WP08's `ProductPrices.urlSync.test.tsx`, WP13's MarketView test, WP19's MarketView tests. Without a `CurrencyProvider` these components now render with rate 1.36 and `exchangeRateLoading` false from the first render (before, they started with `exchangeRateLoading` true until the mocked fetch resolved, also with 1.36). A case that asserted the "rate…" loading text must now assert the settled `1 USD = 1.3600 CAD` text instead; nothing else changes.
 - Any test that renders `<PortfolioDashboard currency=... exchangeRate=...>`: drop the props, and wrap in `CurrencyProvider` if it asserts a CAD value.
-- `app/lib/__tests__/supabaseLazyLoad.test.ts` (WP12): delete the `fetchSalesHistory` case (step 6.1).
+- `app/lib/__tests__/supabaseLazyLoad.test.ts` (WP12): delete the two `fetchSalesHistory` lines inside the "never-throw readers return their fallback" case (step 6.1).
+- `app/components/BoxCalculator/__tests__/sharedRecipe.test.ts` (or wherever WP06 tests `fetchSharedRecipe`), if a case feeds an RPC row whose `currency` is not `"CAD"`/`"USD"`: it now comes back as `"USD"` (step 4.4c). Update that expectation only.
 - Tests whose imports the codemod rewrote need no other change.
 
 ### 8. Must pass unchanged
@@ -1590,10 +1665,11 @@ Structural checks (each must print exactly what is stated):
 ```bash
 # F034: one allowlist, client construction only in the factories
 grep -rn "ALLOWED_ORIGINS\|function isAllowedOrigin" app --include=*.ts | grep -v __tests__   # only app/lib/csrf.ts
-grep -rnE "create(Server|Browser)Client\(|createClient(<[^>]*>)?\(" app proxy.ts --include=*.ts --include=*.tsx | grep -v __tests__
-# only: lib/supabase.ts, lib/routeSupabase.ts, lib/requestSupabase.ts, lib/serverMarketData.ts
+grep -rnE "create(Server|Browser)Client(<[^>]*>)?\(|createClient(<[^>]*>)?\(" app proxy.ts --include=*.ts --include=*.tsx | grep -v __tests__
+# one call in each of lib/supabase.ts, lib/routeSupabase.ts, lib/requestSupabase.ts, lib/serverMarketData.ts,
+# and no call anywhere else (a comment line that only mentions the name is fine)
 # F047
-grep -rnE "as unknown as|as any\b|: any\b|any\[\]|<any>" app proxy.ts --include=*.ts --include=*.tsx | grep -v __tests__   # nothing
+grep -rnE "as unknown as|as any\b|: any\b|any\[\]|<any>|, any>" app proxy.ts --include=*.ts --include=*.tsx | grep -v __tests__   # nothing
 grep -n "no-explicit-any" eslint.config.mjs                                                          # nothing
 grep -c "<Database>" app/lib/supabase.ts app/lib/routeSupabase.ts app/lib/requestSupabase.ts app/lib/serverMarketData.ts   # 1 each
 # F048
@@ -1630,7 +1706,7 @@ Manual checks (`pnpm dev` with a real `.env.local`, or against the Vercel previe
    git add app/types/database.ts && git commit -m "chore(types): generate Supabase Database types" && git push
    ```
 
-   Alternatives if the CLI is not an option: the Supabase dashboard, Project Settings, API, "Generate types" (TypeScript, schema `public`), or the Supabase MCP `generate_typescript_types` tool; save the output verbatim as `frontend/app/types/database.ts`. Confirm: `grep -c "export type Database = " frontend/app/types/database.ts` prints `1`, and `grep -cE "get_portfolio_history|product_price_pending" frontend/app/types/database.ts` prints at least `2`.
+   Alternative if the CLI is not an option: the Supabase MCP `generate_typescript_types` tool for the same project; save its output verbatim as `frontend/app/types/database.ts`. Confirm: `grep -c "export type Database = " frontend/app/types/database.ts` prints `1`, and `grep -oE "get_portfolio_history|get_market_product_metrics|product_price_pending" frontend/app/types/database.ts | sort -u | wc -l` prints `3`.
 2. **Enable the drift check (optional, recommended).** GitHub, repository Settings, Secrets and variables, Actions, "New repository secret": name `SUPABASE_ACCESS_TOKEN`, value the token from item 1 (or a dedicated one). Confirm: Actions, "Database types", "Run workflow" on master finishes green; without the secret it finishes green with the notice "SUPABASE_ACCESS_TOKEN is not set".
 3. **From now on, after applying any migration**, run `pnpm types:db` from `frontend/` and commit the result in the PR that uses the new schema (or immediately after, if the migration shipped alone).
 
@@ -1652,7 +1728,8 @@ No database migration and no Vercel environment change is part of this package.
 - [ ] `/portfolio` renders the shared `CurrencySelector`; `PortfolioDashboard` takes no currency props.
 - [ ] `fetchSalesHistory`, its caches, `searchProductsBySet` and `formatScore` are gone.
 - [ ] `.github/copilot-instructions.md` matches the checklist in step 6.2 (every named path exists).
-- [ ] `HARDENING_FOLLOWUPS.md` section 7 records the WP20 cleanup and F-15.
+- [ ] `HARDENING_FOLLOWUPS.md` section 7 records the WP20 cleanup and F-15, and section 4 names `proxy.ts`, not `middleware.ts`.
+- [ ] `app/auth/callback/route.ts` reads `redirectType` with an `in` check, not a cast.
 - [ ] `.github/workflows/db-types.yml` exists and `package.json` has `types:db`.
 - [ ] `tsc`, lint, the full jest suite and `pnpm build:stub` pass.
 

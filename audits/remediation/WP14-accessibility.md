@@ -1224,8 +1224,8 @@ Expected hits: `Portfolio/__tests__/HoldingCard.test.tsx` (gain and loss `toHave
 - **Do not add `role="img"`, `tabIndex` or `aria-label` back to the stats `InfoIcon`** and do not build a JS popover for it; the `<details>` list is the accessible source and keeps `/stats` a server component.
 - **Do not use `aria-hidden` to hide a focusable element** (ScrollToTop); use `inert`.
 - **Do not touch `Header.tsx`** (WP03 did F022), the auth pages' `autoComplete`/`name` attributes (WP02, F024), `window.confirm`/`alert` (WP15, F103), the `gray-*`/`blue-*` codemod or CardRinkPromo placement/semantics (WP15, F091/F097). Only the class strings listed here change in those files.
-- **Do not "fix" `ProductCard`'s `className="text-[10px] md:text-xs mt-1"` on `<ReturnMetrics>`.** It is inert (ReturnMetrics' inner `<p className="text-sm">` sets the size); leave it for WP19.
-- **Do not add jest-axe or other dependencies in this PR.** An automated axe gate belongs to WP17 with the rest of CI.
+- **Do not "fix" `ProductCard`'s `className="text-[10px] md:text-xs mt-1"` on `<ReturnMetrics>`.** It is inert (ReturnMetrics' inner `<p className="text-sm">` sets the size); leave it. No later package changes it either (WP19 does not edit `ProductCard.tsx`), so do not list it as a hand-off.
+- **Do not add jest-axe or other dependencies in this PR.** No package in the 22-package plan adds an automated axe/pa11y gate (WP17 does not; the F095 recommendation's "axe/pa11y CI check" is unscheduled). List it under "Noticed, out of scope" in the PR body as a follow-up for the owner.
 - **Do not hard-code ids** in the modals or controls; use `useId()` (the controls render in both `/prices` and `/market`, and ids must stay unique and SSR-stable).
 - **Do not call `setState` in the new effects** (Dialog, ProductSearchSelect focus effects, Import step effect). They only move focus or scroll; `react-hooks/set-state-in-effect` would flag anything else.
 
