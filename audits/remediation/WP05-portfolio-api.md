@@ -10,8 +10,9 @@
   - F111 (full): the portfolio history date series steps by local days but keys by UTC date, so a DST change skips or repeats a point.
 - **Priority rationale**: `/portfolio` shows "Failed to load portfolio" to every signed-in user in production today, and this is the largest user-facing feature on the site.
 - **Effort**: L, about 14 to 18 hours including tests.
-- **Depends on**: WP04 (the `ANON_CLIENT_FORBIDDEN_FILES` ESLint guard, `sessionStatus` in `AuthContext`, the `/portfolio` page guards). WP00 for `pnpm build:stub`. WP01's `portfolio_holdings(portfolio_id)` index (migration 0025) makes the new queries cheaper but is not required.
-- **Unblocks**: WP10 (replaces the client-side `getPortfolioHistory` with an RPC), WP11, WP12, WP14 (portfolio modals), WP17, WP20. WP06 copies the route and client pattern built here and extends the same ESLint guards.
+- **Depends on**: WP04 (the `ANON_CLIENT_FORBIDDEN_FILES` ESLint guard, `sessionStatus` in `AuthContext`, the `/portfolio` page guards, and `app/lib/authSession.ts` with `isAuthoritativeSignedOut`, which step 6b uses to tell a signed-out caller (401) from an auth outage (503)). WP02 (it added the username rules to `app/lib/validation.ts`, which shifts that file's line numbers). WP00 for `pnpm build:stub` and `scripts/supabase-stub.mjs`. WP01's `portfolio_holdings(portfolio_id)` index (migration 0025) makes the new queries cheaper but is not required.
+- **Unblocks**: WP10 (replaces the client-side `getPortfolioHistory` with an RPC), WP11, WP12, WP14 (portfolio modals), WP15, WP17, WP20. WP06 copies the route and client pattern built here, reuses `rejectIfNotAppRequest` (step 6a) and `app/lib/routeAuth.ts` (step 6b) instead of creating them, and extends the same ESLint guards.
+- **Names later packages grep for** (keep them exactly): `findPortfolioId` (portfolioRepo), `export class PortfolioApiError` and `async function readErrorMessage` (portfolioApi), `export type Parsed` (portfolioInput), the single-line call `getPortfolioHistory(portfolioId, TIMEFRAME_DAYS[timeframe], holdings, controller.signal)` and the function `loadErrorMessage` in `usePortfolioData.ts` (WP10, WP15), `rejectIfNotAppRequest` (WP06, WP10), `requireRouteUser` and `jsonNoStore` (WP06), `historyLoading`, `applyHoldingSaved` and `applyHoldingDeleted` on the hook's return value (WP14, WP15). WP15 also requires that `usePortfolioData.ts` contains no `.message` text at all, which is why the error state field is called `errorText`.
 - **Suggested branch name**: `remediation/wp05-portfolio-api`
 - **Risk level**: medium. It rewrites the whole portfolio data path and every portfolio write, but that path is fully broken in production today, no migration or environment change is involved, and every route and the hook race are covered by tests.
 
@@ -27,7 +28,7 @@ Read these files fully first (paths relative to `frontend/`):
 - `app/lib/import.ts` (508 lines): `importHoldings` :415-487 calls `addHolding` per row; `processCollectrImport` :385-410.
 - `app/components/Portfolio/hooks/usePortfolioData.ts` (109 lines), `hooks/useProductSearch.ts` (51 lines).
 - `app/components/Portfolio/PortfolioDashboard.tsx` (219 lines), `cards/AddHoldingModal.tsx` (247), `cards/EditHoldingModal.tsx` (239), `cards/ImportHoldingsModal.tsx` (531), `shared/PortfolioChart.tsx` (84), `types/index.ts` (192).
-- `app/lib/csrf.ts`, `app/lib/routeSupabase.ts`, `app/api/auth/sign-in/route.ts` (the route pattern to copy), `app/api/profile/route.ts` (added by WP04).
+- `app/lib/csrf.ts`, `app/lib/routeSupabase.ts`, `app/api/auth/sign-in/route.ts` (the route pattern to copy), `app/api/profile/route.ts` and `app/lib/authSession.ts` (both added by WP04; `/api/profile` shows the 401 versus 503 split this package copies).
 - `app/lib/serverMarketData.ts` :42-49 (`createMarketDataSupabaseClient`), :81-133 (`fetchPriceHistoryPages`), :135-176 (`fetchNewestPricedAt`), :896-903 (`getCachedMarketProductSummaries`).
 - `app/lib/validation.ts` (65 lines plus WP02's additions), `app/lib/priceGuard.ts`, `app/lib/marketPulse.ts:76-78` (`utcMidnightMs`).
 - `migrations/0003_integrity_constraints.sql:10-24` (`purchase_date <= current_date`, evaluated in UTC), `:40-41` (`portfolios_user_id_uidx`, one portfolio per user), `:54-60` (`client_idempotency_key uuid` and the PARTIAL unique index `portfolio_holdings_idem_uidx ... WHERE client_idempotency_key IS NOT NULL`); `migrations/0008_box_recipes_rls_hardening.sql:106-110` (`notes` at most 1000 chars); `migrations/0014_rls_perf_and_dedupe.sql:60-87` (owner-only policies).
@@ -41,16 +42,24 @@ Confirm the starting state from `frontend/`:
 #    and the ESLint guard list exists. Expect: no output from the first grep, one hit from the second.
 grep -n 'lib/supabase' app/context/AuthContext.tsx app/account/page.tsx
 grep -n 'ANON_CLIENT_FORBIDDEN_FILES' eslint.config.mjs | head -1
-# If the first grep prints anything or the second prints nothing, WP04 is missing: stop.
+grep -n 'export function isAuthoritativeSignedOut' app/lib/authSession.ts
+# If the first grep prints anything, or the second or third prints nothing, WP04 is missing: stop.
+
+# 1b. Neither WP06 nor anything else created the shared route helpers yet.
+#     Expect no output from both. If either prints a line, the helper already
+#     exists: skip the matching part of step 6 and import the existing one.
+grep -n 'export function rejectIfNotAppRequest' app/lib/csrf.ts
+grep -rn 'requireRouteUser\|export function jsonNoStore' app/lib | grep -v __tests__
 
 # 2. The bug: user tables queried from the browser module. Expect 10 hits at lines 177,196,218,242,270,300,322,358,396,420.
 grep -n 'from("portfolio' app/lib/portfolio.ts
 
-# 3. portfolio_lots is never queried by the app (only comments). Expect hits only in
-#    app/api/account/export/route.ts and app/api/account/delete/route.ts comments.
+# 3. portfolio_lots is never queried by the app. Expect exactly one hit, a comment at
+#    app/api/account/delete/route.ts:67.
 grep -rn "portfolio_lots" app --include=*.ts --include=*.tsx | grep -v __tests__
 
-# 4. Nobody passes an idempotency key. Expect only types/index.ts:72 and portfolio.ts:366-367.
+# 4. Nobody passes an idempotency key. Expect only types/index.ts:72 and portfolio.ts:354
+#    (a comment), :366 and :367.
 grep -rn "client_idempotency_key" app --include=*.ts --include=*.tsx
 
 # 5. Dead user-table helpers. Expect no output (no callers outside portfolio.ts).
@@ -67,19 +76,20 @@ pnpm exec eslint app/components/Portfolio app/lib/portfolio.ts app/lib/import.ts
 
 Assumptions to check:
 
-- WP02 appended `PASSWORD_MIN_LENGTH`, `USERNAME_RE` and friends to `app/lib/validation.ts`. This PR only adds date helpers there and changes `isValidPastDate`; keep WP02's additions.
-- WP04 may have added its own "header only" check for `GET /api/auth/me`. If `app/lib/csrf.ts` already exports a function that checks only `x-pokefin-request` (any name), reuse it in step 6 instead of adding `rejectIfNotAppRequest`.
+- WP02 inserted `PASSWORD_MIN_LENGTH`, `USERNAME_RE` and friends into `app/lib/validation.ts` after `RECIPE_PACKS_MAX`, so every line number this spec gives for `validation.ts` is about 24 lines too low. Locate the edits in step 1 by the quoted code (`clampNotes`, `isValidPastDate`), not by number. This PR only adds date helpers there and changes `isValidPastDate`; keep WP02's additions.
+- Line numbers for every other file refer to the base commit before this PR. When a step first inserts lines, later numbers in the same file are off by that many; always find the edit point by the quoted code or the named function, and use the number only as a hint.
+- If `app/lib/csrf.ts` already exports a function that checks only `x-pokefin-request` (any name, check 1b), reuse it instead of adding `rejectIfNotAppRequest` in step 6a, and import that name in step 8a.
 - `@testing-library/react` 16 exports `renderHook` (it does at the time of writing).
 
 ## Implementation steps
 
 Order: steps 1 to 7 add new modules that nothing imports yet (the build stays green after each). Steps 8 and 9 add the routes and their browser client. Steps 10 to 17 switch the client over and delete the old code. Step 18 adds the lint guards, step 19 the docs. Write the tests (see Tests) alongside the step they cover.
 
-While this spec was written, the code of steps 1 to 18 was applied to a scratch copy of `frontend/` at base commit `a188fea` (plus a stand-in for WP04's ESLint block): `tsc --noEmit` reported only the expected `portfolio.freshness.test.ts` import of `getHoldings` (fixed by Tests 5), and ESLint on `app/components/Portfolio app/lib app/api/portfolio app/portfolio` reported exactly the 7 pre-existing errors listed in Verification, with 0 errors in every new or rewritten file. If you see other type or lint errors, the difference is in how a step was applied.
+While this spec was written, the code of steps 1 to 18 was applied to a scratch copy of `frontend/` at base commit `a188fea` (plus a stand-in for WP04's ESLint block): `tsc --noEmit` reported only the expected `portfolio.freshness.test.ts` import of `getHoldings` (fixed by Tests 5), and ESLint on `app/components/Portfolio app/lib app/api/portfolio app/portfolio` reported exactly the 7 pre-existing errors listed in Verification, with 0 errors in every new or rewritten file. At review, steps 1 to 13 and 17b were re-applied to a fresh scratch copy together with WP04's `app/lib/authSession.ts`, after the rewrite of steps 6b, 8 and 12: `tsc --noEmit` reported errors only in the files steps 15 to 17a had not yet been applied to, and ESLint reported 0 problems in the routes, `routeAuth.ts`, `portfolioRepo.ts`, both hooks, `portfolioApi.ts`, `portfolioInput.ts`, `priceFreshness.ts`, `import.ts` and `portfolio.ts`, and 0 errors in the test skeletons of Tests 1, 2, 4, 6 and 8. If you see other type or lint errors, the difference is in how a step was applied.
 
 ### Step 1. `app/lib/validation.ts`: local/UTC date keys and a clamped "today" (F060)
 
-Add below `clampNotes` (after line 44), and replace `isValidPastDate` (lines 46-56):
+Add the three new functions directly below `clampNotes`, and replace the whole of `isValidPastDate` (its doc comment `ISO date string YYYY-MM-DD that is not in the future.` through its closing brace) with the version below. At the base commit these are lines 39-44 and 46-56; after WP02 they are about 24 lines lower. Do not touch `stripControlChars` or WP02's constants.
 
 ```ts
 /**
@@ -418,9 +428,9 @@ export async function fetchNewestPricedAtForProducts(
 
 Nothing else in this file changes.
 
-### Step 6. `app/lib/csrf.ts`: header-only gate for private GETs
+### Step 6. Shared route helpers
 
-Append (skip if WP04 already added an equivalent helper; then use that name in step 7):
+6a. `app/lib/csrf.ts`: header-only gate for private GETs. Append (skip if check 1b found an equivalent helper; then use that name in step 8a). `NextRequest` and `NextResponse` are already imported at the top of `csrf.ts`:
 
 ```ts
 /**
@@ -437,6 +447,50 @@ export function rejectIfNotAppRequest(req: NextRequest): NextResponse | null {
   return null;
 }
 ```
+
+6b. `app/lib/routeAuth.ts` (new; skip if check 1b found `requireRouteUser`). `supabase.auth.getUser()` returns `user: null` both when there is no session and when GoTrue is unreachable or rate-limited. Answering 401 in the second case would tell a signed-in user "Your session has expired" during an auth outage, the exact F063 behaviour WP04 removed from `/api/auth/me`. This helper applies WP04's `isAuthoritativeSignedOut` once for every portfolio route. WP06 step 3b defines the same file byte for byte and skips it when it exists, so copy it exactly:
+
+```ts
+import "server-only";
+
+import { NextResponse } from "next/server";
+import type { User } from "@supabase/supabase-js";
+import type { createRouteSupabaseClient } from "./routeSupabase";
+import { isAuthoritativeSignedOut } from "./authSession";
+
+type RouteSupabaseClient = Awaited<ReturnType<typeof createRouteSupabaseClient>>;
+
+export const NO_STORE = { "Cache-Control": "no-store" } as const;
+
+export function jsonNoStore(body: unknown, status = 200) {
+  return NextResponse.json(body, { status, headers: NO_STORE });
+}
+
+const UNAVAILABLE = "Service temporarily unavailable. Please try again.";
+
+/**
+ * Resolve the caller from the HttpOnly session cookie.
+ * Returns the user, or a response to send as-is: 401 when the session is
+ * authoritatively missing or rejected, 503 when GoTrue could not answer
+ * (network, 5xx, 429). A 503 must never be read as "signed out" (review F063).
+ */
+export async function requireRouteUser(
+  supabase: RouteSupabaseClient
+): Promise<{ user: User; response: null } | { user: null; response: NextResponse }> {
+  try {
+    const { data, error } = await supabase.auth.getUser();
+    if (data.user) return { user: data.user, response: null };
+    if (isAuthoritativeSignedOut(error)) {
+      return { user: null, response: jsonNoStore({ error: "Unauthorized" }, 401) };
+    }
+    return { user: null, response: jsonNoStore({ error: UNAVAILABLE }, 503) };
+  } catch {
+    return { user: null, response: jsonNoStore({ error: UNAVAILABLE }, 503) };
+  }
+}
+```
+
+`next/jest` maps `server-only` to an empty module, so tests can load this file.
 
 ### Step 7. `app/lib/server/portfolioRepo.ts` (new): every user-table query
 
@@ -790,18 +844,19 @@ Notes for this step:
 
 ### Step 8. Route handlers (new files)
 
-All four follow `app/api/auth/sign-in/route.ts`: CSRF and size gates first, then `createRouteSupabaseClient()`, then `auth.getUser()` (401 when there is no user, before the body is parsed), then the repo. Every response carries `Cache-Control: no-store`. Unexpected throws are caught, logged with `logCaughtError`, and answered with a generic 500. None of them sets `export const dynamic` or `runtime` (reading cookies already makes them dynamic).
+All four follow `app/api/auth/sign-in/route.ts` and WP04's `app/api/profile/route.ts`: CSRF and size gates first, then `createRouteSupabaseClient()`, then `requireRouteUser` (step 6b: 401 when the session is authoritatively absent, 503 when the auth service could not answer; both before the body is parsed), then the repo. Every response the handler builds goes through `jsonNoStore`, so it carries `Cache-Control: no-store`; only the 403 and 413 answers produced inside `csrf.ts` do not. Unexpected throws are caught, logged with `logCaughtError`, and answered with a generic 500. None of them sets `export const dynamic` or `runtime` (reading cookies already makes them dynamic), and none exports anything except the HTTP method handlers (Next's build rejects other exports from `route.ts`).
 
 8a. `app/api/portfolio/route.ts`:
 
 ```ts
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest } from "next/server";
 import { createRouteSupabaseClient } from "../../lib/routeSupabase";
 import { rejectIfNotAppRequest } from "../../lib/csrf";
+import { jsonNoStore, requireRouteUser } from "../../lib/routeAuth";
 import { loadPortfolioPayload } from "../../lib/server/portfolioRepo";
 import { logCaughtError } from "../../lib/logger";
 
-const NO_STORE = { "Cache-Control": "no-store" } as const;
+const LOAD_FAILED = "Failed to load portfolio";
 
 /**
  * The caller's portfolio (created on first use) and its holdings with the
@@ -816,27 +871,15 @@ export async function GET(req: NextRequest) {
 
   try {
     const supabase = await createRouteSupabaseClient();
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-    if (!user) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401, headers: NO_STORE });
-    }
+    const auth = await requireRouteUser(supabase);
+    if (auth.response) return auth.response;
 
-    const payload = await loadPortfolioPayload(supabase, user.id);
-    if (!payload) {
-      return NextResponse.json(
-        { error: "Failed to load portfolio" },
-        { status: 500, headers: NO_STORE }
-      );
-    }
-    return NextResponse.json(payload, { headers: NO_STORE });
+    const payload = await loadPortfolioPayload(supabase, auth.user.id);
+    if (!payload) return jsonNoStore({ error: LOAD_FAILED }, 500);
+    return jsonNoStore(payload);
   } catch (error) {
     logCaughtError("portfolio_get_failed", error);
-    return NextResponse.json(
-      { error: "Failed to load portfolio" },
-      { status: 500, headers: NO_STORE }
-    );
+    return jsonNoStore({ error: LOAD_FAILED }, 500);
   }
 }
 ```
@@ -844,9 +887,10 @@ export async function GET(req: NextRequest) {
 8b. `app/api/portfolio/holdings/route.ts` (add one holding):
 
 ```ts
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest } from "next/server";
 import { createRouteSupabaseClient } from "../../../lib/routeSupabase";
 import { rejectIfBodyTooLarge, rejectIfCsrfFails } from "../../../lib/csrf";
+import { jsonNoStore, requireRouteUser } from "../../../lib/routeAuth";
 import {
   HOLDING_BODY_MAX_BYTES,
   describeWriteError,
@@ -855,7 +899,7 @@ import {
 import { getOrCreatePortfolio, insertHolding } from "../../../lib/server/portfolioRepo";
 import { logCaughtError } from "../../../lib/logger";
 
-const NO_STORE = { "Cache-Control": "no-store" } as const;
+const SAVE_FAILED = "Could not save the holding. Please try again.";
 
 /**
  * 201 { status: "inserted", holding } for a new row, 200 { status: "duplicate",
@@ -870,57 +914,44 @@ export async function POST(req: NextRequest) {
 
   try {
     const supabase = await createRouteSupabaseClient();
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-    if (!user) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401, headers: NO_STORE });
-    }
+    const auth = await requireRouteUser(supabase);
+    if (auth.response) return auth.response;
 
     let raw: unknown;
     try {
       raw = await req.json();
     } catch {
-      return NextResponse.json({ error: "Invalid body" }, { status: 400, headers: NO_STORE });
+      return jsonNoStore({ error: "Invalid body" }, 400);
     }
     const parsed = parseNewHolding(raw);
-    if (!parsed.ok) {
-      return NextResponse.json({ error: parsed.error }, { status: 400, headers: NO_STORE });
-    }
+    if (!parsed.ok) return jsonNoStore({ error: parsed.error }, 400);
 
-    const portfolio = await getOrCreatePortfolio(supabase, user.id);
-    if (!portfolio) {
-      return NextResponse.json(
-        { error: "Could not save the holding. Please try again." },
-        { status: 500, headers: NO_STORE }
-      );
-    }
+    const portfolio = await getOrCreatePortfolio(supabase, auth.user.id);
+    if (!portfolio) return jsonNoStore({ error: SAVE_FAILED }, 500);
 
     const result = await insertHolding(supabase, portfolio.id, parsed.value);
     if (result.status === "error") {
       const { httpStatus, message } = describeWriteError(result.code);
-      return NextResponse.json({ error: message }, { status: httpStatus, headers: NO_STORE });
+      return jsonNoStore({ error: message }, httpStatus);
     }
-    return NextResponse.json(
+    return jsonNoStore(
       { status: result.status, holding: result.holding },
-      { status: result.status === "inserted" ? 201 : 200, headers: NO_STORE }
+      result.status === "inserted" ? 201 : 200
     );
   } catch (error) {
     logCaughtError("portfolio_holding_post_failed", error);
-    return NextResponse.json(
-      { error: "Could not save the holding. Please try again." },
-      { status: 500, headers: NO_STORE }
-    );
+    return jsonNoStore({ error: SAVE_FAILED }, 500);
   }
 }
 ```
 
-8c. `app/api/portfolio/holdings/[id]/route.ts` (edit and delete one holding). The second argument uses the Next 15+ Promise form of `params`:
+8c. `app/api/portfolio/holdings/[id]/route.ts` (edit and delete one holding). The second argument uses the Next 15+ Promise form of `params`. The local type is named `HoldingRouteContext`, not `RouteContext`, so it does not shadow Next 16's global `RouteContext` helper type:
 
 ```ts
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest } from "next/server";
 import { createRouteSupabaseClient } from "../../../../lib/routeSupabase";
 import { rejectIfBodyTooLarge, rejectIfCsrfFails } from "../../../../lib/csrf";
+import { jsonNoStore, requireRouteUser } from "../../../../lib/routeAuth";
 import {
   HOLDING_BODY_MAX_BYTES,
   describeWriteError,
@@ -933,9 +964,10 @@ import {
 } from "../../../../lib/server/portfolioRepo";
 import { logCaughtError } from "../../../../lib/logger";
 
-const NO_STORE = { "Cache-Control": "no-store" } as const;
+const SAVE_FAILED = "Could not save the holding. Please try again.";
+const DELETE_FAILED = "Could not delete the holding. Please try again.";
 
-type RouteContext = { params: Promise<{ id: string }> };
+type HoldingRouteContext = { params: Promise<{ id: string }> };
 
 function parseHoldingId(raw: string): number | null {
   if (!/^\d{1,15}$/.test(raw)) return null;
@@ -943,98 +975,73 @@ function parseHoldingId(raw: string): number | null {
   return id > 0 ? id : null;
 }
 
-function notFound() {
-  return NextResponse.json({ error: "Holding not found" }, { status: 404, headers: NO_STORE });
+function holdingNotFound() {
+  return jsonNoStore({ error: "Holding not found" }, 404);
 }
 
-export async function PATCH(req: NextRequest, { params }: RouteContext) {
+export async function PATCH(req: NextRequest, { params }: HoldingRouteContext) {
   const csrf = rejectIfCsrfFails(req);
   if (csrf) return csrf;
   const tooLarge = rejectIfBodyTooLarge(req, HOLDING_BODY_MAX_BYTES);
   if (tooLarge) return tooLarge;
 
   const holdingId = parseHoldingId((await params).id);
-  if (holdingId === null) {
-    return NextResponse.json({ error: "Invalid holding id" }, { status: 400, headers: NO_STORE });
-  }
+  if (holdingId === null) return jsonNoStore({ error: "Invalid holding id" }, 400);
 
   try {
     const supabase = await createRouteSupabaseClient();
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-    if (!user) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401, headers: NO_STORE });
-    }
+    const auth = await requireRouteUser(supabase);
+    if (auth.response) return auth.response;
 
     let raw: unknown;
     try {
       raw = await req.json();
     } catch {
-      return NextResponse.json({ error: "Invalid body" }, { status: 400, headers: NO_STORE });
+      return jsonNoStore({ error: "Invalid body" }, 400);
     }
     const parsed = parseHoldingUpdate(raw);
-    if (!parsed.ok) {
-      return NextResponse.json({ error: parsed.error }, { status: 400, headers: NO_STORE });
-    }
+    if (!parsed.ok) return jsonNoStore({ error: parsed.error }, 400);
 
-    const portfolioId = await findPortfolioId(supabase, user.id);
-    if (portfolioId === null) return notFound();
+    const portfolioId = await findPortfolioId(supabase, auth.user.id);
+    if (portfolioId === null) return holdingNotFound();
 
     const result = await updateHolding(supabase, portfolioId, holdingId, parsed.value);
-    if (result.status === "not_found") return notFound();
+    if (result.status === "not_found") return holdingNotFound();
     if (result.status === "error") {
       const { httpStatus, message } = describeWriteError(result.code);
-      return NextResponse.json({ error: message }, { status: httpStatus, headers: NO_STORE });
+      return jsonNoStore({ error: message }, httpStatus);
     }
-    return NextResponse.json({ holding: result.holding }, { headers: NO_STORE });
+    return jsonNoStore({ holding: result.holding });
   } catch (error) {
     logCaughtError("portfolio_holding_patch_failed", error);
-    return NextResponse.json(
-      { error: "Could not save the holding. Please try again." },
-      { status: 500, headers: NO_STORE }
-    );
+    return jsonNoStore({ error: SAVE_FAILED }, 500);
   }
 }
 
-export async function DELETE(req: NextRequest, { params }: RouteContext) {
+export async function DELETE(req: NextRequest, { params }: HoldingRouteContext) {
   const csrf = rejectIfCsrfFails(req);
   if (csrf) return csrf;
   const tooLarge = rejectIfBodyTooLarge(req, 1024);
   if (tooLarge) return tooLarge;
 
   const holdingId = parseHoldingId((await params).id);
-  if (holdingId === null) {
-    return NextResponse.json({ error: "Invalid holding id" }, { status: 400, headers: NO_STORE });
-  }
+  if (holdingId === null) return jsonNoStore({ error: "Invalid holding id" }, 400);
 
   try {
     const supabase = await createRouteSupabaseClient();
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-    if (!user) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401, headers: NO_STORE });
-    }
+    const auth = await requireRouteUser(supabase);
+    if (auth.response) return auth.response;
 
-    const portfolioId = await findPortfolioId(supabase, user.id);
-    if (portfolioId === null) return notFound();
+    const portfolioId = await findPortfolioId(supabase, auth.user.id);
+    if (portfolioId === null) return holdingNotFound();
 
     const result = await deleteHolding(supabase, portfolioId, holdingId);
-    if (result.status === "not_found") return notFound();
-    if (result.status === "error") {
-      return NextResponse.json(
-        { error: "Could not delete the holding. Please try again." },
-        { status: 500, headers: NO_STORE }
-      );
-    }
-    return NextResponse.json({ ok: true }, { headers: NO_STORE });
+    if (result.status === "not_found") return holdingNotFound();
+    if (result.status === "error") return jsonNoStore({ error: DELETE_FAILED }, 500);
+    return jsonNoStore({ ok: true });
   } catch (error) {
     logCaughtError("portfolio_holding_delete_failed", error);
-    return NextResponse.json(
-      { error: "Could not delete the holding. Please try again." },
-      { status: 500, headers: NO_STORE }
-    );
+    return jsonNoStore({ error: DELETE_FAILED }, 500);
   }
 }
 ```
@@ -1042,9 +1049,10 @@ export async function DELETE(req: NextRequest, { params }: RouteContext) {
 8d. `app/api/portfolio/import/route.ts` (bulk import; one request per 250 rows instead of one request per row, which would blow through the proxy's 60/min general limit, `app/lib/rateLimit.ts`):
 
 ```ts
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest } from "next/server";
 import { createRouteSupabaseClient } from "../../../lib/routeSupabase";
 import { rejectIfBodyTooLarge, rejectIfCsrfFails } from "../../../lib/csrf";
+import { jsonNoStore, requireRouteUser } from "../../../lib/routeAuth";
 import {
   IMPORT_BODY_MAX_BYTES,
   parseImportEnvelope,
@@ -1058,7 +1066,7 @@ import {
 import { logCaughtError } from "../../../lib/logger";
 import type { NewHoldingInput } from "../../../components/Portfolio/types";
 
-const NO_STORE = { "Cache-Control": "no-store" } as const;
+const IMPORT_FAILED = "Import failed. Please try again.";
 
 /**
  * Body { rows: NewHoldingInput[] } (1..IMPORT_MAX_ROWS_PER_REQUEST). Answers
@@ -1073,31 +1081,20 @@ export async function POST(req: NextRequest) {
 
   try {
     const supabase = await createRouteSupabaseClient();
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-    if (!user) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401, headers: NO_STORE });
-    }
+    const auth = await requireRouteUser(supabase);
+    if (auth.response) return auth.response;
 
     let raw: unknown;
     try {
       raw = await req.json();
     } catch {
-      return NextResponse.json({ error: "Invalid body" }, { status: 400, headers: NO_STORE });
+      return jsonNoStore({ error: "Invalid body" }, 400);
     }
     const envelope = parseImportEnvelope(raw);
-    if (!envelope.ok) {
-      return NextResponse.json({ error: envelope.error }, { status: 400, headers: NO_STORE });
-    }
+    if (!envelope.ok) return jsonNoStore({ error: envelope.error }, 400);
 
-    const portfolio = await getOrCreatePortfolio(supabase, user.id);
-    if (!portfolio) {
-      return NextResponse.json(
-        { error: "Import failed. Please try again." },
-        { status: 500, headers: NO_STORE }
-      );
-    }
+    const portfolio = await getOrCreatePortfolio(supabase, auth.user.id);
+    if (!portfolio) return jsonNoStore({ error: IMPORT_FAILED }, 500);
 
     const results: ImportRowResult[] = new Array(envelope.value.length);
     const valid: NewHoldingInput[] = [];
@@ -1122,13 +1119,10 @@ export async function POST(req: NextRequest) {
             : { index, status: outcome.status };
       });
     }
-    return NextResponse.json({ results }, { headers: NO_STORE });
+    return jsonNoStore({ results });
   } catch (error) {
     logCaughtError("portfolio_import_failed", error);
-    return NextResponse.json(
-      { error: "Import failed. Please try again." },
-      { status: 500, headers: NO_STORE }
-    );
+    return jsonNoStore({ error: IMPORT_FAILED }, 500);
   }
 }
 ```
@@ -1628,21 +1622,38 @@ const TIMEFRAME_DAYS: Record<PortfolioTimeframe, number> = {
 
 type CoreState =
   | { userId: string; status: "ready"; portfolio: Portfolio; holdings: HoldingWithProduct[] }
-  | { userId: string; status: "error"; message: string };
+  | { userId: string; status: "error"; errorText: string };
 
-type HistoryState = {
+/** The most recent settled history request, success or failure. */
+type HistoryResult = {
   portfolioId: number;
   timeframe: PortfolioTimeframe;
   holdings: HoldingWithProduct[];
   points: PortfolioHistoryPoint[];
 };
 
+/**
+ * Non-empty history already computed for this portfolio and this exact
+ * holdings array, by timeframe, so going back to a range already viewed is
+ * instant (F144 verifier). Any change to holdings (add, edit, delete,
+ * refresh) produces a new array and so invalidates every entry.
+ */
+type HistoryCache = {
+  portfolioId: number;
+  holdings: HoldingWithProduct[];
+  byTimeframe: Partial<Record<PortfolioTimeframe, PortfolioHistoryPoint[]>>;
+};
+
 const NO_HOLDINGS: HoldingWithProduct[] = [];
 const NO_HISTORY: PortfolioHistoryPoint[] = [];
 
+/** Fixed strings only: never show a thrown error's own text to the user. */
 function loadErrorMessage(err: unknown): string {
   if (err instanceof PortfolioApiError && err.status === 401) {
     return "Your session has expired. Please sign in again.";
+  }
+  if (err instanceof PortfolioApiError && err.status === 503) {
+    return "Service temporarily unavailable. Please try again.";
   }
   return "Failed to load portfolio";
 }
@@ -1653,7 +1664,8 @@ function loadErrorMessage(err: unknown): string {
  *    refresh(). A timeframe click never refetches them (F144).
  *  - history: keyed on portfolio id, timeframe and the holdings array it is
  *    computed from. Aborting the previous request means a slow 1Y response can
- *    never land after a later 7D one (F053).
+ *    never land after a later 7D one (F053). A range already computed for the
+ *    same holdings is served from the cache without a request.
  * `loading` is true only before the first data for this user, so a refresh or
  * a timeframe change never unmounts the dashboard (the table keeps its sort).
  * No setState runs synchronously in an effect body
@@ -1665,7 +1677,8 @@ export function usePortfolioData(): UsePortfolioDataReturn {
 
   const [core, setCore] = useState<CoreState | null>(null);
   const [reloadToken, setReloadToken] = useState(0);
-  const [historyState, setHistoryState] = useState<HistoryState | null>(null);
+  const [lastHistory, setLastHistory] = useState<HistoryResult | null>(null);
+  const [historyCache, setHistoryCache] = useState<HistoryCache | null>(null);
   const [timeframe, setTimeframe] = useState<PortfolioTimeframe>("1M");
 
   useEffect(() => {
@@ -1679,7 +1692,7 @@ export function usePortfolioData(): UsePortfolioDataReturn {
       (err: unknown) => {
         if (controller.signal.aborted) return;
         logCaughtError("portfolio_data_fetch_failed", err);
-        setCore({ userId, status: "error", message: loadErrorMessage(err) });
+        setCore({ userId, status: "error", errorText: loadErrorMessage(err) });
       }
     );
     return () => controller.abort();
@@ -1690,30 +1703,52 @@ export function usePortfolioData(): UsePortfolioDataReturn {
   const holdings = current?.status === "ready" ? current.holdings : NO_HOLDINGS;
   const portfolioId = portfolio?.id ?? null;
 
+  const cachedPoints =
+    historyCache !== null &&
+    historyCache.portfolioId === portfolioId &&
+    historyCache.holdings === holdings
+      ? historyCache.byTimeframe[timeframe]
+      : undefined;
+  const cacheHit = cachedPoints !== undefined;
+
   useEffect(() => {
-    if (portfolioId === null) return;
+    if (portfolioId === null || cacheHit) return;
     const controller = new AbortController();
     getPortfolioHistory(portfolioId, TIMEFRAME_DAYS[timeframe], holdings, controller.signal).then(
       (points) => {
         if (controller.signal.aborted) return;
-        setHistoryState({ portfolioId, timeframe, holdings, points });
+        setLastHistory({ portfolioId, timeframe, holdings, points });
+        // An empty series is not cached. Until WP10, getPortfolioHistory
+        // reports a failed read as [], and a failure must be retried the next
+        // time this range is selected.
+        if (points.length === 0) return;
+        setHistoryCache((prev) => ({
+          portfolioId,
+          holdings,
+          byTimeframe: {
+            ...(prev !== null && prev.portfolioId === portfolioId && prev.holdings === holdings
+              ? prev.byTimeframe
+              : {}),
+            [timeframe]: points,
+          },
+        }));
       },
       (err: unknown) => {
         if (controller.signal.aborted) return;
         logCaughtError("portfolio_history_fetch_failed", err);
-        setHistoryState({ portfolioId, timeframe, holdings, points: [] });
+        setLastHistory({ portfolioId, timeframe, holdings, points: [] });
       }
     );
     return () => controller.abort();
-  }, [portfolioId, timeframe, holdings]);
+  }, [portfolioId, timeframe, holdings, cacheHit]);
 
-  const historyForPortfolio =
-    historyState !== null && historyState.portfolioId === portfolioId ? historyState : null;
-  const historyLoading =
-    portfolioId !== null &&
-    (historyForPortfolio === null ||
-      historyForPortfolio.timeframe !== timeframe ||
-      historyForPortfolio.holdings !== holdings);
+  const lastForPortfolio =
+    lastHistory !== null && lastHistory.portfolioId === portfolioId ? lastHistory : null;
+  const lastIsCurrent =
+    lastForPortfolio !== null &&
+    lastForPortfolio.timeframe === timeframe &&
+    lastForPortfolio.holdings === holdings;
+  const historyLoading = portfolioId !== null && !cacheHit && !lastIsCurrent;
 
   const summary = useMemo(() => calculatePortfolioSummary(holdings), [holdings]);
 
@@ -1749,10 +1784,12 @@ export function usePortfolioData(): UsePortfolioDataReturn {
     portfolio,
     holdings,
     summary,
-    history: historyForPortfolio?.points ?? NO_HISTORY,
+    // While a new range loads, keep showing the last settled chart (dimmed by
+    // PortfolioChart) instead of blanking it.
+    history: cachedPoints ?? lastForPortfolio?.points ?? NO_HISTORY,
     loading: userId !== null && current === null,
     historyLoading,
-    error: current?.status === "error" ? current.message : null,
+    error: current?.status === "error" ? current.errorText : null,
     timeframe,
     setTimeframe,
     refresh,
@@ -1762,7 +1799,13 @@ export function usePortfolioData(): UsePortfolioDataReturn {
 }
 ```
 
-Why local patching after add/edit/delete is safe here although the F144 verifier warned against it: that warning was about the old client `addHolding`, which returned a bare row without the `products` join and returned `null` for a duplicate. The new routes return the full joined, freshness-guarded row for insert, duplicate and update. Any change to `holdings` re-runs the history effect in the background, with the old chart kept on screen.
+Keep the `getPortfolioHistory(portfolioId, TIMEFRAME_DAYS[timeframe], holdings, controller.signal)` call on one line exactly as written (WP10 greps for it), and do not introduce the text `.message` anywhere in this file (WP15 greps for it; that is why the error field is `errorText`).
+
+How the cache interacts with the effect: when a request resolves, `setHistoryCache` makes `cacheHit` true, the effect's cleanup aborts the already-settled controller (harmless) and the re-run returns early. When the user switches to a range that is not cached, the effect for the previous range is cleaned up first, which aborts its request.
+
+Why local patching after add/edit/delete is safe here although the F144 verifier warned against it: that warning was about the old client `addHolding`, which returned a bare row without the `products` join and returned `null` for a duplicate. The new routes return the full joined, freshness-guarded row for insert, duplicate and update. Any change to `holdings` invalidates the history cache and re-runs the history effect in the background, with the old chart kept on screen.
+
+The F144 verifier also suggested fetching `fetchPortfolioPriceHistory`'s pages in parallel. Not done here: WP10 replaces that paging with the `get_portfolio_history` RPC, and the cache above removes the repeat cost for ranges already viewed.
 
 ### Step 13. `app/components/Portfolio/hooks/useProductSearch.ts` (rewrite; F110)
 
@@ -1923,7 +1966,7 @@ Keep the empty-state JSX byte-identical to lines 60-71.
   };
 ```
 
-(`window.confirm`/`alert` stay; WP14 replaces them with accessible dialogs. `deleteLoading` keeps its existing unused-variable warning.)
+(`window.confirm`/`alert` stay exactly as written, including the text `alert("Failed to delete holding. Please try again.")`, because WP15 step 9d finds and replaces this function by that text. `deleteLoading` keeps its existing unused-variable warning, which WP15 also removes.)
 
 15d. The `if (loading)` and `if (error)` blocks (lines 79-117) stay as they are; `onClick={refresh}` still works. With the new hook, `loading` is only true before the first load, so these no longer appear on a timeframe click or after a mutation.
 
@@ -2065,9 +2108,9 @@ function editMaxDate(storedDate: string): string {
 }
 ```
 
-- Line 52: `if (!holding) return;`.
+- Line 52: `if (!holding || !user) return;` becomes `if (!holding) return;`.
 - Line 68: `if (!isValidPastDate(purchaseDate, editMaxDate(holding.purchase_date))) {`.
-- Lines 82-91 become:
+- Lines 82-92 (from `const result = await updateHolding(holding.id, user.id, updates);` through the `};` that closes `handleSubmit`) become the block below. It ends with that same `};`, so do not keep the original line 92 as well:
 
 ```tsx
     const result = await updateHolding(holding.id, updates);
@@ -2160,9 +2203,10 @@ The selector was verified with ESLint 9.39.5 while writing this spec: it flags `
 - **Do not return the same value for "duplicate" and "error".** Duplicate is success: the Add modal closes and the import counts the row as imported.
 - **Do not use `upsert` / `onConflict` / `ignoreDuplicates` for the import.** `portfolio_holdings_idem_uidx` is a partial index and PostgREST cannot pass its `WHERE` predicate, so Postgres answers 42P10. Use the key lookup plus batch insert in step 7.
 - **Do not loosen server date validation or the DB CHECK** (F060 verifier). `isValidPastDate` without a second argument stays UTC on the server. Only the client default and `max` use `maxPurchaseDateKey()` (the earlier of local and UTC today). Using `max(localToday, utcToday)` would let an east-of-UTC morning date through to a raw constraint error.
-- **Do not compute the local date during SSR.** It is computed in a `useState` initializer of a component that mounts only after a click (step 15f) and in handlers. Do not render `AddHoldingModal` unconditionally.
+- **Do not compute the local date during SSR.** The F060 verifier asked for the local-date computation to happen on the client only (it suggested an effect or `useMemo` instead of a `useState` initializer). Here it runs in a `useState` initializer and in render of a component that mounts only after a click (step 15f), and `/portfolio` never server-renders the dashboard (the page shows its auth spinner during SSR), so the value is always computed in the browser. An effect that calls `setPurchaseDate` would instead trip `react-hooks/set-state-in-effect`. Do not render `AddHoldingModal` unconditionally.
 - **Do not call setState synchronously in an effect body**, and do not add `eslint-disable` for `react-hooks/set-state-in-effect`. Set state only in promise callbacks or event handlers, and derive `loading` / `historyLoading` during render as shown.
 - **Do not put `setLoading(true)` at the top of a refresh** or gate the whole dashboard on it. Only the chart shows history loading.
+- **Do not answer 401 for every `user: null` from `supabase.auth.getUser()`.** A network failure, 5xx or 429 from GoTrue also yields `user: null`; route it through `requireRouteUser` (step 6b), which answers 503 for those, so an auth outage is never shown as "Your session has expired" (F063, WP04).
 - **Do not check `Origin` on the GET route.** Browsers omit `Origin` on same-origin GETs, so every load would get 403. Use the header-only `rejectIfNotAppRequest`.
 - **Do not trust a `portfolio_id` from the request.** The server resolves the caller's portfolio from the session, and PATCH/DELETE filter on it.
 - **Do not pass the request body to `.update()`.** `parseHoldingUpdate` copies only the four editable columns.
@@ -2252,6 +2296,7 @@ Cases:
 ```ts
 /** @jest-environment node */
 import { NextRequest } from "next/server";
+import { AuthRetryableFetchError } from "@supabase/supabase-js";
 
 const getUser = jest.fn();
 jest.mock("../../../lib/routeSupabase", () => ({
@@ -2286,13 +2331,20 @@ const VALID = {
   client_idempotency_key: KEY,
 };
 
-function req(path: string, init: { method?: string; body?: unknown; headers?: Record<string, string> } = {}) {
-  const headers: Record<string, string> = {
+/** Pass a header as null to leave it out (for example `{ origin: null }`). */
+function req(
+  path: string,
+  init: { method?: string; body?: unknown; headers?: Record<string, string | null> } = {}
+) {
+  const merged: Record<string, string | null> = {
     "x-pokefin-request": "1",
     origin: "https://pokefin.ca",
     "content-type": "application/json",
     ...init.headers,
   };
+  const headers = Object.fromEntries(
+    Object.entries(merged).filter((entry): entry is [string, string] => entry[1] !== null)
+  );
   return new NextRequest(`https://pokefin.ca${path}`, {
     method: init.method ?? "GET",
     headers,
@@ -2309,13 +2361,15 @@ beforeEach(() => {
 });
 ```
 
-Cases (assert status, body and `Cache-Control: no-store` on every non-403 response):
+Do not mock `lib/routeAuth` or `lib/authSession`: the real ones run, so these tests also cover the 401 versus 503 split. `lib/csrf` and `lib/portfolioInput` are real too.
 
-- GET: 403 without `x-pokefin-request`; 200 WITHOUT an `origin` header (same-origin GET); 401 when `getUser` returns no user (repo not called); 500 when `loadPortfolioPayload` returns null; 200 with `{ portfolio, holdings }`; 500 when the repo throws.
-- POST holdings: 403 without the header; 403 with `origin: https://evil.example`; 413 with `content-length: 9000`; 401 without a user (repo not called); 400 on invalid JSON; 400 on `client_idempotency_key: "abc"`; 400 on a future date (`"2999-01-01"`); 201 `{ status: "inserted" }`; 200 `{ status: "duplicate" }`; 400 when `insertHolding` returns code `23514`; 500 for code `XX000`; the body sent to `insertHolding` has no `portfolio_id` from the client and uses `PORTFOLIO.id` as the second argument even if the request body carries `portfolio_id: 999`.
-- PATCH: 400 for id `"abc"`, `"0"` and `"-1"`; 400 for `{}` ("Nothing to update"); unknown keys such as `portfolio_id` and `client_idempotency_key` are not forwarded to `updateHolding`; 404 when `findPortfolioId` returns null; 404 on `not_found`; 200 `{ holding }`; 500 when `findPortfolioId` throws.
-- DELETE: 403 without the header; 404 on `not_found`; 200 `{ ok: true }` with `deleteHolding` called as `(supabase, 7, 5)`.
-- Import: 400 for `{ rows: [] }` and for 251 rows; a request with rows `[valid, invalid(quantity 0), valid]` calls `insertImportedHoldings` with the two valid rows only and answers `results` of length 3 with `index` 0..2, the middle one `{ status: "error", error: QUANTITY_MESSAGE }`; 500 when `insertImportedHoldings` throws.
+Cases (assert status and body; assert `Cache-Control: no-store` on every response except the 403 and 413 answers, which `csrf.ts` builds without it):
+
+- GET: 403 without `x-pokefin-request` (`req("/api/portfolio", { headers: { "x-pokefin-request": null } })`); 200 with `req("/api/portfolio", { headers: { origin: null } })` (same-origin GETs carry no Origin); 401 when `getUser` resolves `{ data: { user: null }, error: null }` (repo not called); 503 when `getUser` resolves `{ data: { user: null }, error: new AuthRetryableFetchError("fetch failed", 0) }` (repo not called); 503 when `getUser` rejects; 500 when `loadPortfolioPayload` returns null; 200 with `{ portfolio, holdings }`; 500 when `loadPortfolioPayload` rejects.
+- POST holdings: 403 without the header; 403 with `origin: https://evil.example`; 413 with `content-length: 9000`; 401 without a user (repo not called); 400 on invalid JSON (build this request by hand with `body: "{"`); 400 on `client_idempotency_key: "abc"`; 400 on a future date (`"2999-01-01"`); 201 `{ status: "inserted" }`; 200 `{ status: "duplicate" }`; 400 when `insertHolding` returns code `23514`; 500 for code `XX000`; the body sent to `insertHolding` has no `portfolio_id` from the client and uses `PORTFOLIO.id` as the second argument even if the request body carries `portfolio_id: 999`.
+- PATCH (`PATCH(req("/api/portfolio/holdings/5", { method: "PATCH", body }), ctx("5"))`): 400 for id `"abc"`, `"0"` and `"-1"`; 400 for `{}` ("Nothing to update"); unknown keys such as `portfolio_id` and `client_idempotency_key` are not forwarded to `updateHolding`; 404 when `findPortfolioId` returns null; 404 on `not_found`; 200 `{ holding }`; 500 when `findPortfolioId` rejects.
+- DELETE: 403 without the header; 400 for id `"abc"`; 404 on `not_found`; 200 `{ ok: true }` with `deleteHolding` called as `(expect.anything(), 7, 5)`.
+- Import: 400 for `{ rows: [] }` and for 251 rows; a request with rows `[VALID, { ...VALID, quantity: 0 }, VALID]` calls `insertImportedHoldings` with the two valid rows only and answers `results` of length 3 with `index` 0..2, the middle one `{ index: 1, status: "error", error: QUANTITY_MESSAGE }` (import `QUANTITY_MESSAGE` from `../../../lib/portfolioInput`); 500 when `insertImportedHoldings` rejects.
 
 ### 3. `app/lib/__tests__/portfolioInput.test.ts` (new, jsdom default is fine)
 
@@ -2452,7 +2506,10 @@ Further cases in the same file:
 - A timeframe change never calls `fetchPortfolio` again (exactly 1 call after three timeframe changes) and `loading` stays `false` throughout (record `result.current.loading` after each `act`).
 - While a new timeframe loads, `historyLoading` is `true` and `history` still holds the previous points (the chart is dimmed, not blanked).
 - `applyHoldingSaved(newHolding)` puts it first in `holdings`, re-runs `getPortfolioHistory` with the new array, and does not call `fetchPortfolio`; `applyHoldingSaved` with an existing id replaces it in place; `applyHoldingDeleted(1)` removes it.
-- Error: `fetchPortfolio` rejects with `new PortfolioApiError("x", 401)`: `error` is "Your session has expired. Please sign in again." and `loading` is false; then `act(() => result.current.refresh())` sets `loading` to true and, after a successful second fetch, `error` is null and `portfolio` is set. A plain `Error` yields "Failed to load portfolio".
+- History cache: 1M resolves `[point("a")]`, switch to 7D and resolve `[point("b")]`, switch back to 1M: `history` is `[point("a")]` and `historyLoading` is false immediately, and `getPortfolioHistory` was called exactly twice in total. Then `applyHoldingSaved(newHolding)`: a third call is made for 1M with the new holdings array (the cache was invalidated).
+- An empty result is not cached: 1M resolves `[]`, switch to 7D and resolve `[point("b")]`, switch back to 1M: `getPortfolioHistory` is called again with `days` 30.
+- Error: `fetchPortfolio` rejects with `new PortfolioApiError("x", 401)`: `error` is "Your session has expired. Please sign in again." and `loading` is false; then `act(() => result.current.refresh())` sets `loading` to true and, after a successful second fetch, `error` is null and `portfolio` is set. `new PortfolioApiError("x", 503)` yields "Service temporarily unavailable. Please try again."; a plain `Error("boom")` yields "Failed to load portfolio" (never "boom").
+- `getPortfolioHistory` rejecting (WP10 makes it throw): `history` is `[]`, `historyLoading` is false, `logCaughtError` was called with `"portfolio_history_fetch_failed"`.
 - Unmounting before `fetchPortfolio` resolves logs nothing and sets no state (no act warning): the signal passed to it is aborted.
 
 ### 7. `app/components/Portfolio/__tests__/useProductSearch.test.tsx` (new)
@@ -2469,12 +2526,14 @@ Mock `../../../lib/portfolio` with `searchProducts: jest.fn()`. Use `jest.useFak
 ```tsx
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 
-// The factory uses require + createElement rather than JSX: a jest.mock factory
-// must not reference out-of-scope bindings such as the compiled JSX helper.
+// The factory uses jest.requireActual + createElement rather than JSX: a
+// jest.mock factory must not reference out-of-scope bindings such as the
+// compiled JSX helper. Not require(): @typescript-eslint/no-require-imports
+// is an error in this repo and test files are linted.
 jest.mock("../shared/ProductSearchSelect", () => ({
   __esModule: true,
   default: ({ onSelect }: { onSelect: (p: unknown) => void }) => {
-    const React = require("react");
+    const React = jest.requireActual<typeof import("react")>("react");
     return React.createElement(
       "button",
       {
@@ -2522,7 +2581,7 @@ Cases:
 
 ### 9. `app/lib/__tests__/import.holdings.test.ts` (new)
 
-Mock `../portfolio` (`getAllProducts: jest.fn()`) and `../portfolioApi` (`importHoldingRows: jest.fn()`). Cases:
+jsdom default environment. Mock `../portfolio` with `getAllProducts: jest.fn()` and `../portfolioApi` with `importHoldingRows: jest.fn()`; in `beforeEach`, `(getAllProducts as jest.Mock).mockResolvedValue([])` (a bare `jest.fn()` resolves to `undefined` and `fetchSupportedProducts` would throw on `.filter`). Build CSV input with the header line from `import.test.ts:20` (`Portfolio Name,Category,Set,Product Name,...,Date Added,Notes`). Build `ImportMatchResult` fixtures for `importHoldings` by hand (`matchedProduct: { id: 42, usd_price: null, image_url: null, variant: null, sets: null, product_types: null }`, `importStatus: "pending"`, `idempotencyKey` a fixed UUID). Cases:
 
 - `processCollectrImport` gives every result a distinct UUID `idempotencyKey` (use two rows with `Category=Pokemon`, `Portfolio Name=Sealed Product` and an unsupported product name so no product catalog is needed).
 - `importHoldings`: unmatched and non-pending rows become `skipped` and are not sent; quantity `0` becomes `error` "Invalid quantity (0)" and is not sent; a `duplicate` result maps to `imported`; an `error` result maps to `error` with the server message; `client_idempotency_key` equals the match's `idempotencyKey`; calling `importHoldings` twice with the same matches sends identical keys.
@@ -2531,7 +2590,7 @@ Mock `../portfolio` (`getAllProducts: jest.fn()`) and `../portfolioApi` (`import
 
 ### 10. `app/lib/__tests__/portfolioApi.test.ts` (new)
 
-Replace `global.fetch` with a `jest.fn()` returning plain objects `{ ok, status, json: async () => body }` (jsdom has no `Response`). Cases: every call sends `x-pokefin-request: 1` and `credentials: "same-origin"`; `fetchPortfolio` throws `PortfolioApiError` with status 401 and the session message; `addHolding` maps 201/200 bodies to `inserted`/`duplicate`, a 400 `{ error: "X" }` to `{ status: "error", message: "X" }`, a thrown fetch to the network message; `updateHolding` hits `/api/portfolio/holdings/5` with PATCH; `deleteHolding` returns `false` on 404 and on a throw; `importHoldingRows` with 600 rows makes 3 requests of 250, 250 and 100 rows and re-bases `index` (the last result's index is 599); a 500 on the second chunk throws after the first chunk's request was made.
+Replace `global.fetch` with a `jest.fn()` returning plain objects `{ ok, status, json: async () => body }` (jsdom has no `Response`); assign it as `global.fetch = fetchMock as unknown as typeof fetch` so `tsc` accepts it, and restore the original in `afterAll`. Cases: every call sends `x-pokefin-request: 1` and `credentials: "same-origin"`; `fetchPortfolio` throws `PortfolioApiError` with status 401 and the session message; `addHolding` maps 201/200 bodies to `inserted`/`duplicate`, a 400 `{ error: "X" }` to `{ status: "error", message: "X" }`, a thrown fetch to the network message; `updateHolding` hits `/api/portfolio/holdings/5` with PATCH; `deleteHolding` returns `false` on 404 and on a throw; `importHoldingRows` with 600 rows makes 3 requests of 250, 250 and 100 rows and re-bases `index` (the last result's index is 599); a 500 on the second chunk throws after the first chunk's request was made.
 
 ### 11. `app/components/Portfolio/__tests__/PortfolioChart.test.tsx` (new)
 
@@ -2539,7 +2598,7 @@ Replace `global.fetch` with a `jest.fn()` returning plain objects `{ ok, status,
 
 ### 12. `app/lib/__tests__/serverMarketData.freshness.test.ts` (update)
 
-Add one case: `fetchNewestPricedAtForProducts([])` returns an empty map without calling `fromMock`; when `fromMock`'s chain resolves `{ data: null, error: { code: "57014" } }`, it returns an empty map and calls `logSupabaseError`.
+Add `fetchNewestPricedAtForProducts` to the import from `../serverMarketData` and a new `describe` with two cases: `fetchNewestPricedAtForProducts([])` resolves to an empty map and `fromMock` is not called; and with `fromMock.mockImplementation(() => ({ select: () => ({ in: () => ({ gte: () => ({ order: () => ({ order: () => ({ range: () => Promise.resolve({ data: null, error: { code: "57014", message: "timeout" } }) }) }) }) }) }) }))`, `fetchNewestPricedAtForProducts([42])` resolves to an empty map (it does not reject) and the mocked `logSupabaseError` was called with `"server_price_freshness_failed"` as its first argument. Import the mocked logger with `import { logSupabaseError } from "../logger";` to assert on it.
 
 ### Existing tests that must keep passing unchanged
 
@@ -2641,11 +2700,11 @@ No migration, environment variable or dashboard setting changes.
 
 - [ ] `grep -rnE 'from\("(portfolios|portfolio_holdings|portfolio_lots)"\)'` finds matches only under `app/api/` and `app/lib/server/`.
 - [ ] `app/lib/portfolio.ts` contains no user-table query and no `getOrCreatePortfolio`, `getHoldings`, `addHolding`, `updateHolding`, `deleteHolding`, `userOwnsHolding`, `getPortfolioById`, `updatePortfolioName` or `getHoldingById`.
-- [ ] `GET /api/portfolio` returns `{ portfolio, holdings }` with freshness-guarded prices, 403 without `x-pokefin-request`, 401 without a session, `Cache-Control: no-store` on every non-403 answer.
-- [ ] `POST /api/portfolio/holdings`, `PATCH` / `DELETE /api/portfolio/holdings/[id]` and `POST /api/portfolio/import` reject a missing header or foreign Origin with 403, an oversized body with 413, no session with 401, and never echo a PostgREST message.
+- [ ] `GET /api/portfolio` returns `{ portfolio, holdings }` with freshness-guarded prices, 403 without `x-pokefin-request`, 401 without a session, 503 when the auth service cannot answer, and `Cache-Control: no-store` on every answer the route builds (all but the 403).
+- [ ] `POST /api/portfolio/holdings`, `PATCH` / `DELETE /api/portfolio/holdings/[id]` and `POST /api/portfolio/import` reject a missing header or foreign Origin with 403, an oversized body with 413, no session with 401, an auth outage with 503 (never 401), and never echo a PostgREST message.
 - [ ] A retried add with the same values sends the same `client_idempotency_key`; the server answers `duplicate` for an existing key and the UI treats it as success.
 - [ ] The Collectr import sends at most one request per 250 rows, and a retry of the same preview reports already-saved rows as imported without inserting them again.
-- [ ] Changing the timeframe does not call `GET /api/portfolio`, does not unmount the dashboard, and the chart always ends showing the last-selected range (hook test).
+- [ ] Changing the timeframe does not call `GET /api/portfolio`, does not unmount the dashboard, and the chart always ends showing the last-selected range (hook test). Returning to a range already loaded for the same holdings makes no request.
 - [ ] A stale product-search response never replaces the results of the current query (hook test).
 - [ ] The Add form's default and `max` date equal `maxPurchaseDateKey()`; server validation is still UTC-only.
 - [ ] Portfolio history dates are contiguous UTC days, `days + 1` points, including across a DST change under `TZ=America/Toronto`.
@@ -2674,12 +2733,13 @@ signed-in user.
   response), POST /api/portfolio/holdings, PATCH/DELETE
   /api/portfolio/holdings/[id] and POST /api/portfolio/import, built on
   createRouteSupabaseClient with the CSRF and body-size gates (F001 part 2,
-  F144).
+  F144). Shared requireRouteUser answers 401 only for a real signed-out
+  caller and 503 when GoTrue cannot answer.
 - Caller-owned idempotency keys: one per distinct Add submission and one
   per parsed import row; a duplicate is reported as success (F033).
 - usePortfolioData: separate history load keyed on portfolio, timeframe
-  and holdings with abort; the dashboard no longer unmounts on refresh or
-  timeframe change (F053).
+  and holdings with abort and a per-range cache; the dashboard no longer
+  unmounts on refresh or timeframe change (F053, F144).
 - useProductSearch ignores stale responses (F110).
 - Purchase dates default to the earlier of local and UTC today; server
   validation stays UTC (F060). History series steps in UTC days (F111).
@@ -2688,4 +2748,4 @@ signed-in user.
 
 PR title: `fix(portfolio): restore signed-in portfolio via route handlers (WP05)`
 
-PR body summary: what was broken (anon client on user tables, the waterfall, the idempotency no-op, the races, the date defaults), the four new routes with their gates and status codes, the modules split (`portfolio.ts` reference reads, `portfolioApi.ts` client, `portfolioInput.ts` parsing, `priceFreshness.ts` shared rule, `lib/server/portfolioRepo.ts` user tables), the ESLint guards, the lint-error delta, the Verification output, the Owner actions checklist, and out-of-scope notes: history still reads `product_price_history` on the anonymous client until WP10; `window.confirm` / `alert` and modal accessibility are WP14; the remaining lint errors in `HoldingsTable.tsx` are WP17.
+PR body summary: what was broken (anon client on user tables, the waterfall, the idempotency no-op, the races, the date defaults), the four new routes with their gates and status codes, the modules split (`portfolio.ts` reference reads, `portfolioApi.ts` client, `portfolioInput.ts` parsing, `priceFreshness.ts` shared rule, `lib/server/portfolioRepo.ts` user tables, `routeAuth.ts` 401/503 helper that WP06 reuses), the ESLint guards, the lint-error delta, the Verification output, the Owner actions checklist, and out-of-scope notes: history still reads `product_price_history` on the anonymous client until WP10; `window.confirm` / `alert` are WP15 and modal accessibility is WP14; the remaining lint errors in `HoldingsTable.tsx` are WP17.

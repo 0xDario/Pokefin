@@ -8,7 +8,7 @@
   - F122 (full): offset-less `recorded_at` timestamps (`timestamp without time zone`, UTC) are parsed with `new Date(raw)`, which reads them as viewer-local time, shifting return windows and sparkline day buckets by the viewer's UTC offset.
 - **Priority rationale**: it removes the only hydration error on `/`, fixes a visible wrong fact (release dates one day early) on four pages, and gives WP08, WP09 and WP18 one formatting API to build on instead of each re-inventing it.
 - **Effort**: M (6 to 8 hours: one new module plus about 25 mechanical call-site edits, 3 new test files, 3 updated test files).
-- **Depends on**: WP00 (for `pnpm build:stub` and the CI job this PR adds a step to). Plays well with WP03 and WP05 landing first (see "Before you start"); does not require them.
+- **Depends on**: WP00 (hard: `pnpm build:stub` and the CI job this PR adds a step to). In plan order WP01 to WP06 have also merged before this package, and this spec is written for that tree by default: WP05 added `app/lib/portfolioInput.ts` (with its own `PRICE_MAX.toLocaleString("en-US")`), WP06 added a `formatInCurrency` money helper to `BoxCalculator.tsx`, and WP04 to WP06 added ESLint blocks. Each step that touches one of those names the fallback for a tree where that package is missing.
 - **Unblocks**: WP08, WP09, WP18 (and WP19, WP20 through them).
 - **Suggested branch name**: `remediation/wp07-date-money-formatting`
 - **Risk level**: medium. Display-only for most edits, but it touches about 25 files, changes visible strings on every page (date style, thousands separators, `C$` on /compare, zone label on "Last Refreshed"), and changes the return-window arithmetic that feeds the 1D/7D figures.
@@ -19,7 +19,7 @@ Set release dates are printed with the browser's own zone and locale: a set rele
 
 ## Before you start
 
-Read these files fully first (line numbers are at commit a188fea; WP03/WP05 may shift a few):
+Read these files fully first. Line numbers are at commit a188fea. WP05 and WP06 have moved lines in `BoxCalculator.tsx` (WP06 inserted code above `:275`), `ImportHoldingsModal.tsx`, `AddHoldingModal.tsx` and `serverMarketData.ts`; in those files locate every edit by the quoted code, not by the number.
 
 - `frontend/app/components/ProductPrices/cards/GroupHeader.tsx` (43 lines; the bug is at :18-20)
 - `frontend/app/components/ProductPrices/cards/ProductCard.tsx` (345 lines; :75-83 date/time, :125-226 flat branch, :228-342 grouped branch)
@@ -29,11 +29,12 @@ Read these files fully first (line numbers are at commit a188fea; WP03/WP05 may 
 - `frontend/app/components/PriceChart.tsx` (:84-136 grouping and parsing, :175-190 range fill, :375, :465-485 tooltip, :638-647 Y axis)
 - `frontend/app/lib/marketPulse.ts` (:46-104, the documented rule that `recorded_at` is offset-less UTC), `frontend/app/lib/marketData.ts` (:386-393), `frontend/app/lib/serverMarketData.ts` (:205-240)
 - `frontend/app/page.tsx` (:17-20 `formatUsd`, :173-192 "Last Refreshed", :298, :310, :319), `frontend/app/product/[id]/page.tsx` (:39-64, :261, :270-281, :291, :420), `frontend/app/stats/page.tsx` (:50-63, :186, :244, :259), `frontend/app/compare/page.tsx` (:201-230, :550-556, :766-783, :896-905, :1037-1057), `frontend/app/privacy/page.tsx` (:9, :15)
-- `frontend/app/components/BoxCalculator/BoxCalculator.tsx` (:191, :196, :275-278, :509, :530, :713-717)
+- `frontend/app/components/BoxCalculator/BoxCalculator.tsx` (:191, :196, :275-278, :509, :530, :713-717 at a188fea; after WP06 also the module-level `function formatInCurrency` above `calculateNav` and its call in the saved-recipes list)
+- `frontend/app/lib/portfolioInput.ts` (created by WP05; `PRICE_MESSAGE` contains `PRICE_MAX.toLocaleString("en-US")`), `frontend/app/components/Portfolio/cards/AddHoldingModal.tsx` and `EditHoldingModal.tsx` (each has a `${PRICE_MAX.toLocaleString()}` error message that WP05 did not change)
 - `frontend/app/components/Portfolio/cards/HoldingCard.tsx` (:25-33, :123), `frontend/app/components/Portfolio/shared/PortfolioSummaryCard.tsx` (:16-24, :96-98), `frontend/app/components/Portfolio/shared/ProductSearchSelect.tsx` (:65, :126), `frontend/app/components/Portfolio/cards/ImportHoldingsModal.tsx` (:394)
 - `frontend/app/components/charts/PortfolioChartImpl.tsx` (:41-49, :99-106, :218-220), `frontend/app/components/charts/AllocationChartImpl.tsx` (:39, :88-95)
 - `frontend/eslint.config.mjs`, `.github/workflows/ci.yml`
-- Tests you will update: `frontend/app/components/Portfolio/__tests__/HoldingCard.test.tsx` (:272-275), `frontend/app/components/Portfolio/__tests__/PortfolioSummaryCard.test.tsx` (:180-183), `frontend/app/components/MarketView/__tests__/returns.test.ts`
+- Tests you will update: `frontend/app/components/Portfolio/__tests__/HoldingCard.test.tsx` (:272-275, :416), `frontend/app/components/Portfolio/__tests__/PortfolioSummaryCard.test.tsx` (:180-183, :210), `frontend/app/components/MarketView/__tests__/returns.test.ts`
 
 Confirm the starting state (run from `frontend/`):
 
@@ -43,8 +44,8 @@ Confirm the starting state (run from `frontend/`):
 #    PortfolioSummaryCard.tsx:20; EditHoldingModal.tsx:64; AddHoldingModal.tsx:85; HoldingCard.tsx:29;
 #    MarketView.tsx:115; AllocationChartImpl.tsx:91; PortfolioChartImpl.tsx:45,102; stats/page.tsx:52;
 #    page.tsx:185,298; compare/page.tsx:229,554; product/[id]/page.tsx:50.
-#    If WP05 landed, EditHoldingModal/AddHoldingModal are gone from this list and app/lib/validation.ts
-#    (PRICE_MESSAGE, PRICE_MAX.toLocaleString("en-US")) appears instead.
+#    With WP05 merged (the default), expect 22: the same 21 (the two modal lines keep their text,
+#    their numbers may move) plus app/lib/portfolioInput.ts (PRICE_MESSAGE, PRICE_MAX.toLocaleString("en-US")).
 grep -rnE "toLocale(Date|Time)?String\(" app --include=*.ts --include=*.tsx | grep -v __tests__
 
 # 2. No Intl.NumberFormat anywhere. Expect 0.
@@ -55,10 +56,11 @@ grep -rn "Intl.NumberFormat" app | wc -l
 #    serverMarketData.ts:211,218,237.
 grep -rnE "new Date\([^)]*recorded_at" app --include=*.ts --include=*.tsx | grep -v __tests__
 
-# 4. toFixed(0|2). Expect 29 hits. The MONEY ones this PR replaces:
+# 4. toFixed(0|2). Expect 29 hits at a188fea, 30 with WP06 merged (WP06's formatInCurrency in
+#    BoxCalculator.tsx). The MONEY ones this PR replaces:
 #    page.tsx:19; product/[id]/page.tsx:63; stats/page.tsx:62; compare/page.tsx:203,209;
-#    useCurrencyConversion.ts:70; BoxCalculator.tsx:278,716; MarketView.tsx:141; PriceChart.tsx:481,645;
-#    ProductSearchSelect.tsx:65,126; ImportHoldingsModal.tsx:394.
+#    useCurrencyConversion.ts:70; BoxCalculator.tsx:278 (or formatInCurrency after WP06),716;
+#    MarketView.tsx:141; PriceChart.tsx:481,645; ProductSearchSelect.tsx:65,126; ImportHoldingsModal.tsx:394.
 #    The rest stay: percentages (ReturnMetrics.tsx:127, PriceChart.tsx:596,602,607, PortfolioSummaryCard.tsx:29,
 #    HoldingCard.tsx:38, MarketView.tsx:134, stats/page.tsx:86, page.tsx:305, product/[id]/page.tsx:87),
 #    scores (stats/page.tsx:57,102), input pre-fills (EditHoldingModal.tsx:43, AddHoldingModal.tsx:62),
@@ -74,12 +76,20 @@ grep -n '"build:stub"' package.json
 
 # 7. no-restricted-properties is not configured yet. Expect no output.
 pnpm exec eslint --print-config app/page.tsx | grep -A2 '"no-restricted-properties"'
+
+# 8. Lint baseline for the files this PR edits. Write down the final "N problems (E errors, W warnings)"
+#    line; Verification compares against it. (Drop app/lib/portfolioInput.ts if WP05 has not merged.)
+pnpm exec eslint app/lib/marketData.ts app/lib/serverMarketData.ts app/lib/portfolioInput.ts \
+  app/components/ProductPrices app/components/MarketView app/components/PriceChart.tsx \
+  app/components/charts app/components/BoxCalculator/BoxCalculator.tsx app/components/Portfolio \
+  app/page.tsx app/product app/stats/page.tsx app/compare/page.tsx app/privacy/page.tsx 2>&1 | tail -3
 ```
 
 Assumptions to check:
 
 - WP03 may have landed and edited `app/page.tsx:205-209` (hero copy) and `Footer.tsx`. This PR does not touch that copy. Re-read `app/page.tsx` before editing; your edits are at the helpers near the top, the "Last Refreshed" block, and the Quick Stats `StatCard`s.
-- WP05 may have landed. If so: `app/lib/portfolio.ts` `getPortfolioHistory` already iterates UTC days (WP05 step 10d), so do not touch it; `EditHoldingModal.tsx`/`AddHoldingModal.tsx` use `PRICE_MESSAGE` from `app/lib/validation.ts`, which contains `PRICE_MAX.toLocaleString("en-US")`; step 7 replaces that. If WP05 has not landed, apply step 7 to the two modal lines instead.
+- WP05 has merged (plan order). `app/lib/portfolio.ts` `getPortfolioHistory` already iterates UTC days (WP05 step 10d), so do not touch it. WP05 created `app/lib/portfolioInput.ts`, whose `PRICE_MESSAGE` contains `PRICE_MAX.toLocaleString("en-US")`; WP05 did NOT change the `${PRICE_MAX.toLocaleString()}` error lines in `EditHoldingModal.tsx` and `AddHoldingModal.tsx`. Step 7 replaces all three. If `ls app/lib/portfolioInput.ts` fails (WP05 missing), step 7 covers only the two modal lines. WP05 also added `localDateKey`/`utcDateKey`/`maxPurchaseDateKey` to `app/lib/validation.ts` and its spec says "WP07 consolidates date formatting"; those compute date keys for form limits, not display text, so leave them and the similar private helpers in `marketPulse.ts:53` and `marketData.ts:108` alone.
+- WP06 has merged (plan order). `BoxCalculator.tsx` has a module-level `function formatInCurrency(value: number, currency: Currency): string` (returns `` `${currency === "CAD" ? "C$" : "$"}${value.toFixed(2)}` ``), `fmtPrice` calls it, and the saved-recipes list calls `formatInCurrency(r.retailPrice, r.currency)`. WP17 relies on `formatInCurrency` still existing, so step 6g changes its body instead of deleting it. Check: `grep -n "function formatInCurrency" app/components/BoxCalculator/BoxCalculator.tsx` (1 hit expected; if none, use the fallback in step 6g).
 - `app/lib/format.ts` does not exist yet (`ls app/lib/format.ts` fails). If it exists, stop and reconcile: another package created it.
 
 ## Implementation steps
@@ -89,10 +99,12 @@ All paths are relative to `frontend/`. Do the steps in order: step 1 creates the
 ### Decisions baked into this spec (do not re-open them)
 
 1. **Date style for the whole site: `Sep 26, 2026`** (month abbreviation, day, year; `Sep 26` where the year is noise, i.e. chart axes). It is what `/product/[id]` already prints, it is unambiguous (numeric `09/10/2026` means different days in en-US and en-GB), and it has no locale-dependent punctuation.
-2. **Date-only values are formatted by string split plus a fixed English month table, not by `Intl`.** The plan asked for a fixed-locale `Intl.DateTimeFormat` with `timeZone: "UTC"`. That fixes the day and the zone, but server and browser still run different ICU/CLDR versions, and CLDR has changed English month and time punctuation between versions (en-CA "Sep" vs "Sept", en-US switching the space before AM/PM to U+202F in ICU 72). Any such difference is a hydration mismatch. A `YYYY-MM-DD` key needs no calendar math, so the split-and-table form is exact, identical on every runtime, and about 50x cheaper per call. This is a deliberate correction of the plan.
+2. **Date-only values are formatted by string split plus a fixed English month table, not by `Intl`.** The F007 verifier allowed either a fixed-locale `Intl.DateTimeFormat` with `timeZone: "UTC"` or a string split of the key; this spec takes the string split. The `Intl` form fixes the day and the zone, but server and browser still run different ICU/CLDR versions, and CLDR has changed English month and time punctuation between versions (en-CA "Sep" vs "Sept", en-US switching the space before AM/PM to U+202F in ICU 72). Any such difference is a hydration mismatch. A `YYYY-MM-DD` key needs no calendar math, so the split-and-table form is exact, identical on every runtime, and about 50x cheaper per call.
 3. **Timestamps (instants) are shown in `America/Toronto` with the zone abbreviation**, e.g. `Sep 25, 2026, 12:12 AM EDT`. Reasons: the audience is Canadian and Eastern time (Ontario and Quebec) is the largest share of it; a fixed zone makes the ISR HTML, the server render and every browser print the same string, so there is no hydration mismatch and no post-mount flicker; the `EDT`/`EST` label tells a Vancouver or Halifax reader exactly what the time means. Rejected: UTC (correct but reads as a bug to consumers), and viewer-local after mount (needs a client island on the server-rendered dashboard, flashes on load, and still needs a zone label). The instant is converted with one module-level `Intl.DateTimeFormat("en-US", { timeZone: "America/Toronto", hourCycle: "h23", ... })` read through `formatToParts`, and the string is assembled by hand from the numeric parts, the fixed month table, a computed AM/PM, and the `timeZoneName` part. Only numeric fields and the `EDT`/`EST` abbreviation come from ICU, and those have been stable in CLDR for decades.
 4. **Money keeps the site's existing symbols: `$` for USD, `C$` for CAD**, placed before the number, with the sign before the symbol (`-C$5.00`, `+$100.00`). Digits come from a module-level `Intl.NumberFormat("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })`. Do not use `style: "currency"`: in en-CA it prints `US$` for USD, in en-US it prints `CA$` for CAD, and with `currencyDisplay: "narrowSymbol"` both become `$`, which is ambiguous on a page with a USD/CAD toggle. `en-US` digits are identical to `en-CA` digits (`1,649.99`), and `en` is the one locale every ICU build contains.
 5. **`recorded_at` and `last_updated` are UTC instants without an offset** (`timestamp without time zone`, written from `datetime.now(timezone.utc)`; see `marketPulse.ts:80-87` and `schema.sql:53,69`). `parseRecordedAt` treats a value without an offset as UTC, accepts `T` or a space as separator, accepts date-only values (UTC midnight), keeps explicit offsets (`Z`, `+00:00`, `-04:00`, `+0000`, and normalises a bare `+00` which V8 rejects), and trims fractional seconds to milliseconds (PostgREST returns microseconds).
+6. **Missing-value markers stay as each surface has them**: `formatMoney` defaults to `--` (the site-wide marker for a withheld price, which the portfolio tests assert), `/compare` keeps its em dash through `missing`, and the portfolio product search keeps `N/A`. F102 asked for one marker; `formatMoney`'s single default plus an explicit `missing` option is how that is delivered, and WP14 and WP18 copy the `/compare` and `N/A` expressions verbatim, so do not change those two markers here.
+7. **Grouped catalog cards show a date only when the price is withheld** (the `StalePriceNote` in step 4b). F096 also suggested a relative "updated" stamp on every grouped card; a shown price is by definition within the staleness tolerance, and adding a timestamp to all ~300 cards would bring back the per-card formatting cost F072 removes. Do not add one.
 
 ### Step 1. Create `app/lib/format.ts` (new file)
 
@@ -307,11 +319,15 @@ This exact file was type-checked with the repo's TypeScript (`--strict --target 
 
 ### Step 2. Add `app/lib/__tests__/format.test.ts` (new file)
 
-Write it now, before replacing call sites, and run it (`pnpm exec jest app/lib/__tests__/format.test.ts`). Full code is in the Tests section. It must pass under `TZ=UTC`, `TZ=America/Vancouver` and `TZ=Asia/Tokyo`.
+Write it now, before replacing call sites. Full code is in the Tests section. Run it in three zones; all three must pass:
+
+```bash
+for z in UTC America/Vancouver Asia/Tokyo; do TZ=$z pnpm exec jest app/lib/__tests__/format.test.ts || break; done
+```
 
 ### Step 3. Parse offset-less timestamps as UTC (F122)
 
-3a. `app/components/MarketView/returns.ts`. Add `import { parseRecordedAt } from "../../lib/format";` below the existing import on line 1. Replace lines 33-51 of `getReturnPercent` (from `const latestEntry = ...` through the end of the `for` loop) with:
+3a. `app/components/MarketView/returns.ts`. Add `import { parseRecordedAt } from "../../lib/format";` below the existing import on line 1. Replace lines 33-50 of `getReturnPercent` (from `const latestEntry = history[history.length - 1];` through the `}` that closes the `for` loop; keep the blank line 51 and `if (!pastEntry) return null;` at 52) with:
 
 ```ts
   const latestEntry = history[history.length - 1];
@@ -343,7 +359,7 @@ Write it now, before replacing call sites, and run it (`pnpm exec jest app/lib/_
 
 Leave `toDailyPoints` (`recorded_at.slice(0, 10)` is already the UTC date of an offset-less UTC value).
 
-3b. `app/components/ProductPrices/shared/ReturnMetrics.tsx`. Add `import { parseRecordedAt } from "../../../lib/format";` with the other imports and `const DAY_MS = 24 * 60 * 60 * 1000;` above `function getHistoricalReturn`. Replace lines 40-58 (from `const targetDate = new Date();` through the end of the `for` loop) with:
+3b. `app/components/ProductPrices/shared/ReturnMetrics.tsx`. Add `import { parseRecordedAt } from "../../../lib/format";` with the other imports and `const DAY_MS = 24 * 60 * 60 * 1000;` above `function getHistoricalReturn`. Replace lines 40-59 (from `const targetDate = new Date();` through the `}` on line 59 that closes the `for` loop; keep the blank line 60 and the final `return null;` at 61) with:
 
 ```ts
   const targetMs = Date.now() - days * DAY_MS;
@@ -392,11 +408,11 @@ with:
     );
 ```
 
-3e. `app/lib/serverMarketData.ts`. Add `import { parseRecordedAt, recordedAtDateKey } from "./format";` below the other `./` imports (keep `import "server-only";` first). In `getReturnPercent` (starts line 205) replace lines 210-222 (from `const latestEntry` through the end of the `for` loop) with:
+3e. `app/lib/serverMarketData.ts`. Add `import { parseRecordedAt, recordedAtDateKey } from "./format";` below the other `./` imports (keep `import "server-only";` first). In `getReturnPercent` (starts line 204 at a188fea) replace lines 210-224 (from `const latestEntry = history[history.length - 1];` through the `}` on line 224 that closes the `for` loop; keep the blank line and the final `return null;` after it) with:
 
 ```ts
   const latestEntry = history[history.length - 1];
-  const targetMs = Date.now() - days * 24 * 60 * 60 * 1000;
+  const targetMs = Date.now() - days * DAY_MS;
 
   if (parseRecordedAt(latestEntry.recorded_at).getTime() <= targetMs) return null;
 
@@ -409,9 +425,9 @@ with:
   }
 ```
 
-(If the file already has a `DAY_MS` constant in scope, use it instead of the literal.) In `buildDailySeries` replace line 237 and the `if` below it the same way as 3c (`recordedAtDateKey`, `if (dateKey === null) continue;`). On Vercel the runtime is UTC so this only changes behaviour for local builds in other zones, but it keeps server and client math identical; WP18 later merges these duplicates.
+`DAY_MS` is the module-level constant at `serverMarketData.ts:51`. In `buildDailySeries` replace line 237 and the `if` below it the same way as 3c (`recordedAtDateKey`, `if (dateKey === null) continue;`). On Vercel the runtime is UTC so this only changes behaviour for local builds in other zones, but it keeps server and client math identical; WP18 later merges these duplicates.
 
-3f. `app/components/PriceChart.tsx`. Add `import { formatMoney, formatMonthDay, parseRecordedAt } from "../lib/format";` below the `resolvePrice` import. In `groupedDaily` (lines 91-105) replace the whole `let dateObj ... }` parse block (from `// Parse the recorded_at timestamp` through the closing `}` of the `else` branch) with:
+3f. `app/components/PriceChart.tsx`. Add `import { formatMoney, formatMonthDay, parseRecordedAt } from "../lib/format";` below the `resolvePrice` import. In `groupedDaily` replace lines 92-105, the whole parse block (from the comment `// Parse the recorded_at timestamp and convert to local date string` through the `}` that closes the final `else` branch, just above `// Format as local YYYY-MM-DD`), with:
 
 ```ts
       // recorded_at is a UTC instant, usually without an offset. The bucket
@@ -467,7 +483,7 @@ function StalePriceNote({ product }: { product: Product }) {
 }
 ```
 
-Render `<StalePriceNote product={product} />` in two places: in the flat branch directly after the `<div className="flex items-center justify-between mb-1">...</div>` that contains `{formatPrice(product.usd_price)}` (around line 162-170), and in the grouped branch directly after the `<div className="flex items-center gap-3 sm:justify-end">...</div>` that contains the MiniSparkline and the price (lines 277-288), before `<ReturnMetrics`. Stale status is known at first render (it comes from the server payload), so this does not shift layout after load.
+Render `<StalePriceNote product={product} />` in two places: in the flat branch directly after the `<div className="flex items-center justify-between mb-1">...</div>` that contains `{formatPrice(product.usd_price)}` and the MiniSparkline (lines 162-172; the note goes between that `</div>` and `<ReturnMetrics`), and in the grouped branch directly after the `<div className="flex items-center gap-3 sm:justify-end">...</div>` that contains the MiniSparkline and the price (lines 277-288), before `<ReturnMetrics`. Stale status is known at first render (it comes from the server payload), so this does not shift layout after load.
 
 4c. `app/components/MarketView/MarketView.tsx`. Add `import { formatDateOnly, formatMoney } from "../../lib/format";`. Delete `formatReleaseDate` (lines 113-116) and change line 484 to `{formatDateOnly(product.sets?.release_date)}`. Keep `getReleaseMs` (:190).
 
@@ -475,7 +491,7 @@ Render `<StalePriceNote product={product} />` in two places: in the flat branch 
 
 4e. `app/stats/page.tsx`. Add `import { formatDateOnly, formatMoney } from "../lib/format";`. Delete `formatReleaseDate` (lines 50-53); change lines 186 and 244 to `{formatDateOnly(set.releaseDate)}`.
 
-4f. `app/product/[id]/page.tsx`. Add `import { formatDateOnly, formatMoney } from "../../lib/format";`. Delete `formatDate` (lines 47-59, including its comment; the comment's point now lives in `format.ts`). Replace its three uses (`formatDate(product.price_recorded_at)` at :271-273 and `formatDate(product.sets?.release_date)` at :281) with `formatDateOnly(...)`. Keep `getReleaseMs` (used at :172). The printed string does not change ("Sep 26, 2026").
+4f. `app/product/[id]/page.tsx`. Add `import { formatDateOnly, formatMoney } from "../../lib/format";`. Delete `formatDate` (lines 47-59, including its comment; the comment's point now lives in `format.ts`). Replace its two uses, `formatDate(product.price_recorded_at)` (the call spans :271-273 inside the template literal; keep the surrounding text) and `formatDate(product.sets?.release_date)` at :281, with `formatDateOnly(...)` and the same argument. `grep -n "formatDate(" "app/product/[id]/page.tsx"` must then print nothing. Keep `getReleaseMs` (used at :172). The printed string does not change ("Sep 26, 2026").
 
 4g. `app/privacy/page.tsx`. Add `import { formatDateOnly } from "../lib/format";` and change line 15 to `Last updated: {formatDateOnly(LAST_UPDATED)}` (was the raw ISO key). Leave the rest of the page to WP15.
 
@@ -530,7 +546,23 @@ and change the two USD call sites, `formatCurrency(row.marketPriceUsd)` at lines
 
 6f. `app/components/MarketView/MarketView.tsx`. Delete `formatRatio` (lines 139-142) and `const currencySymbol = ...` (line 443). Line 494 becomes `{formatMoney(pricePerDay, selectedCurrency)}` (`pricePerDay` is already converted, line 308-314). Remove `currencySymbol,` from the `useMemo` dependency array (line 626); `selectedCurrency` is already in it.
 
-6g. `app/components/BoxCalculator/BoxCalculator.tsx`. Add `import { CURRENCY_SYMBOL, formatInteger, formatMoney } from "../../lib/format";`. Replace lines 275-278 with:
+6g. `app/components/BoxCalculator/BoxCalculator.tsx`. Add `import { CURRENCY_SYMBOL, formatInteger, formatMoney } from "../../lib/format";` with the other `../../lib/` imports.
+
+Default (WP06 merged, `function formatInCurrency` exists):
+
+- Replace the body of WP06's module-level helper so it reads exactly:
+
+```ts
+/** Format a value already expressed in `currency`; never converts. */
+function formatInCurrency(value: number, currency: Currency): string {
+  return formatMoney(value, currency);
+}
+```
+
+  Keep the function, its name and its `Currency` parameter type (WP17 relies on it; `Currency` from `ProductPrices/types` is the same `"USD" | "CAD"` union as `CurrencyCode`, so it type-checks). `fmtPrice` (`const fmtPrice = (value: number) => formatInCurrency(value, selectedCurrency);`) and the saved-list call `formatInCurrency(r.retailPrice, r.currency)` stay as WP06 wrote them; both now print `C$1,299.99` style.
+- Replace `const currencySymbol = selectedCurrency === "CAD" ? "C$" : "$";` (line 275 at a188fea, lower after WP06) with `const currencySymbol = CURRENCY_SYMBOL[selectedCurrency];`.
+
+Fallback (no `formatInCurrency` in the file): replace lines 275-278 with:
 
 ```ts
   const currencySymbol = CURRENCY_SYMBOL[selectedCurrency];
@@ -539,7 +571,9 @@ and change the two USD call sites, `formatCurrency(row.marketPriceUsd)` at lines
   const fmtPrice = (value: number) => formatMoney(value, selectedCurrency);
 ```
 
-(`currencySymbol` stays for the input prefixes at :509 and :530.) Replace lines 714-716 (`{navResult.premiumDiscount > 0 ? "+" : "-"}`, `{currencySymbol}`, `{Math.abs(navResult.premiumDiscount).toFixed(2)} (`) with:
+In both cases `currencySymbol` stays for the two input prefixes (`{currencySymbol}` inside the retail-price and promo-value `<span className="absolute left-3 ...">`, :509 and :530 at a188fea). Afterwards `grep -n 'toFixed(2)\|"C\$"' app/components/BoxCalculator/BoxCalculator.tsx` must print nothing.
+
+Replace lines 714-716 (`{navResult.premiumDiscount > 0 ? "+" : "-"}`, `{currencySymbol}`, `{Math.abs(navResult.premiumDiscount).toFixed(2)} (`) with:
 
 ```tsx
                       {navResult.premiumDiscount > 0 ? "+" : "-"}
@@ -567,27 +601,32 @@ and line 123 `{isPositive ? "+" : ""}{formatCurrency(performance.gain_loss)}` wi
 
 6k. `app/components/Portfolio/cards/ImportHoldingsModal.tsx`. Add the same import. Line 394: `Qty: {result.csvRow.quantity} @ {formatMoney(result.csvRow.averageCostPaid, "USD")} each` (holdings store `purchase_price_usd`). If WP05 moved this line, find it with `grep -n "averageCostPaid.toFixed" app/components/Portfolio/cards/ImportHoldingsModal.tsx`.
 
-6l. `app/components/PriceChart.tsx`. Line 481 becomes `<span className="text-blue-400">{formatMoney(priceEntry.value, currency)}</span>`. Line 645 becomes `tickFormatter={(value) => formatMoney(value, currency, { decimals: 0 })}`. Delete `const currencySymbol = ...` and its comment (lines 374-375) once nothing references it (`grep -n currencySymbol app/components/PriceChart.tsx` must print nothing).
+6l. `app/components/PriceChart.tsx`. Line 481 becomes `<span className="text-blue-400">{formatMoney(priceEntry.value, currency)}</span>`. Line 645 becomes `tickFormatter={(value) => formatMoney(value, currency, { decimals: 0 })}`, and on line 646 in the same `<YAxis>` change `width={45}` to `width={56}`: the chart has `margin.left` 0 (line 612), so the tick text has about 37px, and the new thousands separator makes `C$1,650` (about 42px at 11px) and `$12,500` spill off the left edge. Delete `const currencySymbol = ...` and its comment (lines 374-375) once nothing references it (`grep -n currencySymbol app/components/PriceChart.tsx` must print nothing).
 
-6m. `app/components/charts/PortfolioChartImpl.tsx`. Add `import { CURRENCY_SYMBOL, formatMoney, formatMonthDay } from "../../lib/format";`. Line 41: `const currencySymbol = CURRENCY_SYMBOL[currency];` (still used by the compact `k` axis at :219, which stays). Replace lines 100-105 (the `{currencySymbol}` line and the `payload[0].value.toLocaleString(...)` expression) with `{formatMoney(payload[0].value, currency)}`.
+6m. `app/components/charts/PortfolioChartImpl.tsx`. Add `import { CURRENCY_SYMBOL, formatMoney, formatMonthDay } from "../../lib/format";`. Line 41: `const currencySymbol = CURRENCY_SYMBOL[currency];` (still used by the compact `k` axis at :219, which stays). Replace lines 101-105 (the `{currencySymbol}` line and the `{payload[0].value.toLocaleString(undefined, {` ... `})}` expression; keep the `<span className="text-emerald-400">` on line 100 and its `</span>` on line 106) with `{formatMoney(payload[0].value, currency)}`.
 
-6n. `app/components/charts/AllocationChartImpl.tsx`. Add `import { formatMoney } from "../../lib/format";`. Replace lines 90-94 (`{currencySymbol}` and `{data.value.toLocaleString(...)}`) with `{formatMoney(data.value, currency)}`. If `currencySymbol` (line 39) is then unused, delete it.
+6n. `app/components/charts/AllocationChartImpl.tsx`. Add `import { formatMoney } from "../../lib/format";`. Replace lines 90-94 (`{currencySymbol}` and `{data.value.toLocaleString(...)}`; keep the `<p className="text-sm">` on line 89 and its `</p>` on line 95) with `{formatMoney(data.value, currency)}`. Then delete line 39 (`const currencySymbol = currency === "CAD" ? "C$" : "$";`), which has no other use.
 
-Do not touch: input pre-fills `EditHoldingModal.tsx:43` and `AddHoldingModal.tsx:62` (`toFixed(2)` into an `<input>` value must stay parseable, no commas); percentages (`toFixed(1|2)%`); `CurrencySelector.tsx:43` and `compare/page.tsx:550` exchange rates (`toFixed(4)`); `PriceChart.tsx:54-55` tick keys; `ImportHoldingsModal.tsx:52` file size.
+Do not touch: input pre-fills `EditHoldingModal.tsx:43` and `AddHoldingModal.tsx:62` (`toFixed(2)` into an `<input>` value must stay parseable, no commas); percentages (`toFixed(1|2)%`); `CurrencySelector.tsx:43` and `compare/page.tsx:550` exchange rates (`toFixed(4)`); `PriceChart.tsx:54-55` tick keys; `ImportHoldingsModal.tsx:52` file size; `product/[id]/page.tsx:380` days of supply (`toFixed(1)`, a count of days, not money).
 
 ### Step 7. Integers in copy
 
-If WP05 landed: in `app/lib/validation.ts` replace `PRICE_MAX.toLocaleString("en-US")` in `PRICE_MESSAGE` with `formatInteger(PRICE_MAX)` and add `import { formatInteger } from "./format";`. If WP05 has not landed: replace `${PRICE_MAX.toLocaleString()}` in `EditHoldingModal.tsx:64` and `AddHoldingModal.tsx:85` with `${formatInteger(PRICE_MAX)}` (import from `../../../lib/format`).
+Do all that apply (the default tree after WP05 has all three):
+
+- `app/lib/portfolioInput.ts` (exists once WP05 merged): in `PRICE_MESSAGE` replace `PRICE_MAX.toLocaleString("en-US")` with `formatInteger(PRICE_MAX)` and add `import { formatInteger } from "./format";` with the other imports. The message text does not change (`1,000,000`), so WP05's tests that compare against `PRICE_MESSAGE` keep passing.
+- `app/components/Portfolio/cards/EditHoldingModal.tsx` (line 64 at a188fea) and `app/components/Portfolio/cards/AddHoldingModal.tsx` (line 85 at a188fea): replace `${PRICE_MAX.toLocaleString()}` with `${formatInteger(PRICE_MAX)}` and add `import { formatInteger } from "../../../lib/format";`. Find the lines with `grep -n "PRICE_MAX.toLocaleString" app/components/Portfolio/cards/*.tsx`.
+
+Afterwards `grep -rn "PRICE_MAX.toLocaleString" app` must print nothing.
 
 ### Step 8. Chart date labels
 
-8a. `app/components/PriceChart.tsx`. Line 124-127: replace the `new Date(year, month - 1, day).toLocaleDateString(undefined, {...})` expression and the `const [year, month, day] = ...` line above it with `const displayDate = formatMonthDay(dateStr);`. Line 186: `const displayDate = formatMonthDay(key);`. Both keys are already the viewer-local `YYYY-MM-DD` built by the component, so the label day does not change; only the locale-dependent text does ("Sep 26" everywhere). `releaseDateInfo` (:545-547) compares `d.timestamp`, not `d.date`, so it is unaffected.
+8a. `app/components/PriceChart.tsx`. Replace lines 122-127 (the comment `// Parse date parts directly to avoid timezone issues with Date constructor`, the `const [year, month, day] = dateStr.split("-").map(Number);` line, and the four-line `const displayDate = new Date(year, month - 1, day).toLocaleDateString(undefined, {` ... `});` statement) with `const displayDate = formatMonthDay(dateStr);`. Line 186: `const displayDate = formatMonthDay(key);`. Both keys are already the viewer-local `YYYY-MM-DD` built by the component, so the label day does not change; only the locale-dependent text does ("Sep 26" everywhere). `releaseDateInfo` (:545-547) compares `d.timestamp`, not `d.date`, so it is unaffected.
 
 8b. `app/components/charts/PortfolioChartImpl.tsx`. Lines 45-49: `date: formatMonthDay(point.date),` (point.date is a UTC `YYYY-MM-DD` key; the old code read it back with `timeZone: "UTC"`).
 
 ### Step 9. Lint guard against regressions
 
-`eslint.config.mjs`: add this object at the end of the exported array (after the `no-explicit-any` object). It uses `no-restricted-properties`, not `no-restricted-syntax`, so it cannot collide with the `no-restricted-syntax` blocks WP05/WP06 add (flat config replaces, not merges, a rule configured twice for the same file).
+`eslint.config.mjs`: add this object as the LAST element of the exported `export default [ ... ]` array, after every existing object (the `no-explicit-any` object and the blocks WP04, WP05 and WP06 appended). Do not edit those blocks. It uses `no-restricted-properties`, not `no-restricted-syntax`, so it cannot collide with the `no-restricted-syntax` blocks WP05/WP06 add (flat config replaces, not merges, a rule configured twice for the same file).
 
 ```js
   {
@@ -621,13 +660,16 @@ If WP05 landed: in `app/lib/validation.ts` replace `PRICE_MAX.toLocaleString("en
           TZ=Asia/Tokyo pnpm exec jest --ci app/lib/__tests__/format.test.ts app/components/MarketView/__tests__/returns.test.ts app/components/ProductPrices/__tests__/GroupHeader.test.tsx app/components/ProductPrices/__tests__/ProductCard.format.test.tsx
 ```
 
-GitHub runs `run:` with `bash -e`, so the first failing zone fails the step. If WP00 already added a `build:stub` step after tests, put this step between tests and the build.
+GitHub runs `run:` with `bash -e`, so the first failing zone fails the step. WP00 added two steps after `- run: pnpm test --ci` (`pnpm run test:scripts` and `pnpm build:stub`); insert this step immediately after `- run: pnpm test --ci` and before those two. Keep the job `name:` unchanged (branch protection keys on it).
 
 ### Step 11. Update existing tests
 
-- `app/components/Portfolio/__tests__/HoldingCard.test.tsx:272-274`: comment becomes `// Negative values print the sign before the symbol.` and the assertion `screen.getByText("-$100.00")`.
-- `app/components/Portfolio/__tests__/PortfolioSummaryCard.test.tsx:180-183`: same, `screen.getByText("-$300.00")`.
-- All other money assertions in these two files (`$125.50`, `C$136.00`, `$1,500.50`, `$1,234,567.89`, `+$100.00`, `+$0.00`, `$0.01`) must pass unchanged.
+- `app/components/Portfolio/__tests__/HoldingCard.test.tsx:273-274`: comment becomes `// Negative values print the sign before the symbol.` and the assertion `screen.getByText("-$100.00")`.
+- `app/components/Portfolio/__tests__/HoldingCard.test.tsx:416`: `screen.queryByText("$-200.00")` becomes `screen.queryByText("-$200.00")` (a negative assertion: with the old spelling it would pass trivially and stop guarding the "missing price is not a total loss" case).
+- `app/components/Portfolio/__tests__/PortfolioSummaryCard.test.tsx:181-183`: replace the two comment lines with `// Negative values print the sign before the symbol.` and the assertion with `screen.getByText("-$300.00")`.
+- `app/components/Portfolio/__tests__/PortfolioSummaryCard.test.tsx:210`: `screen.getByText("$-100.00")` becomes `screen.getByText("-$100.00")` (without this the "should apply red styling for negative losses" case fails).
+- Check: `grep -rn '\$-[0-9]' app --include=*.test.tsx` must print nothing.
+- All other money assertions in these two files (`$125.50`, `C$136.00`, `$300.00`, `$1,500.50`, `$999.99`, `$1,234,567.89`, `C$1,500.00`, `+$500.00`, `+$100.00`, `+$0.00`, `$0.01`, and the `getAllByText("--")` counts) must pass unchanged.
 - `app/components/MarketView/__tests__/returns.test.ts`: add the cases in the Tests section; keep every existing case.
 
 ### Step 12. Final sweep
@@ -650,6 +692,9 @@ Run the grep checks in Verification. Every hit left must be one of the "do not t
 - **Do not turn input pre-fills into formatted money** (`EditHoldingModal.tsx:43`, `AddHoldingModal.tsx:62`): `"1,649.99"` in a number input fails to parse.
 - **Do not set `process.env.TZ` inside a test file to switch zones.** Jest gives each test file a copy of `process.env` (jest-util `createProcessEnv`), so the assignment never reaches V8's clock. Switch zones on the command line (`TZ=... pnpm exec jest ...`), as step 10 does.
 - **Do not claim a full-tree client re-render in the PR description.** React 19 patches mismatched text and logs one recoverable error (F089 verifier). The user-visible effect is the console error plus the date text flipping after load.
+- **Do not pass a value with a non-UTC offset to `formatDateOnly`.** It reads the leading `YYYY-MM-DD` as written, which is the UTC date only for date keys and for offset-less UTC timestamps (`release_date`, `price_recorded_at`, `exchange_rates.recorded_at`, the only inputs this spec gives it). For anything carrying an offset, take `recordedAtDateKey(value)` first.
+- **Do not delete WP06's `formatInCurrency` in `BoxCalculator.tsx`.** Change its body to `formatMoney` (step 6g); WP17 expects the helper to exist.
+- **Do not leave `PRICE_MESSAGE` in `app/lib/portfolioInput.ts` on `toLocaleString`.** It is inside `app/`, so the new lint rule flags it; step 7 replaces it with `formatInteger` (same text).
 - **Do not change `/prices` hydration behaviour here.** `/prices` renders client-side today because of `useSearchParams` (F007 verifier); WP08 changes that and relies on this PR having made the text deterministic.
 
 ## Tests
@@ -1006,7 +1051,7 @@ describe("offset-less recorded_at is UTC (F122)", () => {
 
 ### Update: `HoldingCard.test.tsx`, `PortfolioSummaryCard.test.tsx`
 
-As in step 11: `$-100.00` becomes `-$100.00`, `$-300.00` becomes `-$300.00`.
+As in step 11: every `$-100.00`, `$-200.00` and `$-300.00` becomes `-$100.00`, `-$200.00` and `-$300.00` (four assertions: HoldingCard.test.tsx:274 and :416, PortfolioSummaryCard.test.tsx:183 and :210).
 
 ## Verification
 
@@ -1015,15 +1060,22 @@ Run from `frontend/`:
 ```bash
 pnpm exec tsc --noEmit                                   # expect: no output, exit 0
 
-# Lint the files you changed. Expect zero no-restricted-properties errors.
-# Lint is not blocking until WP17; other pre-existing errors in these files
-# may remain, but the count must not grow (compare with `git stash` run).
-pnpm exec eslint app/lib/format.ts app/lib/marketData.ts app/lib/serverMarketData.ts \
+# Lint the files you changed. Lint is not blocking until WP17, so pre-existing
+# errors in these files may remain, but the error count in the last line must be
+# less than or equal to the baseline you wrote down in "Before you start" check 8
+# (the same file list plus format.ts and the new tests). A higher count means
+# this PR introduced a lint error: fix it.
+pnpm exec eslint app/lib/format.ts app/lib/marketData.ts app/lib/serverMarketData.ts app/lib/portfolioInput.ts \
   app/components/ProductPrices app/components/MarketView app/components/PriceChart.tsx \
   app/components/charts app/components/BoxCalculator/BoxCalculator.tsx app/components/Portfolio \
   app/page.tsx app/product app/stats/page.tsx app/compare/page.tsx app/privacy/page.tsx \
-  app/lib/validation.ts eslint.config.mjs
+  app/lib/__tests__/format.test.ts eslint.config.mjs 2>&1 | tail -3
 pnpm exec eslint app | grep -c no-restricted-properties  # expect 0
+
+# The rule fires (then delete the probe file):
+printf 'export const probe = (1).toLocaleString();\n' > app/lib/lintProbe.ts
+pnpm exec eslint app/lib/lintProbe.ts | grep -c no-restricted-properties   # expect 1
+rm app/lib/lintProbe.ts
 
 pnpm test --ci                                           # expect: all suites pass
 
@@ -1046,9 +1098,14 @@ grep -rnE "toLocale(Date|Time)?String\(" app --include=*.ts --include=*.tsx | gr
 grep -rnE "new Date\([^)]*recorded_at" app --include=*.ts --include=*.tsx | grep -v __tests__
 grep -rn "resolvedOptions" app --include=*.ts --include=*.tsx | grep -v __tests__
 grep -rnE '\$\$\{|"\$" *\+|`\$\$' app --include=*.ts --include=*.tsx | grep -v __tests__
-# Remaining .toFixed( hits must all be percentages, exchange rates (toFixed(4)), tick keys
-# (PriceChart.tsx:54-55), the file-size message, the two input pre-fills, or PortfolioChartImpl's
-# compact "k" axis:
+grep -rn "PRICE_MAX.toLocaleString" app
+grep -rn '\$-[0-9]' app --include=*.test.tsx
+# The currency symbol literal lives only in format.ts. Expect exactly one line, app/lib/format.ts (CAD: "C$"):
+grep -rn '"C\$"' app --include=*.ts --include=*.tsx | grep -v __tests__
+# Remaining .toFixed( hits must all be percentages (toFixed(1|2) followed by %), exchange rates
+# (toFixed(4)), tick keys (PriceChart.tsx:54-55), the file-size message (ImportHoldingsModal),
+# the two input pre-fills (AddHoldingModal, EditHoldingModal), PortfolioChartImpl's compact "k"
+# axis, stats/page.tsx formatScore, or product/[id]/page.tsx daysOfSupply:
 grep -rn "toFixed(" app --include=*.ts --include=*.tsx | grep -v __tests__
 
 pnpm build:stub                                          # expect: build succeeds (WP00 harness)
@@ -1063,7 +1120,8 @@ Manual checks (need real data: either the PR's Vercel preview deployment, or `pn
 5. `/prices` in CAD: a product over $999 USD (for example a vintage booster box) shows `C$1,xxx.xx` with a comma. Toggle to USD: `$1,xxx.xx`. A product whose price is withheld shows `--` and, under it, "No current price, last recorded <date>".
 6. `/compare`: CAD columns show `C$`, the "Market USD" column shows `$`, missing cells still show the em dash.
 7. `/portfolio` (signed in, only works after WP05): a losing holding shows `-$12.34`, a gain `+$12.34`; chart tooltip and allocation tooltip show thousands separators; the chart X axis reads "Sep 26".
-8. `/product/[id]`: the full chart tooltip shows `$1,649.99` style, Y-axis ticks `$1,650`, X-axis labels "Sep 26".
+8. `/product/[id]`: the full chart tooltip shows `$1,649.99` style, Y-axis ticks `$1,650`, X-axis labels "Sep 26". On `/prices` in CAD, open "Show full chart" on a product priced above about C$1,000: the Y-axis ticks (`C$1,650` style) are fully visible, not cut off at the left edge.
+9. `/box-calculator` in CAD with a retail price above 1,000: NAV rows, the premium/discount line and the saved-recipes list show `C$1,234.56` style.
 
 ## Owner actions
 
@@ -1084,6 +1142,8 @@ None. (Optional: open the PR's Vercel preview and run manual checks 1 to 3 if th
 - [ ] Money above 999 shows a thousands separator on every page; negative money reads `-$x` / `-C$x`; `/compare` CAD columns use `C$`.
 - [ ] A grouped catalog card with a withheld price shows "No current price, last recorded <date>" (or "No current price yet").
 - [ ] `ProductCard` no longer computes the `Updated:` label outside the flat branch.
+- [ ] `grep -rn '"C\$"' app --include=*.ts --include=*.tsx | grep -v __tests__` prints only `app/lib/format.ts`; `grep -rn "PRICE_MAX.toLocaleString" app` prints nothing; WP06's `formatInCurrency` still exists and returns `formatMoney(value, currency)`.
+- [ ] `PriceChart`'s price `<YAxis>` has `width={56}`, and CAD ticks above C$1,000 are not clipped.
 
 ## Rollback
 
@@ -1115,4 +1175,4 @@ EDT/EST label, and money uses $ / C$ with thousands separators.
 
 PR title: `fix(format): shared date/timestamp/money formatting; fix off-by-one release dates and hydration on /`
 
-PR body summary: what was wrong (release dates a day early for North American visitors, hydration error on `/`, `$1649.99` vs `$1,649.99`, unlabeled UTC "Last Refreshed", local-time parsing of UTC timestamps in return math); the three decisions (date-only by string split, fixed America/Toronto with label, `$`/`C$` symbols with en-US digits) and why; visible changes reviewers should expect (date style "Sep 26, 2026" everywhere, `C$` on /compare, `-$100.00` instead of `$-100.00`, "EDT/EST" on timestamps, stale-price note on grouped cards); how it was tested (unit tests, zone matrix, stub build, manual DevTools timezone check); follow-ups: WP08/WP09 build on this module, WP18 merges the duplicated return helpers in `serverMarketData.ts`/`ReturnMetrics.tsx`/`returns.ts`, WP20 may unify `CurrencyCode` with `ProductPrices/types` `Currency`.
+PR body summary: what was wrong (release dates a day early for North American visitors, hydration error on `/`, `$1649.99` vs `$1,649.99`, unlabeled UTC "Last Refreshed", local-time parsing of UTC timestamps in return math); the three decisions (date-only by string split, fixed America/Toronto with label, `$`/`C$` symbols with en-US digits) and why; visible changes reviewers should expect (date style "Sep 26, 2026" everywhere, `C$` on /compare, `-$100.00` instead of `$-100.00`, "EDT/EST" on timestamps, stale-price note on grouped cards, thousands separators in the box calculator including WP06's saved-recipe prices, a wider price Y axis on PriceChart); how it was tested (unit tests, zone matrix, stub build, manual DevTools timezone check); follow-ups: WP08/WP09 build on this module, WP18 merges the duplicated return helpers in `serverMarketData.ts`/`ReturnMetrics.tsx`/`returns.ts`, WP20 may unify `CurrencyCode` with `ProductPrices/types` `Currency`.

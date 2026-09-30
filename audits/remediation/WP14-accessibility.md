@@ -3,11 +3,11 @@
 - **Findings covered**
   - F030 (full; cluster members F023, F030, F094): the Add, Edit and Import Holding modals are plain `<div>` overlays with no dialog role, no focus move, trap or restore, no Escape, and close (X) buttons with an empty accessible name; `ProductSearchSelect` has no combobox/listbox semantics or arrow-key support, and its clear (X) button is also unnamed. The Header items that the finder bundled here are F022 and were done in WP03.
   - F031 (full): labels are not associated with their inputs in the portfolio modals, the `/prices` filter controls, BoxCalculator and the compare page; the search inputs have only a placeholder. The `autoComplete` half of the finding belongs to F024 (WP02) and is not repeated here.
-  - F095 (full; cluster members F095, F104): `text-slate-400` (2.56:1) is used for informational text, often at 10 to 11 px; gain and loss text colours fail 4.5:1; ReturnMetrics bypasses the gain/loss tokens; some icon buttons are under 24 px or named only by `title`; `ScrollToTop` puts `aria-hidden` on a focusable button; the `/stats` column definitions exist only as `title` tooltips.
-- **Priority rationale**: the Add/Edit/Import flow is the site's only authenticated data-entry surface and WP05 just made it work again, so it should be operable by keyboard and screen-reader users before the polish packages (WP15) build confirm dialogs on top of the same component.
+  - F095 (full; cluster members F095, F104): `text-slate-400` (2.56:1) is used for informational text, often at 10 to 11 px; gain and loss text colours fail 4.5:1; ReturnMetrics bypasses the gain/loss tokens; some icon buttons are small or named only by `title`; `ScrollToTop` puts `aria-hidden` on a focusable button; the `/stats` column definitions exist only as `title` tooltips. The "white on the blue-500 toast" item (3.68:1) is already closed: WP03 deleted that toast (baseline check 4b confirms). The MarketView "Show/Hide" button (about 26 px tall) and the CardRinkPromo dismiss button (about 28 px) are above the 24 px WCAG 2.5.8 minimum and keep their size; say so in the PR.
+- **Priority rationale**: the Add/Edit/Import flow is the site's only authenticated data-entry surface and WP05 just made it work again, so it should be operable by keyboard and screen-reader users before the polish package (WP15) adds confirm dialogs that follow the same native-`<dialog>` rules and reuse this package's jsdom polyfill.
 - **Effort**: M, about 9 hours (3 h Dialog and the three modals, 1.5 h ProductSearchSelect, 1.5 h labels in controls/BoxCalculator/compare, 1 h contrast pass, 2 h tests).
-- **Depends on**: WP05 (hard: the modals, `PortfolioDashboard` and `useProductSearch` are edited on top of WP05's rewrite). Soft: WP03 (Header a11y, not touched here), WP06 (BoxCalculator saved-recipe markup), WP07 (`formatMoney` in `ProductSearchSelect`), WP09, WP12, WP13 (may already have removed some `text-slate-400` lines listed below).
-- **Unblocks**: WP15 (F103 replaces `window.confirm`/`alert` with confirm dialogs built on `app/components/ui/Dialog.tsx`; F091 must treat the gain/loss text tokens and ReturnMetrics as done), WP17 (removes two `react-hooks/set-state-in-effect` lint errors in the modals).
+- **Depends on**: WP05 (hard: the modals, `PortfolioDashboard` and `useProductSearch` are edited on top of WP05's rewrite). The plan runs packages in order, so these have also landed and change where code lives: WP11 moved the compare page's client code to `app/compare/CompareDashboard.tsx` (step 11 edits that file, not `page.tsx`); WP13 moved the login form to `app/auth/login/LoginForm.tsx` and added `app/components/NotFoundPanel.tsx` (its `placeholder:text-slate-400` is covered by step 13's sed); WP09 rewrote the `ControlBar` drawer (collapsed controls are already `invisible`, so out of the tab order) and added a `disabled:text-slate-400` chart-toggle button in `ProductCard`; WP03 did the Header items and removed the `/prices` toast; WP06 changed the BoxCalculator saved-recipe markup; WP07 added `formatMoney` to `ProductSearchSelect`; WP09, WP12 and WP13 may already have removed some `text-slate-400` lines listed below.
+- **Unblocks**: WP15 (its step 1 skips the jsdom `<dialog>` polyfill because step 1 here adds it; its `ConfirmDialog` is self-contained and follows the same rules, so it does not import `Dialog.tsx`; its baseline says "expect Modal.tsx" but only needs `app/components/ui/` to exist, so the name `Dialog.tsx` is correct; its ReturnMetrics step skips because step 12b here did it; F091 must treat the gain/loss text tokens as done), WP17 (removes two `react-hooks/set-state-in-effect` lint errors in the modals), WP18 (expects the compare search `aria-label`, the `sr-only` file input and `METRIC_DEFINITIONS` in `stats/page.tsx`), WP19 (expects the MarketView `--pf-gain-text`/`--pf-loss-text` and `text-slate-500` classes).
 - **Suggested branch name**: `remediation/wp14-accessibility`
 - **Risk level**: medium. No data, API, auth or schema change, but it changes how the three portfolio modals open, close and take focus (native `<dialog>` top layer), and it touches colour classes in about 20 files.
 
@@ -28,7 +28,7 @@ Read these files fully (line numbers are pre-WP05 HEAD `a188fea`; WP05 and other
 - `frontend/app/components/Portfolio/hooks/useProductSearch.ts` (WP05 rewrite; returns `searchQuery, setSearchQuery, results, loading, error`).
 - `frontend/app/components/ProductPrices/controls/{GenerationFilter,ProductTypeFilter,AgeFilter,CurrencySelector,ChartTimeframeButtons,SearchInput,SortControls}.tsx`.
 - `frontend/app/components/BoxCalculator/BoxCalculator.tsx` (747 before WP06). Recipe name `:293-299`, saved-list delete `:364-376`, set select `:392-406`, Qty `:410-418`, pack row buttons `:461-492`, promo/retail `:500-541`, premium/discount colour `:706-712`.
-- `frontend/app/compare/page.tsx` file input `:561-578`, search `:641-647`.
+- `frontend/app/compare/CompareDashboard.tsx` (WP11 moved the client code here with `git mv` from `page.tsx`; if WP11 has not landed, edit `app/compare/page.tsx` instead). Pre-WP11 lines: file input `:561-578`, search `:641-647`.
 - `frontend/app/globals.css` (82 lines), tokens `:19-32`.
 - `frontend/app/stats/page.tsx` (274). `STAT_TOOLTIPS` `:4-25`, `InfoIcon` `:27-39`, All Set Metrics section `:201-267`.
 - `frontend/app/components/ProductPrices/shared/ScrollToTop.tsx` (58), `ReturnMetrics.tsx` `:114-129`.
@@ -48,30 +48,45 @@ grep -rnE 'role="dialog"|aria-modal|<dialog|showModal' app --include=*.tsx
 # Expect 3 hits, one per modal.
 grep -rn "fixed inset-0 z-50" app/components/Portfolio/cards
 
-# 3. Unassociated labels. Expect 25 lines today (AddHoldingModal 5, EditHoldingModal 4, controls 5,
-#    BoxCalculator 3, auth/account multi-line labels 6, compare 2).
+# 3. Unassociated labels. Expect 25 lines (AddHoldingModal 5, EditHoldingModal 4, controls 5,
+#    BoxCalculator 3, multi-line labels whose htmlFor is on the next line: auth/forgot-password 1,
+#    auth/login/LoginForm.tsx 2, account 3; compare/CompareDashboard.tsx 2, labels that wrap their input).
 grep -rnP '<label(?![^>]*htmlFor)' app --include=*.tsx | grep -v __tests__
 
-# 4. Contrast. Expect about 51 tsx lines (fewer if WP09/WP12/WP13 removed "Loading..." texts).
+# 3b. Earlier packages moved these files. Expect both paths to exist.
+ls app/compare/CompareDashboard.tsx app/auth/login/LoginForm.tsx
+
+# 4. Contrast. Expect about 49 tsx lines, plus WP09's disabled:text-slate-400 and WP13's
+#    NotFoundPanel placeholder, minus any "Loading..." text WP09 removed.
 grep -rn "slate-400" app --include=*.tsx | grep -v __tests__ | wc -l
 # Expect 2 hits (ReturnMetrics.tsx, the green/red text).
 grep -rnE "text-(green|red)-600" app --include=*.tsx | grep -v __tests__
+
+# 4b. The F095 blue-500 toast is gone (WP03). Expect no output. If it prints a line,
+#     WP03 is missing: stop and report.
+grep -rn "bg-blue-500 text-white" app --include=*.tsx
 
 # 5. Nothing exists yet. Expect "No such file or directory" and no output.
 ls app/components/ui 2>&1
 grep -n "HTMLDialogElement" jest.setup.ts
 
-# 6. Lint baseline for the files this PR edits. Record the output in the PR.
-#    After WP05 expect errors only in: AddHoldingModal (pre-fill effect,
-#    react-hooks/set-state-in-effect), EditHoldingModal (populate effect), HoldingsTable x5 (WP17).
-pnpm exec eslint app/components/Portfolio app/components/ProductPrices/controls \
-  app/components/BoxCalculator/BoxCalculator.tsx app/stats/page.tsx app/compare/page.tsx
+# 6. Lint baseline. Use this exact file list here and again in Verification, and
+#    record the final "N problems (E errors, W warnings)" line in the PR. The
+#    absolute number depends on what WP04 to WP13 fixed; what matters is the delta.
+LINT_FILES="app/components/Portfolio app/components/ProductPrices \
+  app/components/BoxCalculator/BoxCalculator.tsx app/components/MarketView/MarketView.tsx \
+  app/components/CardRinkPromo.tsx app/components/charts app/stats/page.tsx app/compare \
+  app/page.tsx app/product app/account/page.tsx app/auth"
+pnpm exec eslint $LINT_FILES 2>&1 | tail -n 3
+# Also record the error count per file. After WP05 AddHoldingModal.tsx (pre-fill effect)
+# and EditHoldingModal.tsx (populate effect) each show exactly 1 (react-hooks/set-state-in-effect).
+pnpm exec eslint $LINT_FILES -f json 2>/dev/null | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{for(const f of JSON.parse(s))if(f.errorCount)console.log(f.errorCount,f.filePath.replace(process.cwd()+"/",""))})'
 ```
 
 Assumptions to check:
 
 - WP07 landed: `ProductSearchSelect.tsx` imports `formatMoney` from `../../../lib/format` and renders `formatMoney(..., "USD", { missing: "N/A" })`. If it did not, keep the price expressions exactly as you find them in step 4; nothing else depends on WP07.
-- WP03 landed: `Header.tsx` already has `aria-expanded`, Escape handling and a focus ring. Do not touch `Header.tsx` in this PR either way.
+- WP03 landed: `Header.tsx` already has `aria-expanded`, Escape handling and a focus ring. Do not touch `Header.tsx` in this PR either way. `Header.tsx` also keeps its logo `role="img"`; that one is correct.
 - WP05's `AddHoldingModal` is mounted only while open (`{portfolio && isAddModalOpen && (<AddHoldingModal isOpen ... />)}`) and `ImportHoldingsModal` is always mounted with `isOpen={isImportModalOpen}`. If WP05 wired them differently, keep its wiring for Add and Import; only the Edit block changes (step 6b).
 - F103 (native `window.confirm`/`alert` in `PortfolioDashboard`, `account/page.tsx`, `BoxCalculator`) is WP15. WP05's PR text says "WP14 replaces them"; the plan owner reassigned that to WP15. Leave every `confirm`/`alert` as it is.
 
@@ -578,7 +593,7 @@ export default function ProductSearchSelect({
                         )}
                         <div className="flex-1 min-w-0">
                           <p className="font-medium text-slate-900 truncate">{getProductDisplayName(product)}</p>
-                          <p className="text-sm text-slate-500">
+                          <p className="text-sm text-slate-600">
                             {formatMoney(product.usd_price, "USD", { missing: "N/A" })}
                           </p>
                         </div>
@@ -598,6 +613,8 @@ export default function ProductSearchSelect({
   );
 }
 ```
+
+The option price is `text-slate-600`, not the old `text-slate-500`: the highlighted option has `bg-slate-100`, where slate-500 is 4.34:1 and fails; slate-600 is 6.92:1. The popup is absolutely positioned inside the Dialog's scrolling body, so a long result list extends that body's scroll area instead of spilling over the dialog edge; manual check 4 covers it.
 
 Behaviour changes to accept and mention in the PR: the popup no longer opens on focus (only on typing, click or ArrowDown), so the dialog's initial focus on this input does not pop a hint and the first Escape closes the dialog; results are no longer `<button>`s reached by Tab but options reached by the arrow keys, which is the APG pattern (options inside a listbox must not contain buttons). `aria-controls` is always present because aria-query (used by jsx-a11y `role-has-required-aria-props`) lists it as required on `combobox`.
 
@@ -856,7 +873,22 @@ Use whatever `onSuccess` handler WP05 wired (`applyHoldingSaved` in the WP05 spe
 
 and as the first line of its `catch` add `if (sessionRef.current !== session) return;`.
 
-7e. `handleClose`: add `sessionRef.current += 1;` as its first line. Pass `handleClose` (not `onClose`) to the Dialog, so Escape, the X and a backdrop click all reset the wizard exactly like the old backdrop did.
+7e. `handleClose`: add `sessionRef.current += 1;` as its first line, and add `setLoading(false);` next to the existing `setError(null);`. The `setLoading(false)` is required: the guards in 7c and 7d return before the function's own `setLoading(false)`, and the dashboard keeps this component mounted between opens (WP05 step 15f), so without the reset a dialog closed mid-parse or mid-import reopens with "Processing..." on a disabled upload button forever. The resulting function:
+
+```tsx
+  const handleClose = () => {
+    sessionRef.current += 1;
+    setCsvContent("");
+    setMatchResults([]);
+    setSelectedMatches(new Set());
+    setStep("upload");
+    setError(null);
+    setLoading(false);
+    onClose();
+  };
+```
+
+Pass `handleClose` (not `onClose`) to the Dialog, so Escape, the X and a backdrop click all reset the wizard exactly like the old backdrop did.
 
 7f. Replace the outer shell. Everything from `if (!isOpen) return null;` to the end of the component becomes the structure below; the four step blocks (`{step === "upload" && (...)}`, `preview`, `importing`, `complete`) move inside unchanged except for the edits in 7g:
 
@@ -921,6 +953,8 @@ and as the first line of its `catch` add `if (sessionRef.current !== session) re
   );
 }
 ```
+
+Paste the four step blocks where the placeholder comment is and delete the comment. The old footer `<div className="flex justify-end gap-3 p-4 border-t border-slate-200">` and its three step conditionals are replaced by the `footer` constant above (same buttons, now with `type="button"`); delete the old one.
 
 7g. Edits inside the step blocks:
 
@@ -1023,10 +1057,12 @@ Find each spot by its anchor; WP06 may have moved lines.
 
 Do not convert `gray-*` to `slate-*` or `blue-*` to tokens here; that codemod is WP15 (F091).
 
-### Step 11. `frontend/app/compare/page.tsx`
+### Step 11. `frontend/app/compare/CompareDashboard.tsx`
+
+WP11 moved the client code here (`git mv` from `app/compare/page.tsx`, which is now a server wrapper). If `CompareDashboard.tsx` does not exist, WP11 is missing: make the same edits in `app/compare/page.tsx` and say so in the PR.
 
 - Search input (`placeholder="Search SKU or title"`): add `aria-label="Search by SKU or title"` and add `focus:ring-2 focus:ring-[var(--pf-pokeblue)]` to its className (today it has `focus:outline-none` and only a border change, so keyboard focus is barely visible).
-- CSV upload (`accept=".csv"` inside the dashed `<label>`): the `<input type="file">` has `className="hidden"` (display:none), which makes it unreachable by keyboard. Change it to `className="sr-only"` and add `focus-within:ring-2 focus-within:ring-[var(--pf-pokeblue)]` to the wrapping `<label>`'s className. Clicking still opens the picker; Tab now reaches it and Space opens it.
+- CSV upload (`accept=".csv"` inside the dashed `<label>`): the `<input type="file">` has `className="hidden"` (display:none), which makes it unreachable by keyboard. Change it to `className="sr-only"` and add `relative focus-within:ring-2 focus-within:ring-[var(--pf-pokeblue)]` to the wrapping `<label>`'s className (`relative` anchors the absolutely positioned `sr-only` input inside the label, so focusing it does not scroll the page to its top). Clicking still opens the picker; Tab now reaches it and Space opens it.
 
 ### Step 12. Gain/loss TEXT colours: one rule everywhere
 
@@ -1036,12 +1072,12 @@ Every place that colours gain/loss TEXT uses `--pf-gain-text` / `--pf-loss-text`
 
 ```bash
 cd frontend
-grep -rl 'text-\[var(--pf-gain)\]\|text-\[var(--pf-loss)\]' app --include=*.tsx | xargs sed -i \
+grep -rl 'text-\[var(--pf-gain)\]\|text-\[var(--pf-loss)\]' app --include=*.tsx | xargs -r sed -i \
   -e 's/text-\[var(--pf-gain)\]/text-[var(--pf-gain-text)]/g' \
   -e 's/text-\[var(--pf-loss)\]/text-[var(--pf-loss-text)]/g'
 ```
 
-This covers `app/page.tsx` (MoverCard change), `app/product/[id]/page.tsx` (ReturnValue), `app/stats/page.tsx` (ReturnCell, ScoreCell) and any file WP05 to WP13 added.
+This covers `app/page.tsx` (MoverCard change), `app/product/[id]/page.tsx` (ReturnValue), `app/stats/page.tsx` (ReturnCell, ScoreCell), `app/auth/reset-password/page.tsx` (the large "!" glyph on `bg-rose-100`, 5.24:1 after the change) and any file WP05 to WP13 added. Run the `grep -rl` part alone first and list the files it prints in the PR.
 
 12b. Hand edits (replace the positive branch with `text-[var(--pf-gain-text)]` and the negative branch with `text-[var(--pf-loss-text)]`):
 
@@ -1065,19 +1101,19 @@ Change only these (the background decides slate-500 vs slate-600: slate-500 is 4
 | `app/product/[id]/page.tsx` | `ml-1.5 text-sm font-semibold text-slate-400` ("USD") | `text-slate-600` | page background |
 | `app/stats/page.tsx` | `text-[11px] font-semibold uppercase tracking-wider text-slate-400` ("Top 10") | `text-slate-500` | white section |
 | `app/stats/page.tsx` | `px-3 py-3 text-slate-400 tabular-nums` (rank cell, 2 places) | `text-slate-500` | white rows |
-| `MarketView/MarketView.tsx` | `w-14 bg-white px-3 py-4 text-slate-400` (row number) | `text-slate-500` | white cell |
+| `MarketView/MarketView.tsx` | `w-14 bg-white px-3 py-4 text-slate-400` (row number) | `text-slate-500` | white cell (4.55:1 on its `group-hover:bg-slate-50`) |
 | `MarketView/MarketView.tsx` | `text-xs text-slate-400">Loading...` and `">Open chart` (if still present after WP09) | `text-slate-500` | white cell |
 | `charts/AllocationChartImpl.tsx` | `<li className="text-xs text-slate-400">` ("+N more") | `text-slate-500` | white card |
 | `CardRinkPromo.tsx` | `<p className="mt-6 text-center text-xs text-slate-400">` ("Powered by pokefin.ca" line) | `text-slate-500` | white card |
 | `CardRinkPromo.tsx` | dismiss button `p-1.5 rounded-md text-slate-400` | `text-slate-500` | icon-only control, 1.4.11 needs 3:1 |
-| `ProductPrices/shared/ProductImage.tsx` | `<div className="text-slate-400">Loading...</div>` (only if WP12/WP13 left it) | `text-slate-600` | on `bg-slate-200` |
+| `ProductPrices/shared/ProductImage.tsx` | `<div className="text-slate-400">Loading...</div>` (WP12 keeps this text for non-priority images and its tests assert the text, not the class) | `text-slate-600` | on `bg-slate-200` (slate-500 there is 3.86:1) |
 | `ImportHoldingsModal.tsx` | "Reason:" line | `text-slate-600` | done in step 7g |
 
-Placeholders: replace `placeholder:text-slate-400` with `placeholder:text-slate-500` in every file (the hero search in `app/page.tsx`, `SearchInput.tsx`, and the auth pages, whose placeholders are the only format hint):
+Placeholders: replace `placeholder:text-slate-400` with `placeholder:text-slate-500` in every file (the hero search in `app/page.tsx`, `SearchInput.tsx`, WP13's `components/NotFoundPanel.tsx`, and the auth pages including `auth/login/LoginForm.tsx`, whose placeholders are the only format hint):
 
 ```bash
 cd frontend
-grep -rl 'placeholder:text-slate-400' app --include=*.tsx | xargs sed -i 's/placeholder:text-slate-400/placeholder:text-slate-500/g'
+grep -rl 'placeholder:text-slate-400' app --include=*.tsx | xargs -r sed -i 's/placeholder:text-slate-400/placeholder:text-slate-500/g'
 ```
 
 Keep `text-slate-400` (decorative, or passes on a dark surface), and say so in the PR:
@@ -1085,7 +1121,10 @@ Keep `text-slate-400` (decorative, or passes on a dark surface), and say so in t
 - `--` no-data placeholders: `MarketView.tsx` (`renderReturnValue` and the volume cell), `stats/page.tsx` (ReturnCell, ScoreCell), `product/[id]/page.tsx` (ReturnValue, formatCount, "Days of supply"), `app/page.tsx` MoverCard `change === null`.
 - Decorative icons next to a text label: `Header.tsx` chevron and menu icons (WP03's file), `SearchInput.tsx` magnifier, `ControlBar.tsx` chevron, `ImportHoldingsModal.tsx` upload and X icons, `HoldingCard.tsx` no-image placeholder icon.
 - Dark tooltips, `bg-slate-900` (slate-400 there is 6.96:1): `PriceChart.tsx` currency unit (the verifier cited it, but on this background it passes), `PortfolioChartImpl.tsx`, `AllocationChartImpl.tsx` percentage.
-- `compare/page.tsx` `hover:border-slate-400` (a border, not text).
+- `compare/CompareDashboard.tsx` `hover:border-slate-400` (a border, not text).
+- `disabled:text-slate-400` (WP09's chart toggle button in `ProductCard.tsx`, and any other `disabled:` variant): WCAG 1.4.3 exempts inactive controls.
+
+Tap targets (F104): the MarketView row "Show/Hide" button (`px-3 py-1 text-xs`, about 26 px tall) and the CardRinkPromo dismiss button (`p-1.5` around a 16 px icon, about 28 px) already meet the 24 px WCAG 2.5.8 minimum. Leave their size unchanged and list them in the PR as checked.
 
 ### Step 14. `frontend/app/stats/page.tsx`: definitions that work on touch and for screen readers
 
@@ -1198,8 +1237,13 @@ All new test files live under the jsdom default environment (no docblock). Run t
 
 ```tsx
 import { useRef, useState } from "react";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import Dialog from "../Dialog";
+
+// The showModal spy below is installed per test; undo it so the polyfill is intact.
+afterEach(() => {
+  jest.restoreAllMocks();
+});
 
 function Harness({
   mountWhileOpen = false,
@@ -1255,7 +1299,7 @@ Cases (run the focus and Escape cases for both `mountWhileOpen` values with `des
 - A child that calls `preventDefault()` in its own `onKeyDown` for Escape keeps the dialog open (render `<Dialog open onClose={onClose} title="T"><input onKeyDown={(e) => e.preventDefault()} aria-label="child" /></Dialog>` and assert `onClose` not called).
 - `fireEvent(dialog, new Event("cancel", { cancelable: true }))` returns `false` (default prevented) and calls `onClose`.
 - Backdrop: `fireEvent.pointerDown(dialog); fireEvent.click(dialog)` calls `onClose` once; `fireEvent.pointerDown(input); fireEvent.click(dialog)` does not; `fireEvent.pointerDown(input); fireEvent.click(input)` does not.
-- Browser-initiated close: with `<Dialog open onClose={onClose} ...>`, `act(() => (screen.getByRole("dialog") as HTMLDialogElement).close())` calls `onClose` once.
+- Browser-initiated close: with `<Dialog open onClose={onClose} ...>`, `act(() => { (screen.getByRole("dialog") as HTMLDialogElement).close(); })` calls `onClose` once.
 - Prop-initiated close is not echoed: `const { rerender } = render(<Dialog open onClose={onClose} title="T">x</Dialog>)`, then `rerender(<Dialog open={false} onClose={onClose} title="T">x</Dialog>)`: `onClose` not called, dialog has no `open` attribute.
 
 ### 2. `frontend/app/components/Portfolio/__tests__/ProductSearchSelect.test.tsx` (new)
@@ -1271,8 +1315,11 @@ const mockResults: ProductSearchResult[] = [
 ];
 
 // The factory runs lazily; it may reference mock-prefixed bindings only.
+// jest.requireActual, not require(): @typescript-eslint/no-require-imports is
+// an error in this repo and test files are linted (same rule WP05's
+// AddHoldingModal.test.tsx follows).
 jest.mock("../hooks", () => {
-  const React = require("react");
+  const React = jest.requireActual<typeof import("react")>("react");
   return {
     usePortfolioData: jest.fn(),
     useProductSearch: () => {
@@ -1321,7 +1368,8 @@ Cases:
 Mocks (paths relative to the test file):
 
 ```tsx
-jest.mock("../hooks", () => { /* same factory as test 2, with its own mockResults */ });
+// Copy test 2's `mockResults` array (products 1 and 2) and its `jest.mock("../hooks", ...)`
+// factory into this file verbatim, above the mocks below. Do not import them from test 2.
 jest.mock("../../../lib/portfolioApi", () => ({ addHolding: jest.fn(), updateHolding: jest.fn() }));
 jest.mock("../../../lib/import", () => ({
   processCollectrImport: jest.fn(),
@@ -1338,9 +1386,10 @@ Mocking `../hooks` also keeps `usePortfolioData` (and through it the Supabase br
 Cases:
 
 - AddHoldingModal (`<AddHoldingModal isOpen onClose={onClose} onSuccess={jest.fn()} />`): `getByRole("dialog", { name: "Add Holding" })`; the combobox named "Product" has focus; `getByLabelText("Quantity")`, `getByLabelText("Purchase Price (USD)")`, `getByLabelText("Purchase Date")`, `getByLabelText("Notes (optional)")` each return the matching input/textarea; `getByRole("button", { name: "Close" })` exists; `fireEvent.keyDown(getByLabelText("Quantity"), { key: "Escape" })` calls `onClose` once.
-- AddHoldingModal price pre-fill (replaces the removed effect): type "15", ArrowDown, Enter selects product 1 (usd_price 100): the price input value is "100.00". Then clear, select product 2 (usd_price null): price is "". Use the real `lib/priceGuard` (for a plain product object `hasCurrentPrice` only checks `usd_price !== null`, `priceGuard.ts:135-140`), so no mock is needed.
+- AddHoldingModal price pre-fill (replaces the removed effect): `fireEvent.change(combobox, { target: { value: "15" } })`, `fireEvent.keyDown(combobox, { key: "ArrowDown" })`, `fireEvent.keyDown(combobox, { key: "Enter" })` selects product 1 (usd_price 100): `getByLabelText("Purchase Price (USD)")` has value `100` (`toHaveValue(100)`, it is a number input). Then click the button named `/^Clear selected product/`, query the combobox again (it is a new element), type "15" again, ArrowDown twice, Enter: product 2 (usd_price null) is selected and the price input has no value (`toHaveValue(null)`). Use the real `lib/priceGuard` (for a plain product object `hasCurrentPrice` only checks `usd_price !== null`, `priceGuard.ts:135-140`), so no mock is needed.
 - EditHoldingModal with a fixture `{ id: 7, quantity: 2, purchase_price_usd: 12.5, purchase_date: "2026-01-02", notes: "", products: { id: 1, usd_price: 20, image_url: null, variant: null, url: "", sets: { name: "151" }, product_types: { name: "booster_box", label: "Booster Box" } } } as unknown as HoldingWithProduct`: dialog named "Edit Holding"; `getByLabelText("Quantity")` has focus and value "2"; price "12.50"; Escape calls `onClose`.
 - ImportHoldingsModal (`isOpen`, `onClose`, `onSuccess` mocks): dialog named "Import from Collectr"; the "Click to upload CSV file" button has focus; `fireEvent.change(getByLabelText("Collectr CSV content"), { target: { value: "a,b" } })`, then Escape on the textarea: `onClose` called once and the textarea value is "" (wizard reset through `handleClose`).
+- ImportHoldingsModal closed mid-parse (steps 7c and 7e): import `processCollectrImport` from `"../../../lib/import"` (it is the mock) and make it return a promise you resolve by hand (`let resolveParse!: (v: unknown) => void; (processCollectrImport as jest.Mock).mockReturnValue(new Promise((r) => { resolveParse = r; }));`). Paste "a,b", click "Process CSV", press Escape on the textarea (`onClose` called once), then `await act(async () => { resolveParse([{ csvRow: {}, matchedProduct: null, matchConfidence: "none" }]); })`. Expect: no "Matched Products" / "Unmatched" preview heading appears, and the button named "Click to upload CSV file" exists and is not disabled (proves `setLoading(false)` in `handleClose`).
 
 ### 4. `frontend/app/components/ProductPrices/__tests__/controls.a11y.test.tsx` (new)
 
@@ -1370,12 +1419,19 @@ Run from `frontend/`:
 pnpm exec tsc --noEmit
 # expect: exit 0
 
-pnpm exec eslint app/components/ui app/components/Portfolio app/components/ProductPrices \
+LINT_FILES="app/components/Portfolio app/components/ProductPrices \
   app/components/BoxCalculator/BoxCalculator.tsx app/components/MarketView/MarketView.tsx \
-  app/components/CardRinkPromo.tsx app/components/charts app/stats/page.tsx app/compare/page.tsx \
-  app/page.tsx "app/product/[id]/page.tsx" app/account/page.tsx app/auth
-# expect: the only errors are the five HoldingsTable.tsx react-hooks/static-components errors (WP17).
-# AddHoldingModal.tsx and EditHoldingModal.tsx: 0 errors (2 fewer than the baseline). No new warnings.
+  app/components/CardRinkPromo.tsx app/components/charts app/stats/page.tsx app/compare \
+  app/page.tsx app/product app/account/page.tsx app/auth"
+pnpm exec eslint $LINT_FILES 2>&1 | tail -n 3
+# expect: exactly 2 errors fewer than the baseline from "Before you start" check 6, and the
+# same number of warnings (the rewrite keeps ProductSearchSelect's two <img> warnings).
+pnpm exec eslint $LINT_FILES -f json 2>/dev/null | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{for(const f of JSON.parse(s))if(f.errorCount)console.log(f.errorCount,f.filePath.replace(process.cwd()+"/",""))})'
+# expect: the baseline list minus AddHoldingModal.tsx and EditHoldingModal.tsx. No file this PR
+# created or edited appears (errors still listed belong to WP15/WP17, e.g. HoldingsTable x5,
+# CardRinkPromo, charts/*Impl.tsx).
+pnpm exec eslint app/components/ui
+# expect: no output (0 problems in Dialog.tsx and its test)
 
 pnpm exec jest --ci app/components/ui app/components/Portfolio app/components/ProductPrices
 # expect: all suites pass, including the 5 new files
@@ -1392,15 +1448,17 @@ grep -rn "fixed inset-0" app/components/Portfolio
 grep -rnE '<dialog|showModal' app --include=*.tsx | grep -v __tests__
 # expect: only app/components/ui/Dialog.tsx
 grep -rnP '<label(?![^>]*htmlFor)' app --include=*.tsx | grep -v __tests__
-# expect: only multi-line labels whose htmlFor is on the next line (auth/forgot-password, auth/login x2,
-# account x3, AddHoldingModal/EditHoldingModal if you wrapped them) and compare/page.tsx x2 (labels that wrap
-# their input). Check each remaining hit with: grep -n -A1 '<label' <file>
+# expect exactly 8 lines (baseline check 3's 25 minus the 17 fixed here): the 6 multi-line labels whose htmlFor is on the next line
+# (auth/forgot-password/page.tsx x1, auth/login/LoginForm.tsx x2, account/page.tsx x3) and
+# compare/CompareDashboard.tsx x2 (labels that wrap their input). No hit in Portfolio/,
+# ProductPrices/controls/ or BoxCalculator/. Check each hit with: grep -n -A1 '<label' <file>
 grep -rnE 'text-(green|red)-600|text-emerald-600|text-\[var\(--pf-(gain|loss)\)\]' app --include=*.tsx | grep -v __tests__
 # expect: no output
 grep -rn "slate-400" app --include=*.tsx | grep -v __tests__
-# expect: only the keep-list in step 13 (-- placeholders, decorative icons, dark tooltips, a hover border)
-grep -rn 'aria-hidden={!isVisible}\|role="img"' app --include=*.tsx
-# expect: no output
+# expect: only the keep-list in step 13 (-- placeholders, decorative icons, dark tooltips,
+# a hover border, disabled: variants)
+grep -rn 'aria-hidden={!isVisible}' app --include=*.tsx; grep -n 'role="img"\|tabIndex' app/stats/page.tsx
+# expect: no output (Header.tsx's logo role="img" is correct and is not checked here)
 ```
 
 Manual checks (the executor can do the first three with `pnpm build:stub` then `pnpm start`, or `pnpm dev`; the portfolio ones need a signed-in account, see Owner actions):
@@ -1408,7 +1466,7 @@ Manual checks (the executor can do the first three with `pnpm build:stub` then `
 1. `/prices`: click the word "Generation": the select gets focus. With VoiceOver (Safari) or NVDA (Chrome), Tab to each filter: announced as "Generation, combo box", "Product Type, combo box", "Search products, edit text", "Currency, group".
 2. `/stats` (needs data; on the stub the page shows the unavailable notice, so check it on the Vercel preview): "What do these columns mean?" expands with a tap and lists 19 definitions; the "i" markers are not Tab stops.
 3. Scroll `/prices` down and back to the top: while the round button is hidden, Tab never lands on an invisible element.
-4. `/portfolio`, keyboard only: Tab to "Add Holding", Enter. Correct: the dialog is centred, the page behind is dimmed and does not scroll, focus is in the Product field, the screen reader says "Add Holding, dialog". Type two letters, ArrowDown twice, Enter: the product card appears and focus is on its clear button. Tab cycles only through the dialog's controls (and the browser UI), never the page behind. Escape closes it and focus is back on "Add Holding". Repeat with Edit (focus lands in Quantity, back on the card's Edit button after Escape) and Import (focus on the upload button; Escape after pasting text and reopening shows an empty upload step).
+4. `/portfolio`, keyboard only: Tab to "Add Holding", Enter. Correct: the dialog is centred, the page behind is dimmed and does not scroll, focus is in the Product field, the screen reader says "Add Holding, dialog". Type two letters: the result list is fully visible, or reachable by scrolling the dialog body, and is never cut off with no way to reach the last option. ArrowDown twice, Enter: the product card appears and focus is on its clear button. Tab cycles only through the dialog's controls (and the browser UI), never the page behind. Escape closes it and focus is back on "Add Holding". Repeat with Edit (focus lands in Quantity, back on the card's Edit button after Escape) and Import (focus on the upload button; Escape after pasting text and reopening shows an empty upload step).
 5. Click inside a Notes textarea, drag the selection out onto the dimmed backdrop and release: the dialog stays open. A plain click on the backdrop closes it.
 6. On a phone width (375 px): the dialogs fit with a 16 px margin, the body scrolls when the keyboard is up, the Edit/Delete icons on each holding card are clearly separate 32 px targets.
 
@@ -1469,4 +1527,4 @@ their inputs, and grey captions and gain/loss text failed WCAG AA.
 
 PR title: `fix(a11y): accessible portfolio dialogs, labelled controls, AA contrast (WP14)`
 
-PR body summary: what was broken (per finding, with the WCAG criteria 2.4.3, 4.1.2, 1.3.1, 1.4.3, 1.4.11, 2.5.8), the Dialog API and why native `<dialog>` (plus the four Tailwind/React gotchas it handles), the combobox keyboard model, the contrast table from step 2 and the step-13 change/keep lists, the lint-error delta (-2), test and build output, the owner smoke-test checklist, and "Noticed, out of scope": the `/prices` mobile filter drawer keeps collapsed controls in the tab order (`ControlBar.tsx`, `max-h-0 opacity-0`), BoxCalculator's saved-recipe rows load only on mouse click (clickable `<div>`), and radiogroup/button groups use one Tab stop per button instead of arrow-key roving focus. `window.confirm`/`alert` stay for WP15 (F103), which should build its confirm dialog on `Dialog`.
+PR body summary: what was broken (per finding, with the WCAG criteria 2.4.3, 4.1.2, 1.3.1, 1.4.3, 1.4.11, 2.5.8), the Dialog API and why native `<dialog>` (plus the four Tailwind/React gotchas it handles), the combobox keyboard model, the contrast table from step 2 and the step-13 change/keep lists, the lint-error delta (-2), test and build output, the owner smoke-test checklist, the tap-target sizes checked and left unchanged (MarketView Show/Hide, CardRinkPromo dismiss), and "Noticed, out of scope": BoxCalculator's saved-recipe rows load only on mouse click (clickable `<div>`), and radiogroup/button groups use one Tab stop per button instead of arrow-key roving focus. `window.confirm`/`alert` stay for WP15 (F103), whose `ConfirmDialog` follows the same native-`<dialog>` rules; mention that it could later be rebuilt on `Dialog`.

@@ -3,12 +3,13 @@
 - **Findings covered**
   - F127 (full): the secret-scan job runs the third-party action `trufflesecurity/trufflehog@main` (a mutable branch ref that also pulls the mutable `:latest` scanner image), the workflow declares no `permissions:`, and checkouts persist the GITHUB_TOKEN into `.git/config`.
   - F076 (partial, cluster members F037, F052, F064, F139): only two parts are in scope here: (a) run `next build` in CI, made possible without a Supabase project or secrets by a local Supabase stub; (b) fix the pnpm version drift between CI (`version: 10`) and `frontend/package.json` (`pnpm@11.20.0`). Making lint blocking and fixing the 16 lint errors is WP17. Rewriting `.github/copilot-instructions.md` (F052) is WP20.
+  - Prerequisite, not a finding: the required `pnpm audit (high+ severity)` check is red today, independent of this PR. On 2026-09-30 `pnpm audit --audit-level high --prod` exits 1 with two high advisories on the transitive `brace-expansion@5.0.9` (GHSA-qhr7-859c-m2p7, GHSA-6j4f-fj2g-mc7p; path `@sentry/nextjs > @sentry/bundler-plugin-core > glob > minimatch > brace-expansion`), published after the 2026-09-25 review found the audit clean. Step 7 raises the existing `brace-expansion@5` override so the WP00 PR can go green. This is the only lockfile change in this WP.
 - **Priority rationale**: every later work package needs a trustworthy "does it still build" check. Today the only one is the Vercel deployment (a preview per PR, not a required check, and the production deploy after merge), which is how a broken build already reached production once.
 - **Effort**: S, about 2 to 3 hours including one CI round trip.
 - **Depends on**: none.
 - **Unblocks**: WP02, WP03, WP07, WP16 directly, and every later WP through them (all of them reuse `pnpm build:stub` in their Verification section).
 - **Suggested branch name**: `remediation/wp00-build-harness-ci-gate`
-- **Risk level**: low. CI and dev tooling only; no runtime code, no migrations, no Vercel build change. The worst failure mode is a red CI check, fixed by revert.
+- **Risk level**: low. CI and dev tooling only; no runtime code, no migrations, no Vercel build change. The one dependency change (step 7) is a patch bump of a transitive, build-time-only package (`brace-expansion` 5.0.9 to 5.0.12, under the Sentry bundler plugin). The worst failure mode is a red CI check, fixed by revert.
 
 ## Why
 
@@ -21,7 +22,7 @@ Read these files fully:
 - `.github/workflows/ci.yml` (97 lines; the only workflow)
 - `.github/dependabot.yml` (lines 41-44 track `github-actions` monthly)
 - `frontend/package.json` (line 5: `"packageManager": "pnpm@11.20.0"`; line 8: `"build": "next build"`; scripts block lines 6-14)
-- `frontend/pnpm-workspace.yaml` (uses the pnpm 11 `allowBuilds` key, which pnpm 10 ignores; one more reason CI must run pnpm 11)
+- `frontend/pnpm-workspace.yaml` (uses the pnpm 11 `allowBuilds` key, which pnpm 10 ignores; one more reason CI must run pnpm 11; line 13 `brace-expansion@5: ^5.0.9` is changed in step 7)
 - `frontend/jest.config.js` (line 20: `testPathIgnorePatterns`)
 - `frontend/eslint.config.mjs` (lint runs `eslint .`, so new `.mjs` files under `frontend/scripts/` are linted)
 - `frontend/app/lib/serverMarketData.ts:27-40` (env fallbacks), `:734-751` (`fetchLatestExchangeRate` uses `.single()`), `:891-925` (the `unstable_cache` wrappers, `revalidate: 3600`)
@@ -39,21 +40,26 @@ grep -c "build" .github/workflows/ci.yml                       # expect 0
 grep -n '"packageManager"' frontend/package.json               # expect pnpm@11.20.0
 ls frontend/scripts 2>&1                                       # expect "No such file or directory"
 ls package.json 2>&1                                           # expect "No such file" (no root package.json; this matters for step 5)
+grep -n "brace-expansion@5" frontend/pnpm-workspace.yaml       # expect line 13: brace-expansion@5: ^5.0.9
+(cd frontend && pnpm audit --audit-level high --prod; echo "exit=$?")
+# expect exit=1 listing brace-expansion GHSA-qhr7-859c-m2p7 and GHSA-6j4f-fj2g-mc7p (step 7 fixes this).
+# If it prints exit=0, skip step 7. If it lists any OTHER high advisory, follow the rule in step 7.
 ```
 
-Check the latest trufflehog v3 release (network permitting) and whether its tag is lightweight:
+Confirm the trufflehog pin (network permitting):
 
 ```bash
-git ls-remote --tags https://github.com/trufflesecurity/trufflehog | grep -E 'refs/tags/v3\.[0-9]+\.[0-9]+(\^\{\})?$' | sort -t. -k2,2n -k3,3n | tail -4
+git ls-remote --tags https://github.com/trufflesecurity/trufflehog 'refs/tags/v3.97.9*'
+# expect exactly one line: 4dd8831c5f12599465d4d45c3c447b4018a34c85  refs/tags/v3.97.9
 ```
 
-On 2026-09-28 the newest was `v3.97.9` at `4dd8831c5f12599465d4d45c3c447b4018a34c85`, a lightweight tag (no `^{}` line), so that SHA is the commit. The matching image tag `ghcr.io/trufflesecurity/trufflehog:3.97.9` exists (the `v`-prefixed tag does not). If a newer v3 tag exists when you run this, you may use it instead: take the `^{}` line's SHA if the tag is annotated, otherwise the plain line's SHA, and use the version without the leading `v` for the `version:` input. If you have no network, use the v3.97.9 values above unchanged.
+`v3.97.9` is a lightweight tag (no `^{}` line), so that SHA is the commit. The matching image tag `ghcr.io/trufflesecurity/trufflehog:3.97.9` exists (checked 2026-09-30: HTTP 200 from the ghcr manifest API; `:v3.97.9` returns 404). Use exactly v3.97.9 even if a newer v3 tag exists: every grep and acceptance criterion below is written for it, and Dependabot's monthly github-actions run will move it forward later. If the command above prints a different SHA for v3.97.9 (a moved tag), stop and report it instead of pinning anything. If you have no network, use the v3.97.9 values above unchanged.
 
 Assumptions to check: none of the four CI jobs pushes, comments, or writes checks (confirmed: no `git push`, no `gh`, no `secrets.*` anywhere under `.github/`). Branch protection on `master` requires the four checks by their job names (`Frontend (lint + typecheck + tests)`, `pnpm audit (high+ severity)`, `Python (pip-audit)`, `Secret scan (trufflehog)`), so those names must not change.
 
 ## Implementation steps
 
-Do steps 1 to 4 first and verify locally (see Verification) before step 5, so the CI change lands with a harness already known to work.
+Do steps 1 to 4 and step 7 first and verify locally (see Verification) before step 5, so the CI change lands with a harness already known to work and an audit check that can pass. Step 6 (README) can be done at any point.
 
 Copy the three script files byte-for-byte. WP08 later patches `supabase-stub.mjs` and `build-with-stub.mjs` by exact text (the `startSupabaseStub({ port = DEFAULT_STUB_PORT, onRequest } = {})` signature and its JSDoc `@param` line, the `if (accept.includes("application/vnd.pgrst.object+json")) { ... return; }` block followed by the default `res.writeHead(200, ...)`, the CLI block's `startSupabaseStub({ port, onRequest: ... })` call, and in the build script the `const stub = await startSupabaseStub({` / `port,` / `onRequest:` lines and the `Supabase stub listening on` log line). Renaming or restructuring any of these breaks WP08's instructions.
 
@@ -394,7 +400,7 @@ Resulting block:
   },
 ```
 
-No lockfile change: no dependency is added.
+This step adds no dependency and does not change `pnpm-lock.yaml`; the only lockfile change in this WP comes from step 7.
 
 ### 5. `.github/workflows/ci.yml`: build gate, pnpm pin, F127 hardening
 
@@ -404,7 +410,7 @@ Changes, by current line:
 - Every `actions/checkout@v7` (lines 16, 45, 58, 86) gets `persist-credentials: false`. No job uses git credentials after checkout.
 - Both `pnpm/action-setup@v6` steps (lines 17-19 and 46-48): remove `version: 10` and add `package_json_file: frontend/package.json`. The action's `package_json_file` input defaults to `package.json` **relative to the repository root** (pnpm/action-setup `action.yml`; the floating `v6` tag resolved to v6.0.10 on 2026-09-28 and v6.1.0 behaves the same: "This path must be relative to the repository root (GITHUB_WORKSPACE)"); `defaults.run.working-directory` does not apply to `uses:` steps, and there is no root `package.json`. Simply deleting `version:` would therefore fail with "No pnpm version is specified". Pointing it at `frontend/package.json` makes it install `pnpm@11.20.0` from `packageManager`, and leaves only one source of truth, which also avoids the action's "Multiple versions of pnpm specified" error that a `version:` input disagreeing with `packageManager` triggers.
 - Frontend job: add `timeout-minutes: 20` (a hung build must not burn the 6-hour default), then after the `pnpm test --ci` step (line 36) add two steps: `pnpm run test:scripts` and `pnpm build:stub`. Adding them to the existing job (not a new job) means the build is covered by the already-required `Frontend (lint + typecheck + tests)` check with no branch-protection change. Keep the job `name:` byte-for-byte unchanged.
-- Line 89: pin trufflehog to `4dd8831c5f12599465d4d45c3c447b4018a34c85 # v3.97.9` (or the newer values from "Before you start") and add `version: "3.97.9"` under its `with:`. The action is a composite that runs `docker run "${IMAGE}:${VERSION}"` with `version` defaulting to `latest`, so the SHA pin alone would still execute an unpinned scanner.
+- Line 89: pin trufflehog to `4dd8831c5f12599465d4d45c3c447b4018a34c85 # v3.97.9` and add `version: "3.97.9"` under its `with:`. The action is a composite that runs `docker run "${IMAGE}:${VERSION}"` with `version` defaulting to `latest`, so the SHA pin alone would still execute an unpinned scanner.
 - Leave the lint step's `continue-on-error: true` and its comment exactly as they are (WP17 owns that).
 
 Replace the whole file with this (it preserves every existing comment and job; verified to parse with PyYAML and to keep the four job names):
@@ -563,6 +569,38 @@ It starts `scripts/supabase-stub.mjs` (answers every Supabase REST call with an 
 `pnpm test:scripts` runs the stub's own tests (`node --test`; Jest ignores `scripts/`).
 ````
 
+### 7. `frontend/pnpm-workspace.yaml`: clear the high-severity audit advisories (skip if the starting-state audit printed `exit=0`)
+
+The `pnpm audit (high+ severity)` job is a required check and currently fails on the transitive `brace-expansion@5.0.9` (see "Findings covered"). It is reached only through `@sentry/nextjs`'s build plugins (`glob > minimatch@10.2.6 > brace-expansion`), and `minimatch@10.2.6` accepts any `brace-expansion@^5.0.8`, so a patch-level override is enough. Verified on 2026-09-30 with pnpm 11.20.0: after this change the lockfile diff is exactly 5 changed lines (the `overrides:` entry, three `brace-expansion@5.0.9` references and that package's `resolution: {integrity: ...}` line), and `pnpm audit --audit-level high --prod` prints "No known vulnerabilities found".
+
+7a. In `frontend/pnpm-workspace.yaml`, replace line 13
+
+```yaml
+  brace-expansion@5: ^5.0.9
+```
+
+with
+
+```yaml
+  # GHSA-6j4f-fj2g-mc7p (<5.0.10) and GHSA-qhr7-859c-m2p7 (<5.0.11), both high.
+  # Reached only via @sentry/nextjs build plugins -> glob -> minimatch@10.
+  brace-expansion@5: ^5.0.12
+```
+
+Leave the `brace-expansion@1` and `brace-expansion@2` lines unchanged.
+
+7b. From `frontend/`:
+
+```bash
+pnpm install                                            # updates pnpm-lock.yaml (not --frozen-lockfile here)
+git diff --stat pnpm-lock.yaml                          # expect 1 file changed, 5 insertions(+), 5 deletions(-)
+git diff pnpm-lock.yaml | grep '^[-+] ' | grep -v -e brace-expansion -e 'resolution: {integrity:'   # expect no output
+pnpm audit --audit-level high --prod; echo "exit=$?"    # expect "No known vulnerabilities found" and exit=0
+pnpm install --frozen-lockfile                          # expect success, no further lockfile change
+```
+
+Rule if the starting-state audit listed a high advisory other than the two above: if the vulnerable package is transitive and a patched version exists in the same major, add or raise an override in `pnpm-workspace.yaml` the same way (with a comment naming the advisory), then re-run 7b. If the package is a direct dependency in `package.json`, or the fix needs a new major version, do not change it: stop and report the advisory to the owner in the PR, because that is a dependency upgrade outside this WP.
+
 ### Standard verification commands (for this and every later WP)
 
 Later specs refer to this block as "the WP00 standard checks". Run from `frontend/` unless stated:
@@ -570,7 +608,7 @@ Later specs refer to this block as "the WP00 standard checks". Run from `fronten
 ```bash
 pnpm install --frozen-lockfile          # must not modify pnpm-lock.yaml
 pnpm exec tsc --noEmit                  # expect exit 0, no output
-pnpm exec eslint <every file you changed>   # expect 0 errors in changed files
+pnpm exec eslint <every .js/.jsx/.mjs/.ts/.tsx file you changed under frontend/>   # expect 0 errors (list paths relative to frontend/; skip .md, .sql, .yaml, .json)
 pnpm run lint                           # baseline before WP17: 33 problems (16 errors, 17 warnings); must not increase
 pnpm test --ci                          # all suites pass (baseline 23 suites / 265 tests; later WPs add more)
 pnpm exec jest <path> --ci              # targeted run of the suites a WP touched
@@ -590,6 +628,8 @@ Route-handler tests need `/** @jest-environment node */` as the first line, beca
 
 ## Pitfalls: do not do this
 
+- **Do not skip step 7 when the starting-state audit fails, and do not "fix" the audit job instead** (no `continue-on-error`, no `--audit-level critical`, no `|| true`). The audit check is required; weakening it is out of scope and against the plan's rules. Do not bump `@sentry/nextjs` or any other direct dependency to clear an advisory in this WP.
+- **Do not run `pnpm install --frozen-lockfile` to apply the override change.** It refuses to update the lockfile; use plain `pnpm install` once (step 7b), then `--frozen-lockfile` to confirm.
 - **Do not rename any CI job or change a job `name:`.** Branch protection on `master` requires the four checks by exact name; a renamed job leaves the old required check pending forever and blocks every PR. That is also why the build is a step in the existing Frontend job rather than a new `build` job.
 - **Do not just delete `version: 10`** from `pnpm/action-setup`. With no root `package.json` the action finds no `packageManager` and fails. Use `package_json_file: frontend/package.json` (F076 verifier correction: drop `version:` rather than bumping it, so there is a single source of truth).
 - **Do not set `version: 11` alongside `package_json_file`.** Two sources can disagree on the next bump and the action errors with "Multiple versions of pnpm specified".
@@ -607,6 +647,7 @@ Route-handler tests need `/** @jest-environment node */` as the first line, beca
 - **Do not name the stub test `*.test.js` or put it under `__tests__/`**, and do not skip the `jest.config.js` ignore: Jest 30 matches `.test.mjs` by default.
 - **Do not SHA-pin the first-party actions** (`actions/checkout`, `setup-node`, `setup-python`, `pnpm/action-setup`) in this PR. Out of scope; Dependabot maintains their tags. Mention it as an optional follow-up.
 - **Do not run `pnpm build:stub` in a checkout another agent is building in.** Both write `.next/`.
+- **Do not commit `frontend/AGENTS.md` or `frontend/CLAUDE.md`.** Next 16.3's `next dev` writes them when it detects a coding agent (`ensureAgentRulesForDev` in `next/dist/server/lib/app-info-log.js`). They are not part of this WP; before committing, `git status --porcelain` must list only the files named in this spec.
 - **Do not describe the harness as "offline" in comments, the README or the PR.** `next/font/google` (`app/layout.tsx:2`) downloads fonts at build time, so the build needs internet access; what it no longer needs is a Supabase project or secrets.
 
 ## Tests
@@ -625,29 +666,62 @@ From `frontend/`:
 
 ```bash
 pnpm install --frozen-lockfile
-git status --porcelain pnpm-lock.yaml            # expect empty
+git diff --stat master -- pnpm-lock.yaml          # expect only step 7's change: 5 insertions(+), 5 deletions(-) (or nothing if step 7 was skipped)
+pnpm audit --audit-level high --prod; echo "exit=$?"   # expect exit=0 (the audit CI job now runs this with pnpm 11.20.0)
 pnpm exec tsc --noEmit                            # expect exit 0 (scripts/*.mjs are outside tsconfig "include")
 pnpm exec eslint scripts/                         # expect exit 0, no output
 pnpm run lint                                     # expect "33 problems (16 errors, 17 warnings)", unchanged; none in scripts/
 pnpm test --ci                                    # expect 23 suites / 265 tests passed, no suite from scripts/
 pnpm exec jest --listTests | grep -c scripts/     # expect 0
 pnpm run test:scripts                             # expect "# pass 4" and "# fail 0"
-pnpm build:stub; echo "exit=$?"
 ```
 
-Expected `pnpm build:stub` output: `[build:stub] Supabase stub listening on http://127.0.0.1:<port>`, then the normal Next 16.3 build, a route table where `/`, `/analytics`, `/market`, `/prices`, `/stats` show `Revalidate 1h`, then a request summary that includes at least `POST /rest/v1/rpc/get_market_product_summaries`, `POST /rest/v1/rpc/get_market_product_volume_metrics`, `POST /rest/v1/rpc/get_set_analytics` and `GET /rest/v1/exchange_rates`, and finally `exit=0`. Then:
+Then run the build with its output captured, so the port and the inlined URL can be checked. All commands are non-interactive and run from `frontend/`. First define two small helpers (`lsof` and `ss` are not assumed to exist):
 
 ```bash
-test ! -e .next/cache/fetch-cache && echo "fetch-cache wiped"    # expect the message
-grep -rl "127.0.0.1" .next/static/chunks | head -1                # expect a match: the stub URL was inlined, proving the env override won over .env.local
+probe() { node -e "require('net').connect(+process.argv[1].split(':').pop(),'127.0.0.1').on('connect',()=>{console.log('STILL LISTENING');process.exit(1)}).on('error',()=>console.log('stub stopped'))" "$1"; }
+stub_url() { grep -o 'http://127.0.0.1:[0-9]*' "$1" | head -1; }
 ```
 
-Manual failure-path checks (revert each change afterwards):
+```bash
+pnpm build:stub > /tmp/wp00-build.log 2>&1; echo "exit=$?"     # expect exit=0
+STUB_URL=$(stub_url /tmp/wp00-build.log); echo "$STUB_URL"      # expect http://127.0.0.1:<port>
+test ! -e .next/cache/fetch-cache && echo "fetch-cache wiped"  # expect the message
+grep -rlF "$STUB_URL" .next/static/chunks | head -1            # expect one file: the stub URL was inlined, proving the env override won over any .env.local
+probe "$STUB_URL"                                              # expect "stub stopped"
+cat /tmp/wp00-build.log                                        # read it against the expected output below
+```
 
-1. Build failure propagates: add `throw new Error("wp00 probe");` as the first statement inside `export default async function StatsPage()` in `frontend/app/stats/page.tsx` (line 106; `/analytics` re-exports it, so both routes fail), run `pnpm build:stub; echo "exit=$?"`. Expect a prerender error for `/stats`, the request summary still printed, and a non-zero exit. Then (still in `frontend/`) `git checkout -- app/stats/page.tsx` and confirm `lsof -i :<port printed>` (or `ss -ltnp | grep <port>`) shows nothing listening.
-2. Port collision is reported, not hung: `node -e "require('http').createServer().listen(54399,'127.0.0.1')" & sleep 1; SUPABASE_STUB_PORT=54399 pnpm build:stub; echo "exit=$?"; kill %1`. Expect `EADDRINUSE` and `exit=1`.
-3. Interrupt stops everything: start `pnpm build:stub`, press Ctrl+C during "Creating an optimized production build". Expect the process to exit within a few seconds with no stub left listening.
-4. Standalone stub: `node scripts/supabase-stub.mjs` prints `listening on http://127.0.0.1:54321`; `curl -s -i -X POST http://127.0.0.1:54321/rest/v1/rpc/x` shows `200`, `content-range: */0`, body `[]`; Ctrl+C stops it.
+Expected content of `/tmp/wp00-build.log`: `[build:stub] Supabase stub listening on http://127.0.0.1:<port>`, then the normal Next 16.3 build, a route table where `/`, `/analytics`, `/market`, `/prices`, `/stats` show `Revalidate 1h` (confirmed against a stub build on 2026-09-27: `.next/prerender-manifest.json` lists `initialRevalidateSeconds: 3600` for exactly these five), then a request summary that includes at least `POST /rest/v1/rpc/get_market_product_summaries`, `POST /rest/v1/rpc/get_market_product_volume_metrics`, `POST /rest/v1/rpc/get_set_analytics` and `GET /rest/v1/exchange_rates`, and finally `[build:stub] next build exited with 0`.
+
+Manual failure-path checks (revert each change afterwards). None needs a keyboard; `lsof` and `ss` are not assumed to exist.
+
+1. Build failure propagates: add `throw new Error("wp00 probe");` as the first statement inside `export default async function StatsPage()` in `frontend/app/stats/page.tsx` (line 106; `/analytics` re-exports it, so both routes fail). Run `pnpm build:stub > /tmp/wp00-fail.log 2>&1; echo "exit=$?"`. Expect a non-zero exit, a prerender error mentioning `wp00 probe` in the log, and the `[build:stub] stub requests during build:` summary still printed at the end of the log. Then run `git checkout -- app/stats/page.tsx` and `probe "$(stub_url /tmp/wp00-fail.log)"`; expect `stub stopped`.
+2. Port collision is reported, not hung:
+   ```bash
+   node -e "require('http').createServer().listen(54399,'127.0.0.1')" & HOLDER=$!
+   node -e "setTimeout(()=>{},1000)"   # give the holder a second to bind
+   SUPABASE_STUB_PORT=54399 pnpm build:stub; echo "exit=$?"
+   kill $HOLDER
+   ```
+   Expect `EADDRINUSE` in the output and a non-zero exit (the script exits 1), within a few seconds.
+3. Interrupt stops everything (the script forwards SIGINT/SIGTERM to `next build`, then closes the stub):
+   ```bash
+   node scripts/build-with-stub.mjs > /tmp/wp00-int.log 2>&1 & BPID=$!
+   for i in $(seq 180); do grep -q "Creating an optimized production build" /tmp/wp00-int.log && break; node -e "setTimeout(()=>{},1000)"; done
+   kill -INT $BPID; wait $BPID; echo "exit=$?"
+   probe "$(stub_url /tmp/wp00-int.log)"
+   ```
+   Expect a non-zero exit within about 10 seconds of the kill, either `[build:stub] next build killed by SIGINT` or a non-zero `[build:stub] next build exited with` line at the end of the log, and `stub stopped`. No `next build` process may remain: `pgrep -fl "next/dist/bin/next build"` prints nothing. If the loop finished without seeing the line (3 minutes), read the log: the build failed or finished before the kill, so repeat the check.
+4. Standalone stub on its default port:
+   ```bash
+   node scripts/supabase-stub.mjs > /tmp/wp00-cli.log 2>&1 & SPID=$!
+   node -e "setTimeout(()=>{},1000)"
+   curl -s -i -X POST http://127.0.0.1:54321/rest/v1/rpc/x
+   kill $SPID; wait $SPID
+   cat /tmp/wp00-cli.log
+   ```
+   Expect `HTTP/1.1 200 OK`, `content-range: */0` and body `[]` from curl, and the log to contain `[supabase-stub] listening on http://127.0.0.1:54321` and `POST /rest/v1/rpc/x`. If port 54321 is taken (a local `supabase start`), prefix the first line with `SUPABASE_STUB_PORT=54322` and use that port in the curl URL.
 
 Workflow file (repo root):
 
@@ -679,12 +753,13 @@ In CI, after pushing the branch and opening the PR:
 ## Acceptance criteria
 
 - [ ] `frontend/scripts/supabase-stub.mjs`, `frontend/scripts/build-with-stub.mjs` and `frontend/scripts/supabase-stub.test.mjs` exist and lint clean.
-- [ ] `frontend/package.json` has `build:stub` and `test:scripts`; `build` is still `next build`; `pnpm-lock.yaml` is unchanged.
+- [ ] `frontend/package.json` has `build:stub` and `test:scripts`; `build` is still `next build`; dependencies in `package.json` are unchanged.
+- [ ] `frontend/pnpm-workspace.yaml` has `brace-expansion@5: ^5.0.12` with its advisory comment, `pnpm-lock.yaml` differs from master only in the 5 brace-expansion lines (plus lines for any override added under step 7's rule, each named in the PR body), and `pnpm audit --audit-level high --prod` exits 0 (unless step 7 was skipped because the audit was already clean).
 - [ ] `pnpm build:stub` exits 0 with no network access to Supabase and no `.env.local`, and exits non-zero when a prerendered page throws.
-- [ ] After `pnpm build:stub`, nothing listens on the stub port and `.next/cache/fetch-cache` does not exist.
+- [ ] After `pnpm build:stub` (success, failure or SIGINT), nothing listens on the stub port and `.next/cache/fetch-cache` does not exist.
 - [ ] `pnpm run test:scripts` passes 4 tests; `pnpm test --ci` suite count is unchanged and includes nothing from `scripts/`.
 - [ ] `pnpm run lint` problem count is unchanged (33: 16 errors, 17 warnings).
-- [ ] `ci.yml` has top-level `permissions: contents: read`, four `persist-credentials: false`, no `version: 10`, `package_json_file: frontend/package.json` in both pnpm setup steps, and trufflehog pinned by 40-character SHA with a `# v3.x.y` comment plus a matching `version:` input.
+- [ ] `ci.yml` has top-level `permissions: contents: read`, four `persist-credentials: false`, no `version: 10`, `package_json_file: frontend/package.json` in both pnpm setup steps, and trufflehog pinned to `4dd8831c5f12599465d4d45c3c447b4018a34c85 # v3.97.9` plus `version: "3.97.9"`.
 - [ ] The Frontend CI job runs `pnpm run test:scripts` and `pnpm build:stub` after the tests, and its `name:` is unchanged.
 - [ ] Lint in CI is still `continue-on-error: true`.
 - [ ] All four CI checks pass on the PR, the pnpm setup log shows 11.20.0, and the secret-scan log shows the `:3.97.9` image.
@@ -692,7 +767,7 @@ In CI, after pushing the branch and opening the PR:
 
 ## Rollback
 
-`git revert <merge commit>` on `master` restores the previous workflow and removes the scripts. No migrations, no Vercel or Supabase settings, and no runtime code are involved, so a revert has no production effect. If only the build step misbehaves in CI (for example a flaky runner), a smaller rollback is to delete the `Production build (Supabase stub)` step from `ci.yml` in a follow-up PR, keeping the pnpm and F127 fixes. If the pnpm 11 switch breaks `pnpm install` or `pnpm audit` in CI, revert only the two `package_json_file` edits back to `version: 10` and open an issue; do not add both inputs at once.
+`git revert <merge commit>` on `master` restores the previous workflow and removes the scripts. No migrations, no Vercel or Supabase settings, and no runtime code are involved, so a revert has no production effect. If only the build step misbehaves in CI (for example a flaky runner), a smaller rollback is to delete the `Production build (Supabase stub)` step from `ci.yml` in a follow-up PR, keeping the pnpm and F127 fixes. The `brace-expansion` override is independent of the rest; reverting it alone brings back the two audit advisories. If the pnpm 11 switch breaks `pnpm install` or `pnpm audit` in CI, revert only the two `package_json_file` edits back to `version: 10` and open an issue; do not add both inputs at once.
 
 ## Commit and PR
 
@@ -711,6 +786,9 @@ ci: build the app in CI against a local Supabase stub; pin trufflehog
   frontend/package.json packageManager (11.20.0) instead of version 10;
   top-level permissions: contents: read; persist-credentials: false on all
   checkouts; trufflehog pinned to v3.97.9 by SHA and image version
+- pnpm-workspace.yaml: raise the brace-expansion@5 override to ^5.0.12
+  (GHSA-6j4f-fj2g-mc7p, GHSA-qhr7-859c-m2p7) so the required audit check
+  passes again
 
 Findings: F127, F076 (build gate and pnpm pin only; lint gate is WP17)
 ```
@@ -719,8 +797,9 @@ PR title: `ci: add a Supabase-free build gate (pnpm build:stub) and harden the w
 
 PR body summary:
 
-- What: local Supabase stub plus `pnpm build:stub`; CI now runs a full `next build` on every PR inside the existing required Frontend check; CI uses pnpm 11.20.0 from `packageManager`; token is read-only; checkouts do not persist credentials; trufflehog action and scanner image are pinned.
+- What: local Supabase stub plus `pnpm build:stub`; CI now runs a full `next build` on every PR inside the existing required Frontend check; CI uses pnpm 11.20.0 from `packageManager`; token is read-only; checkouts do not persist credentials; trufflehog action and scanner image are pinned; the `brace-expansion@5` override is raised to `^5.0.12` because two new high advisories had turned the required audit check red on every PR.
 - Why: F076 (build breakage only surfaced on Vercel after merge; pnpm major drift) and F127 (unpinned third-party action and image, implicit token scope).
 - Not in scope: blocking lint (WP17), prerender resilience to a failing or empty Supabase RPC at build and revalidate time (F064 recommendation part 2, owned by no work package; list it under "Follow-ups" in the PR body as: "serverMarketData fetchers should throw instead of caching an empty or failed result, so ISR keeps the last good page"), SHA-pinning first-party actions (optional follow-up), copilot-instructions rewrite (WP20).
 - Verification: paste the output of every command in the spec's Verification section, the `pnpm build:stub` request summary, and links to the green CI run.
+- Note for other open PRs: until this PR merges, every PR's `pnpm audit (high+ severity)` check is red for the brace-expansion advisories; rebase them on master after WP00 merges.
 - Owner actions: confirm the four required checks in branch protection; optionally set the repo default workflow permissions to read-only; remember to bump trufflehog `version:` alongside Dependabot SHA bumps; check the pnpm version in the Vercel build log (Owner action 4).

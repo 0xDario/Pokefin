@@ -3,10 +3,10 @@
 - **Findings covered**
   - F011 (full; cluster members F011, F013): supabase-js (about 250 kB raw / 66 kB gzip, including GoTrue and Realtime) is on the initial script list of every page because modules rendered on first paint import `app/lib/supabase` statically. WP04 already removed the root-layout path (`AuthContext.tsx`); this package removes the remaining static importers so the library loads only when a page first queries public data.
   - F069 (full): the product detail hero image is lazy-loaded, has no fetch priority and stays `opacity-0` until hydration runs its `onLoad`, so it is the late LCP element on `/product/[id]`; the same page's sibling grid downloads full-size originals instead of thumbnails.
-- **Priority rationale**: two measured, low-risk load-time wins (about 66 kB gzip of hydration-path JS on 7 routes, and the LCP element on every product page) that are safe to do now that WP04 to WP06 have removed every user-table query from the browser client.
+- **Priority rationale**: two measured, low-risk load-time wins (about 66 kB gzip of hydration-path JS on 6 routes: `/`, `/prices`, `/market`, `/compare`, `/box-calculator`, `/portfolio`; and the LCP element on every product page) that are safe to do now that WP04 to WP06 have removed every user-table query from the browser client.
 - **Effort**: M, about 4 hours (1.5 h lazy loader and call sites, 1 h ProductImage, 1.5 h tests and the stub-build verification).
-- **Depends on**: WP04 (AuthContext and account page no longer import `app/lib/supabase`), WP05 (`app/lib/portfolio.ts` holds reference reads only), WP06 (the shared-recipe RPC lives in `app/components/BoxCalculator/sharedRecipe.ts`). Uses WP00's `pnpm build:stub`. Rebase on WP09 and WP11 if they have merged (both edit `clientMarketData.ts` / `exchangeRate.ts`).
-- **Unblocks**: nothing directly. WP17 (blocking lint) inherits the new ESLint guard.
+- **Depends on**: WP04 (AuthContext and account page no longer import `app/lib/supabase`), WP05 (`app/lib/portfolio.ts` holds reference reads only), WP06 (the shared-recipe RPC lives in `app/components/BoxCalculator/sharedRecipe.ts`). Uses WP00's `pnpm build:stub`. The plan executes packages in order, so WP07 to WP11 have also merged before this one: WP09 replaced `fetchProductHistoryClient` with a batcher (query in `queryHistoryChunk`), WP10 renamed the in-browser portfolio fold to `getPortfolioHistoryInBrowser` (it still calls `fetchPortfolioPriceHistory`), and WP11 step 8a rewrote `exchangeRate.ts`. Every `:line` below is HEAD (pre-WP04) unless it says otherwise; locate code by the function name and quoted text, not by the number.
+- **Unblocks**: WP20 (types `BrowserSupabaseClient` and documents `supabaseLoader.ts`; it also deletes this package's `fetchSalesHistory` test case). WP17 (blocking lint) inherits the new ESLint guard.
 - **Suggested branch name**: `remediation/wp12-bundle-and-images`
 - **Risk level**: low. Data calls behave the same; the only runtime change is that the first public-data query of a page waits for one extra chunk fetch, and every failure of that fetch degrades exactly like a failed query.
 
@@ -20,13 +20,13 @@ Read these files in full:
 
 - `frontend/app/lib/supabase.ts` (25 lines). `:23` constructs the browser client at module evaluation, which starts GoTrue's session recovery. Do not change this file.
 - `frontend/app/lib/clientMarketData.ts` (433 lines at the time of writing). `:21` static import. Query sites: `fetchNewestPricedAtClient` `:105-160` (query at `:119`), `fetchProductsFallback` `:171-209` (`:173`), `fetchMarketProductsClient` `:211-248` (`:225`, inside `try` at `:224`), `fetchProductHistoryClient` `:250-306` (`:272`; WP09 replaces it with a batcher whose query lives in `queryHistoryChunk`), `fetchVolumeMetrics` `:314-356` (`:328`, inside `try` at `:327`), `fetchSalesHistory` `:364-433` (`:393`, inside `try` at `:392`).
-- `frontend/app/lib/exchangeRate.ts` (50 lines at HEAD; WP04 step 11b or WP11 step 8a rewrites it). `:4` static import; the single query sits inside the `try` of the IIFE (`:20-26` at HEAD).
+- `frontend/app/lib/exchangeRate.ts` (50 lines at HEAD; WP11 step 8a replaced it in full, WP04 step 11 leaves it alone). `:4` static import; the single query sits inside the `try` of the IIFE (`:20-26` at HEAD).
 - `frontend/app/lib/portfolio.ts`. `:1` static import. After WP05 the remaining query sites are `fetchPortfolioPriceHistory` (`:461-497` at HEAD, query at `:472`), `searchProducts` (`:756-777`), `searchProductsBySet` (`:784-818`), `getAllProducts` (`:823-843`), plus anything WP10 added.
 - `frontend/app/components/BoxCalculator/sharedRecipe.ts` (created by WP06 step 6). Static import of `../../lib/supabase`; one RPC.
 - `frontend/eslint.config.mjs`: WP04's `ANON_CLIENT_FORBIDDEN_FILES` array and its `no-restricted-imports` block (with WP05's second pattern), and WP05's `no-restricted-syntax` block.
 - `frontend/app/components/ProductPrices/shared/ProductImage.tsx` (110 lines). `:42` `useState(true)` for `isLoading`; `:87-91` pulse overlay; `:99-101` `opacity-0` until loaded; `:102` `onLoad`; `:104` `loading="lazy"`; `:105` `unoptimized`.
 - `frontend/app/product/[id]/page.tsx`. Hero `ProductImage` at `:238-242`; sibling grid `ProductImage` at `:411-415`.
-- Tests that mock the client: `frontend/app/lib/__tests__/clientMarketData.cache.test.ts`, `portfolio.test.ts`, `portfolio.freshness.test.ts`, `import.test.ts`, WP09's `clientMarketData.history.test.ts`, WP11's `exchangeRate.test.ts`, WP04's `app/context/__tests__/AuthContext.test.tsx` (its `lib/supabase` mock throws on load; keep it).
+- Tests that mock the client: `frontend/app/lib/__tests__/clientMarketData.cache.test.ts`, `portfolio.test.ts`, `portfolio.freshness.test.ts`, `import.test.ts`, WP09's `clientMarketData.history.test.ts`, WP11's `exchangeRate.test.ts`, WP10's `portfolio.history.test.ts` (imports `supabase` from `../supabase` statically to reach `fromMock`; still works because the loader's `import()` returns the same mocked module), WP05's portfolio tests, WP04's `app/context/__tests__/AuthContext.test.tsx` (its `lib/supabase` mock throws on load; keep it).
 
 Confirm the starting state from `frontend/`:
 
@@ -47,7 +47,9 @@ grep -rn 'lib/supabase"\|from "\./supabase"\|from "\.\./supabase"' app --include
 #    must be a server file (app/api/**, app/auth/callback/route.ts, app/lib/server/**,
 #    routeSupabase.ts, serverSupabase.ts, serverMarketData.ts, authSession.ts, proxy.ts)
 #    or app/lib/supabase.ts itself.
-grep -rn '^import .* from "@supabase/' app proxy.ts --include=*.ts --include=*.tsx | grep -v __tests__ | grep -v 'import type'
+#    A line that starts with `}` is the end of a multi-line import: open the file and
+#    check whether that import statement starts with `import type`.
+grep -rn 'from "@supabase/' app proxy.ts --include=*.ts --include=*.tsx | grep -v __tests__ | grep -v 'import type'
 
 # 4. F069 still present. Expect :42 useState(true) and :104 loading="lazy", and no "priority".
 grep -n 'useState(true)\|loading="lazy"\|priority' app/components/ProductPrices/shared/ProductImage.tsx
@@ -64,13 +66,15 @@ Stop and report (do not improvise) if:
 - Check 2 prints a file not in the list: add it to step 3's call-site conversion only if it reads public tables or anon-granted RPCs; if it reads `profiles`, `portfolios`, `portfolio_holdings`, `portfolio_lots` or `box_recipes`, stop (that is an F001 regression, not a bundle issue).
 - Check 3 prints a client module (a file with `"use client"` or imported by one) with a value import from `@supabase/*`: that import also pins supabase-js to the initial bundle. Convert it to `import type` if only types are used; otherwise stop and report.
 
-Measure the baseline before changing anything (the build writes `.next/`; never run it while another agent builds in the same checkout):
+Measure the baseline before changing anything (the build writes `.next/`; never run it while another agent builds in the same checkout). First save the analysis script from "Bundle analysis" in the Verification section, byte for byte, as `/tmp/wp12-analyze.sh` (outside the repo; do not commit it). Then:
 
 ```bash
-pnpm build:stub > /tmp/wp12-build-before.log 2>&1; echo "exit=$?"
-# then run the two analysis commands from the Verification section and save the output:
-#   ... > /tmp/wp12-before.txt
+pnpm build:stub > /tmp/wp12-build-before.log 2>&1; echo "exit=$?"   # exit=0
+bash /tmp/wp12-analyze.sh > /tmp/wp12-before.txt 2>&1
+cat /tmp/wp12-before.txt
 ```
+
+If the baseline build does not exit 0, stop and report: the stub harness from WP00 is broken, and nothing in this package can be measured.
 
 ## Implementation steps
 
@@ -139,7 +143,7 @@ export async function getSupabaseOrNull(
 }
 ```
 
-No `"use client"` directive (it has no React code; every importer is already a client module). `typeof import("./supabase")` is a type-only reference and is erased; it does not create a static import. This was typechecked against the installed TypeScript 6 and supabase-js 2.112 while writing this spec: `(await getSupabase()).from(...).select(...).single()` and `.rpc(...)` keep their current types.
+No `"use client"` directive (it has no React code; every importer is already a client module). About the retry: resetting the memo guarantees this module never hands out a cached rejection. Whether the browser actually refetches the chunk on the next call is up to the bundler runtime (Turbopack's runtime may keep a failed chunk promise until the page reloads); that is acceptable, because every caller already degrades on failure. Do not add retry loops, timers or `location.reload()` to work around it. `typeof import("./supabase")` is a type-only reference and is erased; it does not create a static import. This was typechecked against the installed TypeScript 6 and supabase-js 2.112 while writing this spec: `(await getSupabase()).from(...).select(...).single()` and `.rpc(...)` keep their current types.
 
 ### Step 2. The conversion rule (applies to every file in step 3)
 
@@ -183,7 +187,7 @@ Then, per function (HEAD line numbers; adapt to WP09/WP11 edits):
         const supabase = await getSupabase();
   ```
 
-- Price history. If WP09 has landed, the query is in `async function queryHistoryChunk(productIds, timeframe)`: make `const supabase = await getSupabase();` its first statement. A rejection then flows into the `.then(..., (error) => waiters...reject(error))` handler in `flushHistoryQueue`, so every queued card is settled. Do not put the `await` in `flushHistoryQueue` or `fetchProductHistoryClient` (both are synchronous; a rejection there would leave waiters pending forever). If WP09 has not landed, put it as the first statement inside `const fetchPromise = (async () => {` (`:270`).
+- Price history (WP09's batcher). The query is in `async function queryHistoryChunk(productIds, timeframe)`: make `const supabase = await getSupabase();` its first statement (before `const startDate = ...`). A rejection then reaches the `.catch((error: unknown) => { ... waiters.get(productId)?.reject(error); })` that `flushHistoryQueue` chains on every `queryHistoryChunk(...)` call, so every queued card is settled. Do not put the `await` in `flushHistoryQueue` or `fetchProductHistoryClient` (both are synchronous; a rejection there would leave waiters pending forever). Only if WP09's batcher is absent (`grep -n "queryHistoryChunk" app/lib/clientMarketData.ts` prints nothing), put it as the first statement inside `const fetchPromise = (async () => {` (`:270` at HEAD).
 - `fetchVolumeMetrics` (`:314`). First statement inside `try {` (`:327`); the existing `catch` already logs `volume_metrics_load_failed` and returns `{}`.
 - `fetchSalesHistory` (`:364`). First statement inside the `try {` at `:392`; the existing `catch` logs `sales_history_load_failed` and leaves `sales = []`.
 
@@ -195,9 +199,9 @@ After this, `grep -n "supabase" app/lib/clientMarketData.ts` shows only the impo
       const supabase = await getSupabase();
 ```
 
-so a failed load reaches the existing `catch` (`logCaughtError("client_exchange_rate_failed", ...)` and the `DEFAULT_EXCHANGE_RATE` fallback, whichever form WP04 or WP11 left). Keep the `"use client"` directive and every other line.
+so a failed load reaches the existing `catch` (`logCaughtError("client_exchange_rate_failed", ...)` and WP11's `return exchangeRateCache ?? { rate: DEFAULT_EXCHANGE_RATE, date: null }` fallback). Keep the `"use client"` directive and every other line.
 
-3c. `frontend/app/lib/portfolio.ts`. Replace `import { supabase } from "./supabase";` with `import { getSupabaseOrNull } from "./supabaseLoader";` and update WP05's header comment sentence "which is why it can use the browser client in ./supabase" to "which is why it can use the browser client (loaded lazily through ./supabaseLoader)". Then:
+3c. `frontend/app/lib/portfolio.ts`. Replace `import { supabase } from "./supabase";` with `import { getSupabaseOrNull } from "./supabaseLoader";`. In WP05's header doc comment, the first paragraph ends with the line ` * is why it can use the browser client in ./supabase.`; change that line to ` * is why it can use the browser client (loaded lazily through ./supabaseLoader).` (the sentence starts on the previous line, so search for `is why it can use the browser client`). Then:
 
 - `fetchPortfolioPriceHistory` (`:461`). It returns `{ rows: null, error }` instead of throwing. First statement of the body:
 
@@ -208,7 +212,7 @@ so a failed load reaches the existing `catch` (`logCaughtError("client_exchange_
     }
   ```
 
-  (`Error` is already an accepted value for that `error` field: the page-cap branch returns `capError`, an `Error`.) If WP10 replaced this function (for example with an RPC call on the browser client), apply the same pattern to whatever function now issues the query; if WP10 moved it to a route handler, there is nothing to convert.
+  (`Error` is already an accepted value for that `error` field: the page-cap branch returns `capError`, an `Error`.) After WP05 the body starts with `const rows: PortfolioPriceHistoryRow[] = [];`; insert the block above that line, before the `for` loop and its `signal?.aborted` check. A failed load then logs twice, once as `portfolio_price_history_failed` here and once as `price_history_fetch_failed` in the caller; that is expected, leave it. After WP10 this function still exists: `getPortfolioHistoryInBrowser` (the fallback used when `/api/portfolio/history` answers 501) calls it. If `grep -n "fetchPortfolioPriceHistory" app/lib/portfolio.ts` prints nothing (the owner already ran WP10's cleanup), skip this bullet.
 - `searchProducts` (`:756`). After `if (!query || query.length < 2) return [];`:
 
   ```ts
@@ -294,7 +298,7 @@ Commit 1 here (message in "Commit and PR").
 
 ### Step 6. `frontend/app/components/ProductPrices/shared/ProductImage.tsx`: `priority` prop
 
-Correction to the plan's wording, verified against the installed Next 16.3.6: next/image's `priority` prop is marked `@deprecated` in favour of `preload` (`node_modules/next/dist/shared/lib/get-img-props.d.ts:24-28`); both do the same thing (`get-img-props.js:271` disables lazy loading, `:587` emits `ReactDOM.preload(src, { as: "image" })`), and passing both throws in development (`:407-408`). So ProductImage exposes a prop named `priority` (the plan's API) and forwards it to next/image as `preload`. `fetchPriority` is an independent passthrough (`:150`, `:572`) and must be passed explicitly. `loading="lazy"` together with `preload` throws in development (`:400-401`), so `loading` is only set for non-priority images. Rendering these props with `react-dom/server` while writing this spec produced `<link rel="preload" as="image" href="<url>" fetchPriority="high"/>` followed by `<img ... fetchPriority="high" ...>` with no `loading` attribute.
+Correction to the plan's wording, verified against the installed Next 16.3.6: next/image's `priority` prop is marked `@deprecated` in favour of `preload` (`node_modules/next/dist/shared/lib/get-img-props.d.ts:24-28`); both do the same thing (`get-img-props.js:271` disables lazy loading; `:587` sets `meta.preload = preload || priority`, and `node_modules/next/dist/client/image-component.js:233-234` then calls `ReactDOM.preload(src, { as: "image", fetchPriority })`), and passing both throws in development (`:407-408`). So ProductImage exposes a prop named `priority` (the plan's API) and forwards it to next/image as `preload`. `fetchPriority` is an independent passthrough (`:150`, `:572`) and must be passed explicitly. `loading="lazy"` together with `preload` throws in development (`:400-401`), so `loading` is only set for non-priority images. Rendering these props with `react-dom/server` while writing this spec produced `<link rel="preload" as="image" href="<url>" fetchPriority="high"/>` followed by `<img ... fetchPriority="high" ...>` with no `loading` attribute.
 
 6a. Props interface (`:6-18`). Add after `preferThumbnail?: boolean;`:
 
@@ -351,7 +355,9 @@ Leave everything else (thumbnail logic, `handleImageError`, fallback markup, ove
 
 ### Step 7. `frontend/app/product/[id]/page.tsx`
 
-7a. Hero (`:238-242`): add `priority`:
+WP07 and WP11 have already edited this file, so find the two `<ProductImage` elements by content: the hero is the one with `className="w-full h-72"` under the `{/* Hero */}` comment; the sibling one is inside `siblings.map((sib) => (` with `className="w-full h-28"`. Change only the props shown.
+
+7a. Hero (`:238-242` at HEAD): add `priority`:
 
 ```tsx
           <ProductImage
@@ -364,7 +370,7 @@ Leave everything else (thumbnail logic, `handleImageError`, fallback markup, ove
 
 Do not add `preferThumbnail` here: the thumbnail is 256 px on its long edge (`main.py:97` `THUMBNAIL_MAX_EDGE`), too small for this slot.
 
-7b. Sibling grid (`:411-415`): add `preferThumbnail` (every other list-sized call site already passes it: `ProductCard.tsx:132-137` and `:236-241`, `MarketView.tsx:155-160`, `app/page.tsx:52-57`):
+7b. Sibling grid (`:411-415` at HEAD): add `preferThumbnail` (every other list-sized call site already passes it: `ProductCard.tsx:132-137` and `:236-241`, `MarketView.tsx:155-160`, `app/page.tsx:52-57`):
 
 ```tsx
                 <ProductImage
@@ -380,10 +386,11 @@ Commit 2 here.
 ## Pitfalls: do not do this
 
 - **Do not declare `const supabase = await getSupabase()` at module scope or use top-level `await`.** It evaluates `./supabase` on import and puts the chunk back on the initial load.
-- **Do not cache a rejected import.** `getSupabase` must reset its memo on failure (step 1); otherwise one offline moment or a chunk missing after a deploy breaks every data call in the tab until reload.
+- **Do not cache a rejected import.** `getSupabase` must reset its memo on failure (step 1), so this module never pins a failure; whether the chunk itself is refetched is the bundler runtime's business (step 1 note). Do not change the existing fallback caching either: `fetchVolumeMetrics` caching `{}` and `fetchSalesHistory` caching `[]` after a failure is today's behaviour for a failed query and stays the same for a failed load.
 - **Do not put the `await` outside the `try` that turns failures into the function's fallback.** `fetchVolumeMetrics`, `fetchSalesHistory`, `fetchNewestPricedAtClient`, `fetchLatestExchangeRateClient`, the portfolio searches and `fetchSharedRecipe` never reject today; callers (`useCurrencyConversion`, `import.ts`, the recipe loader) depend on that.
 - **In WP09's batcher, do not await the client in `flushHistoryQueue` or `fetchProductHistoryClient`.** Put it in `queryHistoryChunk`, whose rejection is routed to the queued waiters. Anywhere else a failure leaves cards waiting forever.
 - **Do not use `next/dynamic`, `React.lazy` or `webpackChunkName` comments.** `next/dynamic` is for components; Turbopack ignores webpack magic comments. A plain `import()` is what splits the chunk.
+- **Do not leave a new test file without a top-level `import` or `export`.** `tsc --noEmit` type-checks tests (`tsconfig.json` includes `**/*.ts`), and a file with neither is a global script: two such files that both declare `mockEvaluations` fail with TS2451 "Cannot redeclare block-scoped variable". The test code below includes the `export {};` or static import that prevents this; keep it.
 - **Do not import from `./supabase` anywhere else, including `import type`.** Use `BrowserSupabaseClient` from `supabaseLoader.ts` if a type is needed. The new ESLint guard enforces this.
 - **Do not change `app/lib/supabase.ts`** (`flowType: "pkce"`, the placeholder handling) or bridge the cookie session into it. WP04's pitfalls still apply: the browser client stays anonymous; user tables go through route handlers.
 - **Do not add `sharedRecipe.ts`, `clientMarketData.ts`, `exchangeRate.ts` or `portfolio.ts` to `ANON_CLIENT_FORBIDDEN_FILES`.** They read anon-readable data by design.
@@ -408,6 +415,10 @@ Commit 2 here.
  * WP12 (review F011): the browser Supabase client is loaded on first use,
  * once, and a failed load is retried rather than cached.
  */
+// Makes this file a module; without it tsc treats it as a global script and
+// its `mockEvaluations` collides with supabaseLazyLoad.test.ts (TS2451).
+export {};
+
 let mockEvaluations = 0;
 let mockFailuresLeft = 0;
 
@@ -468,21 +479,134 @@ it("getSupabaseOrNull logs under the caller's label and returns null", async () 
 
 ### New: `frontend/app/lib/__tests__/supabaseLazyLoad.test.ts`
 
-Same `jest.mock("../supabase", ...)` factory shape as above, but returning `{ supabase: { rpc: (...a) => mockRpc(...a), from: (...a) => mockFrom(...a) } }` and throwing when `mockFailLoad` is true; same `../logger` mock; `beforeEach` does `jest.resetModules()`, `jest.clearAllMocks()`, resets `mockEvaluations = 0` and `mockFailLoad = false`. Cases:
+```ts
+/**
+ * WP12 (review F011): the modules that read public data do not load the
+ * browser Supabase client until they query, and a failed load degrades the
+ * same way a failed query does.
+ */
+import { DEFAULT_EXCHANGE_RATE } from "../marketData";
 
-1. **Importing does not load the client** (`it.each` over `"../clientMarketData"`, `"../exchangeRate"`, `"../portfolio"`, `"../../components/BoxCalculator/sharedRecipe"`): `await import(path)`; `expect(mockEvaluations).toBe(0)`.
-2. **First query loads it once**: import `../exchangeRate`; `mockFrom` returns a chain `select().order().limit().single()` resolving `{ data: { usd_to_cad: 1.4, recorded_at: "2026-09-01T00:00:00" }, error: null }`; `expect(mockEvaluations).toBe(0)` before the call; `fetchLatestExchangeRateClient()` resolves with `rate: 1.4`; `mockEvaluations` is 1. Then import `../clientMarketData`, `mockRpc.mockResolvedValue({ data: [], error: null })`, `await fetchVolumeMetrics()`; `mockEvaluations` is still 1.
-3. **A failed load degrades exactly like a failed query** (`mockFailLoad = true` before importing):
-   - `fetchLatestExchangeRateClient()` resolves `{ rate: DEFAULT_EXCHANGE_RATE, date: null }` (import `DEFAULT_EXCHANGE_RATE` from `../marketData`).
-   - `fetchVolumeMetrics()` resolves `{}`.
-   - `fetchSalesHistory(1, 30)` resolves `[]`.
-   - `fetchNewestPricedAtClient([1])` resolves a `Map` of size 0.
-   - `fetchMarketProductsClient()` rejects with `/ChunkLoadError/` (it rejects on query errors too).
-   - `getAllProducts()` and `searchProducts("ev")` from `../portfolio` resolve `[]` (`mockRpc` is irrelevant: the load fails first).
-   - `fetchSharedRecipe("0123456789abcdef0123456789abcdef")` resolves `null`.
-   - `mockFrom` and `mockRpc` were never called.
+const mockRpc = jest.fn();
+const mockFrom = jest.fn();
+let mockEvaluations = 0;
+let mockFailLoad = false;
 
-If WP10 or WP11 changed one of these functions' failure contract, assert the contract the function now documents, and say so in the PR.
+jest.mock("../supabase", () => {
+  mockEvaluations += 1;
+  if (mockFailLoad) {
+    throw new Error("ChunkLoadError: Loading chunk failed");
+  }
+  return {
+    supabase: {
+      rpc: (...args: unknown[]) => mockRpc(...args),
+      from: (...args: unknown[]) => mockFrom(...args),
+    },
+  };
+});
+
+jest.mock("../logger", () => ({
+  logCaughtError: jest.fn(),
+  logSupabaseError: jest.fn(),
+}));
+
+beforeEach(() => {
+  jest.resetModules();
+  jest.clearAllMocks();
+  mockEvaluations = 0;
+  mockFailLoad = false;
+});
+
+afterEach(() => {
+  jest.useRealTimers();
+});
+
+it.each([
+  "../clientMarketData",
+  "../exchangeRate",
+  "../portfolio",
+  "../../components/BoxCalculator/sharedRecipe",
+])("importing %s does not load the client", async (modulePath) => {
+  await import(modulePath);
+  expect(mockEvaluations).toBe(0);
+});
+
+it("loads the client on the first query, once", async () => {
+  const single = jest.fn().mockResolvedValue({
+    data: { usd_to_cad: 1.4, recorded_at: "2026-09-01T00:00:00" },
+    error: null,
+  });
+  mockFrom.mockReturnValue({
+    select: () => ({ order: () => ({ limit: () => ({ single }) }) }),
+  });
+  mockRpc.mockResolvedValue({ data: [], error: null });
+
+  const { fetchLatestExchangeRateClient } = await import("../exchangeRate");
+  expect(mockEvaluations).toBe(0);
+  await expect(fetchLatestExchangeRateClient()).resolves.toMatchObject({ rate: 1.4 });
+  expect(mockEvaluations).toBe(1);
+
+  const { fetchVolumeMetrics } = await import("../clientMarketData");
+  await fetchVolumeMetrics();
+  expect(mockRpc).toHaveBeenCalledWith("get_market_product_volume_metrics");
+  expect(mockEvaluations).toBe(1);
+});
+
+describe("a failed load degrades exactly like a failed query", () => {
+  beforeEach(() => {
+    mockFailLoad = true;
+  });
+
+  it("never-throw readers return their fallback", async () => {
+    const { fetchLatestExchangeRateClient } = await import("../exchangeRate");
+    const {
+      fetchVolumeMetrics,
+      fetchSalesHistory,
+      fetchNewestPricedAtClient,
+    } = await import("../clientMarketData");
+    const { getAllProducts, searchProducts } = await import("../portfolio");
+    const { fetchSharedRecipe } = await import(
+      "../../components/BoxCalculator/sharedRecipe"
+    );
+
+    await expect(fetchLatestExchangeRateClient()).resolves.toEqual({
+      rate: DEFAULT_EXCHANGE_RATE,
+      date: null,
+    });
+    await expect(fetchVolumeMetrics()).resolves.toEqual({});
+    await expect(fetchSalesHistory(1, 30)).resolves.toEqual([]);
+    const newest = await fetchNewestPricedAtClient([1]);
+    expect(newest.size).toBe(0);
+    await expect(getAllProducts()).resolves.toEqual([]);
+    await expect(searchProducts("ev")).resolves.toEqual([]);
+    await expect(
+      fetchSharedRecipe("0123456789abcdef0123456789abcdef")
+    ).resolves.toBeNull();
+
+    expect(mockFrom).not.toHaveBeenCalled();
+    expect(mockRpc).not.toHaveBeenCalled();
+  });
+
+  it("fetchMarketProductsClient rejects, as it does on a query error", async () => {
+    const { fetchMarketProductsClient } = await import("../clientMarketData");
+    await expect(fetchMarketProductsClient()).rejects.toThrow(/ChunkLoadError/);
+  });
+
+  it("a queued price-history request is rejected, not left pending", async () => {
+    jest.useFakeTimers();
+    const { fetchProductHistoryClient } = await import("../clientMarketData");
+    const pending = fetchProductHistoryClient(1, "3M");
+    const settled = expect(pending).rejects.toThrow(/ChunkLoadError/);
+    await jest.advanceTimersByTimeAsync(100);
+    await settled;
+    expect(mockFrom).not.toHaveBeenCalled();
+  });
+});
+```
+
+The static `import { DEFAULT_EXCHANGE_RATE } from "../marketData"` also makes the file a module (see the `export {};` note above); `marketData.ts` does not import `./supabase`. `await import(modulePath)` with a variable compiles to `require(modulePath)` under next/jest and resolves relative to this test file.
+
+If WP10 or WP11 changed one of these functions' failure contract, assert the contract the function now documents, and say so in the PR. WP20 later deletes the `fetchSalesHistory` line together with that function; that is expected.
 
 ### New: `frontend/app/components/ProductPrices/__tests__/ProductImage.ssr.test.tsx`
 
@@ -539,11 +663,43 @@ describe("ProductImage server markup (review F069)", () => {
 
 ### New: `frontend/app/components/ProductPrices/__tests__/ProductImage.test.tsx` (jsdom)
 
-Use `@testing-library/react` (`render`, `screen`, `fireEvent`, `waitFor`). Cases:
+```tsx
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import ProductImage from "../shared/ProductImage";
 
-1. **Priority image never shows the placeholder**: render with `priority`; `screen.queryByText("Loading...")` is null immediately; `screen.getByAltText("Hero")` has class `opacity-100`. Rendering must not throw (it would if `loading="lazy"` were still passed with `preload`).
-2. **Non-priority image fades in on load**: render without `priority`; "Loading..." is present; `fireEvent.load(screen.getByAltText("Card"))`; `await waitFor(() => expect(screen.queryByText("Loading...")).toBeNull())` (next/image calls the user `onLoad` after a resolved promise, hence `waitFor`).
-3. **Thumbnail falls back to the original, then to the placeholder**: render with `preferThumbnail`; the img `src` ends with `42_thumb.webp`; `fireEvent.error(img)`; the new `screen.getByAltText(...)` has `src` ending `42.jpg`; `fireEvent.error` on it; `screen.getByText("No Image")` is present.
+const SRC = "https://abc.supabase.co/storage/v1/object/public/products/42.jpg";
+
+describe("ProductImage in the browser (review F069)", () => {
+  it("priority: never shows the placeholder and does not throw", () => {
+    // next/image throws in non-production builds on preload + loading="lazy",
+    // so this render also proves loading is unset for the priority image.
+    render(<ProductImage imageUrl={SRC} productName="Hero" priority />);
+    expect(screen.queryByText("Loading...")).toBeNull();
+    expect(screen.getByAltText("Hero")).toHaveClass("opacity-100");
+  });
+
+  it("default: hidden behind the pulse until onLoad, then visible", async () => {
+    render(<ProductImage imageUrl={SRC} productName="Card" />);
+    expect(screen.getByText("Loading...")).toBeInTheDocument();
+    expect(screen.getByAltText("Card")).toHaveClass("opacity-0");
+    fireEvent.load(screen.getByAltText("Card"));
+    // next/image calls the user onLoad after a resolved promise.
+    await waitFor(() => expect(screen.queryByText("Loading...")).toBeNull());
+    expect(screen.getByAltText("Card")).toHaveClass("opacity-100");
+  });
+
+  it("thumbnail falls back to the original, then to the placeholder", () => {
+    render(<ProductImage imageUrl={SRC} productName="Sibling" preferThumbnail />);
+    const thumb = screen.getByAltText("Sibling");
+    expect(thumb.getAttribute("src")).toMatch(/42_thumb\.webp$/);
+    fireEvent.error(thumb);
+    const original = screen.getByAltText("Sibling");
+    expect(original.getAttribute("src")).toMatch(/42\.jpg$/);
+    fireEvent.error(original);
+    expect(screen.getByText("No Image")).toBeInTheDocument();
+  });
+});
+```
 
 ### Existing tests
 
@@ -586,12 +742,14 @@ pnpm test --ci                            # all suites pass; 4 more suites than 
 pnpm build:stub > /tmp/wp12-build-after.log 2>&1; echo "exit=$?"   # exit=0
 ```
 
-Bundle analysis after the build (run the same two commands on the baseline build from "Before you start"):
+Bundle analysis. This is the exact content of `/tmp/wp12-analyze.sh` (saved in "Before you start" and already run once on the baseline build). After the build above, run `bash /tmp/wp12-analyze.sh > /tmp/wp12-after.txt 2>&1; cat /tmp/wp12-after.txt`.
 
 ```bash
+#!/usr/bin/env bash
+cd "$(git rev-parse --show-toplevel)/frontend" || exit 1
 # A. Where the supabase-js chunk is referenced.
 SUPA=$(grep -l -e RealtimeClient -e GoTrueClient -e createBrowserClient .next/static/chunks/*.js | xargs -n1 basename | sort -u)
-echo "supabase chunks: $SUPA"
+echo "supabase chunks: ${SUPA:-NONE FOUND}"
 for c in $SUPA; do
   echo "== $c"
   echo "-- prerendered HTML:";           find .next/server/app -name '*.html' -exec grep -l "$c" {} +
@@ -602,7 +760,7 @@ done
 # B. Initial JS per prerendered page.
 node -e '
 const fs=require("fs"),zlib=require("zlib"),path=require("path");
-for (const page of ["index","privacy","stats","prices","market","compare","box-calculator","portfolio","account","auth/login"]) {
+for (const page of ["index","privacy","stats","analytics","prices","market","compare","box-calculator","portfolio","account","auth/login"]) {
   const f=`.next/server/app/${page}.html`; if(!fs.existsSync(f)){console.log(page,"(no html)");continue;}
   const html=fs.readFileSync(f,"utf8");
   const srcs=[...new Set([...html.matchAll(/\/_next\/(static\/chunks\/[^"?]+\.js)/g)].map(m=>m[1]))];
@@ -614,7 +772,9 @@ for (const page of ["index","privacy","stats","prices","market","compare","box-c
 Expected:
 
 - A: `SUPA` names at least one chunk (the library still exists, now as an async chunk). For each: no prerendered HTML, no `page_client-reference-manifest.js` (this covers `/product/[id]`, `/portfolio` and every dynamic page), and at least one other static chunk referencing it (the async loader). On the baseline build the same chunk was listed in the HTML of `/`, `/prices`, `/market`, `/compare`, `/box-calculator` and `/portfolio` and in their manifests. This is the same way the existing `next/dynamic` Recharts chunk is referenced today (chunks only, no HTML or manifest), which was checked on a local build while writing this spec.
-- B: every page whose baseline HTML listed the supabase chunk drops by roughly the chunk's size (about 245 kB raw / 60 to 66 kB gzip, measured at 251,861 B raw in a recent build). Pages that did not list it at baseline (`/privacy`, `/stats`, `/auth/login`, and `/account` after WP04) change by less than 2 kB. Paste both tables into the PR.
+- B: every page whose baseline HTML listed the supabase chunk drops by roughly the chunk's size (about 245 kB raw / 60 to 66 kB gzip, measured at 251,861 B raw in a recent build). Pages that did not list it at baseline (`/privacy`, `/stats`, `/analytics`, `/auth/login`, and `/account` after WP04) change by less than 2 kB. A page printed as `(no html)` is dynamic; for it, analysis A's manifest check is the evidence. Paste both before/after outputs into the PR.
+
+Stop and report (do not merge) if, after the change, analysis A lists a prerendered HTML file or a `page_client-reference-manifest.js` for a supabase chunk. Before reporting, re-run check 2 and check 3 from "Before you start" and include their output: a remaining static importer (or a client module value-importing `@supabase/*`) is the usual cause. If `SUPA` prints `NONE FOUND` on both builds, the marker strings were minified away; report that instead of guessing a chunk.
 
 Manual checks on the PR's Vercel preview (real data; skip to Owner actions if you cannot open the preview):
 
@@ -645,7 +805,7 @@ No configuration, migration or environment change. Confirmation only:
 
 ## Rollback
 
-`git revert` the merge commit (or only one of the two commits: commit 1 is the lazy loader, commit 2 is the image change; they do not depend on each other). No migrations, environment variables or dashboard settings are involved, so a revert is a normal redeploy with no data impact. If only the ESLint guard causes trouble, revert just the step 4 edits in `eslint.config.mjs`.
+`git revert -m 1 <merge-sha>` for the whole PR, or `git revert <sha>` of only one of the two commits (commit 1 is the lazy loader, commit 2 is the image change; they do not depend on each other). This needs the PR merged with a merge commit, not squashed; say so in the PR body. If it was squashed anyway, revert the squash commit and re-apply the half you want to keep. No migrations, environment variables or dashboard settings are involved, so a revert is a normal redeploy with no data impact. If only the ESLint guard causes trouble, revert just the step 4 edits in `eslint.config.mjs`.
 
 ## Commit and PR
 

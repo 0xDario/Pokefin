@@ -7,7 +7,7 @@
   - F071 (full, button half only, per verifier): the "Show full chart" button only appears once history arrives, so each card grows about 30 px while the user scrolls (catalog grid and the home page "Recently Released" strip).
   - F126 (full): the mobile filter drawer animates `max-height` and `margin-top` with `transition-all`, and the cards use `transition-all` for a hover shadow.
 - **Priority rationale**: `/prices` is the most visited page and these are its biggest remaining scroll and interaction costs once WP08 has put the catalog in the server HTML; the fix is dependency-free and needs no database change.
-- **Effort**: M (8 to 10 hours: one component rewrite, one new data-layer batcher, one small store module, about 8 call-site edits, 5 new or updated test files).
+- **Effort**: M (8 to 10 hours: one component rewrite, one new data-layer batcher, one small store module, about 8 call-site edits, 6 new and 2 updated test files).
 - **Depends on**: WP07 (`recordedAtDateKey` in `app/lib/format.ts`; WP07 also edits `MiniSparkline.tsx` and `ProductCard.tsx`), WP08 (rewrites `ProductPrices/index.tsx`), and through them WP03 (removed the history toast and the hook-level `historyLoading`) and WP00 (`pnpm build:stub`).
 - **Unblocks**: WP19 (MarketView row memoisation uses the per-product loading store added here), WP17 (lint and tests gate), and the `/prices` "no charting library while scrolling" done-criterion in `00-PLAN.md`.
 - **Suggested branch name**: `remediation/wp09-prices-card-rendering`
@@ -15,7 +15,7 @@
 
 ## Why
 
-On `/prices` every card draws its 96x40 price line with a full Recharts chart. After one scroll through the catalog about 306 charts, 306 ResizeObservers and 306 chart stores are alive, and the 118 kB gzip charting library is downloaded on every visit to `/` and `/prices` just for those lines; switching USD/CAD or the chart period then re-renders all of them and freezes the page for a moment on phones. While scrolling, each card fires its own Supabase request (about 306 per scroll) and each request re-renders the entire card list two or three times; switching the timeframe after browsing fires hundreds of requests at once. Cards also grow about 30 px when their "Show full chart" button pops in, shifting the grid under the user's thumb, and opening the mobile filter drawer animates a layout property above the whole list. After this PR the sparkline is a plain SVG polyline that renders on the server and never loads Recharts, history is fetched in batched `.in()` queries (about 10x fewer requests), only the affected card re-renders when its loading state changes, off-screen cards skip layout and paint, cards keep a fixed height, and the drawer animates without `max-height`.
+On `/prices` every card draws its 96x40 price line with a full Recharts chart. After one scroll through the catalog about 306 charts, 306 ResizeObservers and 306 chart stores are alive, and the 118 kB gzip charting library is downloaded on every visit to `/` and `/prices` just for those lines; switching USD/CAD or the chart period then re-renders all of them and freezes the page for a moment on phones. While scrolling, each card fires its own Supabase request (about 306 per scroll) and each request re-renders the entire card list two or three times; switching the timeframe after browsing fires hundreds of requests at once. Cards also grow about 30 px when their "Show full chart" button pops in, shifting the grid under the user's thumb, and opening the mobile filter drawer animates a layout property above the whole list. After this PR the sparkline is a plain SVG polyline that renders on the server and never loads Recharts, history requested together (the first screen, a row of cards, a fast scroll, a timeframe change) is fetched in batched `.in()` queries, only the affected card re-renders when its loading state changes, off-screen cards skip layout and paint, cards keep a fixed height, and the drawer animates without `max-height`.
 
 ## Before you start
 
@@ -37,28 +37,34 @@ Read these files in full first (line numbers are at commit a188fea; WP03, WP07 a
 Confirm the starting state from `frontend/`:
 
 ```bash
-# Dependencies landed. Each must print a match; if one does not, STOP: the
-# prerequisite package has not merged.
-grep -n "export function recordedAtDateKey" app/lib/format.ts          # WP07
-grep -rn "historyLoading" app/components/ProductPrices/hooks/useProductData.ts || echo "WP03 ok (no hook-level historyLoading)"
-grep -n "useSearchParams" app/components/ProductPrices/index.tsx || echo "WP08 ok (no useSearchParams)"
+# Dependencies landed. Expected output in the comments. Any other output means
+# the prerequisite package has not merged: STOP and report it.
+grep -c "export function recordedAtDateKey" app/lib/format.ts                  # WP07: 1
+grep -c "historyLoading" app/components/ProductPrices/hooks/useProductData.ts  # WP03: 0 (hook-level historyLoading removed)
+grep -c "useSearchParams" app/components/ProductPrices/index.tsx               # WP08: 0
+grep -c "const cardList = useMemo" app/components/ProductPrices/index.tsx      # WP08: 1
 
-# The bugs are still present. Expected output in the comments.
-grep -rn "MiniSparklineImpl" app                     # 8 hits: MiniSparkline.tsx:47,48,92, ChartBundle.tsx:27, MiniSparklineImpl.tsx:10,16,19,22
+# The bugs are still present. Expected output in the comments. Line numbers are
+# at a188fea; WP07 shifts ProductCard.tsx, so compare hit COUNTS, not numbers.
+grep -rn "MiniSparklineImpl" app                     # 8 hits: MiniSparkline.tsx:47,48,92, ChartBundle.tsx:27,28, MiniSparklineImpl.tsx:10,19,22
 grep -n '\.eq("product_id", productId)' app/lib/clientMarketData.ts   # 2 hits: :275 (price history) and :398 (sales history, stays)
 grep -rn "content-visibility\|contain-intrinsic" app # no output
 grep -n "hasHistory && (" app/components/ProductPrices/cards/ProductCard.tsx   # 4 hits: :191 and :310 (the conditional buttons), :201 and :320 (the full chart, stays)
 grep -n "hasTriggeredLoad" app/components/ProductPrices/cards/ProductCard.tsx  # 4 hits
 grep -n "max-h-\[1000px\]" app/components/ProductPrices/controls/ControlBar.tsx # 1 hit
 grep -rn "loadingProductIds" app --include=*.tsx --include=*.ts
-#   useProductData.ts:34,178,185 (after WP03: state + return only), index.tsx (destructure + 3 per-card props),
+#   useProductData.ts: 2 hits (the useState line and the return object; setLoadingProductIds has a capital L and does not match),
+#   index.tsx: 5 hits (destructure, 3 per-card props, the cardList useMemo dependency array),
 #   RecentlyReleased.tsx:24,55, MarketView.tsx:210,545,567,622, useProductData.test.tsx:73 (comment),164,183
 
 # Baseline: these must pass before you change anything.
 pnpm exec tsc --noEmit
 pnpm test --ci app/components/MarketView app/components/ProductPrices app/lib/__tests__/clientMarketData.cache.test.ts
 pnpm exec eslint app/components/ProductPrices app/components/MarketView/MiniSparkline.tsx app/components/MarketView/MarketView.tsx app/components/dashboard/RecentlyReleased.tsx app/lib/clientMarketData.ts app/components/charts/ChartBundle.tsx
-#   expect 0 errors; the only warning today is ProductCard.tsx "'historyLoading' is assigned a value but never used" (this PR removes it)
+#   expect exactly 1 error and 1 warning at a188fea:
+#   - error: useCurrencyConversion.ts:21 react-hooks/set-state-in-effect. Pre-existing, owned by WP17; do not fix it here.
+#   - warning: ProductCard.tsx "'historyLoading' is assigned a value but never used" (this PR removes it).
+#   Anything else is new since a188fea: note it in the PR, and do not fix it unless it is in a line this spec changes.
 ```
 
 Assumptions to check:
@@ -73,7 +79,7 @@ Do the steps in order. Steps 1 to 3 are the data layer and compile on their own;
 
 ### Step 1. Batched, chunked history reads: `frontend/app/lib/clientMarketData.ts`
 
-Replace the whole `fetchProductHistoryClient` function (`:250-306`, from `export async function fetchProductHistoryClient(` through its closing `}` before the `fetchVolumeMetrics` doc comment) with the block below. The function keeps its name and signature (callers and the hook's jest mock stay valid) but now queues the request for 100 ms and answers every product queued in that window with one `.in("product_id", ids)` query per chunk. Keep the existing `productHistoryCache` and `productHistoryPromiseCache` declarations at `:54-58` unchanged; the block uses them. If WP12 has since replaced the static `supabase` import with a lazy accessor, use that accessor exactly as the rest of the file does.
+Replace the whole `fetchProductHistoryClient` function (`:250-306`, from `export async function fetchProductHistoryClient(` through its closing `}` before the `fetchVolumeMetrics` doc comment `/**\n * Fetch per-product sales-volume metrics`) with the block below. The function keeps its name, parameters and `Promise<PriceHistoryEntry[]>` return type (callers and the hook's jest mock stay valid; it is no longer declared `async`, which callers cannot observe) but now queues the request for 100 ms and answers every product queued in that window with one `.in("product_id", ids)` query per chunk. Keep the existing `productHistoryCache` and `productHistoryPromiseCache` declarations at `:54-58` unchanged; the block uses them. Keep the static `import { supabase } from "./supabase";`: WP12 runs after this package and moves the client behind a lazy accessor inside `queryHistoryChunk` itself.
 
 ```ts
 /**
@@ -87,13 +93,17 @@ Replace the whole `fetchProductHistoryClient` function (`:250-306`, from `export
  * Chunking: PostgREST silently truncates a response at the API "Max rows"
  * setting (1000 on this project), with no error. The unique index
  * product_price_history_product_day_uidx (migration 0003) allows at most one
- * row per product per day, and getHistoryStartDate reaches back days + 2, so
- * one product contributes at most requestedDays + 3 rows. Chunks are sized so
+ * row per product per UTC day. getHistoryStartDate reaches back days + 2
+ * LOCAL days and converts local midnight to a UTC date, so depending on the
+ * viewer's time zone the window spans up to requestedDays + 4 UTC dates, i.e.
+ * one product contributes at most requestedDays + 4 rows. Chunks are sized so
  * a chunk fits one page; the page loop is a safety net, not the plan.
  */
 const HISTORY_BATCH_WINDOW_MS = 100;
 const HISTORY_PAGE_SIZE = 1000;
 const HISTORY_MAX_PAGES = 10;
+// Upper bound on rows per product beyond requestedDays (see above).
+const HISTORY_EXTRA_DAYS = 4;
 
 type HistoryRow = { product_id: number; usd_price: number; recorded_at: string };
 
@@ -111,8 +121,11 @@ const pendingHistoryByTimeframe = new Map<
 let historyFlushTimer: ReturnType<typeof setTimeout> | null = null;
 
 function historyIdsPerRequest(requestedDays: number): number {
-  // 7D: 100, 1M: 30, 3M: 10, 6M: 5, 1Y: 2.
-  return Math.max(1, Math.floor(HISTORY_PAGE_SIZE / (requestedDays + 3)));
+  // 7D: 90, 1M: 29, 3M: 10, 6M: 5, 1Y: 2.
+  return Math.max(
+    1,
+    Math.floor(HISTORY_PAGE_SIZE / (requestedDays + HISTORY_EXTRA_DAYS))
+  );
 }
 
 function readFreshHistory(
@@ -200,8 +213,8 @@ function flushHistoryQueue(): void {
 
     for (let start = 0; start < ids.length; start += chunkSize) {
       const chunk = ids.slice(start, start + chunkSize);
-      queryHistoryChunk(chunk, timeframe).then(
-        (historyByProduct) => {
+      queryHistoryChunk(chunk, timeframe)
+        .then((historyByProduct) => {
           for (const productId of chunk) {
             // A product with no rows is a real, empty history (e.g. id 442),
             // not a failure: cache it so it is not refetched forever.
@@ -209,14 +222,17 @@ function flushHistoryQueue(): void {
             storeHistory(productId, requestedDays, history);
             waiters.get(productId)?.resolve(history);
           }
-        },
-        (error: unknown) => {
-          // Only this chunk fails; nothing is cached, so a retry refetches.
+        })
+        .catch((error: unknown) => {
+          // Only this chunk fails. A failed query caches nothing, so a retry
+          // refetches. .catch (not a second .then argument) also settles the
+          // waiters if the success handler above throws, so no card can be
+          // left "Loading chart..." forever; rejecting an already resolved
+          // promise is a no-op.
           for (const productId of chunk) {
             waiters.get(productId)?.reject(error);
           }
-        }
-      );
+        });
     }
   }
 }
@@ -270,6 +286,7 @@ Notes for this step:
 - `getDaysForTimeframe`, `getHistoryStartDate` and `groupHistoryRowsByProduct` are already imported at `:10-17`; `logCaughtError` at `:20`; `ChartTimeframe` and `PriceHistoryEntry` at `:3-9`. Add nothing else.
 - The `.order("id")` column exists (`fetchNewestPricedAtClient` already orders by it at `:127`).
 - The resolve-after-`storeHistory` order matters: a caller woken by `resolve` that immediately asks for a narrower range must hit the cache.
+- Batching only merges requests made in the same 100 ms window: the first screen of cards, a row of cards entering together, a fast scroll, a timeframe change. A slow one-card-at-a-time scroll on a one-column phone layout still makes about one request per card. That is expected; do not lengthen the window to chase it (it delays every sparkline).
 
 ### Step 2. Per-product loading store: new file `frontend/app/components/ProductPrices/hooks/historyLoadingStore.ts`
 
@@ -585,10 +602,10 @@ Do not remove `selectedCurrency` or `exchangeRate` from that `useMemo`'s depende
 
 ### Step 5. `frontend/app/components/ProductPrices/cards/ProductCard.tsx`
 
-5a. Imports. Change the React import to `import { memo, useEffect, useRef, useState } from "react";` (`useCallback` is no longer used after 5d; if WP07 added another `useCallback` use, keep it). Add below the `../types` import:
+5a. Imports. Change the React import to `import { memo, useEffect, useRef, useState } from "react";` (`useCallback` is no longer used after 5d; run `grep -n "useCallback" app/components/ProductPrices/cards/ProductCard.tsx` after 5d, and if WP07 or another package added a `useCallback(` call, keep `useCallback` in the import). Add below the `../types` import:
 
 ```ts
-import { HistoryLoadingStore, useIsHistoryLoading } from "../hooks/historyLoadingStore";
+import { type HistoryLoadingStore, useIsHistoryLoading } from "../hooks/historyLoadingStore";
 ```
 
 5b. Props interface: replace the line `historyLoading?: boolean;` (`:19`) with
@@ -604,9 +621,17 @@ import { HistoryLoadingStore, useIsHistoryLoading } from "../hooks/historyLoadin
 
 5c. Destructure: replace `historyLoading = false,` (`:60`) with `historyLoadingStore,`.
 
-5d. Replace everything from `const [showFullChart, setShowFullChart] = useState(false);` through the end of the third effect (`:67-69` plus `:87-120`, i.e. the `cardRef`/`hasTriggeredLoad` declarations, `handleIntersection` and all three `useEffect`s) with the code below. Keep the lines between them that WP07 left (`setName`, `productType`, `generation`, `setCode`, `releaseDate`, `accentClass`, etc.) in place between the declarations and the effects exactly as they are now.
+5d. Two replacements in the component body. The lines between them (`setName`, `productType`, `generation`, `setCode`, `releaseDate`, `accentClass`, and whatever WP07 left there) stay exactly as they are.
 
-Top of the component body:
+First replacement: the three lines at the top of the body (`:67-69` at a188fea)
+
+```tsx
+  const [showFullChart, setShowFullChart] = useState(false);
+  const cardRef = useRef<HTMLDivElement>(null);
+  const hasTriggeredLoad = useRef(false);
+```
+
+become:
 
 ```tsx
   const [showFullChart, setShowFullChart] = useState(false);
@@ -621,7 +646,7 @@ Top of the component body:
   const historyLoading = useIsHistoryLoading(historyLoadingStore, product.id);
 ```
 
-The effects (where `handleIntersection` and the three old effects were):
+Second replacement: everything from the comment `// Auto-load history when card scrolls into viewport` (`:87`) through the line `const fullChartToggleLabel = showFullChart ? "Hide chart" : "Show full chart";` (`:123`), i.e. `handleIntersection`, the three old `useEffect`s, the old `hasHistory` and the old toggle label, becomes the block below. The next line after it must still be `if (viewMode === "flat") {`.
 
 ```tsx
   // Load history when the card comes near the viewport. Re-entering the
@@ -663,10 +688,13 @@ The effects (where `handleIntersection` and the three old effects were):
     }
   }, [showFullChart, product.id, chartTimeframe, onLoadChart]);
 
-  const hasHistory = (history?.length ?? 0) > 1;
+  // Written as a narrowing check on purpose: `{showFullChart && hasHistory &&
+  // <LazyPriceChart data={history} />}` relies on TypeScript narrowing
+  // `history` to PriceHistoryEntry[] through this alias.
+  const hasHistory = history !== undefined && history.length > 1;
 ```
 
-Delete the old `const hasHistory = history && history.length > 1;` and `const fullChartToggleLabel = ...` lines (`:122-123`).
+Do not write `hasHistory` as `(history?.length ?? 0) > 1`: it does not narrow `history`, and `tsc` then fails at both `<LazyPriceChart data={history}` sites with "Type 'PriceHistoryEntry[] | undefined' is not assignable" (checked).
 
 5e. Add this component above `const ProductCard = memo(...)` (after `VolumeChip`, and after WP07's `StalePriceNote` if present):
 
@@ -788,7 +816,7 @@ with
 historyLoadingStore={historyLoadingStore}
 ```
 
-If WP08 wrapped the card lists in `useMemo`, replace `loadingProductIds` with `historyLoadingStore` in those dependency arrays. After this, `grep -n loadingProductIds app/components/ProductPrices/index.tsx` must print nothing. The page component no longer re-renders when a card starts or finishes loading; it re-renders once per arriving batch (the `priceHistory` update), and `ProductCard`'s `memo` keeps unaffected cards from re-rendering.
+WP08 builds the card lists in one `const cardList = useMemo(...)`; in its dependency array replace the entry `loadingProductIds,` with `historyLoadingStore,`. After this, `grep -n loadingProductIds app/components/ProductPrices/index.tsx` must print nothing. The page component no longer re-renders when a card starts or finishes loading; it re-renders once per arriving batch (the `priceHistory` update), and `ProductCard`'s `memo` keeps unaffected cards from re-rendering.
 
 6b. `frontend/app/components/dashboard/RecentlyReleased.tsx`. Replace `:24-25` with
 
@@ -799,7 +827,7 @@ If WP08 wrapped the card lists in `useMemo`, replace `loadingProductIds` with `h
 
 and in the card (`:55`) replace `historyLoading={loadingProductIds.includes(product.id)}` with `historyLoadingStore={historyLoadingStore}`.
 
-6c. `frontend/app/components/MarketView/MarketView.tsx`. MarketView shows loading text in a table cell and the expanded row, and re-renders its whole table anyway (row memoisation is WP19, F125), so it subscribes to the full list and keeps its `loadingProductIds` variable. Add to the imports:
+6c. `frontend/app/components/MarketView/MarketView.tsx`. MarketView shows loading text in a table cell and the expanded row, and re-renders its whole table anyway (row memoisation is WP19, F125), so it subscribes to the full list and keeps its `loadingProductIds` variable. Add this import on the line directly below `import MiniSparkline from "./MiniSparkline";`:
 
 ```ts
 import { useLoadingProductIds } from "../ProductPrices/hooks/historyLoadingStore";
@@ -862,7 +890,7 @@ Every other use of `loadingProductIds` in the file (`:545`, `:567`, the `useMemo
 }
 ```
 
-`40rem` is Tailwind 4's `sm` breakpoint. The block-size longhand is used (not the `contain-intrinsic-size` shorthand) so the placeholder never implies a width; card widths always come from the grid track. The plan's figures (520 / 400 / 180 px) were measured without the button slot; these add its 30 px.
+`40rem` is Tailwind 4's `sm` breakpoint. The block-size longhand is used (not the `contain-intrinsic-size` shorthand) so the placeholder never implies a width; card widths always come from the grid track. The F015 verifier's figures (about 520 / 400 / 180 px) were measured without the button slot; these add its 30 px.
 
 ### Step 8. Drawer without `max-height`: `frontend/app/components/ProductPrices/controls/ControlBar.tsx`
 
@@ -876,11 +904,15 @@ Every other use of `loadingProductIds` in the file (`:545`, `:567`, the `useMemo
       {/* Filter panel: collapsible on mobile, always open on md+.
           Animates grid-template-rows 0fr -> 1fr instead of max-height and
           margin-top (F126). The spacing lives on an inner element so the
-          collapsed row is truly 0px tall. */}
+          collapsed row is truly 0px tall. `invisible` while closed keeps the
+          collapsed controls out of the tab order; visibility is in the
+          transition list so it flips only after the close animation. */}
       <div
         id={panelId}
-        className={`grid transition-[grid-template-rows,opacity] duration-200 ease-out md:grid-rows-[1fr] md:opacity-100 md:transition-none ${
-          drawerOpen ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0"
+        className={`grid transition-[grid-template-rows,opacity,visibility] duration-200 ease-out md:visible md:grid-rows-[1fr] md:opacity-100 md:transition-none ${
+          drawerOpen
+            ? "visible grid-rows-[1fr] opacity-100"
+            : "invisible grid-rows-[0fr] opacity-0"
         }`}
       >
         <div className="min-h-0 overflow-hidden md:overflow-visible">
@@ -904,7 +936,7 @@ Every other use of `loadingProductIds` in the file (`:545`, `:567`, the `useMemo
       </div>
 ```
 
-Paste the real children from `:138-178` where the placeholder comment is; do not leave the comment in the file. `ControlBar` is also used by `/market` (`MarketView.tsx:635`), which gets the same behaviour. Honest expectation: the list below the bar still moves down frame by frame while the drawer opens (any height animation does that), but the cards are only translated, not re-laid-out internally, and with step 7 off-screen cards are skipped; the win is dropping the `transition-all` over layout properties and the 1000px `max-height` easing curve.
+Paste the real children from `:138-178` (from `<GenerationFilter` through the `</div>` that closes `<div className="md:ml-auto">`) where the placeholder comment is, indented four more spaces, with no change to their content; do not leave the placeholder comment in the file. The trigger button, `activeFilterCount` and the outer card `<div className="rounded-xl border ...">` stay as they are. `ControlBar` is also used by `/market` (`MarketView.tsx:635`), which gets the same behaviour. Honest expectation: the list below the bar still moves down frame by frame while the drawer opens (any height animation does that), but the cards are only translated, not re-laid-out internally, and with step 7 off-screen cards are skipped; the win is dropping the `transition-all` over layout properties and the 1000px `max-height` easing curve.
 
 ## Pitfalls: do not do this
 
@@ -924,6 +956,9 @@ Paste the real children from `:138-178` where the placeholder comment is; do not
 - **Do not add a virtualization library** (`@tanstack/react-virtual`, `react-window`). F015 verifier: the default view is grouped, windowing adds nothing over `content-visibility` for layout and paint, and its render-cost benefit is delivered here by the SVG sparkline and the store.
 - **Do not add a database RPC or migration** (for example a `get_product_sparklines` function). That is outside this package; WP10 and WP11 own database and caching changes.
 - **Do not wait on real 100 ms timers in new tests.** Use `jest.useFakeTimers()` and `await jest.advanceTimersByTimeAsync(100)`.
+- **Do not settle chunk waiters with `.then(onOk, onErr)`, and do not `await` anything in `flushHistoryQueue` or `fetchProductHistoryClient`.** Use `.then(onOk).catch(onErr)` as in step 1, so a throw anywhere after the query still rejects the chunk's waiters; any path that leaves a waiter unsettled leaves its card on "Loading chart..." forever and its product never refetches (the in-flight promise stays cached).
+- **Do not size chunks with `days + 3`.** `getHistoryStartDate` works in local time, so viewers far from UTC get up to `days + 4` daily rows per product; at 7D and 1M a `+ 3` chunk can exceed 1000 rows and silently fall back to a second page request.
+- **Do not remove the `export {};` line from `clientMarketData.history.test.ts`.** Without a static import or export the file is a global script and `tsc` fails on the duplicate `fromMock`.
 - **Do not remove `SparklineSkeleton`, `LazyPriceChart`, or the `PriceChart`/`PortfolioChartImpl`/`AllocationChartImpl` exports from `ChartBundle`.** Only `MiniSparklineImpl` goes.
 - **Do not change `useCurrencyConversion`, `ReturnMetrics`, `ScrollToTop` (its `transition-all` is a fixed button, out of scope) or anything in `serverMarketData.ts`.**
 
@@ -1042,7 +1077,11 @@ it("renders the polyline on the server", () => {
 
 Mock the Supabase builder chain the batcher uses: `from().select().in().gte().order().order().order().range()`.
 
+The file has no static `import` (it imports the module under test dynamically after `jest.resetModules()`), so TypeScript would treat it as a global script, and its `const fromMock` would collide with the one in `clientMarketData.cache.test.ts` (`tsc` error TS2451 "Cannot redeclare block-scoped variable 'fromMock'", checked). The first line `export {};` makes it a module. Keep it.
+
 ```ts
+export {};
+
 const fromMock = jest.fn();
 
 jest.mock("../supabase", () => ({
@@ -1206,7 +1245,43 @@ Keep the test's name and comment.
   });
 ```
 
-3. "stays loading while a wider range is still in flight": two deferred fetches (3M then 1Y for id 475); resolve 3M: `isLoading(475)` is still `true`; resolve 1Y: `false`, and `priceHistory[475]` is the 1Y array.
+3. In the same `describe`, add the test below, and add `ChartTimeframe` to the file's type import (`import type { ChartTimeframe, PriceHistoryEntry, Product } from "../../ProductPrices/types";`):
+
+```tsx
+  it("stays loading while a wider range is still in flight", async () => {
+    const resolvers: Partial<Record<ChartTimeframe, (history: PriceHistoryEntry[]) => void>> = {};
+    fetchHistoryMock.mockImplementation(
+      (_productId, timeframe) =>
+        new Promise((resolve) => {
+          resolvers[timeframe] = resolve;
+        })
+    );
+
+    const { result } = renderHook(() => useProductData({ initialProducts: PRODUCTS }));
+
+    let narrow!: Promise<PriceHistoryEntry[]>;
+    let wide!: Promise<PriceHistoryEntry[]>;
+    act(() => {
+      narrow = result.current.ensureHistoryLoaded(475, "3M");
+      wide = result.current.ensureHistoryLoaded(475, "1Y");
+    });
+
+    await act(async () => {
+      resolvers["3M"]!(makeHistory(2));
+      await narrow;
+    });
+    expect(result.current.historyLoadingStore.isLoading(475)).toBe(true);
+
+    await act(async () => {
+      resolvers["1Y"]!(makeHistory(10));
+      await wide;
+    });
+    expect(result.current.historyLoadingStore.isLoading(475)).toBe(false);
+    expect(result.current.priceHistory[475]).toHaveLength(10);
+  });
+```
+
+Both new hook tests typecheck and lint clean against the step 2 and step 3 code (checked).
 
 ### New: `frontend/app/components/ProductPrices/__tests__/historyLoadingStore.test.tsx`
 
@@ -1217,9 +1292,15 @@ Keep the test's name and comment.
 
 ### New: `frontend/app/components/ProductPrices/__tests__/ProductCard.history.test.tsx`
 
-Mock `../shared/ProductImage` to `() => null` and `../shared/LazyPriceChart` to `() => <div data-testid="full-chart" />` (as WP07's `ProductCard.format.test.tsx` does). Keep `MiniSparkline` real. Use a controllable IntersectionObserver:
+Imports: `act`, `fireEvent`, `render`, `screen` from `@testing-library/react`; `ProductCard` from `../cards/ProductCard`; `createHistoryLoadingStore` from `../hooks/historyLoadingStore`; types `PriceHistoryEntry`, `Product` from `../types`. Mock the two heavy children the same way WP07's `ProductCard.format.test.tsx` does, with `__esModule: true`. Keep `MiniSparkline` real. Use a controllable IntersectionObserver:
 
 ```tsx
+jest.mock("../shared/ProductImage", () => ({ __esModule: true, default: () => null }));
+jest.mock("../shared/LazyPriceChart", () => ({
+  __esModule: true,
+  default: () => <div data-testid="full-chart" />,
+}));
+
 type ObserverRecord = { callback: IntersectionObserverCallback; elements: Element[] };
 let observers: ObserverRecord[] = [];
 
@@ -1261,7 +1342,7 @@ beforeEach(() => {
 });
 ```
 
-Base props: `product` (like WP07's `makeProduct`), `chartTimeframe: "3M"`, `selectedCurrency: "USD"`, `exchangeRate: 1.36`, `formatPrice: (p) => String(p)`, `onLoadChart: jest.fn()`. Cases:
+Base props: `product` from a `makeProduct(id = 1)` helper shaped like WP07's (`id`, `usd_price: 100`, `url`, `last_updated`, `sets: { name, code, release_date }`, `product_types: { id: 1, name: "booster_box", label: "Booster Box" }`, `returns: null`), `chartTimeframe: "3M" as const`, `selectedCurrency: "USD" as const`, `exchangeRate: 1.36`, `formatPrice: (price: number | null | undefined) => String(price)`, `onLoadChart` a `jest.fn()` created in `beforeEach` (so call counts start at zero per test) and passed by the same reference on every `rerender`. Cases:
 
 1. **Slot reserved without history** (flat and grouped): `screen.getByRole("button", { name: "Show full chart" })` exists, `toBeDisabled()`, `toHaveClass("invisible")`.
 2. **Loading label**: with `historyLoadingStore` where `store.start(product.id)` was called, the button reads "Loading chart...", is disabled and does not have `invisible`.
@@ -1276,7 +1357,7 @@ Its `baseProps` do not pass `historyLoading`, so it compiles unchanged. If it do
 
 ### New: `frontend/app/components/ProductPrices/__tests__/ControlBar.test.tsx`
 
-Render `ControlBar` with minimal props (`selectedGeneration="all"`, `availableGenerations={[]}`, `searchTerm=""`, `chartTimeframe="3M"`, `selectedCurrency="USD"`, `exchangeRate={1.36}`, `exchangeRateLoading={false}`, no-op callbacks). Find the trigger with `screen.getByRole("button", { name: /Filters/ })`, the panel with `document.getElementById(trigger.getAttribute("aria-controls")!)`. Assert: closed panel has `grid-rows-[0fr]` and no class containing `max-h-`; after `fireEvent.click(trigger)` it has `grid-rows-[1fr]` and `aria-expanded="true"`; clicking "Done" closes it again.
+Render `ControlBar` with minimal props (`selectedGeneration="all"`, `availableGenerations={[]}`, `searchTerm=""`, `chartTimeframe="3M"`, `selectedCurrency="USD"`, `exchangeRate={1.36}`, `exchangeRateLoading={false}`, no-op callbacks). Find the trigger with `screen.getByRole("button", { name: /Filters/ })`, the panel with `document.getElementById(trigger.getAttribute("aria-controls")!)`. Assert: the closed panel has classes `grid-rows-[0fr]` and `invisible`, `trigger` has `aria-expanded="false"`, and `panel.className` does not contain `max-h-`; after `fireEvent.click(trigger)` the panel has `grid-rows-[1fr]` and `visible` and not `invisible`, and `trigger` has `aria-expanded="true"`; `fireEvent.click(screen.getByRole("button", { name: "Done" }))` closes it again (`grid-rows-[0fr]`, `aria-expanded="false"`). jsdom does not load Tailwind, so `invisible` does not hide anything from `getByRole` in this test.
 
 ## Verification
 
@@ -1322,19 +1403,19 @@ Report in the PR the request counts the new jest tests prove: 25 cards at 3M pro
 
 Manual checks (need real data; do them on the Vercel preview deployment of this PR, see Owner actions, or locally with `pnpm dev` if you have a `.env.local` pointing at the project's public URL and anon key):
 
-1. Open `/prices` in Chrome, DevTools Network tab, "Disable cache" on, reload. Type `product_price_history` in the filter box. Before scrolling: note the request count (expect 1 to 3 at desktop width; production before this PR shows one per visible card, 12 to 20). Scroll slowly to the bottom: expect roughly 30 to 60 in total (production: about 306).
+1. Open `/prices` in Chrome, DevTools Network tab, "Disable cache" on, reload. Type `product_price_history` in the filter box. Before scrolling: note the request count (expect 1 to 3 at desktop width; production before this PR shows one per visible card, 12 to 20). Scroll to the bottom at a steady pace at desktop width (3 columns): expect at most about one request per row of cards, so about 100 or fewer for the whole catalog, and far fewer with a fast scroll (production: about 306, one per card). A one-column phone layout scrolled slowly stays close to one request per card; that is expected (see step 1 notes).
 2. Same page, filter `chunks`, sort by Size. Before this PR one chunk of about 118 kB transferred (about 415 kB resource) appears as soon as the first sparklines draw. After: no such chunk appears while loading or scrolling; it appears exactly once after clicking "Show full chart" on any card.
 3. Switch the chart timeframe from 3M to 1Y after scrolling halfway: expect only a handful of new `product_price_history` requests (visible cards, 2 per request at 1Y), not a burst of hundreds. Scroll back up: cards refetch as they come into view.
 4. Toggle USD/CAD after a full scroll: no visible freeze; sparklines do not change shape; prices change.
 5. Watch a card while it loads: the button slot shows "Loading chart..." then "Show full chart"; the card height does not change. Same on `/` in "Recently Released".
 6. In the Elements panel, pick an off-screen card in `/prices` grouped view and check Computed: `content-visibility: auto`. Scroll to it: it renders and its history still loads (the IntersectionObserver fires).
 7. At 375 px width, open and close the Filters drawer: it slides open and closed smoothly, with no content visible when closed. At 1024 px width the filters are always visible and the Filters button is hidden. Check `/market` too.
-8. Console: no React hydration warnings and no Recharts "width(0) and height(0)" warnings while scrolling with a full chart open.
+8. Console: no React hydration warnings while loading `/prices` and `/`. Open one full chart, then scroll it far off-screen and back: if Recharts logs a "width(0) and height(0)" warning at that moment, it is the `content-visibility` skip the F015 verifier predicted (the chart re-measures when it comes back) and is harmless; mention it in the PR. A hydration warning is a bug in this PR: fix it before merging.
 
 ## Owner actions
 
 1. **Confirm the API row cap is 1000 (read-only check).** Supabase Dashboard, project, Project Settings, API (Data API settings), "Max rows". Expected: `1000`. The batcher sizes chunks to fit 1000 rows and treats a page shorter than 1000 as the last page, like the existing `fetchNewestPricedAtClient`. If the value is lower, do not merge: tell the executor the value so `HISTORY_PAGE_SIZE` is set to it. If it is higher, nothing to do.
-2. **Measure before and after.** Before merging, run manual checks 1 and 2 on production (`/prices`) and write down the numbers; then run manual checks 1 to 8 on this PR's Vercel preview deployment and add both sets of numbers to the PR. Done when the preview shows no roughly 118 kB Recharts chunk until "Show full chart" is clicked and at most about 60 `product_price_history` requests for a full scroll.
+2. **Measure before and after.** Before merging, run manual checks 1 and 2 on production (`/prices`) and write down the numbers; then run manual checks 1 to 8 on this PR's Vercel preview deployment and add both sets of numbers to the PR. Done when the preview shows no roughly 118 kB Recharts chunk until "Show full chart" is clicked, at most about 110 `product_price_history` requests for a steady full scroll at desktop width, and only a handful of requests for a timeframe change after scrolling.
 
 No migrations, no environment variables, no dashboard toggles.
 
@@ -1343,13 +1424,13 @@ No migrations, no environment variables, no dashboard toggles.
 - [ ] `app/components/charts/MiniSparklineImpl.tsx` is deleted and `ChartBundle.tsx` no longer exports `MiniSparklineImpl` or `SparklinePoint`.
 - [ ] `MiniSparkline` renders an inline `<svg><polyline>` with no `next/dynamic`, no `currency`/`exchangeRate` props, and its markup appears in server-rendered HTML (SSR test passes).
 - [ ] On the preview, `/` and `/prices` load no Recharts chunk until "Show full chart" is clicked.
-- [ ] History for all products requested within 100 ms is fetched with `.in("product_id", ...)` in chunks of at most `floor(1000 / (days + 3))` products; 25 cards at 3M produce 3 requests.
+- [ ] History for all products requested within 100 ms is fetched with `.in("product_id", ...)` in chunks of at most `floor(1000 / (days + 4))` products; 25 cards at 3M produce 3 requests.
 - [ ] A product with no history resolves `[]` and is not refetched; a failed chunk rejects only its own products and can be retried.
 - [ ] `useProductData` no longer holds loading flags in React state and returns `historyLoadingStore` instead of `loadingProductIds`; starting a load does not re-render the host component.
 - [ ] A timeframe change refetches only cards near the viewport; each card creates exactly one IntersectionObserver for its lifetime.
 - [ ] The "Show full chart" button is always rendered: invisible and disabled with no history, "Loading chart..." while loading, enabled once history exists; card height does not change when history arrives.
 - [ ] `/prices` catalog cards (inside `ProductGrid`) have `content-visibility: auto` with the step 7 intrinsic block sizes; home page cards do not.
-- [ ] Card roots use `transition-shadow`, not `transition-all`; the filter drawer animates `grid-template-rows` and contains no `max-h-` class.
+- [ ] Card roots use `transition-shadow`, not `transition-all`; the filter drawer animates `grid-template-rows`, contains no `max-h-` class, and is `invisible` (out of the tab order) while closed on mobile.
 - [ ] `tsc`, eslint on changed files, the full jest suite and `pnpm build:stub` all pass.
 
 ## Rollback

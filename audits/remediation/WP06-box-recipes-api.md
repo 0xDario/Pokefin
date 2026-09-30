@@ -10,7 +10,8 @@
   - F131 (full): share codes are chosen by the client with no database format check, and `get_shared_recipe` returns the owner's `auth.users` UUID to anonymous callers.
 - **Priority rationale**: the Box Calculator's save, list and share features have been dead for every signed-in user since 2026-05-27, and the fix also closes a small anonymous data leak (owner UUID) in the same RPC.
 - **Effort**: L (about 10 hours: one migration, three route handlers, a hook rewrite, component edits, six test files).
-- **Depends on**: WP04 (`sessionStatus` in `AuthContext`, `app/lib/authSession.ts`, the `ANON_CLIENT_FORBIDDEN_FILES` ESLint guard). WP00 for `pnpm build:stub`. WP01 claims migration numbers 0024 and 0025. WP05 is not required, but if it has landed this package reuses its `rejectIfNotAppRequest` and extends its `no-restricted-syntax` ESLint block.
+- **Depends on**: WP04 (`sessionStatus` in `AuthContext`, `app/lib/authSession.ts`, the `ANON_CLIENT_FORBIDDEN_FILES` ESLint guard). WP00 for `pnpm build:stub`. WP01 claims migration numbers 0024 and 0025; WP10 claims 0027 to 0029 and WP16 claims 0030, so this package's migration is **0026**. WP05 runs before this package in plan order and, as specified, creates `rejectIfNotAppRequest` in `app/lib/csrf.ts` (WP05 step 6a), `app/lib/routeAuth.ts` with `requireRouteUser`, `jsonNoStore` and `NO_STORE` (WP05 step 6b, byte-identical to step 3b below), the `no-restricted-syntax` ESLint block (WP05 step 18c) and the relative-path `^\.{1,2}/supabase$` import pattern (WP05 step 18b). The default path is therefore: skip steps 3a, 3b and 4, and use the first variant of step 11b. Steps 3a, 3b, 4 and the second variant of 11b are fallbacks for a tree where those files are missing.
+- **Also closes (handed over by WP04)**: the F058 note that `useBoxRecipes` / `BoxCalculator` must key their recipe loading on `user?.id`, not on the `user` object (WP04 "Pitfalls" and PR body). Step 8 keys the fetch on the user id and step 9d deletes the `[user, loadMyRecipes]` effect.
 - **Unblocks**: WP11 (server-fed tools, F143/F068 touch `/box-calculator`), WP12 (bundle work on the calculator), WP17 (lint to zero, blocking CI), WP20 (currency context, CSRF helper dedupe), WP21 (least-privilege and schema baseline; it must include the new column, constraints and trigger).
 - **Suggested branch name**: `remediation/wp06-box-recipes-api`
 - **Risk level**: medium. It adds a migration that changes the `get_shared_recipe` return shape and adds a trigger, and the migration must be applied before the code deploys; the code path it replaces is fully broken in production today, so there is no working behaviour to regress.
@@ -27,8 +28,8 @@ Read these files fully (line numbers are from HEAD `a188fea`; adapt if earlier p
 - `frontend/app/components/BoxCalculator/BoxCalculator.tsx` (747 lines). `:73-97` hooks; `:99-114` state; `:116-119` load effect; `:121-129` shared-recipe effect (missing deps, no cancel flag); `:131-138` `loadRecipeIntoState`; `:180-226` `handleSave`; `:228-234` `handleCopyShareLink`; `:236-248` new/delete; `:275-278` `currencySymbol` and `fmtPrice`; `:300-332` action buttons; `:335-381` saved list (`formatPrice(r.retailPrice)` at `:361`); `:741` "Save and share your recipes" copy.
 - `frontend/app/components/BoxCalculator/types.ts` (55 lines), `frontend/app/components/BoxCalculator/hooks/useBoosterBoxPrices.ts` (99 lines, sort at `:56-61`), `frontend/app/components/BoxCalculator/__tests__/useBoosterBoxPrices.test.tsx`.
 - `frontend/app/components/ProductPrices/hooks/useCurrencyConversion.ts:13-14` (display currency defaults to `"CAD"`; `setSelectedCurrency` is a plain `useState` setter, so it is stable) and `:64-70` (`formatPrice` treats its input as USD and converts).
-- `frontend/app/lib/csrf.ts`, `frontend/app/lib/routeSupabase.ts`, `frontend/app/lib/logger.ts`, `frontend/app/lib/validation.ts`, `frontend/app/api/account/export/route.ts`, `frontend/app/api/profile/route.ts` (WP04) and, if present, `frontend/app/api/portfolio/route.ts` (WP05): the route-handler pattern.
-- `frontend/eslint.config.mjs` (after WP04 and possibly WP05).
+- `frontend/app/lib/csrf.ts`, `frontend/app/lib/routeSupabase.ts`, `frontend/app/lib/logger.ts`, `frontend/app/lib/validation.ts`, `frontend/app/api/account/export/route.ts`, `frontend/app/api/profile/route.ts` (WP04), `frontend/app/api/portfolio/route.ts` and `frontend/app/lib/routeAuth.ts` (WP05): the route-handler pattern.
+- `frontend/eslint.config.mjs` (after WP04 and WP05: `ANON_CLIENT_FORBIDDEN_FILES`, the `no-restricted-imports` block and WP05's `no-restricted-syntax` block).
 - `migrations/create_box_recipes.sql`, `migrations/0005_box_recipes_share_code_hardening.sql` (the RPC at `:21-36`), `migrations/0008_box_recipes_rls_hardening.sql:58-133`, `migrations/0013_revoke_anon_on_user_tables.sql:21`, `migrations/0014_rls_perf_and_dedupe.sql:89-104` (current owner-only policies), `migrations/0023_price_freshness_guard.sql:50-60` (why a dropped and recreated function must restate its grants), `migrations/0006_function_execute_grants_hardening.sql` (trigger helpers are not RPC-callable).
 - `verify_migration.py:1-100` (docstring) and `:1491-1505` (`UNVERIFIABLE`). It is a generic parser that hard-codes nothing about `box_recipes` or `get_shared_recipe`, and it refuses column-level grants (`:1262-1270`). **It needs no change in this package.**
 
@@ -56,15 +57,18 @@ grep -n "navigator.clipboard.writeText(url);" app/components/BoxCalculator/BoxCa
 grep -n "new Date(b.releaseDate)" app/components/BoxCalculator/hooks/useBoosterBoxPrices.ts
 # expect: one hit each (:231 and :59)
 
-# 6. The RPC returns the whole row, including user_id (F131). Run from the repo root.
+# 6. The RPC returns the whole row, including user_id (F131).
 grep -n "RETURNS SETOF public.box_recipes" ../migrations/0005_box_recipes_share_code_hardening.sql
 # expect: 22:RETURNS SETOF public.box_recipes
 
-# 7. Next free migration number. Run from the repo root.
-ls ../migrations | sort | tail -5
-# expect: 0024_... and 0025_... from WP01 (and possibly later files). Use the
-# next free four-digit number. Everywhere below, NNNN means that number
-# (0026 if WP01 is the last package that added migrations).
+# 7. Migration number. 0026 is reserved for this package (WP10 already
+# numbers its files 0027-0029 assuming it).
+ls ../migrations | grep '^002[4-9]'
+# expect: 0024_export_my_data_volatile.sql and 0025_portfolio_fk_indexes.sql
+# (WP01), and no 0026_ file. Everywhere below, NNNN means 0026. Only if a
+# 0026_ file already exists: use the next free number, replace 0026 in the
+# comments of steps 1, 2 and 6, and say in the PR body which number you used
+# so WP10's executor renumbers its files.
 
 # 8. What WP04 and WP05 left behind. Record the answers; steps branch on them.
 grep -n "sessionStatus" app/context/AuthContext.tsx | head -3
@@ -86,9 +90,9 @@ Assumptions to check, and what to do if they are wrong:
 
 - **`sessionStatus` (WP04).** Expected on `useAuth()` as `"unknown" | "anonymous" | "authenticated"`. If check 8 finds nothing, WP04 has not landed: stop, because this package also relies on WP04's ESLint guard and route helpers. (If you are told to proceed anyway, replace the `userId` line in step 8 with `const userId = user?.id ?? null;` and drop `sessionStatus` from the test mocks.)
 - **`app/lib/authSession.ts` (WP04 step 2).** Must export `isAuthoritativeSignedOut`. If the file is missing, create it exactly as in step 3a.
-- **`rejectIfNotAppRequest` (WP05 step 6).** If `app/lib/csrf.ts` already exports it (or an equivalent header-only check under another name), use it and skip step 4. Otherwise add it in step 4.
-- **A shared route-auth helper.** If check 8 shows WP05 (or anything else) already created a helper that returns the user or a 401/503 response using `isAuthoritativeSignedOut`, reuse it instead of creating `app/lib/routeAuth.ts`, and adjust the imports in step 5. WP05's spec as written does not create one.
-- **`get_shared_recipe` callers.** Only `useBoxRecipes.ts:206` calls it: `grep -rn "get_shared_recipe" app --include=*.ts --include=*.tsx` must print that line only (plus tests). If anything else calls it, it must stop reading `id`, `user_id`, `share_code`, `is_public`, `created_at` and `updated_at`, which the new RPC no longer returns.
+- **`rejectIfNotAppRequest` (WP05 step 6a).** Expected to exist. If `app/lib/csrf.ts` exports it (or an equivalent header-only check under another name), use it and skip step 4. Only if it is missing, add it in step 4.
+- **`app/lib/routeAuth.ts` (WP05 step 6b).** Expected to exist, exporting `requireRouteUser`, `jsonNoStore` and `NO_STORE`; check 8's last grep prints them. Then skip step 3b and import from `app/lib/routeAuth.ts` exactly as step 5 does. If WP05 put an equivalent helper under a different file or name, import that instead in steps 5a, 5b and 5c. Only if no such helper exists, create it in step 3b.
+- **`get_shared_recipe` callers.** Only `useBoxRecipes.ts:206` calls it: `grep -rn 'rpc("get_shared_recipe"' app --include=*.ts --include=*.tsx` must print that line only. (A plain `grep get_shared_recipe` also prints the comment at `:202`.) If anything else calls it, it must stop reading `id`, `user_id`, `share_code`, `is_public`, `created_at` and `updated_at`, which the new RPC no longer returns.
 - **Legacy share data.** The migration regenerates any public row's share code that is not 32 lowercase hex characters, which breaks that one link. Before this PR, the UI could never make a recipe public, so the expected count is 0; the owner checks it (Owner actions, step 1).
 
 ## Implementation steps
@@ -1472,7 +1476,7 @@ with:
                         {r.shareCode ? " · Shared" : ""}
 ```
 
-(`"·"` is the middle dot; type it as the escape or as the literal character.) The plan said "use `fmtPrice(r.retailPrice)`". That fixes the double conversion but still labels a CAD recipe with "$" while USD is selected; now that each recipe stores its currency, the label must use the recipe's own currency.
+(The `·` inside `" · Shared"` is the literal middle-dot character U+00B7, or write the string as `" · Shared"`. Do not write `&middot;` inside that JavaScript string: HTML entities are decoded only in JSX text, so it would render the eight characters `&middot;` literally.) The plan said "use `fmtPrice(r.retailPrice)`". That fixes the double conversion but still labels a CAD recipe with "$" while USD is selected; now that each recipe stores its currency, the label must use the recipe's own currency.
 
 Leave everything else, including the "How it works" copy at `:741` ("Save and share your recipes to revisit them later"), which is now true. WP15 owns copy changes.
 
@@ -1616,7 +1620,7 @@ Both variants were checked with the installed ESLint 9.39.5 while writing this s
 
 ## Tests
 
-All tests below were run green against a copy of the tree with these changes (6 suites, 74 tests; full suite 28 suites, 335 tests) while this spec was written. `jest.config.js` maps `server-only` to an empty module, so `routeAuth.ts` loads in tests.
+The tests below were run green against a copy of the tree with these changes while this spec was written (6 suites, 74 tests; full suite 28 suites, 335 tests), except the two shared-link race cases in test file 5, which replaced a weaker single case during review (so expect 75 tests in these 6 suites). `next/jest` (`node_modules/next/dist/build/jest/jest.js`, `'^server-only$'` in its `moduleNameMapper`) maps `server-only` to an empty module, so `routeAuth.ts` and `recipeErrors.ts` load in tests; `jest.config.js` itself does not need a change.
 
 ### 1. `frontend/app/lib/__tests__/boxRecipes.test.ts` (new)
 
@@ -2245,7 +2249,7 @@ it("turns a shared recipe into an unsaved copy in its own currency", async () =>
 
 ### 5. `frontend/app/components/BoxCalculator/__tests__/BoxCalculator.test.tsx` (new)
 
-Mocks the two data hooks, `next/navigation`, `AuthContext` and `lib/exchangeRate`, so it tests only the component. Covers: saved-list price in the recipe's own currency with no conversion (F059); loading a recipe switches the display currency; Save sends `currency` and no `isPublic` / `shareCode` (F055); "Make shareable" appears only for a saved recipe and turns into "Copy share link" / "Stop sharing"; "Copied!" only after `writeText` resolves; a rejected write shows the manual-copy field and no "Copied!" (F116); a late shared-recipe answer after unmount is ignored; an unresolvable link shows the message.
+Mocks the two data hooks, `next/navigation`, `AuthContext` and `lib/exchangeRate`, so it tests only the component. Covers: saved-list price in the recipe's own currency with no conversion (F059); loading a recipe switches the display currency; Save sends `currency` and no `isPublic` / `shareCode` (F055); "Make shareable" appears only for a saved recipe and turns into "Copy share link" / "Stop sharing"; "Copied!" only after `writeText` resolves; a rejected write shows the manual-copy field and no "Copied!" (F116); a shared-recipe answer for a link that changed in the meantime is ignored (the effect's `cancelled` flag), and one that arrives after the visitor loaded or started a recipe does not overwrite it (the `packsCountRef` guard); an unresolvable link shows the message. The input with placeholder `"Recipe name..."` (`BoxCalculator.tsx:298`) starts as `"My Collection Box"` (`:100`).
 
 ```tsx
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
@@ -2383,20 +2387,44 @@ it("reports a rejected clipboard write and shows the link to copy by hand (F116)
   );
 });
 
-it("loads a shared recipe from ?recipe= and ignores a late answer after unmount (F116)", async () => {
+it("ignores a shared-recipe answer for a link that is no longer current (F116, cancel flag)", async () => {
+  mockSearch = new URLSearchParams(`recipe=${"e".repeat(32)}`);
+  const pending: Array<(r: BoxRecipe | null) => void> = [];
+  hook.loadSharedRecipe.mockImplementation(
+    () => new Promise<BoxRecipe | null>((resolve) => { pending.push(resolve); })
+  );
+  const { rerender } = render(<BoxCalculator />);
+  expect(hook.loadSharedRecipe).toHaveBeenCalledTimes(1);
+
+  // The ?recipe= value changes before the first answer arrives.
+  mockSearch = new URLSearchParams(`recipe=${"f".repeat(32)}`);
+  rerender(<BoxCalculator />);
+  expect(hook.loadSharedRecipe).toHaveBeenCalledTimes(2);
+
+  await act(async () => {
+    pending[0]({ ...SAVED, id: undefined, name: "Stale" });
+  });
+  // Without the cancelled flag this would read "Stale".
+  expect(screen.getByPlaceholderText("Recipe name...")).toHaveValue("My Collection Box");
+
+  await act(async () => {
+    pending[1]({ ...SAVED, id: undefined, name: "Current" });
+  });
+  expect(screen.getByPlaceholderText("Recipe name...")).toHaveValue("Current");
+});
+
+it("does not overwrite a recipe the visitor started before the shared one arrived (F116)", async () => {
   mockSearch = new URLSearchParams(`recipe=${"e".repeat(32)}`);
   let resolveShared: (r: BoxRecipe | null) => void = () => {};
   hook.loadSharedRecipe.mockImplementation(
     () => new Promise<BoxRecipe | null>((resolve) => { resolveShared = resolve; })
   );
-  const { unmount } = render(<BoxCalculator />);
-  expect(hook.loadSharedRecipe).toHaveBeenCalledTimes(1);
-  unmount();
+  render(<BoxCalculator />);
+  openSavedAndLoad(); // the form now holds 1 pack
   await act(async () => {
     resolveShared({ ...SAVED, id: undefined, name: "Late" });
   });
-  // No "state update on unmounted component" path and nothing thrown.
-  expect(screen.queryByDisplayValue("Late")).not.toBeInTheDocument();
+  expect(screen.getByPlaceholderText("Recipe name...")).toHaveValue("Saved CAD box");
 });
 
 it("says so when a shared link does not resolve", async () => {
@@ -2491,11 +2519,15 @@ echo 'declare const s: any; export const q = s.from("box_recipes").select("id");
 # expect: 0
 
 # No browser-client use and no client share code left.
-grep -rn 'lib/supabase"\|generateShareCode\|select("\*")\|user_id: row\|userId' \
+# (The new hook has a local `userId` variable, so match only the old
+# `userId:` / `userId?:` property, not the bare word.)
+grep -rnE 'lib/supabase"|generateShareCode|select\("\*"\)|user_id: row|userId\??:' \
   app/components/BoxCalculator/hooks app/components/BoxCalculator/BoxCalculator.tsx app/components/BoxCalculator/types.ts
 # expect: no output
-grep -rn "get_shared_recipe" app --include=*.ts --include=*.tsx | grep -v __tests__
+grep -rn 'rpc("get_shared_recipe"' app --include=*.ts --include=*.tsx | grep -v __tests__
 # expect: exactly one line, in app/components/BoxCalculator/sharedRecipe.ts
+# (a plain "get_shared_recipe" grep also hits doc comments in sharedRecipe.ts
+# and app/lib/boxRecipes.ts; that is expected)
 
 # Full lint: the error count must not rise above master's; the two
 # BoxCalculator warnings from "Before you start" check 9 are gone.
@@ -2576,10 +2608,22 @@ Seed legacy rows (after the four migrations, before NNNN): one private row with 
    ```
 
    `public_bad_code` rows get a new code, so any link already handed out for them stops working. Expected 0. If it is not 0 and those links matter, tell the author before applying.
+
+   In the same session, confirm the production column types match what the new `get_shared_recipe` declares (a `LANGUAGE sql` function whose `SELECT` types differ from its `RETURNS TABLE` fails to create, and the migration would abort):
+
+   ```sql
+   SELECT column_name, data_type
+     FROM information_schema.columns
+    WHERE table_schema = 'public' AND table_name = 'box_recipes'
+      AND column_name IN ('name', 'retail_price', 'promo_value', 'packs', 'share_code', 'is_public', 'currency')
+    ORDER BY column_name;
+   ```
+
+   Expected: `is_public` boolean, `name` text, `packs` jsonb, `promo_value` double precision, `retail_price` double precision, `share_code` text, and no `currency` row yet. If any type differs, stop and tell the author: the `RETURNS TABLE` column types in step 1 must be changed to match before applying. (The migration runs as one transaction through `apply_migration` or a whole-file SQL editor run, so a failure leaves the old function in place.)
 2. **Apply `migrations/NNNN_box_recipes_sharing_and_currency.sql`** to production via Supabase MCP `apply_migration` (preferred) or the SQL editor with the whole file selected. Do this **before** the Vercel deployment of this PR goes live.
 3. **Verify:** run `python3 verify_migration.py migrations/NNNN_box_recipes_sharing_and_currency.sql`, execute the printed query: all 9 rows `OK`. Then run the three queries in the migration header: 3 constraint rows, 1 trigger row with `tgenabled = 'O'`, and `currency` default `'USD'::text`, not nullable. `verify_migration.py` on `0005` now reports a body `MISMATCH` for `get_shared_recipe`; that is correct, because NNNN redefines it.
 4. **Run the Supabase security advisor** (Dashboard, Advisors, Security, or MCP `get_advisors` type `security`). Expect no new finding for `box_recipes_share_code_guard` (its `search_path` is pinned) or `get_shared_recipe`.
-5. **Record it** in `audits/HARDENING_FOLLOWUPS.md` section 7 as a bullet in the existing style: "**Migration NNNN applied** (date, via Supabase MCP). Server-owned box recipe share codes (trigger + format/visibility CHECKs), `box_recipes.currency`, and `get_shared_recipe` without owner id. `public_bad_code` before apply: N."
+5. **Record it** in `audits/HARDENING_FOLLOWUPS.md` section 7 as a bullet in the existing style: "**Migration NNNN applied** (date, via Supabase MCP). Server-owned box recipe share codes (trigger + format/visibility CHECKs), `box_recipes.currency`, and `get_shared_recipe` without owner id. `public_bad_code` before apply: N." Add a second bullet: "**Open:** `export_my_data` (0011, redefined by WP01's 0024) does not export `box_recipes.currency`; add it the next time that function is redefined."
 6. **After deploy**, run manual checks 1 to 9 from "Manual checks" under Verification on production with a test account.
 
 ## Acceptance criteria
@@ -2595,7 +2639,8 @@ Seed legacy rows (after the four migrations, before NNNN): one private row with 
 - [ ] `get_shared_recipe` returns only `name, retail_price, promo_value, packs, currency`.
 - [ ] Every recipe row has `currency` in (`USD`, `CAD`); Save writes the display currency; loading a recipe switches the display to its currency; the saved list shows each price in its own currency without conversion.
 - [ ] "Copied!" appears only after the clipboard write resolves; a failed write shows the link in a read-only field.
-- [ ] A shared-recipe response that arrives after unmount, or after the visitor added packs, does not change the form.
+- [ ] A shared-recipe response for a `?recipe=` value that is no longer current, or one that arrives after the visitor loaded or added packs, does not change the form.
+- [ ] `grep -rn 'rpc("get_shared_recipe"' app` prints exactly one line, in `app/components/BoxCalculator/sharedRecipe.ts`.
 - [ ] The set picker orders newest first with undated sets last, and the comparator never returns NaN.
 - [ ] `pnpm exec tsc --noEmit`, the lint commands, `pnpm test --ci` and `pnpm build:stub` pass; the migration verifies all `OK`.
 
@@ -2658,4 +2703,4 @@ before this deploys.
 
 PR title: `WP06: box recipes via route handlers, working share links, recipe currency`
 
-PR body summary: link this spec; list F001 (part 3), F055, F059, F116, F117, F131, F149; call out in bold that migration NNNN must be applied before deploy, and paste the Owner actions; note the plan corrections (legacy currency backfilled as CAD with USD default; RPC trimmed to five columns; trigger instead of column grants); state whether steps 3a, 3b and 4 were needed or reused from WP04/WP05; paste the Verification outputs; list follow-ups: `export_my_data` does not include `currency` (WP01 area), `schema.sql` lacks `is_public`, `currency`, the constraints and the trigger (WP21, F135), and WP21's per-user row caps (F133) should cover `box_recipes`.
+PR body summary: link this spec; list F001 (part 3), F055, F059, F116, F117, F131, F149; call out in bold that migration NNNN must be applied before deploy, and paste the Owner actions; note the plan corrections (legacy currency backfilled as CAD with USD default; RPC trimmed to five columns; trigger instead of column grants); state whether steps 3a, 3b and 4 were needed or reused from WP04/WP05; paste the Verification outputs; list follow-ups: `export_my_data` does not include `currency` (WP01 area; recorded in `HARDENING_FOLLOWUPS.md` by Owner action 5), `schema.sql` lacks `is_public`, `currency`, the constraints and the trigger (WP21, F135), WP21's per-user row caps (F133) should cover `box_recipes`, and for WP07: `formatInCurrency` in `BoxCalculator.tsx` (step 9b) is a money formatter that WP07 step 6g should route through `formatMoney(value, currency)` together with `fmtPrice`. State the migration number you used (0026 unless check 7 found it taken).

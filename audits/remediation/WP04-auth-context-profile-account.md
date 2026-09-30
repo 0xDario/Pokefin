@@ -8,7 +8,7 @@
 - **Priority rationale**: every signed-in user has had no username in the header and a broken "Update Username" form since 2026-05-27, and this package also builds the session state (`sessionStatus`) that WP05 and WP06 need to restore the portfolio and box recipes.
 - **Effort**: M, about 6 to 8 hours including tests.
 - **Depends on**:
-  - WP02, which must have merged. It provides `USERNAME_RE`, `USERNAME_FORMAT_MESSAGE`, `USERNAME_HINT` and `USERNAME_MAX_LENGTH` in `app/lib/validation.ts` (WP02 step 1). It also creates `POST /api/auth/forgot-password` and makes `AuthContext.resetPassword(email, captchaToken?)` call it (WP02 steps 9 and 11), and it edits the password section of `account/page.tsx` (WP02 step 16: a `validation` import and a hidden `autoComplete="username"` email field).
+  - WP02, which must have merged. It provides `USERNAME_RE`, `USERNAME_FORMAT_MESSAGE`, `USERNAME_HINT` and `USERNAME_MAX_LENGTH` in `app/lib/validation.ts` (WP02 step 1). It also creates `POST /api/auth/forgot-password` and makes `AuthContext.resetPassword(email, captchaToken?)` call it, and it changes `AuthContext.updatePassword` to `(newPassword: string, currentPassword?: string)` with body `{ password: newPassword, currentPassword }` (WP02 steps 9 and 11; WP02 lists this signature under "Names later packages rely on", so this package must keep it). It edits the password section of `account/page.tsx` (WP02 step 16): two import lines (`PASSWORD_HINT, PASSWORD_MIN_LENGTH, PASSWORD_TOO_SHORT_MESSAGE` from `../lib/validation` and `AUTH_MESSAGES` from `../lib/authErrors`), a `currentPassword` state line, a "Current Password" input, a hidden `autoComplete="username"` email input, the call `updatePassword(newPassword, currentPassword)`, and `role="alert"` on the four error `<div>`s.
   - WP03 (merged before this package in plan order): it adds refs and an Escape handler to `Header.tsx` and creates `app/components/__tests__/Header.test.tsx`.
   - WP00, for `pnpm build:stub`.
 - **Unblocks**: WP05, WP06, WP13 directly; WP12 through them. WP05 and WP06 extend the ESLint guard list created in step 9.
@@ -21,11 +21,11 @@ Since commit `fec21dc` (2026-05-27) the session lives only in HttpOnly cookies, 
 
 ## Before you start
 
-Read these files fully. Line numbers are from HEAD `a188fea`. Earlier packages move some of them: WP02 adds one import line near the top of `account/page.tsx` (so its later lines are one higher) and lengthens `resetPassword` in `AuthContext.tsx`; WP03 adds about 20 lines near the top of `Header.tsx` (so its auth-slot lines are about 20 higher). Always match on the quoted code, not the number.
+Read these files fully. Line numbers are from HEAD `a188fea`. Earlier packages move some of them: WP02 adds two import lines near the top of `account/page.tsx` and one state line after `:19` (so line numbers after `:19` are three larger, and the password form grows by about 20 lines), and it lengthens `resetPassword` and changes `updatePassword` in `AuthContext.tsx`; WP03 adds about 20 lines near the top of `Header.tsx` (so its auth-slot line numbers are about 20 larger). Always match on the quoted code, not the number.
 
-- `frontend/app/context/AuthContext.tsx` (230 lines at HEAD, longer after WP02). Key spots: `:5` browser-client import; `:57-70` `fetchProfile`; `:75-98` `refreshSession` (clears state on any failure at `:82-86` and `:94-97`); `:100-118` boot and focus effect; `:120-204` five auth methods as plain functions; `resetPassword` (after WP02 it `fetch`es `/api/auth/forgot-password`); the inline context value at the end of `AuthProvider`.
+- `frontend/app/context/AuthContext.tsx` (230 lines at HEAD, longer after WP02). Key spots: `:5` browser-client import; `:57-70` `fetchProfile`; `:75-98` `refreshSession` (clears state on any failure at `:82-86` and `:94-97`); `:100-118` boot and focus effect; `:120-204` five auth methods as plain functions; `resetPassword` (after WP02 it `fetch`es `/api/auth/forgot-password`); `updatePassword` (after WP02 it takes `(newPassword, currentPassword?)` and sends `{ password: newPassword, currentPassword }`); the inline context value at the end of `AuthProvider`.
 - `frontend/app/api/auth/me/route.ts` (20 lines). Returns `{ user }` and turns every `getUser()` error into `{ user: null }`.
-- `frontend/app/account/page.tsx` (368 lines at HEAD). Key spots (HEAD numbers; add 1 after WP02's import line): `:6` browser-client import; `:13` username state; `:33-37` effect that copies `profile.username` into state on every `profile` identity change (current lint error `react-hooks/set-state-in-effect` at `:35`); `:39-44` redirect on `!loading && !user`; `:46-82` username handler with the browser UPDATE at `:65-68` and raw `error.message` at `:74`; `:172-189` loading and redirect render guards; `:222-231` the username input and its hint. WP02 added `import { PASSWORD_HINT, PASSWORD_MIN_LENGTH, PASSWORD_TOO_SHORT_MESSAGE } from "../lib/validation";` and a hidden `autoComplete="username"` email input inside the password form.
+- `frontend/app/account/page.tsx` (368 lines at HEAD). Key spots (HEAD numbers; after WP02 add 2 to lines `:6-19` and 3 to later lines, and more below the password form): `:6` browser-client import; `:13` username state; `:33-37` effect that copies `profile.username` into state on every `profile` identity change (current lint error `react-hooks/set-state-in-effect` at `:35`); `:39-44` redirect on `!loading && !user`; `:46-82` username handler with the browser UPDATE at `:65-68` and raw `error.message` at `:74`; `:172-189` loading and redirect render guards; `:222-231` the username input and its hint. WP02 added `import { PASSWORD_HINT, PASSWORD_MIN_LENGTH, PASSWORD_TOO_SHORT_MESSAGE } from "../lib/validation";`, `import { AUTH_MESSAGES } from "../lib/authErrors";`, `const [currentPassword, setCurrentPassword] = useState("");`, a "Current Password" input and a hidden `autoComplete="username"` email input inside the password form (it reads `user.email`, which relies on the `!user` early return), and `updatePassword(newPassword, currentPassword)` in `handlePasswordUpdate`.
 - `frontend/app/components/Header.tsx` (310 lines at HEAD, about 330 after WP03). Key spots (HEAD numbers): `:45` `useAuth()` destructure; `:73` `displayName`; `:117-119` desktop skeleton; `:250-255` mobile skeleton.
 - `frontend/app/components/__tests__/Header.test.tsx` (created by WP03). Its `MockAuth` type and `mockAuth` objects have `loading` but no `sessionStatus`.
 - `frontend/app/portfolio/page.tsx` (104 lines). `:10` destructure; `:34-39` redirect effect; `:41-58` render guards.
@@ -43,7 +43,7 @@ Confirm the starting state (run from `frontend/`):
 ```bash
 # 1. Both files still import the anonymous browser client.
 grep -n 'lib/supabase"' app/context/AuthContext.tsx app/account/page.tsx
-# expect: app/context/AuthContext.tsx:5 and exactly one hit in app/account/page.tsx (:6 or :7, depending on where WP02 put its import)
+# expect: app/context/AuthContext.tsx:5 and exactly one hit in app/account/page.tsx (between :6 and :8, depending on where WP02 put its two imports)
 
 # 2. Any failure clears the user (F063).
 grep -n "setUser(null)" app/context/AuthContext.tsx
@@ -56,22 +56,26 @@ grep -n "loading ?" app/components/Header.tsx
 # 4. The only lint error in the files this package touches.
 pnpm exec eslint app/account/page.tsx app/context/AuthContext.tsx app/components/Header.tsx app/portfolio/page.tsx app/auth/reset-password/page.tsx app/api/auth/me/route.ts
 # expect: exactly 1 error, react-hooks/set-state-in-effect in app/account/page.tsx
-# (at :35:7 on HEAD, :36:7 after WP02's import line)
+# (at :35:7 on HEAD, :38:7 after WP02's two import lines and currentPassword state line)
 
 # 5. WP02 has landed. Every command must print what its comment says.
 grep -c "export const USERNAME_RE\|export const USERNAME_FORMAT_MESSAGE\|export const USERNAME_HINT\|export const USERNAME_MAX_LENGTH" app/lib/validation.ts
 # expect: 4
 grep -n '"/api/auth/forgot-password"' app/context/AuthContext.tsx
 # expect: 1 hit (inside resetPassword)
+grep -n "currentPassword" app/context/AuthContext.tsx
+# expect: 3 hits (the interface line, the updatePassword signature, its JSON body)
 grep -rln "resetPasswordForEmail" app --include=*.ts --include=*.tsx | grep -v __tests__
 # expect: only app/api/auth/forgot-password/route.ts
 ls app/components/__tests__/Header.test.tsx
 # expect: the file exists (WP03)
-# If any of the first three checks fails, WP02 has not landed: STOP and report it.
+# If any of the first four checks fails, WP02 has not landed: STOP and report it.
 # Do not recreate WP02's work here. If only the Header test is missing, skip step 6d.
 
-# 6. Record the full lint baseline (the error count on the last line). Verification compares against it.
-pnpm run lint 2>&1 | tail -3
+# 6. Record the full lint baseline. Verification compares against it. Read the error
+#    count from the line that starts with "✖" ("✖ N problems (E errors, W warnings)");
+#    ignore the "0 errors and N warnings potentially fixable" line below it.
+pnpm run lint 2>&1 | grep "problems ("
 
 # 7. Baseline tests pass.
 pnpm test --ci app/context
@@ -285,8 +289,8 @@ Replace the whole file with the version below. What changes and why:
 - Identity stability (F058): an unchanged payload returns the previous state object, so React bails out and no consumer re-renders; all methods are `useCallback`, the context value is `useMemo`.
 - Results of a refresh that started before a sign-in, sign-up or sign-out are dropped (generation counter), so a slow boot request cannot overwrite a fresh sign-in.
 - `loading` is kept with its current meaning (true until the first `/api/auth/me` attempt settles) because WP03's Header test mock and other packages read it.
-- `resetPassword` is WP02's body unchanged (signature `(email: string, captchaToken?: string)`, URL `/api/auth/forgot-password`, fallback message `"Could not send the reset email"`), only wrapped in `useCallback`. Before replacing the file, diff WP02's `resetPassword` against the block below; if WP02's merged version differs in any detail (URL, body, fallback string), keep WP02's version inside the `useCallback`.
-- Every other method body (`signUp`, `signIn`, `signOut`, `updatePassword`) keeps the request it sends today (URL, headers, JSON body); only the state handling around it changes.
+- `resetPassword` and `updatePassword` are WP02's bodies unchanged, only wrapped in `useCallback`: `resetPassword(email: string, captchaToken?: string)` POSTs `{ email, captchaToken }` to `/api/auth/forgot-password` with fallback message `"Could not send the reset email"`; `updatePassword(newPassword: string, currentPassword?: string)` POSTs `{ password: newPassword, currentPassword }` to `/api/auth/update-password` (`JSON.stringify` drops an `undefined` `currentPassword`, so the reset-password page still sends `{ password }` only). Before replacing the file, copy the merged file aside (`cp app/context/AuthContext.tsx /tmp/AuthContext.wp02.tsx`) and compare both methods and both interface lines against the block below; if WP02's merged version differs in any detail (URL, body, parameter list, fallback string), keep WP02's version inside the `useCallback`. Do not drop the `currentPassword` parameter: `account/page.tsx` calls `updatePassword(newPassword, currentPassword)` after WP02, and `tsc` fails without it.
+- `signUp`, `signIn` and `signOut` keep the request they send today (URL, headers, JSON body); only the state handling around them changes.
 
 ```tsx
 "use client";
@@ -328,7 +332,7 @@ interface AuthContextType {
   signIn: (email: string, password: string, captchaToken?: string) => Promise<{ error: AuthError | null }>;
   signOut: () => Promise<void>;
   resetPassword: (email: string, captchaToken?: string) => Promise<{ error: AuthError | null }>;
-  updatePassword: (newPassword: string) => Promise<{ error: AuthError | null }>;
+  updatePassword: (newPassword: string, currentPassword?: string) => Promise<{ error: AuthError | null }>;
   /** PATCH /api/profile. Returns a user-safe message on failure. */
   updateUsername: (username: string) => Promise<{ error: string | null }>;
 }
@@ -560,6 +564,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } catch {
       /* Clear locally anyway; the next refresh reports the server's view. */
     } finally {
+      // Again: a focus refresh that started while the POST was in flight may
+      // still report the old session; drop it.
+      invalidatePending();
       apply({ user: null, profile: null });
     }
   }, [apply, invalidatePending]);
@@ -585,13 +592,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
-  const updatePassword = useCallback(async (newPassword: string) => {
+  // WP02's body (step 11), unchanged: the account page sends the current
+  // password (F078); the reset-password page (recovery session) does not.
+  const updatePassword = useCallback(async (newPassword: string, currentPassword?: string) => {
     try {
       const res = await fetch("/api/auth/update-password", {
         method: "POST",
         headers: FETCH_HEADERS,
         credentials: "same-origin",
-        body: JSON.stringify({ password: newPassword }),
+        body: JSON.stringify({ password: newPassword, currentPassword }),
       });
       if (!res.ok) {
         const message = await readErrorMessage(res, "Failed to update password");
@@ -756,6 +765,8 @@ import {
 } from "../lib/validation";
 ```
 
+Keep WP02's `import { AUTH_MESSAGES } from "../lib/authErrors";` line as it is.
+
 7b. The `useAuth()` destructure (`:9` on HEAD). Replace it with:
 
 ```tsx
@@ -861,7 +872,7 @@ The messages the user can now see are fixed: the rules message, "Username is tak
   }
 ```
 
-Apart from extending the shared `validation` import in 7a, do not touch the password, export or delete sections (WP01 and WP02 own those).
+Apart from extending the shared `validation` import in 7a, do not touch the password, export or delete sections (WP01 and WP02 own those). In particular keep `handlePasswordUpdate` calling `updatePassword(newPassword, currentPassword)` and keep WP02's hidden email input and "Current Password" input. The hidden input reads `user.email`; the `sessionStatus === "anonymous" || !user` guard above still returns early when `user` is null, so TypeScript keeps `user` non-null there.
 
 7i. Create `frontend/app/components/SessionUnavailable.tsx` (used by steps 7h and 8):
 
@@ -1009,6 +1020,7 @@ Do not edit `app/lib/exchangeRate.ts` or `app/lib/clientMarketData.ts`. F106's n
 - **Do not delete `app/lib/supabase.ts`** or touch `app/lib/portfolio.ts`, `useBoxRecipes.ts`, `usePortfolioData.ts`, `BoxCalculator.tsx` or `EditHoldingModal.tsx`. Public reads (`clientMarketData.ts`, `exchangeRate.ts`, the `get_shared_recipe` RPC) legitimately stay on the anon client, and portfolio and recipes are WP05 and WP06. Switching those hooks from `user` to `user?.id` dependencies is also theirs; this package already stops the identity churn at the source.
 - **Do not change login redirect URLs or query parameters** (`/auth/login`, `?redirect=/portfolio`). WP13 (F002) reconciles `redirect` and `next`.
 - **Do not touch password reset.** Keep WP02's `POST /api/auth/forgot-password` route and `resetPassword` body exactly (URL, captcha token, fixed `redirectTo`); only wrap it in `useCallback`. Do not create `app/api/auth/reset-password/route.ts` (nothing would call it), and do not add an app-side Turnstile `siteverify` call (F019 verifier: tokens are single use and Supabase is the only verifier).
+- **Do not revert `updatePassword` to one argument.** WP02 made it `(newPassword, currentPassword?)` with body `{ password: newPassword, currentPassword }` (F078); the account page passes the current password and WP02's route forwards it as `current_password`. If `tsc` reports "Expected 1 arguments, but got 2" in `account/page.tsx`, the fix is in `AuthContext.tsx`, not in the page.
 - **Do not use `autoComplete="username"` on the account page's username field.** It is a display handle; the sign-in identifier is the email, and WP02's hidden email field in the password form already carries `autoComplete="username"`. Use `name="nickname" autoComplete="nickname"` (step 7g).
 - **Do not create `app/lib/username.ts` or redefine the username regex or message.** Import them from WP02's `app/lib/validation.ts`, so the sign-up form, the sign-up route, the account form and `PATCH /api/profile` show the same text.
 - **Do not edit `app/lib/exchangeRate.ts` or `app/lib/clientMarketData.ts`.** The exchange-rate TTL (F106 note, F150) is WP11 step 8a.
@@ -1038,10 +1050,11 @@ Remove the `lib/supabase` mock and the `mockFrom`/`mockSelect`/`mockEq`/`mockMay
 - signIn: POSTs with CSRF header (find the call by URL, because a `/api/auth/me` refresh now follows), sets `"authenticated"` immediately, then the profile from the follow-up `/api/auth/me` appears.
 - signIn while the boot refresh is still pending and that boot refresh later resolves `{ user: null }`: the state stays `"authenticated"` (generation guard).
 - signUp: POSTs the body, then calls `/api/auth/me`; state follows `/api/auth/me` (anonymous when it returns `{ user: null }`).
-- signOut: POSTs to `/api/auth/sign-out`, ends `"anonymous"`; a rejected sign-out fetch also ends `"anonymous"` and does not throw.
+- signOut: POSTs to `/api/auth/sign-out`, ends `"anonymous"`; a rejected sign-out fetch also ends `"anonymous"` and does not throw; a refresh started while the sign-out POST is in flight cannot bring the user back. For that case, boot signed in, make `/api/auth/sign-out` and the next `/api/auth/me` return manually resolved promises, then inside `act`: call `const p = auth.signOut()` (do not await), call `void auth.refreshSession()`, resolve the sign-out promise with `jsonResponse(200, { ok: true })`, `await p`, resolve the `/api/auth/me` promise with `jsonResponse(200, ME_SIGNED_IN)`; then `await flush()` and expect `"anonymous"` (this fails without the `invalidatePending()` in `signOut`'s `finally`).
+- updatePassword (carry over WP02's cases): `updatePassword("newSecurePassword123")` POSTs to `/api/auth/update-password` with body exactly `{ password: "newSecurePassword123" }`; `updatePassword("newSecurePassword123", "oldPassword12")` sends `{ password: "newSecurePassword123", currentPassword: "oldPassword12" }`; neither changes `sessionStatus`. Find the call with `lastCallTo("/api/auth/update-password")`.
 - resetPassword (carry over WP02's cases): POSTs `{ email, captchaToken }` to `/api/auth/forgot-password` with the CSRF header; a non-2xx returns the server's `error` string as `error.message`; a rejected fetch returns `"Network error"`.
 - updateUsername: PATCHes `/api/profile` with `{ username }` and CSRF header; on 200 the context `profile.username` changes; on 409 returns `"Username is taken"` and profile is unchanged; on 429 returns the rate-limit string; on 401 returns the session-expired string and state becomes `"anonymous"`; on rejection returns `"Network error. Please try again."`.
-- Context surface: has `sessionStatus`, `refreshSession`, `updateUsername`, `loading`; still no `session`.
+- Context surface: has `sessionStatus`, `refreshSession`, `updateUsername`, `loading`; still no `session`. Keep the existing "throws if used outside an AuthProvider" case.
 
 Skeleton for the non-obvious parts:
 
@@ -1242,7 +1255,7 @@ describe("generation guard", () => {
 });
 ```
 
-Write the remaining cases (signUp, signOut, resetPassword, updateUsername, profileError, context surface, "two focus events in one tick produce one fetch", "`refreshSession()` is not debounced") in the same style. For the "two focus events" case, make the `/api/auth/me` mock return a promise you resolve manually, dispatch `focus` twice inside one `act`, then assert `meCalls()` is 2 (boot plus one).
+Write the remaining cases (signUp, signOut, updatePassword, resetPassword, updateUsername, profileError, context surface, "two focus events in one tick produce one fetch", "`refreshSession()` is not debounced") in the same style. For the "two focus events" case, make the `/api/auth/me` mock return a promise you resolve manually, dispatch `focus` twice inside one `act`, then assert `meCalls()` is 2 (boot plus one).
 
 ### 2. `frontend/app/api/auth/me/__tests__/route.test.ts` (new)
 
@@ -1404,7 +1417,8 @@ Copy the `next/navigation` and `next/link` mocks from WP03's `app/components/__t
 
 - `sessionStatus: "unknown", user: null`: "Sign In" and "Sign Up" links are present, and `container.querySelector(".animate-pulse")` is null (F124).
 - `sessionStatus: "anonymous"`: same.
-- `sessionStatus: "authenticated"` with profile `ash`: a button with accessible name matching `/ash/` exists and "Sign In" is absent.
+- `sessionStatus: "authenticated"`, `user: { id: "u1", email: "ash@example.com" }`, `profile: { id: "u1", username: "ash", email: "ash@example.com" }`: a button with accessible name matching `/ash/` exists and no link named "Sign In" is present.
+- `sessionStatus: "unknown"` with that same non-null `user` (cannot happen in the real provider, but guards the `signedIn` check): "Sign In" is shown, not the avatar button.
 
 ### 7. (none)
 
@@ -1433,9 +1447,11 @@ pnpm exec eslint eslint.config.mjs app/context/AuthContext.tsx app/account/page.
   app/components/__tests__
 
 # Files this package must not have touched: the git diff and ls lines must print nothing.
+# (Compares the merge base with the working tree, so it also sees uncommitted edits.)
 git fetch origin master
-git diff --name-only origin/master...HEAD -- app/lib/exchangeRate.ts app/lib/clientMarketData.ts \
-  app/lib/validation.ts app/lib/rateLimit.ts app/api/auth/forgot-password app/lib/supabase.ts
+git diff --name-only "$(git merge-base HEAD origin/master)" -- app/lib/exchangeRate.ts \
+  app/lib/clientMarketData.ts app/lib/validation.ts app/lib/rateLimit.ts \
+  app/api/auth/forgot-password app/lib/supabase.ts app/lib/authErrors.ts
 ls app/lib/username.ts app/api/auth/reset-password 2>&1 | grep -v "No such file"
 
 # The guard works (lints stdin under the guarded file name; no file is modified).
@@ -1454,10 +1470,16 @@ grep -n "lib/supabase\|supabase\.from\|supabase\.auth" app/context/AuthContext.t
 grep -n "loading ?" app/components/Header.tsx
 # expect: no output
 
-# Full lint: the error count on the last line must be exactly one lower than the
-# baseline you recorded in "Before you start" check 6 (the account/page.tsx
-# set-state-in-effect error is fixed and nothing new is added).
-pnpm run lint 2>&1 | tail -3
+# Full lint: E in "✖ N problems (E errors, W warnings)" must be exactly one lower
+# than the baseline you recorded in "Before you start" check 6 (the account/page.tsx
+# set-state-in-effect error is fixed and nothing new is added). If the output has no
+# "problems (" line at all, the error count is 0.
+pnpm run lint 2>&1 | grep "problems ("
+
+# WP02's two-argument updatePassword survived the rewrite.
+grep -n "currentPassword" app/context/AuthContext.tsx app/account/page.tsx
+# expect: 3 hits in AuthContext.tsx (interface, signature, JSON body) and WP02's hits in
+# account/page.tsx, including updatePassword(newPassword, currentPassword)
 
 # Tests.
 pnpm test --ci app/context app/api app/account app/components/__tests__ app/lib/__tests__
@@ -1498,6 +1520,7 @@ No migrations and no environment variables. After the deploy that contains this 
 - [ ] A focus refresh happens at most once per 30 s and only when the document is visible; an unchanged answer causes no consumer re-render.
 - [ ] An unsaved username edit survives a focus refresh.
 - [ ] The account username field uses `autoComplete="nickname"`, `maxLength={USERNAME_MAX_LENGTH}` and WP02's `USERNAME_HINT`; the rules message is WP02's `USERNAME_FORMAT_MESSAGE` in both the page and `PATCH /api/profile`.
+- [ ] `updatePassword(newPassword, currentPassword?)` still sends `{ password, currentPassword }` exactly as WP02 left it, and `/account` still passes the current password.
 - [ ] `resetPassword` still calls `POST /api/auth/forgot-password`; no `app/lib/username.ts`, no `app/api/auth/reset-password/route.ts`, and no change to `exchangeRate.ts` or `clientMarketData.ts`.
 - [ ] `pnpm exec tsc --noEmit`, the touched-file lint, `pnpm test --ci` and `pnpm build:stub` all pass.
 
@@ -1533,4 +1556,4 @@ anon and RLS rejected them for every signed-in user (review F001, part 1).
 
 PR title: `fix(auth): restore profile and username for signed-in users; stop transient sign-outs (WP04)`
 
-PR body summary: link this spec; list findings F001 (part 1), F058, F063, F124; state that F106's exchange-rate note is left to WP11 (F150); paste the Verification command outputs; list the Owner actions above; note follow-ups for WP05/WP06 (append their files to `ANON_CLIENT_FORBIDDEN_FILES`, key `usePortfolioData`/`useBoxRecipes` on `user?.id`) and WP13 (login return-to parameter). Also note, as an open item for the owner, that the F001 verifiers asked for a signed-in end-to-end smoke test against a real Supabase test project (sign in through `/api/auth/sign-in`, then expect 200 from `/api/auth/me` with a non-null `profile`); no package in the plan adds it because CI has no Supabase test project.
+PR body summary: link this spec; list findings F001 (part 1), F058, F063, F124; state that F106's exchange-rate note is left to WP11 (F150); state that WP02's `resetPassword(email, captchaToken?)` and `updatePassword(newPassword, currentPassword?)` bodies and signatures were kept unchanged (WP02 asks for this sentence); state that profile-read failures are now logged server-side as `profile_fetch_failed` through `logSupabaseError`, which WP17 wires to Sentry (F001 verifier: failures must not stay silent in the browser console); paste the Verification command outputs; list the Owner actions above; note follow-ups for WP05/WP06 (append their files to `ANON_CLIENT_FORBIDDEN_FILES`, key `usePortfolioData`/`useBoxRecipes` on `user?.id`) and WP13 (login return-to parameter). Also note, as an open item for the owner, that the F001 verifiers asked for a signed-in end-to-end smoke test against a real Supabase test project (sign in through `/api/auth/sign-in`, then expect 200 from `/api/auth/me` with a non-null `profile`); no package in the plan adds it because CI has no Supabase test project.

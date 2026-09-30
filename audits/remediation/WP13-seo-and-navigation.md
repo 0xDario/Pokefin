@@ -6,8 +6,8 @@
   - F002 (full; cluster members F002, F006, F021, F027, F129): the login page ignores the return-to destination, the three auth gates disagree on the parameter (`next`, `redirect`, none), and the only validator (`safeNextPath`) is private to the OAuth callback.
 - **Priority rationale**: cheap, low-risk fixes to how every page looks in tabs, search results and link previews, plus a sign-in flow that finally returns people to the page they asked for.
 - **Effort**: M, about 7 to 9 hours including tests and the stub-build checks.
-- **Depends on**: WP04 (the `sessionStatus` redirect effects in `app/portfolio/page.tsx` and `app/account/page.tsx`, and `signIn` setting `"authenticated"` immediately). Also assumes the already-merged WP00 (`pnpm build:stub`, `scripts/supabase-stub.mjs`), WP02 (login page `turnstileRef`, callback route with `RESET_PASSWORD_PATH` and `?error=auth_link`), WP03 ("updated daily" description in `layout.tsx`), WP08 (`updateUrlState` and `PRICES_URL_DEFAULTS` in `/prices`, stub `SUPABASE_STUB_FIXTURE=catalog`), WP11 (`/compare` page is a server component; product page has `revalidate` and `generateStaticParams`). Every step says what to do when one of those has not landed.
-- **Unblocks**: nothing in the plan depends on it formally. WP14 and WP15 must edit `app/auth/login/LoginForm.tsx` (not `page.tsx`) and the new `NotFoundPanel.tsx` / `NoResults.tsx` components after this lands.
+- **Depends on**: WP04 (the `sessionStatus` redirect effects in `app/portfolio/page.tsx` and `app/account/page.tsx`, and `signIn` setting `"authenticated"` immediately). Also assumes the already-merged WP00 (`pnpm build:stub`, `scripts/supabase-stub.mjs`), WP02 (login page `turnstileRef`, callback route with `RESET_PASSWORD_PATH` and `?error=auth_link`, and `app/lib/siteUrl.ts` with `getSiteUrl()` and the apex fallback `FALLBACK_SITE_URL = "https://pokefin.ca"`), WP03 ("updated daily" description in `layout.tsx`), WP08 (`updateUrlState` and `PRICES_URL_DEFAULTS` in `/prices`, stub `SUPABASE_STUB_FIXTURE=catalog`), WP11 (`/compare` page is a server component; product page has `revalidate` and `generateStaticParams`). WP02 is a hard prerequisite (WP04 depends on it); for WP08 and WP11 each step says what to do when one of them has not landed.
+- **Unblocks**: nothing in the plan depends on it formally. WP14 and WP15 must edit `app/auth/login/LoginForm.tsx` (not `page.tsx`) and the new `NotFoundPanel.tsx` / `NoResults.tsx` components after this lands. WP17's coverage config (which lists server pages explicitly) must treat `app/auth/login/page.tsx` and `app/analytics/page.tsx` as server pages after this PR; `LoginForm.tsx` is the client component.
 - **Suggested branch name**: `remediation/wp13-seo-and-navigation`
 - **Risk level**: medium. It changes the `<head>` of every page (a wrong canonical can de-index pages) and the post-login navigation; unit tests, the stub-build HTML checks and the owner's host check bound both.
 
@@ -24,6 +24,7 @@ Read these files fully (paths relative to `frontend/`):
 - `app/auth/login/page.tsx` (138 lines at review time, a `"use client"` page). `handleSubmit` `:35-48` with the unconditional `router.push("/")` at `:46`; error box `:60-64`; `<form>` `:66`; `<Turnstile>` `:103-106`.
 - `app/auth/callback/route.ts`. `safeNextPath` `:6-24`, imported helper `stripControlChars` `:4`. After WP02 the file also has `RESET_PASSWORD_PATH`, `AUTH_LINK_FAILED_PATH` and a `GET` that routes recovery links through `next === RESET_PASSWORD_PATH`.
 - `app/lib/validation.ts:62-65` (`stripControlChars`).
+- `app/lib/siteUrl.ts` (WP02 step 3): `const FALLBACK_SITE_URL = "https://pokefin.ca";`, `getSiteUrl(): string` (the `NEXT_PUBLIC_SITE_URL` value when it matches `^https?://[^/]+`, else the fallback, trailing slashes removed) and `authCallbackUrl()`. This PR reuses `getSiteUrl` for every SEO URL; it does not add a second site-URL reader.
 - `app/portfolio/page.tsx` (redirect effect, `router.push("/auth/login?redirect=/portfolio")` at `:37` before WP04, inside a `sessionStatus === "anonymous"` effect after WP04) and `app/account/page.tsx` (`router.push("/auth/login")` at `:42`, same WP04 shape).
 - `proxy.ts:69-89` (already redirects anonymous `/account` and `/portfolio` hits to `/auth/login?next=<path>`; no change needed) and `:94-100` (matcher: `robots.txt`, `sitemap.xml` and `opengraph-image` are not covered, so they are not rate-limited).
 - `app/prices/page.tsx`, `app/market/page.tsx`, `app/analytics/page.tsx` (1 line: `export { default } from "../stats/page";`), `app/stats/page.tsx:106`, `app/box-calculator/page.tsx`, `app/compare/page.tsx`, `app/privacy/page.tsx:4-7`, and the auth pages `app/auth/signup/page.tsx`, `app/auth/forgot-password/page.tsx`, `app/auth/reset-password/page.tsx` (all `"use client"`, so they cannot export `metadata` themselves).
@@ -57,7 +58,10 @@ grep -n 'PRICES_URL_DEFAULTS' app/components/ProductPrices/utils/urlState.ts   #
 head -1 app/compare/page.tsx                  # WP11 landed: NOT "use client"
 grep -n 'generateStaticParams\|export const revalidate' "app/product/[id]/page.tsx"   # WP11 landed: 2 matches
 grep -rn 'No products match' app              # expect no output
-cat .env.example | grep SITE_URL              # documents https://www.pokefin.ca as the example
+grep -n 'FALLBACK_SITE_URL\|export function getSiteUrl' app/lib/siteUrl.ts
+#   expect: const FALLBACK_SITE_URL = "https://pokefin.ca"; and export function getSiteUrl(): string {
+#   If the file is missing, WP02 has not landed. STOP, this PR depends on it.
+grep -n 'SITE_URL' .env.example                # expect: NEXT_PUBLIC_SITE_URL=http://localhost:3000 (local dev value)
 ```
 
 Record the lint baseline for the files you will touch (compare in Verification):
@@ -65,13 +69,21 @@ Record the lint baseline for the files you will touch (compare in Verification):
 ```bash
 pnpm exec eslint app/layout.tsx "app/product/[id]" app/auth app/portfolio app/account \
   app/prices/page.tsx app/market/page.tsx app/analytics/page.tsx app/box-calculator/page.tsx \
-  app/compare/page.tsx app/privacy/page.tsx app/components/ProductPrices/index.tsx \
-  app/components/MarketView/MarketView.tsx next.config.ts 2>&1 | tail -3
+  app/compare/page.tsx app/privacy/page.tsx app/lib/siteUrl.ts app/components/ProductPrices/index.tsx \
+  app/components/MarketView/MarketView.tsx 2>&1 | tail -3
+```
+
+(`next.config.ts` is in the ESLint ignore list, so it is not linted; `tsc` covers it.)
+
+Record which files read the site URL (compare in Verification):
+
+```bash
+grep -rn 'NEXT_PUBLIC_SITE_URL' app --include=*.ts --include=*.tsx | grep -v __tests__
 ```
 
 Assumptions to check while reading:
 
-1. **www versus apex.** The code points both ways: `layout.tsx:34` hardcodes `https://pokefin.ca`, while `.env.example:9` documents `https://www.pokefin.ca` and `audits/HARDENING_FOLLOWUPS.md:90` says production headers were verified on `https://www.pokefin.ca`. The plan owner's default was the apex, but the evidence favours www, so this spec reads `NEXT_PUBLIC_SITE_URL` (which is already set in Vercel for auth redirects and CSRF) and falls back to `https://www.pokefin.ca` only when it is missing or invalid. The owner confirms the real serving host in Owner actions. Do not hardcode either host anywhere else.
+1. **Apex, through WP02's helper.** The canonical host is the apex `https://pokefin.ca`: `layout.tsx:34` hardcodes it, `audits/HARDENING_FOLLOWUPS.md:87` records `NEXT_PUBLIC_SITE_URL = https://pokefin.ca` as the production value, and WP02 (already merged) fixed its fallback to the apex in `app/lib/siteUrl.ts` and made its owner set Production `NEXT_PUBLIC_SITE_URL` to exactly `https://pokefin.ca` with `www` redirecting to it (WP02 owner action 4). `.env.example:9` is `http://localhost:3000`; only its comment on line 8 mentions `www` as an example. This spec therefore derives every SEO URL from WP02's `getSiteUrl()` (the env value, else the apex). Do not add a second fallback constant and do not hardcode either host anywhere else. The owner re-checks the serving host in Owner actions.
 2. **Product 404s already exist.** `page.tsx:156,159` already call `notFound()`. The gap is id parsing: `Number()` accepts `"0x2a"`, `"4.2e1"`, `"042"` and `" 42"`, so `/product/0x2a` renders product 42 under a second URL. Step 7 makes parsing strict.
 3. **The callback must keep accepting `/auth/...` targets.** WP02 routes password recovery through `next=/auth/reset-password` in `app/auth/callback/route.ts`. The new "no `/auth/` targets" rule must therefore live in a separate function used by the login page only (step 2).
 
@@ -79,49 +91,35 @@ Assumptions to check while reading:
 
 Do the steps in order. Steps 1 and 2 add the shared helpers the later steps import.
 
-### 1. New `frontend/app/lib/site.ts`
+### 1. Export WP02's fallback and add `frontend/app/lib/site.ts`
 
-One place that knows the site origin, the site name and the no-index robots value.
+1a. `frontend/app/lib/siteUrl.ts` (WP02's file): change the one line `const FALLBACK_SITE_URL = "https://pokefin.ca";` to `export const FALLBACK_SITE_URL = "https://pokefin.ca";`. Change nothing else in that file (`getSiteUrl` and `authCallbackUrl` keep their bodies and signatures; the auth routes use them).
+
+1b. New `frontend/app/lib/site.ts`: the SEO view of the same origin, the site name and the no-index robots value. It reads the origin only through WP02's `getSiteUrl()`, so auth emails and SEO URLs can never disagree.
 
 ```ts
 import type { Metadata } from "next";
+import { FALLBACK_SITE_URL, getSiteUrl } from "./siteUrl";
 
 export const SITE_NAME = "Pokéfin";
 
 /**
- * Used only when NEXT_PUBLIC_SITE_URL is unset or invalid. www, not the apex:
- * .env.example documents https://www.pokefin.ca as the site URL and the
- * production security headers were verified on www
- * (audits/HARDENING_FOLLOWUPS.md). The Vercel env var is the source of truth.
+ * The public origin of the site as a URL, for metadataBase, canonical links,
+ * the sitemap and JSON-LD. Always an origin (a path in the configured site
+ * URL is dropped). Never throws: getSiteUrl() only checks the value with a regex,
+ * so a value URL() rejects falls back instead of failing the build.
  */
-const FALLBACK_SITE_URL = "https://www.pokefin.ca";
-
-const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1"]);
-
-/**
- * The public origin of the site, for metadataBase, canonical links, the
- * sitemap and JSON-LD. Always an origin (no path, no trailing slash). Never
- * throws: a malformed env value falls back instead of failing the build.
- */
-export function getSiteUrl(): URL {
-  const raw = process.env.NEXT_PUBLIC_SITE_URL?.trim();
-  if (raw) {
-    try {
-      const url = new URL(raw);
-      const allowed =
-        url.protocol === "https:" ||
-        (url.protocol === "http:" && LOCAL_HOSTS.has(url.hostname));
-      if (allowed) return new URL(url.origin);
-    } catch {
-      // fall through to the fallback
-    }
+export function getSiteOrigin(): URL {
+  try {
+    return new URL(new URL(getSiteUrl()).origin);
+  } catch {
+    return new URL(FALLBACK_SITE_URL);
   }
-  return new URL(FALLBACK_SITE_URL);
 }
 
 /** Absolute URL for a site path. "/" becomes the bare origin, as Next renders it. */
 export function absoluteUrl(path: string): string {
-  const base = getSiteUrl();
+  const base = getSiteOrigin();
   if (path === "/") return base.origin;
   return new URL(path, base).toString();
 }
@@ -180,7 +178,13 @@ export function safeReturnToPath(raw: string | null | undefined): string {
   if (safe === "/") return "/";
   let pathOnly: string;
   try {
-    pathOnly = decodeURIComponent(safe.split(/[?#]/)[0]).toLowerCase();
+    // URL() drops ?query and #hash and resolves "..", "%2e%2e" and "\" the
+    // way the router will ("/portfolio/../auth/login" is "/auth/login");
+    // decodeURIComponent then catches "/%61uth/login". The base is never
+    // used for navigation.
+    pathOnly = decodeURIComponent(
+      new URL(safe, "https://return-to.invalid").pathname
+    ).toLowerCase();
   } catch {
     return "/";
   }
@@ -210,14 +214,14 @@ import { safeNextPath } from "../../lib/redirects";
 
 Leave every other line of the callback, including WP02's `RESET_PASSWORD_PATH` logic, unchanged. The callback keeps calling `safeNextPath`, not `safeReturnToPath` (see Pitfalls).
 
-Note: WP02's comment names the target file `app/lib/redirect.ts`; the plan settled on `app/lib/redirects.ts`. If WP02 left a comment mentioning `redirect.ts`, update it to `redirects.ts`.
+Run `grep -rn 'lib/redirect\.ts\|lib/redirect"' app`. The review's recommendation named the file `redirect.ts`; the plan uses `redirects.ts`. If the grep prints a comment, change it to `redirects.ts`; if it prints nothing, move on.
 
 ### 3. Root metadata: `frontend/app/layout.tsx` (F028)
 
 Add below the existing imports:
 
 ```ts
-import { getSiteUrl, SITE_NAME } from "./lib/site";
+import { getSiteOrigin, SITE_NAME } from "./lib/site";
 ```
 
 Replace the whole `export const metadata: Metadata = { ... };` block (`:26-36`) with the block below. Keep WP03's description text exactly (the string that says "updated daily from TCGPlayer"); only the structure changes.
@@ -226,7 +230,7 @@ Replace the whole `export const metadata: Metadata = { ... };` block (`:26-36`) 
 export const metadata: Metadata = {
   // Resolves every relative URL below (canonical, og:url, images) against the
   // real public origin. Without it Next falls back to http://localhost:3000.
-  metadataBase: getSiteUrl(),
+  metadataBase: getSiteOrigin(),
   title: {
     default: "Pokéfin: Pokémon Sealed Product Price Tracker",
     // Child pages set a bare title ("Sealed Product Prices") and get the
@@ -254,7 +258,17 @@ export const metadata: Metadata = {
 };
 ```
 
-Do not add `themeColor` here (it belongs in `export const viewport`, and no finding asks for it).
+Member finding F029 asks for a theme colour; the F028 verifier says it belongs in the `viewport` export, not in `metadata`. Change the first line of the file from `import type { Metadata } from "next";` to `import type { Metadata, Viewport } from "next";` and add directly below the `metadata` block:
+
+```ts
+// Browser UI colour (mobile address bar). White matches the sticky white
+// header; the site has no dark theme (globals.css is light only).
+export const viewport: Viewport = {
+  themeColor: "#ffffff",
+};
+```
+
+Next emits `<meta name="theme-color" content="#ffffff"/>` on every page. Do not put `themeColor` inside `metadata`.
 
 ### 4. Per-route metadata (F028)
 
@@ -347,9 +361,11 @@ export default function PortfolioLayout({ children }: { children: React.ReactNod
 
 `frontend/app/auth/signup/layout.tsx`: `SignUpLayout`, title `"Create an account"`, description `"Create a free Pokéfin account to track your sealed product portfolio."`, `robots: NO_INDEX`, import from `"../../lib/site"`.
 
-`frontend/app/auth/forgot-password/layout.tsx`: `ForgotPasswordLayout`, title `"Forgot password"`, description `"Request a link to reset your Pokéfin password."`, `robots: NO_INDEX`.
+`frontend/app/auth/forgot-password/layout.tsx`: `ForgotPasswordLayout`, title `"Forgot password"`, description `"Request a link to reset your Pokéfin password."`, `robots: NO_INDEX`, import from `"../../lib/site"`.
 
-`frontend/app/auth/reset-password/layout.tsx`: `ResetPasswordLayout`, title `"Reset password"`, description `"Choose a new password for your Pokéfin account."`, `robots: NO_INDEX`.
+`frontend/app/auth/reset-password/layout.tsx`: `ResetPasswordLayout`, title `"Reset password"`, description `"Choose a new password for your Pokéfin account."`, `robots: NO_INDEX`, import from `"../../lib/site"`.
+
+None of these layouts renders markup of its own; they must return `children` unchanged so the pages look exactly as before.
 
 The login route gets its metadata in step 11 (its `page.tsx` becomes a server component). Do not add a layout for `/auth/login`.
 
@@ -413,7 +429,7 @@ export default function OpengraphImage() {
 
 Every `div` with more than one child must keep `display: "flex"` (Satori rejects anything else).
 
-6b. Touch icon: `cp app/favicon.ico app/apple-icon.png` (the `.ico` is really a 512x512 PNG, `file app/favicon.ico` confirms). Next emits `<link rel="apple-touch-icon" ...>` for it. Do not delete or rename `favicon.ico`.
+6b. Icons: run `file app/favicon.ico` (expect `PNG image data, 512 x 512`; the `.ico` is really a PNG, which the review found served as `type="image/x-icon"`), then `cp app/favicon.ico app/icon.png` and `cp app/favicon.ico app/apple-icon.png`. Next then emits `<link rel="icon" href="/icon.png?..." type="image/png" sizes="512x512">` and `<link rel="apple-touch-icon" href="/apple-icon.png?..." ...>` on every page. Do not delete or rename `favicon.ico` (browsers still request `/favicon.ico` directly). If `file` does not report a PNG, skip both copies and say so in the PR.
 
 ### 7. Product metadata, strict ids and JSON-LD (F028, F093)
 
@@ -456,9 +472,13 @@ export function getProductDisplayName(product: Product): string {
   return `${setName} ${getProductLabel(product)}${variant}`;
 }
 
+// Used by generateMetadata and by ./not-found.tsx: depending on whether the
+// response streams, Next takes the 404's head from one or the other.
 export const PRODUCT_NOT_FOUND_METADATA: Metadata = {
   title: "Product not found",
   robots: NO_INDEX,
+  // No canonical on an error page (the layout's "./" would point at the bad URL).
+  alternates: { canonical: null },
 };
 
 export function buildProductMetadata(product: Product): Metadata {
@@ -511,6 +531,7 @@ export function buildProductJsonLd(product: Product): JsonLd {
       "@type": "Offer",
       price: product.usd_price.toFixed(2),
       priceCurrency: "USD",
+      url: absoluteUrl(productPath(product.id)),
     };
   }
   return jsonLd;
@@ -540,7 +561,7 @@ import {
 } from "./productMeta";
 ```
 
-  The page's other uses of `getProductLabel` (the `label` constant and the sibling grid) keep working through the import.
+  The page's other uses of `getProductLabel` (the `label` constant and the sibling grid) keep working through the import. At review time `Product` was used only by the deleted function: after the edits in this step, run `grep -nw "Product" "app/product/[id]/page.tsx"`; if the only hit is the `import { Product } from "../../components/ProductPrices/types";` line, delete that line (otherwise ESLint reports an unused import).
 
 - Replace the body of `generateMetadata` (`:125-147`, the whole function) with:
 
@@ -751,7 +772,12 @@ import type { Metadata } from "next";
 import NotFoundPanel from "./components/NotFoundPanel";
 
 // Next adds <meta name="robots" content="noindex"> to 404 responses itself.
-export const metadata: Metadata = { title: "Page not found" };
+// canonical: null removes the layout's "./" canonical, which on the
+// prerendered 404 would otherwise point at https://<host>/_not-found.
+export const metadata: Metadata = {
+  title: "Page not found",
+  alternates: { canonical: null },
+};
 
 export default function NotFound() {
   return (
@@ -766,7 +792,14 @@ export default function NotFound() {
 9c. New `frontend/app/product/[id]/not-found.tsx` (rendered by the two `notFound()` calls in the product page):
 
 ```tsx
+import type { Metadata } from "next";
 import NotFoundPanel from "../../components/NotFoundPanel";
+import { PRODUCT_NOT_FOUND_METADATA } from "./productMeta";
+
+// When notFound() is thrown before the response streams, Next builds the
+// 404's <head> from the layouts plus this export and skips the page's
+// generateMetadata (resolve-metadata.js collectMetadata, errorConvention).
+export const metadata: Metadata = PRODUCT_NOT_FOUND_METADATA;
 
 export default function ProductNotFound() {
   return (
@@ -778,7 +811,7 @@ export default function ProductNotFound() {
 }
 ```
 
-(The tab title for this case comes from `PRODUCT_NOT_FOUND_METADATA` in step 7.)
+(The tab title for this case, "Product not found · Pokéfin", comes from `PRODUCT_NOT_FOUND_METADATA` in step 7, through either this export or `generateMetadata`.)
 
 ### 10. Product loading skeleton: new `frontend/app/product/[id]/loading.tsx` (F093)
 
@@ -1060,9 +1093,10 @@ export default function NoResults({ query, onClearFilters }: NoResultsProps) {
 - **Do not set `alternates: { canonical: "/" }` in the root layout** (F028 verifier correction). It is inherited by every page that does not set its own `alternates`, and `"/"` resolves to the bare origin (`resolve-url.js:70-85`), so `/prices`, `/market` and every product page would declare themselves duplicates of the home page. Use `"./"`, which resolves per request pathname.
 - **Do not hand-write `· Pokéfin` (or the privacy page's dash-plus-"Pokefin" suffix) in any page title** (F028 verifier correction). The template applies to every string title (`resolve-title.js:14-18`); the old product and privacy titles would render "… · Pokéfin · Pokéfin". Titles in child pages are bare.
 - **Do not keep the hardcoded `openGraph.url: "https://pokefin.ca"`** (F028 verifier correction). It made every page's `og:url` the apex home page. The layout uses `url: "./"` plus `metadataBase` from `NEXT_PUBLIC_SITE_URL`.
-- **Do not hardcode the apex or www host** anywhere new. Only `app/lib/site.ts` knows the fallback; the owner confirms the real host.
+- **Do not hardcode the apex or www host** anywhere new, and do not add a second `NEXT_PUBLIC_SITE_URL` reader or fallback constant. `app/lib/site.ts` gets the origin only from WP02's `getSiteUrl()` and `FALLBACK_SITE_URL` in `app/lib/siteUrl.ts`, so auth-email links and canonical URLs always name the same host. Do not change `getSiteUrl`'s behaviour (the auth routes and their tests depend on it); the only edit to `siteUrl.ts` is the `export` in step 1a.
+- **Do not name the new helper `getSiteUrl`.** WP02's `getSiteUrl()` returns a string; the SEO helper that returns a `URL` origin is `getSiteOrigin()`.
 - **Do not put `openGraph.title` or `openGraph.description` in the layout.** Next only fills `og:title`/`og:description` from the page when the inherited block lacks them (`resolve-metadata.js:603-611`); setting them in the layout gives every page the home page's preview text.
-- **Do not add `themeColor` to `metadata`** (F028 verifier). It belongs in `export const viewport`, and it is not needed for this package.
+- **Do not add `themeColor` to `metadata`** (F028 verifier). It goes in the layout's `export const viewport` (step 3); Next warns "Unsupported metadata themeColor" and ignores it inside `metadata`.
 - **Do not add `generateStaticParams` returning the 300 product ids** (F028 verifier). It makes `next build` query all of them; the sitemap is the discovery lever. WP11's empty `generateStaticParams` stays as it is.
 - **Do not call `useSearchParams()` in the login page body or wrap the whole form in `<Suspense>`** (F002 verifier corrections). The first fails the static prerender of `/auth/login`; the second ships the page with no form in its HTML. Only the two small readers in step 11 are suspended.
 - **Do not apply the `/auth/` rejection to the OAuth callback.** The callback keeps `safeNextPath`; WP02 routes recovery through `next=/auth/reset-password`, and `safeReturnToPath` there would send every password-reset link to `/`.
@@ -1076,7 +1110,8 @@ export default function NoResults({ query, onClearFilters }: NoResultsProps) {
 - **Do not use `global-not-found.js`** (experimental flag). `app/not-found.tsx` inside the root layout is the right primitive here.
 - **Do not add `app/loading.tsx`** (F093 verifier: every other route is static or ISR, a root skeleton adds nothing).
 - **Do not remove `product/[id]/loading.tsx` because a bad product URL returns HTTP 200.** If the product route is still dynamic (WP11 not landed), a streamed 404 has status 200 plus `<meta name="robots" content="noindex">`, which Next documents as not indexed (`loading.md`, "Status Codes"). With WP11's ISR the status is 404.
-- **Do not add `prefetch` props to product links in this PR.** The F093 verifier notes a `loading.tsx` enables partial prefetch of dynamic routes; with WP11's ISR the route is static anyway. Prefetch tuning is out of scope; record any concern in the PR.
+- **Do not add `prefetch` props to product links in this PR.** The F093 verifier notes that a `loading.tsx` enables partial prefetch of dynamic routes, so every product card or mover link that scrolls into view on `/` and `/prices` may issue one server prefetch per product id (not rate-limited, so no lockout, but extra function invocations). Prefetch tuning is out of scope. Put this sentence in the PR body so the owner can watch function invocations after deploy: "product/[id]/loading.tsx makes visible product links prefetch up to the loading boundary; if Vercel function invocations for /product/* rise noticeably, add prefetch={false} to the product card and mover Links in a follow-up."
+- **Do not leave the layout's `"./"` canonical on error pages.** Both `not-found.tsx` metadata exports set `alternates: { canonical: null }`; without it the prerendered 404 declares `https://<host>/_not-found` canonical.
 - **Do not touch `ProductImage.tsx`'s "Loading..." text** (F093 member recommendation). WP12 owns that component and its tests assert the placeholder text for non-priority images; changing it breaks WP12's `ProductImage` tests.
 - **Do not change the "Found {n} products" copy or add pluralisation** (copy is WP15). WP08's tests assert "Found 2 products".
 - **Do not delete `app/stats/page.tsx`.** `app/analytics/page.tsx` re-exports it; `/stats` only redirects.
@@ -1097,7 +1132,8 @@ Cases for `safeNextPath` (behaviour must be identical to the old callback functi
 
 Cases for `safeReturnToPath`:
 - Everything `safeNextPath` rejects is rejected.
-- `"/auth/login"`, `"/auth/signup?x=1"`, `"/auth"`, `"/%61uth/login"`, `"/AUTH/login"`, `"/api/account/export"` return `"/"`.
+- `"/auth/login"`, `"/auth/signup?x=1"`, `"/auth"`, `"/%61uth/login"`, `"/AUTH/login"`, `"/api/account/export"`, `"/portfolio/../auth/login"`, `"/portfolio/%2e%2e/auth/login"` return `"/"`.
+- `"/portfolio?tab=lots#top"` is returned unchanged (query and hash are kept).
 - `"/authors"` and `"/apiary"` are returned unchanged (prefix match is per segment).
 - `"/portfolio"` returns `"/portfolio"`.
 
@@ -1108,17 +1144,19 @@ Cases for `loginPathWithNext`:
 
 ### 2. New `app/lib/__tests__/site.test.ts`
 
-Save `process.env.NEXT_PUBLIC_SITE_URL` in `beforeAll` and restore it in `afterEach` (delete the key when it was undefined; `next/jest` may have loaded a local `.env.local`). Cases:
-- `"https://www.pokefin.ca/"` gives origin `"https://www.pokefin.ca"`; `"https://pokefin.ca/some/path"` gives `"https://pokefin.ca"`.
-- Unset, `""`, `"not a url"` and `"http://pokefin.ca"` (plain http, not local) give the fallback `"https://www.pokefin.ca"`.
+Save `process.env.NEXT_PUBLIC_SITE_URL` in `beforeAll` and restore it in `afterEach` (delete the key when it was undefined; `next/jest` may have loaded a local `.env.local`). Compare `getSiteOrigin().origin` (a `URL`'s `toString()` ends in `/`). Cases:
+- `"https://pokefin.ca/"` gives `"https://pokefin.ca"`; `"https://www.pokefin.ca/some/path"` gives `"https://www.pokefin.ca"` (the path is dropped).
+- Unset, `""` and `"not a url"` give the WP02 fallback `"https://pokefin.ca"`; so does `"https://exa mple.com"` (passes WP02's regex, rejected by `URL()`).
 - `"http://localhost:3000"` gives `"http://localhost:3000"`.
 - `absoluteUrl("/")` is the origin with no trailing slash; `absoluteUrl("/product/42")` is `"<origin>/product/42"`.
 - `NO_INDEX` equals `{ index: false, follow: true }`.
 
+Do not add cases for `getSiteUrl` itself; WP02's tests own it.
+
 ### 3. New `app/__tests__/robots.test.ts`
 
-Save and restore `VERCEL_ENV` and `NEXT_PUBLIC_SITE_URL`; set the site URL to `https://www.pokefin.ca`. Cases:
-- `VERCEL_ENV` unset and `"production"`: `rules` allows `"/"`, disallows exactly `["/api/", "/account", "/portfolio"]`, and `sitemap` is `"https://www.pokefin.ca/sitemap.xml"`.
+Save and restore `VERCEL_ENV` and `NEXT_PUBLIC_SITE_URL`; set the site URL to `https://pokefin.ca`. Cases:
+- `VERCEL_ENV` unset and `"production"`: `rules` allows `"/"`, disallows exactly `["/api/", "/account", "/portfolio"]`, and `sitemap` is `"https://pokefin.ca/sitemap.xml"`.
 - `VERCEL_ENV = "preview"`: `{ rules: { userAgent: "*", disallow: "/" } }` and no `sitemap`.
 - In no case does the disallow list contain an `/auth` entry.
 
@@ -1148,7 +1186,7 @@ function product(overrides: Partial<Product>): Product {
 const ORIGINAL_SITE_URL = process.env.NEXT_PUBLIC_SITE_URL;
 
 beforeEach(() => {
-  process.env.NEXT_PUBLIC_SITE_URL = "https://www.pokefin.ca";
+  process.env.NEXT_PUBLIC_SITE_URL = "https://pokefin.ca";
   mockSummaries.mockReset();
 });
 
@@ -1165,12 +1203,12 @@ it("lists the public pages and every product, nothing private", async () => {
   const urls = (await sitemap()).map((entry) => entry.url);
   expect(urls).toEqual(
     expect.arrayContaining([
-      "https://www.pokefin.ca",
-      "https://www.pokefin.ca/prices",
-      "https://www.pokefin.ca/market",
-      "https://www.pokefin.ca/analytics",
-      "https://www.pokefin.ca/product/42",
-      "https://www.pokefin.ca/product/7",
+      "https://pokefin.ca",
+      "https://pokefin.ca/prices",
+      "https://pokefin.ca/market",
+      "https://pokefin.ca/analytics",
+      "https://pokefin.ca/product/42",
+      "https://pokefin.ca/product/7",
     ])
   );
   for (const hidden of ["/stats", "/portfolio", "/account", "/auth/"]) {
@@ -1185,7 +1223,8 @@ Further cases: the entry for product 42 has `lastModified` instanceof `Date`; th
 
 - `parseProductId`: `"42"` gives `42`; `"042"`, `"4.2"`, `"4.2e1"`, `"1e3"`, `"0x2a"`, `" 42"`, `"42 "`, `"-1"`, `"0"`, `""`, `"abc"`, `"12345678901234567"` (17 digits) give `null`.
 - `buildProductMetadata` for `{ id: 42, sets: { name: "Prismatic Evolutions", ... }, product_types: { label: "Elite Trainer Box", ... }, variant: "Pokemon Center", image_url: "https://x.supabase.co/storage/v1/object/public/products/42.png" }`: `title` is `"Prismatic Evolutions Elite Trainer Box (Pokemon Center)"` and contains no `"Pokéfin"`; `alternates.canonical` is `"/product/42"`; `openGraph.url` is `"/product/42"`; `openGraph.images` is `[{ url: <image_url>, alt: <title> }]`; `twitter.card` is `"summary"`. With `image_url: null` the `openGraph` object has no `images` key.
-- `buildProductJsonLd`: with `usd_price: 59.99` (and site URL set to `https://www.pokefin.ca`) the result has `"@type": "Product"`, `url: "https://www.pokefin.ca/product/42"`, `offers: { "@type": "Offer", price: "59.99", priceCurrency: "USD" }`; with `usd_price: null` there is no `offers` key; `image` is an array when `image_url` is set and absent otherwise.
+- `PRODUCT_NOT_FOUND_METADATA`: `title` is `"Product not found"`, `robots` equals `NO_INDEX`, `alternates.canonical` is `null`.
+- `buildProductJsonLd`: with `usd_price: 59.99` (and `NEXT_PUBLIC_SITE_URL` set to `https://pokefin.ca`, saved and restored as in test 2) the result has `"@type": "Product"`, `url: "https://pokefin.ca/product/42"`, `offers: { "@type": "Offer", price: "59.99", priceCurrency: "USD", url: "https://pokefin.ca/product/42" }`; with `usd_price: null` there is no `offers` key; `image` is an array when `image_url` is set and absent otherwise.
 - `serializeJsonLd`: for a product whose set name is `"</script><script>alert(1)</script>"`, the output contains no `"<"` character and `JSON.parse(output).name` equals the original display name.
 
 Access nested Metadata fields through narrow casts, for example `(meta.openGraph as { images?: unknown }).images`.
@@ -1218,21 +1257,19 @@ jest.mock("../../../context/AuthContext", () => ({
   useAuth: () => ({ signIn: mockSignIn }),
 }));
 
-// Issues a token on mount so the submit button enables. forwardRef because
-// WP02 passes ref={turnstileRef}.
+// Issues a token on mount so the submit button enables. A plain function
+// component is enough: in React 19 `ref` is an ordinary prop, so WP02's
+// ref={turnstileRef} is accepted and simply stays unset (the component calls
+// turnstileRef.current?.reset(), which is then a no-op).
 jest.mock("@marsidev/react-turnstile", () => {
   const React = jest.requireActual<typeof import("react")>("react");
-  const Turnstile = React.forwardRef(function MockTurnstile(
-    props: { onSuccess?: (token: string) => void },
-    _ref: React.Ref<unknown>
-  ) {
-    const { onSuccess } = props;
+  function MockTurnstile({ onSuccess }: { onSuccess?: (token: string) => void }) {
     React.useEffect(() => {
       onSuccess?.("test-token");
     }, [onSuccess]);
     return null;
-  });
-  return { Turnstile };
+  }
+  return { Turnstile: MockTurnstile };
 });
 
 import LoginForm from "../LoginForm";
@@ -1281,7 +1318,7 @@ More cases in the same file:
 
 ### 8. `/prices` empty state
 
-If `app/components/ProductPrices/__tests__/ProductPrices.urlSync.test.tsx` exists (WP08), add one case to it using its existing mocks and render helper; otherwise create `app/components/ProductPrices/__tests__/ProductPrices.emptyState.test.tsx` by copying that file's mock block (ProductCard stub, `next/navigation` mock, `window.history.replaceState(null, "", "/prices")` in `beforeEach`). The case: render with two products; `fireEvent.change(screen.getByPlaceholderText("Search by name or variant..."), { target: { value: "zzzz" } })`; `await screen.findByText("No products match “zzzz”")`; click "Clear filters"; both stub cards are rendered again, the search input's value is `""`, and "No products match" is gone. A second case: `initialProducts={[]}` never shows the panel.
+If `app/components/ProductPrices/__tests__/ProductPrices.urlSync.test.tsx` exists (WP08), add one case to it using its existing mocks and render helper; otherwise create `app/components/ProductPrices/__tests__/ProductPrices.emptyState.test.tsx` by copying that file's mock block (ProductCard stub, `next/navigation` mock, `window.history.replaceState(null, "", "/prices")` in `beforeEach`). The case: render with two products; `fireEvent.change(screen.getByPlaceholderText("Search by name or variant..."), { target: { value: "zzzz" } })`; `await screen.findByText("No products match “zzzz”")`; click "Clear filters"; both stub cards are rendered again, the search input's value is `""`, and "No products match" is gone. A second case: `initialProducts={[]}` never shows the panel (with an empty list `useProductData` fetches on the client, so the file must mock `../../../lib/clientMarketData` with `fetchMarketProductsClient: jest.fn().mockResolvedValue([])`; add that mock if the copied block lacks it, and assert with `await waitFor(() => expect(screen.queryByText(/No products match/)).toBeNull())`).
 
 ### 9. New `app/components/MarketView/__tests__/MarketView.emptyState.test.tsx`
 
@@ -1305,7 +1342,7 @@ If `grep -n "^import" app/components/MarketView/MarketView.tsx` or the hooks it 
 
 ### 10. Auth gate targets
 
-- New `app/portfolio/__tests__/page.redirect.test.tsx`: mock `next/navigation` (`useRouter: () => ({ push: mockPush })`), `../../context/AuthContext` (`useAuth: () => mockAuth`), `../../components/Portfolio/PortfolioDashboard` (`{ __esModule: true, default: () => null }`) and `../../lib/exchangeRate` (as in test 9); mock any other data module the page imports after WP05. Cases: `sessionStatus: "anonymous", user: null, loading: false` calls `mockPush("/auth/login?next=%2Fportfolio")`; `sessionStatus: "unknown", loading: true` never calls `mockPush`.
+- New `app/portfolio/__tests__/page.redirect.test.tsx`: mock `next/navigation` (`useRouter: () => ({ push: mockPush })`), `../../context/AuthContext` (`useAuth: () => mockAuth`), `../../components/Portfolio/PortfolioDashboard` (`{ __esModule: true, default: () => null }`) and `../../lib/exchangeRate` (as in test 9); mock any other data module the page imports after WP05 (run `grep -n "^import" app/portfolio/page.tsx` and mock every `../lib/*` or `../components/*` module except `SessionUnavailable`). `mockAuth` always carries `refreshSession: jest.fn()` (WP04 destructures it). Cases: `sessionStatus: "anonymous", user: null, loading: false` calls `mockPush` exactly once with `"/auth/login?next=%2Fportfolio"`; `sessionStatus: "unknown", user: null, loading: true` never calls `mockPush`; `sessionStatus: "unknown", user: null, loading: false` (network error) never calls `mockPush`.
 - Update WP04's `app/account/__tests__/page.test.tsx`: the case "`sessionStatus: "anonymous"`, user: null" now expects `mockPush` with `"/auth/login?next=%2Faccount"`. If WP04's file does not exist, add that single case in a new `app/account/__tests__/page.redirect.test.tsx` with the same mocks as WP04 describes.
 
 ### Existing tests that must pass unchanged
@@ -1326,8 +1363,10 @@ pnpm exec eslint app/layout.tsx "app/product/[id]" app/auth app/portfolio app/ac
   app/compare app/privacy/page.tsx app/components/ProductPrices/index.tsx \
   app/components/MarketView/MarketView.tsx app/components/NoResults.tsx \
   app/components/NotFoundPanel.tsx app/not-found.tsx app/robots.ts app/sitemap.ts \
-  app/opengraph-image.tsx app/lib/site.ts app/lib/redirects.ts next.config.ts app/__tests__ 2>&1 | tail -3
-# expect: no more problems than the baseline you recorded, and none in the new files
+  app/opengraph-image.tsx app/lib/site.ts app/lib/siteUrl.ts app/lib/redirects.ts app/__tests__ \
+  app/lib/__tests__/redirects.test.ts app/lib/__tests__/site.test.ts app/components/__tests__ \
+  app/components/ProductPrices/__tests__ app/components/MarketView/__tests__ 2>&1 | tail -3
+# expect: no more problems than the baseline you recorded, and none (errors or warnings) in the new files
 
 pnpm test --ci app/lib/__tests__/redirects.test.ts app/lib/__tests__/site.test.ts \
   app/__tests__ productMeta app/auth/login app/components/__tests__ \
@@ -1346,6 +1385,10 @@ grep -rn '· Pokéfin"\|Pokefin",' app --include=*.tsx | grep -v __tests__
 # expect: no output (no hand-written title suffixes)
 grep -rn '"https://pokefin.ca"\|"https://www.pokefin.ca"' app --include=*.tsx
 # expect: no output (layout no longer hardcodes a host; csrf/export/delete are .ts and unchanged)
+grep -rn 'NEXT_PUBLIC_SITE_URL' app --include=*.ts --include=*.tsx | grep -v __tests__
+# expect: exactly the lines the same grep printed before your first edit (run it then and keep
+# the output; after WP02 that is siteUrl.ts, csrf.ts and the account export and delete routes).
+# app/lib/site.ts and app/layout.tsx must NOT appear (they read the origin through getSiteUrl)
 ```
 
 Stub build (WP00 harness; it sets `NEXT_PUBLIC_SITE_URL=http://localhost:3000`):
@@ -1353,7 +1396,7 @@ Stub build (WP00 harness; it sets `NEXT_PUBLIC_SITE_URL=http://localhost:3000`):
 ```bash
 pnpm build:stub
 # expect exit 0. In the route table: ○ /auth/login (static, NOT dynamic),
-# ○ /robots.txt, ○ /sitemap.xml, ○ /opengraph-image, ○ /apple-icon.png,
+# ○ /robots.txt, ○ /sitemap.xml, ○ /opengraph-image, ○ /icon.png, ○ /apple-icon.png,
 # /product/[id] as before (ISR if WP11 landed).
 
 grep -o '<title>[^<]*</title>' .next/server/app/prices.html .next/server/app/market.html \
@@ -1373,10 +1416,16 @@ grep -c 'id="email"' .next/server/app/auth/login.html
 # expect: 1 (the form is in the static HTML)
 grep -c 'noindex' .next/server/app/auth/login.html
 # expect: 1 or more
+grep -c 'name="theme-color" content="#ffffff"' .next/server/app/index.html
+# expect: 1
 grep -c 'next-error-h1' .next/server/app/_not-found.html
 # expect: 0 (Next's stock 404 block is gone)
 grep -c 'find that page' .next/server/app/_not-found.html
 # expect: 1 or more
+grep -c 'rel="canonical"' .next/server/app/_not-found.html
+# expect: 0 (canonical: null on the 404)
+grep -o '<link rel="apple-touch-icon"[^>]*>\|<link rel="icon"[^>]*>' .next/server/app/index.html
+# expect: the favicon.ico link, an /icon.png link and an /apple-icon.png link
 
 find .next/server/app -maxdepth 1 \( -name 'robots.txt*' -o -name 'sitemap.xml*' \)
 cat .next/server/app/robots.txt.body
@@ -1407,7 +1456,7 @@ kill %1
 
 Dynamic checks in the browser. Terminal 1: `cd frontend && SUPABASE_STUB_FIXTURE=catalog node scripts/supabase-stub.mjs`. Terminal 2: `cd frontend && NEXT_PUBLIC_SUPABASE_URL=http://127.0.0.1:54321 NEXT_PUBLIC_SUPABASE_KEY=stub-anon-key NEXT_PUBLIC_SITE_URL=http://localhost:3000 pnpm dev`. Then:
 
-1. `http://localhost:3000/product/900001`: renders. View source: `<title>Stubfixture Alpha Booster Box · Pokéfin</title>`, `<link rel="canonical" href="http://localhost:3000/product/900001"/>`, and a `<script type="application/ld+json">` whose JSON has `"@type":"Product"` and `"offers":{"@type":"Offer","price":"123.45","priceCurrency":"USD"}`.
+1. `http://localhost:3000/product/900001`: renders. View source: `<title>Stubfixture Alpha Booster Box · Pokéfin</title>`, `<link rel="canonical" href="http://localhost:3000/product/900001"/>`, and a `<script type="application/ld+json">` whose JSON has `"@type":"Product"` and `"offers":{"@type":"Offer","price":"123.45","priceCurrency":"USD","url":"http://localhost:3000/product/900001"}`.
 2. `/product/999999`, `/product/abc`, `/product/0900001` and `/product/0x10`: each shows "We don't track that product" with the search form and the three links, inside the normal header and footer, with a light background even with the OS in dark mode. Tab title "Product not found · Pokéfin".
 3. `/nope`: shows "We couldn't find that page"; submitting "booster" in its search box lands on `/prices?q=booster` with the filter applied.
 4. Product skeleton: DevTools Network "Slow 4G", go to `/prices`, click a product card. The pulse skeleton (image block, title bars, tiles) appears immediately, then the product page replaces it.
@@ -1417,9 +1466,9 @@ Dynamic checks in the browser. Terminal 1: `cd frontend && SUPABASE_STUB_FIXTURE
 
 ## Owner actions
 
-1. **Confirm the canonical host.** Run `curl -sI https://pokefin.ca/ | grep -iE '^HTTP|^location'` and `curl -sI https://www.pokefin.ca/ | grep -iE '^HTTP|^location'`. The host that answers `200` (not `301`/`307`/`308`) is canonical. In Vercel, Project, Settings, Environment Variables, check that `NEXT_PUBLIC_SITE_URL` for **Production** is exactly that origin with `https://` and no trailing slash (for example `https://www.pokefin.ca`). If it is missing or different, set it and redeploy production. Confirm: after the deploy, view source of `https://<host>/prices` shows `<link rel="canonical" href="https://<host>/prices"/>`. `NEXT_PUBLIC_*` values are inlined at build, so a redeploy is required after any change.
+1. **Confirm the canonical host (same host as WP02 owner action 4).** Run `curl -sI https://pokefin.ca/ | grep -iE '^HTTP|^location'` and `curl -sI https://www.pokefin.ca/ | grep -iE '^HTTP|^location'`. Expected, after WP02 owner action 4: the apex answers `200` and `www` answers `307`/`308` with `location: https://pokefin.ca/`. In Vercel, Project, Settings, Environment Variables, check that `NEXT_PUBLIC_SITE_URL` for **Production** is exactly `https://pokefin.ca` (no trailing slash). If `www` serves `200` and the apex redirects instead, do not change the variable alone: auth emails (WP02) and canonical URLs both follow it, so fix the redirect direction in Vercel, Domains (apex primary, `www` redirecting to it) as WP02 owner action 4 describes. Redeploy production after any change to the variable (`NEXT_PUBLIC_*` values are inlined at build). Confirm: view source of `https://pokefin.ca/prices` shows `<link rel="canonical" href="https://pokefin.ca/prices"/>` and `<meta property="og:url" content="https://pokefin.ca/prices"/>`.
 2. **Submit the sitemap** (recommended). In Google Search Console, add or open the property for the canonical host, go to Sitemaps and submit `https://<host>/sitemap.xml`. Confirm: status "Success" and a discovered URL count of about 300 plus 7.
-3. **Spot-check previews after deploy.** Paste a production product URL into the Rich Results Test (search.google.com/test/rich-results): a "Product snippets" item is detected with no errors (a warning about missing reviews is expected). Paste the same URL into a Discord or Slack message: the card shows the product name and photo. Paste `https://<host>/prices`: the card shows "Sealed Product Prices · Pokéfin" and the Pokéfin share image.
+3. **Spot-check previews after deploy.** Paste the URL of a production product whose page shows a current price into the Rich Results Test (search.google.com/test/rich-results): a "Product snippets" item is detected with no errors (warnings about missing reviews, ratings or availability are expected). A product whose price is withheld has no `offers`, so the test reports it as not eligible; that is intended. Paste the same URL into a Discord or Slack message: the card shows the product name and photo. Paste `https://<host>/prices`: the card shows "Sealed Product Prices · Pokéfin" and the Pokéfin share image.
 4. **Preview deployments.** Open `https://<any-preview-url>/robots.txt`: it must say `Disallow: /`. If it shows the production rules, `VERCEL_ENV` was not visible at build time; tell the developer (no code change is expected).
 
 ## Acceptance criteria
@@ -1432,7 +1481,9 @@ Dynamic checks in the browser. Terminal 1: `cd frontend && SUPABASE_STUB_FIXTURE
 - [ ] `/sitemap.xml` lists the 7 public routes and one URL per product, and no `/stats`, `/portfolio`, `/account` or `/auth` URL.
 - [ ] `/stats` answers `308` to `/analytics`.
 - [ ] Product pages contain one Product JSON-LD block; `offers` appears only when the page shows a current price; the block contains no raw `<`.
-- [ ] `/product/abc`, `/product/042`, `/product/0x10` and an unknown numeric id show the branded "We don't track that product" page; unmatched URLs show "We couldn't find that page"; neither contains `next-error-h1`, and both keep the light background in OS dark mode.
+- [ ] `/product/abc`, `/product/042`, `/product/0x10` and an unknown numeric id show the branded "We don't track that product" page; unmatched URLs show "We couldn't find that page"; neither contains `next-error-h1` or a `rel="canonical"` link, and both keep the light background in OS dark mode.
+- [ ] Every page's `<head>` has `/icon.png` and `/apple-icon.png` links next to the existing `/favicon.ico`.
+- [ ] `app/lib/site.ts` reads the origin only through WP02's `getSiteUrl()`; no new file reads `NEXT_PUBLIC_SITE_URL` directly and no new file hardcodes a `pokefin.ca` host.
 - [ ] Clicking a product card shows the skeleton immediately.
 - [ ] A zero-result search on `/prices` and on `/market` shows the "No products match" panel, and "Clear filters" restores the full list.
 - [ ] `/auth/login` is still static (`○` in the build table) and its static HTML contains the form.
@@ -1452,8 +1503,9 @@ Commit message:
 ```
 feat(seo): per-page metadata, sitemap, branded 404, login return-to
 
-- Root metadata: metadataBase from NEXT_PUBLIC_SITE_URL, title template,
-  per-page canonical ("./"), og:url per page, share image (F028)
+- Root metadata: metadataBase from getSiteUrl() (WP02's siteUrl.ts),
+  title template, per-page canonical ("./"), og:url per page, share
+  image, icon.png and apple-icon.png (F028)
 - Per-route titles and descriptions; noindex on auth, account, portfolio;
   /stats redirects to /analytics (F028)
 - Product pages: strict id parsing, canonical, product photo as og:image,
@@ -1468,4 +1520,4 @@ feat(seo): per-page metadata, sitemap, branded 404, login return-to
 
 PR title: `WP13: SEO metadata, 404 and loading states, login return-to`
 
-PR body summary: list F028, F093 and F002 with one line each as in the metadata block above, and state what F093 items were intentionally left to other packages (toast: WP03; `/prices` Suspense fallback: WP08; `ProductImage` "Loading..." text: WP12). Paste the Verification output (tsc, lint counts before and after, Jest summary, the `pnpm build:stub` route table lines for `/auth/login`, `/robots.txt`, `/sitemap.xml`, `/opengraph-image`, and the grep results). List the four Owner actions. Note whether the sign-in return-to was checked manually or by unit tests only.
+PR body summary: list F028, F093 and F002 with one line each as in the metadata block above, and state what F093 items were intentionally left to other packages (toast: WP03; `/prices` Suspense fallback: WP08; `ProductImage` "Loading..." text: WP12). Paste the Verification output (tsc, lint counts before and after, Jest summary, the `pnpm build:stub` route table lines for `/auth/login`, `/robots.txt`, `/sitemap.xml`, `/opengraph-image`, and the grep results). List the four Owner actions. Note whether the sign-in return-to was checked manually or by unit tests only, and whether the `/market` empty state is covered by test 9 or only by the manual check. Include the prefetch sentence from Pitfalls verbatim. State that `app/lib/siteUrl.ts` changed only by exporting `FALLBACK_SITE_URL`, and that WP17's coverage list must treat `app/auth/login/page.tsx` and `app/analytics/page.tsx` as server pages.

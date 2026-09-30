@@ -1,19 +1,19 @@
 # WP15: Visual consistency, promo placement, user-facing copy
 
 - **Findings covered**
-  - F091 (full, cluster members F091, F099): design-token drift. `ReturnMetrics` colours returns with `text-green-600`/`text-red-600` (the brand red) while the same card's stripe uses `--pf-gain`/`--pf-loss`; `BoxCalculator`, `/privacy`, `error.tsx`, `global-error.tsx`, `ScrollToTop`, `HoldingsTable`, the portfolio spinners and one MarketView link use the raw `gray-*`/`blue-*` palette; `/privacy` spells the brand "Pokefin". The slate-400 contrast part of F091 is **not** in this package: WP14 (F095) owns it.
-  - F097 (full, cluster members F092, F097, F101): two or three CardRinkTCG calls to action per page, the `/market` banner sits above the results table, and the promo's "footer" variant is a `<footer>` element inside `<main>`. Scoped by the plan owner to promo count, placement and semantics; the "Seller Tools" nav item from F092 is out of scope (listed in the PR as noticed).
+  - F091 (full, cluster members F091, F099): design-token drift. `ReturnMetrics` coloured returns with `text-green-600`/`text-red-600` (the brand red) while the same card's stripe uses `--pf-gain`/`--pf-loss` (WP14 step 12b fixed this file; step 5a here only verifies it); `BoxCalculator`, `/privacy`, `error.tsx`, `global-error.tsx`, `ScrollToTop`, `HoldingsTable`, the portfolio spinners and one MarketView link use the raw `gray-*`/`blue-*` palette; `/privacy` spells the brand "Pokefin". The slate-400 contrast part of F091 is **not** in this package: WP14 (F095) owns it.
+  - F097 (full, cluster members F092, F097, F101): two or three CardRinkTCG calls to action per page, the `/market` banner sits above the results table, the promo's "footer" variant is a `<footer>` element inside `<main>`, and its "Powered by pokefin.ca" line reads as if the visitor were on the store's site. The cluster's merged recommendation and its verifier correction cover promo count, placement, semantics and the dead variants only. F092's separate IA suggestion (move "Seller Tools" out of the primary nav in `Header.tsx`) is not part of that recommendation and is a product decision, so this package does not change the nav; list it in the PR under "Noticed, out of scope".
   - F103 (full): developer-facing copy ("Supabase analytics function migration", "Check your Supabase connection"), raw error strings, native `alert()`/`confirm()` for validation and destructive actions, a doubled portfolio heading, "Pokemon"/"Pokefin" spelling drift, a privacy contact line with no link, and mixed `...`/`…` ellipses.
 - **Priority rationale**: all three are verified low-severity polish items; they come after WP14 because the destructive confirmations need an accessible dialog pattern and the jsdom `<dialog>` polyfill, and after WP04 to WP06 because those packages rewrite the account, portfolio and box-calculator code this package edits.
 - **Effort**: M, about 6 to 8 hours including tests.
-- **Depends on**: WP14 (dialog pattern, jsdom `<dialog>` polyfill, the slate-400 contrast sweep). Also assumes WP02, WP03, WP04, WP05, WP06, WP07, WP08, WP11 and WP13 have landed; each dependency has a stated fallback where this spec touches its output.
-- **Unblocks**: nothing formally. WP17 (blocking lint) and WP18 (compare split) should start from the copy and tokens set here.
+- **Depends on**: WP14 (hard: the native-`<dialog>` rules, the jsdom `<dialog>` polyfill in `jest.setup.ts`, `app/components/ui/Dialog.tsx`, the `--pf-gain-text`/`--pf-loss-text` tokens and the ReturnMetrics fix, and the slate-400 contrast sweep). The plan runs packages in order, so WP00 to WP13 have also landed; the ones whose output this spec edits are WP02, WP03, WP04, WP05, WP06, WP07, WP08, WP11 and WP13, and each has a stated check or fallback below.
+- **Unblocks**: WP17 (expects the `CardRinkPromo` rewrite with no effect, `deleteLoading` in use in `PortfolioDashboard`, and `SortButton`'s `type="button"`/`aria-pressed`/`bg-blue-50 text-[var(--pf-pokeblue-strong)]`), WP18 (keeps `MARKET_DATA_UNAVAILABLE` and the `logCaughtError("compare_market_data_failed", err)` catch in `CompareDashboard.tsx`, and runs `uiConventions.test.ts`), WP19 (expects no `CardRinkPromo` in `MarketView.tsx` and the tokenised TCGPlayer link). Keep those names exactly.
 - **Suggested branch name**: `remediation/wp15-visual-polish-and-copy`
 - **Risk level**: medium. Most changes are class names and strings, but the account-deletion and holding-deletion flows are rewired onto a new dialog; a wiring mistake would block a GDPR erasure path. Both flows get component tests. No migrations.
 
 ## Why
 
-Pokéfin looks like two products today: the catalog, market and stats pages use the slate palette and the `--pf-*` tokens, while the Box Calculator, the privacy page and the error page use Tailwind's default gray and blue, and a losing product card shows two different reds (rose stripe, brand-red percentage). The CardRinkTCG store is pitched up to three times on one screen at the bottom of `/prices` and `/market`, and on `/market` a large store banner sits between the filters and the table, so on a 360x640 phone the visitor sees an ad before a single price. Copy leaks implementation details ("Supabase", "migration"), box-calculator validation interrupts with OS `alert()` popups, account deletion is guarded by a single `window.confirm`, and the portfolio page prints its heading twice. After this PR every page uses one palette, each page shows at most one promo and always after its primary content, all errors are fixed user-facing sentences, and destructive actions use an accessible in-page confirmation (account deletion requires typing DELETE).
+Pokéfin looks like two products today: the catalog, market and stats pages use the slate palette and the `--pf-*` tokens, while the Box Calculator, the privacy page and the error page use Tailwind's default gray and blue, and at review time a losing product card showed two different reds (rose stripe, brand-red percentage; WP14 has since fixed that file). The CardRinkTCG store is pitched up to three times on one screen at the bottom of `/prices` and `/market`, and on `/market` a large store banner sits between the filters and the table, so on a 360x640 phone the visitor sees an ad before a single price. Copy leaks implementation details ("Supabase", "migration"), box-calculator validation interrupts with OS `alert()` popups, account deletion is guarded by a single `window.confirm`, and the portfolio page prints its heading twice. After this PR every page uses one palette, each page shows at most one promo and always after its primary content, all errors are fixed user-facing sentences, and destructive actions use an accessible in-page confirmation (account deletion requires typing DELETE).
 
 ## Before you start
 
@@ -28,11 +28,11 @@ Read these files fully (paths relative to `frontend/`):
 - `app/account/page.tsx` as left by WP04 step 7 (export handler, delete handler with `window.confirm`, Danger Zone block).
 - `app/components/Portfolio/PortfolioDashboard.tsx` as left by WP05 step 15 (`handleDelete` with `window.confirm` and `alert`, header row `:121-151`), `app/portfolio/page.tsx:63-74` (page-level H1).
 - `app/components/Portfolio/cards/HoldingsTable.tsx:79-95` and its test `app/components/Portfolio/__tests__/HoldingsTable.test.tsx:395-447` (asserts `bg-blue-100`).
-- `app/components/Portfolio/cards/ImportHoldingsModal.tsx` (copy `:97`, `:226`; palette `:255`, `:356`, `:383`, `:444`), `app/components/Portfolio/shared/ProductSearchSelect.tsx:95`, `app/components/ProductPrices/shared/ScrollToTop.tsx:36`, `app/components/MarketView/MarketView.tsx:587`.
+- `app/components/Portfolio/cards/ImportHoldingsModal.tsx` (review-time copy `:97`, `:226`; palette `:255`, `:356`, `:383`, `:444`; WP05 and WP14 moved these lines, so find them by the quoted text), `app/components/Portfolio/shared/ProductSearchSelect.tsx` (WP14 step 4 rewrote it; its loading spinner has `border-blue-500`), `app/components/ProductPrices/shared/ScrollToTop.tsx:36`, `app/components/MarketView/MarketView.tsx:587` (the "View on TCGPlayer" link).
 - The compare market-data error: `app/compare/CompareDashboard.tsx` if WP11 landed (WP11 step 9 moved the client code there), otherwise `app/compare/page.tsx:371-375`.
 - `app/components/Portfolio/hooks/usePortfolioData.ts` and `hooks/useProductSearch.ts` (WP05 rewrote both).
 - `app/lib/logger.ts` (`logCaughtError`), `app/lib/authErrors.ts` (WP02, `AUTH_MESSAGES`), `app/lib/format.ts` (WP07, `formatInteger`), `jest.setup.ts`, `jest.config.js`.
-- WP14's output: `app/components/ui/` (expected `Modal.tsx`) and any `HTMLDialogElement` polyfill it added.
+- WP14's output: `app/components/ui/Dialog.tsx` (read it: `ConfirmDialog` in step 2 copies its Escape, native-close and backdrop handling) and the `HTMLDialogElement` polyfill WP14 step 1 appended to `jest.setup.ts`.
 
 Confirm the starting state (run from `frontend/`):
 
@@ -48,9 +48,11 @@ grep -n "<footer\|sessionStorage" app/components/CardRinkPromo.tsx
 #    BoxCalculator.tsx (4 alert calls + the WP06 "Stop sharing?" confirm).
 grep -rn "window\.confirm(\|alert(" app --include=*.tsx | grep -v __tests__
 
-# 3. Token drift: expect text-green-600 / text-red-600 (skip step 5 if WP14 already replaced them).
+# 3. Token drift. The first grep should print nothing (WP14 step 12b already moved ReturnMetrics
+#    to the -text tokens; see step 5a). The second counts LINES with gray- in BoxCalculator:
+#    60 at review time plus about 12 added by WP06, so expect roughly 70.
 grep -n "text-green-600\|text-red-600" app/components/ProductPrices/shared/ReturnMetrics.tsx
-grep -c "gray-" app/components/BoxCalculator/BoxCalculator.tsx      # expect 90+ after WP06
+grep -c "gray-" app/components/BoxCalculator/BoxCalculator.tsx
 
 # 4. Copy: expect one hit each.
 grep -rn "Supabase analytics" app/stats/page.tsx
@@ -59,15 +61,20 @@ grep -rn "\bPokefin\b" app --include=*.tsx | grep -v __tests__        # privacy/
 grep -n "Pokemon" app/components/Portfolio/PortfolioDashboard.tsx app/components/Portfolio/cards/ImportHoldingsModal.tsx
 
 # 5. Dependencies this spec reads.
-ls app/components/ui/ 2>/dev/null                    # WP14 (expect Modal.tsx)
+ls app/components/ui/ 2>/dev/null                    # WP14 (expect Dialog.tsx)
 grep -n "HTMLDialogElement" jest.setup.ts            # WP14 polyfill; if absent, step 1 adds it
 grep -n "export function formatInteger" app/lib/format.ts      # WP07
 grep -n "sessionExpired\|rateLimited" app/lib/authErrors.ts     # WP02
 grep -n "loadErrorMessage" app/components/Portfolio/hooks/usePortfolioData.ts   # WP05
 
-# 6. Baselines.
+# 6. Baselines. The eslint file list is the same one Verification uses (minus the files this
+#    PR creates), so the two error counts are comparable.
 pnpm exec tsc --noEmit
-pnpm exec eslint app/components app/account app/privacy app/error.tsx app/global-error.tsx app/stats app/compare 2>&1 | tail -3
+pnpm exec eslint app/components/CardRinkPromo.tsx app/components/MarketView/MarketView.tsx \
+  app/components/ProductPrices/index.tsx app/components/ProductPrices/shared \
+  app/components/BoxCalculator app/components/Portfolio app/account app/privacy app/error.tsx \
+  app/global-error.tsx app/stats app/compare \
+  app/page.tsx app/prices app/market app/product app/box-calculator 2>&1 | tail -3
 pnpm test --ci 2>&1 | tail -5
 ```
 
@@ -75,6 +82,7 @@ Record the lint error count from baseline 6; this PR must not raise it.
 
 Assumptions to check, with the fallback if false:
 
+- WP14 landed: `app/components/ui/Dialog.tsx` exists, `jest.setup.ts` contains the `HTMLDialogElement` polyfill, and `ReturnMetrics.tsx` uses `text-[var(--pf-gain-text)]`/`text-[var(--pf-loss-text)]`. If `Dialog.tsx` is missing, stop: this package runs after WP14. (Step 1 and step 5a still carry fallbacks so a partially merged WP14 does not block the rest.)
 - WP05 landed: `usePortfolioData.ts` has `loadErrorMessage` and never shows `err.message`; `PortfolioDashboard` has `applyHoldingDeleted` and imports `deleteHolding` from `../../lib/portfolioApi` (returns `boolean`). If WP05 has not landed, stop: this package's portfolio step is written against WP05's code.
 - WP04 landed: `account/page.tsx` no longer imports `../lib/supabase`, and username errors are fixed strings. If not, stop.
 - WP02 landed: `app/lib/authErrors.ts` exports `AUTH_MESSAGES` with `sessionExpired` and `rateLimited`. If missing, use the literal strings given in step 7.
@@ -85,22 +93,31 @@ Assumptions to check, with the fallback if false:
 
 Do the steps in order. Steps 1 and 2 create what later steps import. Step 6 (codemod) must run after step 5's manual spinner edits. Step 15 (ellipsis script) runs after every step that writes copy. Step 16 (guard test) runs last.
 
-### Step 1. jsdom `<dialog>` polyfill (only if WP14 did not add one)
+### Step 1. jsdom `<dialog>` polyfill (verify; add only if WP14 did not)
 
-jsdom 26 (the version installed) implements `HTMLDialogElement` without `showModal()` or `close()` (`node_modules/.pnpm/jsdom@26.1.0*/node_modules/jsdom/lib/jsdom/living/nodes/HTMLDialogElement-impl.js` is an empty class). If `grep -n "HTMLDialogElement" jest.setup.ts` printed nothing, append to `frontend/jest.setup.ts`:
+jsdom 26 (the version installed) implements `HTMLDialogElement` without `showModal()`, `show()` or `close()`. WP14 step 1 appended a polyfill to `frontend/jest.setup.ts`. If `grep -n "HTMLDialogElement" jest.setup.ts` printed a line, do nothing in this step. If it printed nothing, append exactly WP14's block (copied here so both packages produce the same file):
 
 ```ts
-// jsdom 26 implements <dialog> without showModal()/close(). Minimal stand-ins:
-// the open attribute drives visibility (jsdom's UA sheet hides dialog:not([open])),
-// and close() fires "close" like a browser does.
+// jsdom 26 ships HTMLDialogElement (with a reflected `open` attribute and a
+// UA rule hiding dialog:not([open])) but no showModal/show/close. These
+// stand-ins toggle `open` and fire "close" like a browser does, so dialog
+// content is visible to Testing Library queries. Top layer, inertness of the
+// page behind and browser focusing steps are NOT emulated.
+// Guarded because route tests run this file under the node environment.
 if (typeof HTMLDialogElement !== "undefined") {
-  if (!HTMLDialogElement.prototype.showModal) {
-    HTMLDialogElement.prototype.showModal = function showModal(this: HTMLDialogElement) {
+  const proto = HTMLDialogElement.prototype;
+  if (typeof proto.showModal !== "function") {
+    proto.showModal = function showModal(this: HTMLDialogElement) {
       this.setAttribute("open", "");
     };
   }
-  if (!HTMLDialogElement.prototype.close) {
-    HTMLDialogElement.prototype.close = function close(this: HTMLDialogElement) {
+  if (typeof proto.show !== "function") {
+    proto.show = function show(this: HTMLDialogElement) {
+      this.setAttribute("open", "");
+    };
+  }
+  if (typeof proto.close !== "function") {
+    proto.close = function close(this: HTMLDialogElement) {
       if (!this.hasAttribute("open")) return;
       this.removeAttribute("open");
       this.dispatchEvent(new Event("close"));
@@ -109,20 +126,30 @@ if (typeof HTMLDialogElement !== "undefined") {
 }
 ```
 
-The `typeof` guard keeps `/** @jest-environment node */` suites working (setup files run there too).
+The `typeof HTMLDialogElement` guard keeps `/** @jest-environment node */` suites working (setup files run there too). Note that this `close()` dispatches `close` synchronously, while browsers dispatch it in a later task; `ConfirmDialog` in step 2 is written to behave the same either way.
 
 ### Step 2. `app/components/ui/ConfirmDialog.tsx` (new)
 
-A confirmation dialog for destructive actions, used by steps 8, 9 and 11. Create the `app/components/ui/` directory if WP14 did not.
+A confirmation dialog for destructive actions, used by steps 8, 9 and 11. WP14 created the `app/components/ui/` directory.
 
-Deviation from the plan, and why: the plan says "use the WP14 Dialog". WP14's `Modal` API was not fixed when this spec was written, and a confirmation needs three behaviours a generic modal may not have: dismissal is blocked while the action is running, initial focus goes to Cancel (or to the typed-confirmation field), and the confirm button can require typed text. So `ConfirmDialog` is self-contained and follows the same native-`<dialog>` pattern and the same verifier rules as WP14 (F030 correction: guard `!dialog.open` before `showModal()`, focus explicitly after `showModal()` instead of `autoFocus`, handle `cancel` for Escape, backdrop click via `e.target === e.currentTarget`). Do not import or modify `Modal.tsx`. Mention the possible consolidation in the PR body.
+Deviation from the plan, and why: the plan says "use the WP14 dialog". WP14's `Dialog` (`app/components/ui/Dialog.tsx`) always renders an X close button and reports every close request to `onClose`, and it has no notion of a running action. A confirmation needs three things it does not provide: dismissal is blocked while the action runs (including the X and a browser-forced close), initial focus goes to Cancel (or to the typed-confirmation field), and the confirm button can require typed text. WP14's spec anticipates this ("its `ConfirmDialog` is self-contained and follows the same rules, so it does not import `Dialog.tsx`"). So `ConfirmDialog` is self-contained and copies `Dialog.tsx`'s handling of the native element: guard `!dialog.open` before `showModal()`; focus explicitly after `showModal()` instead of `autoFocus` (F030 correction 4); Escape as a `keydown` with `preventDefault()` plus `onCancel` for other close requests; an `onClose` handler that keeps React state in sync when the browser closes the dialog on its own; backdrop click only when the press also started on the backdrop (F030 correction 5). Do not import or modify `Dialog.tsx`. Mention the possible consolidation in the PR body.
 
 The dialog is open for exactly as long as it is mounted. Parents render it conditionally (`{pending && <ConfirmDialog ... />}`). That resets the typed text on every open without a state-reset effect (`react-hooks/set-state-in-effect` is an error in this repo) and makes focus restore a plain effect cleanup.
 
 ```tsx
 "use client";
 
-import { useEffect, useId, useRef, useState, type ReactNode } from "react";
+import {
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type MouseEvent,
+  type PointerEvent,
+  type ReactNode,
+  type SyntheticEvent,
+} from "react";
 
 export interface ConfirmDialogProps {
   /** Short question, e.g. "Delete this holding?". Becomes the dialog's accessible name. */
@@ -135,22 +162,22 @@ export interface ConfirmDialogProps {
   busyLabel?: string;
   cancelLabel?: string;
   tone?: "danger" | "default";
-  /** While true, both buttons are disabled and Escape / backdrop clicks are ignored. */
+  /** While true, both buttons are disabled and every dismissal path is ignored. */
   busy?: boolean;
   /** Fixed, user-facing failure text shown inside the dialog (never a raw error message). */
   error?: string | null;
   /** When set, the confirm button stays disabled until the user types exactly this text. */
   confirmText?: string;
   onConfirm: () => void;
-  /** Called on Cancel, Escape or a backdrop click (not while busy). The parent unmounts the dialog. */
+  /** Called on Cancel, Escape, a backdrop click or a browser-forced close (never while busy). The parent unmounts the dialog. */
   onDismiss: () => void;
 }
 
 /**
- * Accessible confirmation for destructive actions (review F103), replacing
- * window.confirm(). Mounting opens a native modal <dialog> (focus containment,
- * inert page, Escape); unmounting closes it and returns focus to the control
- * that was focused before it opened.
+ * Accessible confirmation for destructive actions (review F103). It replaces
+ * the browser's native confirm and alert popups. Mounting opens a native modal
+ * <dialog> (focus containment, inert page); unmounting closes it and returns
+ * focus to the control that was focused before it opened.
  */
 export default function ConfirmDialog({
   title,
@@ -168,6 +195,12 @@ export default function ConfirmDialog({
   const dialogRef = useRef<HTMLDialogElement>(null);
   const cancelRef = useRef<HTMLButtonElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  // Set when this component closes the dialog itself (unmount, or the
+  // StrictMode effect re-run), so the resulting "close" event is ignored.
+  const closingFromEffectRef = useRef(false);
+  // A press that started inside the panel (e.g. selecting the typed text)
+  // and ended on the backdrop must not dismiss.
+  const pressStartedOnBackdropRef = useRef(false);
   const titleId = useId();
   const bodyId = useId();
   const inputId = useId();
@@ -178,12 +211,15 @@ export default function ConfirmDialog({
     if (!dialog) return;
     const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     if (!dialog.open) dialog.showModal();
-    // React 19 runs autoFocus before this effect, while the dialog is still
-    // closed, and showModal() would then focus the first button. Focus here.
+    // React 19 runs autoFocus at commit, before this effect, while the dialog
+    // is still closed, so it would be a no-op. Focus here instead.
     (inputRef.current ?? cancelRef.current)?.focus();
     return () => {
-      if (dialog.open) dialog.close();
-      opener?.focus();
+      if (dialog.open) {
+        closingFromEffectRef.current = true;
+        dialog.close();
+      }
+      if (opener && opener.isConnected) opener.focus();
     };
   }, []);
 
@@ -191,6 +227,47 @@ export default function ConfirmDialog({
 
   const requestDismiss = () => {
     if (!busy) onDismiss();
+  };
+
+  const handleKeyDown = (event: KeyboardEvent<HTMLDialogElement>) => {
+    if (event.key !== "Escape" || event.nativeEvent.isComposing) return;
+    // preventDefault also stops the browser from turning this key press into
+    // a cancel/close request, so React state stays the one source of truth.
+    event.preventDefault();
+    requestDismiss();
+  };
+
+  const handleCancel = (event: SyntheticEvent<HTMLDialogElement>) => {
+    // Close requests that are not an Escape keydown (Android back gesture).
+    event.preventDefault();
+    requestDismiss();
+  };
+
+  const handleNativeClose = () => {
+    if (closingFromEffectRef.current) {
+      closingFromEffectRef.current = false;
+      return;
+    }
+    // The browser closed the dialog without a cancelable request (for
+    // example a second Escape with no user activation in between). Keep the
+    // DOM and the parent's state in agreement.
+    if (busy) {
+      dialogRef.current?.showModal();
+      return;
+    }
+    onDismiss();
+  };
+
+  const handlePointerDown = (event: PointerEvent<HTMLDialogElement>) => {
+    // The <dialog> has no padding and the panel fills it, so the dialog element
+    // itself is only ever the target when the ::backdrop was pressed.
+    pressStartedOnBackdropRef.current = event.target === event.currentTarget;
+  };
+
+  const handleClick = (event: MouseEvent<HTMLDialogElement>) => {
+    const startedOnBackdrop = pressStartedOnBackdropRef.current;
+    pressStartedOnBackdropRef.current = false;
+    if (startedOnBackdrop && event.target === event.currentTarget) requestDismiss();
   };
 
   const confirmClass =
@@ -203,15 +280,11 @@ export default function ConfirmDialog({
       ref={dialogRef}
       aria-labelledby={titleId}
       aria-describedby={bodyId}
-      onCancel={(e) => {
-        // Escape: let React state decide; the parent unmounts us.
-        e.preventDefault();
-        requestDismiss();
-      }}
-      onClick={(e) => {
-        // Only a click on the backdrop targets the <dialog> itself.
-        if (e.target === e.currentTarget) requestDismiss();
-      }}
+      onKeyDown={handleKeyDown}
+      onCancel={handleCancel}
+      onClose={handleNativeClose}
+      onPointerDown={handlePointerDown}
+      onClick={handleClick}
       className="m-auto w-[calc(100%-2rem)] max-w-md rounded-xl border border-slate-200 bg-white p-0 text-left shadow-xl backdrop:bg-slate-900/50"
     >
       <div className="p-6">
@@ -273,7 +346,10 @@ export default function ConfirmDialog({
 }
 ```
 
-Notes: `m-auto` is required because Tailwind 4's preflight sets `margin: 0` on every element, which removes the user-agent `margin: auto` that centres a modal dialog. The inner `div` carries the padding so that a click anywhere inside the panel never has the `<dialog>` as its target.
+Notes:
+- `m-auto` is required because Tailwind 4's preflight sets `margin: 0` on every element, which removes the user-agent `margin: auto` that centres a modal dialog. Do not add `flex`, `block` or `grid` to the `<dialog>` itself (an author `display` would beat the UA `dialog:not([open]) { display: none }` rule); layout goes on the inner `div`, which also carries the padding so that a press anywhere inside the panel never has the `<dialog>` as its target.
+- WP14's `html:has(dialog[open]) { overflow: hidden }` rule in `globals.css` also locks page scrolling behind this dialog; nothing to add.
+- The doc comment deliberately does not contain the text `alert(` or `confirm(` with a parenthesis: the step 16 guard test scans comments too.
 
 ### Step 3. `app/components/CardRinkPromo.tsx`: one variant, an `<aside>`, a server component
 
@@ -363,7 +439,7 @@ export default function CardRinkPromo() {
 }
 ```
 
-What changed versus the old footer variant, besides the element: a visible "Partner store" label is added above the heading, and the old tagline "Powered by pokefin.ca, Track prices, shop smart." (`:196-198`, written as if the visitor were on the store's site, and set in low-contrast slate-400) is removed.
+What changed versus the old footer variant, besides the element: a visible "Partner store" label is added above the heading, and the old tagline "Powered by pokefin.ca, Track prices, shop smart." (`:196-198` at review time, written as if the visitor were on the store's site; WP14 only changed its colour) is removed, and with it the dismiss button WP14 restyled.
 
 ### Step 4. Promo call sites: remove both banners, drop the `variant` prop
 
@@ -392,37 +468,21 @@ Expected: exactly six lines, one each in `app/page.tsx`, `app/prices/page.tsx`, 
 
 ### Step 5. `ReturnMetrics` and the three spinners (manual, before the codemod)
 
-5a. `app/components/ProductPrices/shared/ReturnMetrics.tsx:115-120`. Skip if baseline check 3 printed nothing (WP14's F095 already did it). Otherwise replace
+5a. `app/components/ProductPrices/shared/ReturnMetrics.tsx`, the `colorClass` ternary. WP14 step 12b already replaced it with `text-[var(--pf-gain-text)]` / `text-[var(--pf-loss-text)]`, which fixes F091's "two reds on one card" (the loss text is rose-700 from the same rose family as the rose-600 stripe, not the brand red-600). Verify only:
 
-```tsx
-      const colorClass =
-        value > 0
-          ? "text-green-600"
-          : value < 0
-          ? "text-red-600"
-          : "text-slate-500";
+```bash
+grep -n "pf-gain-text\|pf-loss-text" app/components/ProductPrices/shared/ReturnMetrics.tsx   # expect 2 lines
 ```
 
-with the same classes `ReturnCell` uses in `app/stats/page.tsx` (currently `:78-82`):
-
-```tsx
-      // Same finance tokens as the card's edge stripe and stats/page.tsx:
-      // rose loss, not the brand red (review F091).
-      const colorClass =
-        value > 0
-          ? "text-[var(--pf-gain)]"
-          : value < 0
-          ? "text-[var(--pf-loss)]"
-          : "text-slate-500";
-```
-
-If WP14 introduced a separate text token for gains (F095 suggested emerald-700 for text), use exactly what `ReturnCell` in `stats/page.tsx` uses at that point.
+Fallback, only if it still says `"text-green-600"` / `"text-red-600"` (WP14 step 12b did not land): replace the positive branch with `"text-[var(--pf-gain-text)]"` and the negative branch with `"text-[var(--pf-loss-text)]"` if `grep -n "pf-gain-text" app/globals.css` prints a line, otherwise with exactly the classes `ReturnCell` in `app/stats/page.tsx` uses at that point. Keep `"text-slate-500"` for zero. Do not use `--pf-gain`/`--pf-loss` for text once the `-text` tokens exist (emerald-600 text is 3.77:1 and fails WCAG AA; WP14 owns that decision).
 
 5b. Spinners match the portfolio shell (`app/portfolio/page.tsx:44`, `border-[var(--pf-pokeball)]`):
 
-- `app/components/Portfolio/PortfolioDashboard.tsx` (loading block, `:83`): `border-blue-600` becomes `border-[var(--pf-pokeball)]`.
-- `app/components/Portfolio/cards/ImportHoldingsModal.tsx` ("Importing holdings" block, `:444` before WP14): `border-blue-600` becomes `border-[var(--pf-pokeball)]`.
-- `app/components/Portfolio/shared/ProductSearchSelect.tsx:95`: `border-blue-500` becomes `border-[var(--pf-pokeball)]` (keep `border-t-transparent`).
+- `app/components/Portfolio/PortfolioDashboard.tsx` (the `if (loading)` block, `:83` at review time): `border-blue-600` becomes `border-[var(--pf-pokeball)]`.
+- `app/components/Portfolio/cards/ImportHoldingsModal.tsx` (the `{step === "importing" && (` block, `:444` at review time; find it with `grep -n "border-blue-600" app/components/Portfolio/cards/ImportHoldingsModal.tsx`, expect one line): `border-blue-600` becomes `border-[var(--pf-pokeball)]`. This must happen before step 6, otherwise the codemod turns it into the blue token.
+- `app/components/Portfolio/shared/ProductSearchSelect.tsx` (rewritten by WP14 step 4; `:95` at review time): the loading spinner `<div ... className="animate-spin h-5 w-5 border-2 border-blue-500 border-t-transparent rounded-full mx-auto">`. Find it with `grep -n "border-blue-500" app/components/Portfolio/shared/ProductSearchSelect.tsx` (expect exactly one line); `border-blue-500` becomes `border-[var(--pf-pokeball)]`. Keep `border-t-transparent` and any `aria-hidden` WP14 added.
+
+After 5b, `grep -rn "border-blue-" app/components/Portfolio --include=*.tsx | grep -v __tests__` prints only ImportHoldingsModal lines that the step 6 codemod converts (at review time `hover:border-blue-500` on the upload area and `border-blue-500` on the selected match row). A hit in `PortfolioDashboard.tsx` or `ProductSearchSelect.tsx` means 5b is incomplete.
 
 5c. `app/privacy/page.tsx:13`: delete ` dark:text-gray-100` from the `<main>` class list. The `dark:` variant is inert in this app (`globals.css:8` routes it to a class that is never applied).
 
@@ -563,23 +623,27 @@ Keep the `x-pokefin-request` header and the lowercase `pokefin-data-` file name 
   const handleDeleteAccount = async () => {
     setDeleteLoading(true);
     setDeleteError(null);
+    let response: Response;
     try {
-      const response = await fetch("/api/account/delete", {
+      response = await fetch("/api/account/delete", {
         method: "DELETE",
         headers: { "x-pokefin-request": "1" },
       });
-      if (!response.ok) {
-        setDeleteError(apiFailureMessage(response.status, DELETE_FAILED_MESSAGE));
-        setDeleteLoading(false);
-        return;
-      }
-      await signOut();
-      router.push("/");
     } catch (err) {
       logCaughtError("account_delete_failed", err);
       setDeleteError(NETWORK_ERROR_MESSAGE);
       setDeleteLoading(false);
+      return;
     }
+    if (!response.ok) {
+      setDeleteError(apiFailureMessage(response.status, DELETE_FAILED_MESSAGE));
+      setDeleteLoading(false);
+      return;
+    }
+    // The account is gone. Only the network call sits inside the try, so a
+    // later failure here can never be reported as "couldn't delete".
+    await signOut();
+    router.push("/");
   };
 ```
 
@@ -704,7 +768,7 @@ This also puts `deleteLoading` to use (WP05 noted its unused-variable warning).
       </div>
 ```
 
-Move the two existing `<button>` elements byte for byte. Every portfolio is named "My Portfolio" (`app/lib/portfolio.ts:197` is the only insert and there is no rename UI), so dropping `portfolio.name` from the dashboard loses nothing.
+Move the two existing `<button>` elements byte for byte. Every portfolio is named "My Portfolio": after WP05 the only insert is `.insert({ user_id: userId, name: "My Portfolio" })` in `app/lib/server/portfolioRepo.ts` (it was `app/lib/portfolio.ts:197` at review time), and there is no rename UI. So dropping `portfolio.name` from the dashboard loses nothing, and the F103 suggestion to pass `portfolio.name` into the page `<h1>` is not needed. Confirm with `grep -rn 'name: "My Portfolio"' app --include=*.ts | grep -v __tests__` (expect exactly one line, in `portfolioRepo.ts`); if a second insert or a rename route exists, stop and report instead of dropping the name.
 
 9f. At the end of the returned JSX, after the Import modal block and before the final `</div>`, add:
 
@@ -875,7 +939,35 @@ add `import { logCaughtError } from "../lib/logger";` if the file does not impor
 
 Pre-WP11 version: the same without the `if (cancelled) return;` line. Do not touch `setErrorMessage(error)` in `handleCsvUpload`: those strings come from `parseShopifyCsv` and are already written for users.
 
-12c. `app/components/Portfolio/hooks/useProductSearch.ts` (WP05 step 13): the rejection handler stores `err instanceof Error ? err.message : "Search failed"`. Nothing renders it today (`ProductSearchSelect.tsx:18` does not destructure `error`), but it is the last raw-message path in client code. Replace that expression with the fixed string `"Search failed. Please try again."` and add `logCaughtError("product_search_failed", err);` inside the same `if (!cancelled)` block (import from `"../../../lib/logger"`).
+12c. `app/components/Portfolio/hooks/useProductSearch.ts` (WP05 step 13). Nothing renders its `error` today (WP14's `ProductSearchSelect` destructures only `searchQuery, setSearchQuery, results, loading`), but the rejection handler is the last place client code stores a raw `err.message`. Add `import { logCaughtError } from "../../../lib/logger";` below the other imports and replace the rejection handler
+
+```ts
+        (err: unknown) => {
+          if (!cancelled) {
+            setResponse({
+              query: searchQuery,
+              results: [],
+              error: err instanceof Error ? err.message : "Search failed",
+            });
+          }
+        }
+```
+
+with
+
+```ts
+        (err: unknown) => {
+          if (!cancelled) {
+            // Never keep err.message: it can carry PostgREST or fetch wording.
+            logCaughtError("product_search_failed", err);
+            setResponse({
+              query: searchQuery,
+              results: [],
+              error: "Search failed. Please try again.",
+            });
+          }
+        }
+```
 
 12d. `app/components/Portfolio/hooks/usePortfolioData.ts`: verify only. `grep -n "err.message\|\.message" app/components/Portfolio/hooks/usePortfolioData.ts` must print nothing (WP05's `loadErrorMessage` returns fixed strings). If it prints a line, WP05 did not land as specified: stop and report.
 
@@ -887,29 +979,30 @@ Only user-visible strings change. Data values, identifiers and comments stay.
 - `:6` description becomes `"How Pokéfin collects, uses, and protects your data."`. (`:5` is already `title: "Privacy Policy",` after WP13 step 4f; if it still contains "Pokefin", set it to `"Privacy Policy"` exactly as WP13 specifies.)
 - `:18` "This policy describes how Pokefin handles personal data. Pokefin is" becomes "This policy describes how Pokéfin handles personal data. Pokéfin is".
 - `:97` and `:108`: after the codemod the two account links read `className="text-[var(--pf-pokeblue)] underline"`; make them `className="text-[var(--pf-pokeblue)] underline hover:text-[var(--pf-pokeblue-strong)]"`.
-- Contact. Add below `const LAST_UPDATED = ...`:
+- Contact. The current text sends readers to "the contact channel listed on the Pokefin GitHub repository", but the repository's README lists no contact channel, so a plain repo link would still leave them nowhere. The repository is public and has issues enabled (checked 2026-09-30 via `https://api.github.com/repos/0xDario/Pokefin`: `"private": false`, `"has_issues": true`), so the default channel is a new issue, with a warning not to post personal data there. Add below `const LAST_UPDATED = ...`:
 
 ```tsx
-// Where privacy requests go. The owner may replace this with a mailto: link.
-const PRIVACY_CONTACT_URL = "https://github.com/0xDario/Pokefin";
+// Where privacy requests go. The owner should replace this with a mailto:
+// link (see the WP15 owner actions); a public issue is the fallback channel.
+const PRIVACY_CONTACT_URL = "https://github.com/0xDario/Pokefin/issues/new";
 ```
 
-  Replace the Contact section (`:132-136`) with:
+  Replace the Contact section (the `<h2 ...>Contact</h2>` and the `<p>` after it, `:132-136` at review time) with:
 
 ```tsx
       <h2 id="contact" className="mt-8 mb-2 text-xl font-semibold">Contact</h2>
       <p>
-        For privacy questions, reach the operator via the contact channel
-        listed on the{" "}
+        For privacy questions or requests,{" "}
         <a
           href={PRIVACY_CONTACT_URL}
           target="_blank"
           rel="noopener noreferrer"
           className="text-[var(--pf-pokeblue)] underline hover:text-[var(--pf-pokeblue-strong)]"
         >
-          Pokéfin GitHub repository
+          open an issue on the Pokéfin GitHub repository
         </a>
-        .
+        . Issues are public, so do not include personal data in it; the
+        operator will reply there and arrange a private channel.
       </p>
 ```
 
@@ -917,8 +1010,9 @@ const PRIVACY_CONTACT_URL = "https://github.com/0xDario/Pokefin";
 - Give the `<h1>` (`:14`) `text-slate-900` in addition to its current classes, so headings match the rest of the site.
 
 13b. `app/components/Portfolio/cards/ImportHoldingsModal.tsx`:
-- `:97` becomes `setError("No valid products found in this CSV. Make sure it's a Collectr export that includes Pokémon sealed products.");`
-- `:226` becomes `Import your sealed Pokémon TCG collection from Collectr. Export your collection as CSV from Collectr, then upload it here.`
+- The line `setError("No valid products found in CSV. Make sure it's a Collectr export with Pokemon sealed products.");` (`:97` at review time) becomes `setError("No valid products found in this CSV. Make sure it's a Collectr export that includes Pokémon sealed products.");`
+- The paragraph text `Import your sealed Pokemon TCG collection from Collectr. Export your collection as CSV from Collectr, then upload it here.` (`:226` at review time) becomes `Import your sealed Pokémon TCG collection from Collectr. Export your collection as CSV from Collectr, then upload it here.`
+- Find both with `grep -n "Pokemon" app/components/Portfolio/cards/ImportHoldingsModal.tsx` (expect exactly these two lines). If a test asserts the old error text (`grep -rn "No valid products" app --include=*.test.*`), update it to the new text.
 
 13c. `PortfolioDashboard.tsx:128` ("Track your Pokemon TCG sealed product investments") was removed in step 9e.
 
@@ -1020,7 +1114,7 @@ Read the diff of every file the script printed: each changed line must differ on
 
 ### Step 16. `app/__tests__/uiConventions.test.ts` (new): keep it this way
 
-A static guard, in lieu of a lint plugin, that fails CI if the palette, the promo rules or the dialog rule regress. Code in "Tests" 1. Run it: it must pass on the tree produced by steps 1 to 15. If it lists a file added by another package (for example WP14's `Modal.tsx` using `gray-*`), convert that file with the step 6 script rather than allowlisting it.
+A static guard, in lieu of a lint plugin, that fails CI if the palette, the promo rules or the dialog rule regress. Code in "Tests" 1. Run it: it must pass on the tree produced by steps 1 to 15. If it lists a file added by another package (for example a WP13 or WP14 component using `gray-*` or `text-blue-600`), convert that file with the step 6 script rather than allowlisting it, and name the file in the PR. If it lists a comment (the alert/confirm check scans comments too), reword the comment so it no longer contains `alert(` or `confirm(`.
 
 ## Pitfalls: do not do this
 
@@ -1034,6 +1128,9 @@ A static guard, in lieu of a lint plugin, that fails CI if the palette, the prom
 - **Do not change `text-slate-400` here.** The contrast sweep is WP14 (F095). Its verifier also warned not to route hint text through `--pf-muted` (#94a3b8 is slate-400 itself).
 - **Do not use `autoFocus` inside `ConfirmDialog`** (F030 verifier correction 4): React 19 calls `.focus()` at commit, before the effect that runs `showModal()`, so focus lands on the first button instead. Focus explicitly after `showModal()` as in step 2.
 - **Do not call `showModal()` on an already open dialog** (it throws `InvalidStateError`); keep the `if (!dialog.open)` guard. React strict mode mounts, cleans up and remounts effects in development.
+- **Do not drop `onClose={handleNativeClose}` or the `closingFromEffectRef` guard from `ConfirmDialog`.** Browsers may close a modal dialog without a cancelable request (Chrome does on a second Escape with no user activation in between). Without the handler the dialog disappears while the parent still thinks it is open, so the trigger button stops working until reload; without the guard, the component's own `close()` on unmount would be reported as a dismissal.
+- **Do not rely on the `cancel` event alone for Escape, and do not dismiss on every click on the `<dialog>`.** Handle Escape as a `keydown` (as WP14's `Dialog` does), and dismiss on a backdrop click only when the press also started on the backdrop, so selecting the typed text and releasing outside the panel does not close the account-deletion dialog.
+- **Do not write `alert(` or `confirm(` (with the parenthesis) anywhere under `app/` outside `__tests__`, comments included.** The step 16 guard test is a text scan and fails on comments too.
 - **Do not rely on the browser's default dialog centring.** Tailwind 4 preflight zeroes margins; `m-auto` is required.
 - **Do not keep `ConfirmDialog` always mounted with an `open` prop.** Resetting the typed text would need a state update inside an effect, which is a lint error in this repo; conditional mounting resets it for free.
 - **Do not show `err.message`, `error.message` or a server's `data.error` text for our own `/api/account/*` routes.** Their bodies are "Forbidden", "Unauthorized", "Payload too large". Map by status with `apiFailureMessage` and log the original with `logCaughtError`.
@@ -1139,20 +1236,16 @@ describe("CardRinkTCG promo (F097)", () => {
 
 ### 2. `app/components/ui/__tests__/ConfirmDialog.test.tsx` (new)
 
-Cases:
-- Mounting opens it: `getByRole("dialog", { name: "Delete this holding?" })` exists, has the body as its description, and `document.activeElement` is the Cancel button.
-- With `confirmText="DELETE"`: focus is on the text field; the confirm button is disabled; typing `delete` keeps it disabled; typing `DELETE` enables it; clicking calls `onConfirm` once.
-- Cancel calls `onDismiss`; a `cancel` event (Escape) calls `onDismiss` and is `defaultPrevented`; a click whose target is the `<dialog>` itself calls `onDismiss`; a click on the body text does not.
-- With `busy`: both buttons are disabled, the confirm button shows `busyLabel`, and the `cancel` event does not call `onDismiss`.
-- `error="We couldn't delete this holding. Please try again."` renders in a `role="alert"` element inside the dialog.
-- Unmounting returns focus to the element focused before it opened.
+jsdom (no docblock). Relies on WP14's `jest.setup.ts` polyfill; if `getByRole("dialog")` cannot find the element, the polyfill is missing (step 1). Write the file exactly as below.
 
 ```tsx
-import { useState } from "react";
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { useState, type ComponentProps } from "react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import ConfirmDialog from "../ConfirmDialog";
 
-function renderDialog(props: Partial<React.ComponentProps<typeof ConfirmDialog>> = {}) {
+type Props = ComponentProps<typeof ConfirmDialog>;
+
+function renderDialog(props: Partial<Props> = {}) {
   const onConfirm = jest.fn();
   const onDismiss = jest.fn();
   render(
@@ -1166,11 +1259,13 @@ function renderDialog(props: Partial<React.ComponentProps<typeof ConfirmDialog>>
       <p>Surging Sparks Booster Box will be removed.</p>
     </ConfirmDialog>
   );
-  return { onConfirm, onDismiss, dialog: screen.getByRole("dialog", { name: "Delete this holding?" }) };
+  const dialog = screen.getByRole("dialog", { name: "Delete this holding?" }) as HTMLDialogElement;
+  return { onConfirm, onDismiss, dialog };
 }
 
 it("opens on mount, is described by its body, and focuses Cancel", () => {
   const { dialog } = renderDialog();
+  expect(dialog).toHaveAttribute("open");
   expect(dialog).toHaveAccessibleDescription("Surging Sparks Booster Box will be removed.");
   expect(document.activeElement).toBe(within(dialog).getByRole("button", { name: "Cancel" }));
 });
@@ -1184,34 +1279,86 @@ it("requires the exact confirmation text", () => {
   fireEvent.change(input, { target: { value: "delete" } });
   expect(confirm).toBeDisabled();
   fireEvent.change(input, { target: { value: "DELETE" } });
+  expect(confirm).toBeEnabled();
   fireEvent.click(confirm);
   expect(onConfirm).toHaveBeenCalledTimes(1);
 });
 
-it("dismisses on Escape unless busy", () => {
+it("dismisses on Cancel, Escape and a cancel request", () => {
   const { onDismiss, dialog } = renderDialog();
-  const escape = new Event("cancel", { cancelable: true });
-  fireEvent(dialog, escape);
-  expect(escape.defaultPrevented).toBe(true);
+  fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+  expect(onDismiss).toHaveBeenCalledTimes(1);
+  fireEvent.keyDown(dialog, { key: "Escape" });
+  expect(onDismiss).toHaveBeenCalledTimes(2);
+  const cancel = new Event("cancel", { cancelable: true });
+  fireEvent(dialog, cancel);
+  expect(cancel.defaultPrevented).toBe(true);
+  expect(onDismiss).toHaveBeenCalledTimes(3);
+});
+
+it("dismisses on a backdrop click but not on a click inside the panel", () => {
+  const { onDismiss, dialog } = renderDialog();
+  const body = screen.getByText(/will be removed/);
+  fireEvent.pointerDown(body);
+  fireEvent.click(body);
+  expect(onDismiss).not.toHaveBeenCalled();
+  // A press that starts inside and ends on the backdrop does not dismiss.
+  fireEvent.pointerDown(body);
+  fireEvent.click(dialog);
+  expect(onDismiss).not.toHaveBeenCalled();
+  fireEvent.pointerDown(dialog);
+  fireEvent.click(dialog);
   expect(onDismiss).toHaveBeenCalledTimes(1);
 });
 
-it("ignores Escape and disables buttons while busy", () => {
+it("ignores every dismissal path and disables buttons while busy", () => {
   const { onDismiss, dialog } = renderDialog({ busy: true, busyLabel: "Deleting…" });
+  fireEvent.keyDown(dialog, { key: "Escape" });
   fireEvent(dialog, new Event("cancel", { cancelable: true }));
+  fireEvent.pointerDown(dialog);
+  fireEvent.click(dialog);
   expect(onDismiss).not.toHaveBeenCalled();
   expect(within(dialog).getByRole("button", { name: "Cancel" })).toBeDisabled();
   expect(within(dialog).getByRole("button", { name: "Deleting…" })).toBeDisabled();
 });
 
-it("returns focus to the opener when it unmounts", () => {
+it("keeps state in sync when the browser closes the dialog itself", () => {
+  const { onDismiss, dialog } = renderDialog();
+  act(() => dialog.close());
+  expect(onDismiss).toHaveBeenCalledTimes(1);
+});
+
+it("reopens instead of dismissing when the browser closes it while busy", () => {
+  const { onDismiss, dialog } = renderDialog({ busy: true });
+  act(() => dialog.close());
+  expect(onDismiss).not.toHaveBeenCalled();
+  expect(dialog).toHaveAttribute("open");
+});
+
+it("shows a fixed error message as an alert inside the dialog", () => {
+  const { dialog } = renderDialog({ error: "We couldn't delete this holding. Please try again." });
+  expect(within(dialog).getByRole("alert")).toHaveTextContent(
+    "We couldn't delete this holding. Please try again."
+  );
+});
+
+it("returns focus to the opener and does not call onDismiss again when it unmounts", () => {
+  const onDismiss = jest.fn();
   function Harness() {
     const [open, setOpen] = useState(false);
     return (
       <>
         <button type="button" onClick={() => setOpen(true)}>Open</button>
         {open && (
-          <ConfirmDialog title="Sure?" confirmLabel="Yes" onConfirm={() => {}} onDismiss={() => setOpen(false)}>
+          <ConfirmDialog
+            title="Sure?"
+            confirmLabel="Yes"
+            onConfirm={() => {}}
+            onDismiss={() => {
+              onDismiss();
+              setOpen(false);
+            }}
+          >
             <p>Body</p>
           </ConfirmDialog>
         )}
@@ -1225,14 +1372,14 @@ it("returns focus to the opener when it unmounts", () => {
   fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
   expect(screen.queryByRole("dialog")).toBeNull();
   expect(document.activeElement).toBe(opener);
+  // The close() in the unmount cleanup fires "close"; it must not be reported.
+  expect(onDismiss).toHaveBeenCalledTimes(1);
 });
 ```
 
-Write the backdrop-click and error cases in the same style (`fireEvent.click(dialog)` versus `fireEvent.click(screen.getByText(/will be removed/))`). If `getByRole("dialog")` cannot find the element, the polyfill from step 1 is missing.
-
 ### 3. `app/components/Portfolio/__tests__/PortfolioDashboard.test.tsx` (new)
 
-Cases: clicking a row's delete opens "Delete this holding?" naming the product; Cancel closes it and `deleteHolding` is not called; confirming calls `deleteHolding(1)` then `applyHoldingDeleted(1)` and closes; a `false` result keeps the dialog open with "We couldn't delete this holding. Please try again." and never calls `window.alert`; the dashboard renders no `<h1>` and no "Track your Pokemon" text.
+Cases: clicking a row's delete opens "Delete this holding?" naming the product; Cancel closes it and `deleteHolding` is not called; confirming calls `deleteHolding(1)` then `applyHoldingDeleted(1)` and closes; a `false` result keeps the dialog open with "We couldn't delete this holding. Please try again." and never calls `window.alert`; the dashboard renders no `<h1>` and no "Track your Pokemon" text. Mock factories use `jest.requireActual` + `createElement` instead of JSX, the same convention as WP05's `AddHoldingModal.test.tsx`.
 
 ```tsx
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
@@ -1274,9 +1421,14 @@ jest.mock("../cards/EditHoldingModal", () => ({ __esModule: true, default: () =>
 jest.mock("../cards/ImportHoldingsModal", () => ({ __esModule: true, default: () => null }));
 jest.mock("../cards/HoldingsTable", () => ({
   __esModule: true,
-  default: ({ onDelete }: { onDelete: (id: number) => void }) => (
-    <button type="button" onClick={() => onDelete(1)}>Delete row 1</button>
-  ),
+  default: ({ onDelete }: { onDelete: (id: number) => void }) => {
+    const React = jest.requireActual<typeof import("react")>("react");
+    return React.createElement(
+      "button",
+      { type: "button", onClick: () => onDelete(1) },
+      "Delete row 1"
+    );
+  },
 }));
 
 import { deleteHolding } from "../../../lib/portfolioApi";
@@ -1293,9 +1445,18 @@ it("confirms in a dialog, then deletes and updates local state", async () => {
   const dialog = screen.getByRole("dialog", { name: "Delete this holding?" });
   expect(dialog).toHaveTextContent("Surging Sparks Booster Box will be removed from your portfolio.");
   fireEvent.click(within(dialog).getByRole("button", { name: "Delete holding" }));
-  await waitFor(() => expect(mockHookState.applyHoldingDeleted).toHaveBeenCalledWith(1));
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
   expect(deleteHoldingMock).toHaveBeenCalledWith(1);
+  expect(mockHookState.applyHoldingDeleted).toHaveBeenCalledWith(1);
+});
+
+it("does nothing when the dialog is cancelled", () => {
+  render(<PortfolioDashboard />);
+  fireEvent.click(screen.getByRole("button", { name: "Delete row 1" }));
+  const dialog = screen.getByRole("dialog", { name: "Delete this holding?" });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
   expect(screen.queryByRole("dialog")).toBeNull();
+  expect(deleteHoldingMock).not.toHaveBeenCalled();
 });
 
 it("shows a failure inside the dialog instead of alert()", async () => {
@@ -1310,38 +1471,47 @@ it("shows a failure inside the dialog instead of alert()", async () => {
   );
   expect(mockHookState.applyHoldingDeleted).not.toHaveBeenCalled();
   expect(alertSpy).not.toHaveBeenCalled();
+  alertSpy.mockRestore();
+});
+
+it("renders no second heading or tagline", () => {
+  render(<PortfolioDashboard />);
+  expect(screen.queryByRole("heading", { level: 1 })).toBeNull();
+  expect(screen.queryByText(/Track your Pok/)).toBeNull();
+  expect(screen.getByRole("button", { name: /Add Holding/ })).toBeInTheDocument();
 });
 ```
 
-Add the Cancel case and the "no `<h1>`" case (`expect(screen.queryByRole("heading", { level: 1 })).toBeNull()`) in the same style. If WP05's hook field names differ, match them.
+If `PortfolioDashboard` imports a module that is not mocked above (run `grep -n "^import" app/components/Portfolio/PortfolioDashboard.tsx`), add a `() => null` mock for it in the same style. If WP05's hook field names differ from `mockHookState`, match the hook.
 
 ### 4. `app/account/__tests__/page.test.tsx` (update; created by WP04)
 
-Keep WP04's mocks and cases. Add `jest.mock("../../lib/logger", () => ({ logCaughtError: jest.fn() }));` and a `describe("export and deletion (WP15)")` with `global.fetch = fetchMock` set in `beforeEach`. Use plain response objects (jsdom has no `Response`): `{ ok: false, status: 500, json: async () => ({ error: "Failed to delete account" }) }`. Cases:
-- "Delete Account" opens a dialog named "Delete your account?"; its "Delete account" button is disabled until `DELETE` is typed; confirming calls `fetch("/api/account/delete", { method: "DELETE", headers: { "x-pokefin-request": "1" } })`, then `signOut`, then `mockPush("/")` (response `{ ok: true, status: 200 }`).
-- A 500 shows "We couldn't delete your account. Please try again." inside the dialog, `mockPush` is not called, and the raw "Failed to delete account" text is not in the document.
-- `fetchMock.mockRejectedValue(new TypeError("Failed to fetch"))` shows "We couldn't reach Pokéfin. Check your connection and try again." and "Failed to fetch" is not in the document.
+Keep WP04's mocks and cases. Add `jest.mock("../../lib/logger", () => ({ logCaughtError: jest.fn() }));` and a `describe("export and deletion (WP15)")` block with `const fetchMock = jest.fn(); beforeEach(() => { fetchMock.mockReset(); global.fetch = fetchMock as unknown as typeof fetch; });`. Use plain response objects (jsdom has no `Response`): `{ ok: false, status: 500, json: async () => ({ error: "Failed to delete account" }) }`. Open the dialog with `fireEvent.click(screen.getByRole("button", { name: "Delete Account" }))` and query inside it with `within(screen.getByRole("dialog", { name: "Delete your account?" }))` (the page button is "Delete Account", the dialog button is "Delete account"; `getByRole` name matching is case-sensitive). Wrap each confirm click in `await act(async () => { fireEvent.click(...); })`. Cases:
+- "Delete Account" opens a dialog named "Delete your account?"; its "Delete account" button is disabled until `DELETE` is typed into the field labelled "Type DELETE to confirm"; confirming calls `fetch("/api/account/delete", { method: "DELETE", headers: { "x-pokefin-request": "1" } })`, then `signOut`, then `mockPush("/")` (response `{ ok: true, status: 200 }`).
+- A 500 shows "We couldn't delete your account. Please try again." inside the dialog, the dialog stays open, `mockPush` is not called, and `screen.queryByText(/Failed to delete account/)` is null.
+- `fetchMock.mockRejectedValue(new TypeError("Failed to fetch"))` shows "We couldn't reach Pokéfin. Check your connection and try again." and `screen.queryByText(/Failed to fetch/)` is null.
 - A 401 on delete shows "Your session has expired. Please sign in again.".
-- "Export my data" with a 500 (`json` resolving `{ error: "Failed to export data" }`) shows "We couldn't prepare your data export. Please try again."; with a 403 shows "This request was blocked. Refresh the page and try again.".
-- `jest.spyOn(window, "confirm")` is never called in any of the above.
+- "Export my data" with a 500 (`json` resolving `{ error: "Failed to export data" }`) shows "We couldn't prepare your data export. Please try again." and not "Failed to export data"; with a 403 shows "This request was blocked. Refresh the page and try again.".
+- `const confirmSpy = jest.spyOn(window, "confirm");` at the start of the describe's first case; it is never called.
 
 ### 5. `app/components/Portfolio/__tests__/HoldingsTable.test.tsx` (update)
 
-Replace the four class assertions at `:403`, `:431`, `:442`, `:445`:
-- `expect(dateButton).toHaveClass("bg-blue-100")` becomes `expect(dateButton).toHaveAttribute("aria-pressed", "true")`.
-- `expect(updatedNameButton).toHaveClass("bg-blue-100")` becomes `expect(updatedNameButton).toHaveAttribute("aria-pressed", "true")`.
-- `expect(dateButton).not.toHaveClass("bg-blue-100")` becomes `expect(dateButton).toHaveAttribute("aria-pressed", "false")`.
+Replace the four class assertions (review-time `:403`, `:431`, `:442`, `:445`; find them with `grep -n "bg-blue-100" app/components/Portfolio/__tests__/HoldingsTable.test.tsx`):
+- `:403` and `:431`, both `expect(dateButton).toHaveClass("bg-blue-100")`, become `expect(dateButton).toHaveAttribute("aria-pressed", "true")`.
+- `:442` `expect(updatedNameButton).toHaveClass("bg-blue-100")` becomes `expect(updatedNameButton).toHaveAttribute("aria-pressed", "true")`.
+- `:445` `expect(dateButton).not.toHaveClass("bg-blue-100")` becomes `expect(dateButton).toHaveAttribute("aria-pressed", "false")`.
+
+Afterwards `grep -n "bg-blue-100" app/components/Portfolio/__tests__/HoldingsTable.test.tsx` prints nothing.
 
 ### 6. `app/components/BoxCalculator/__tests__/BoxCalculator.test.tsx` (update; created by WP06)
 
-Reuse WP06's mocks (`hook`, `SAVED`, `SETS`). If the file has no `beforeEach(() => jest.clearAllMocks())` and no reset of `hook.savedRecipes`, add both (reset `hook.savedRecipes = [SAVED]`). Add:
+Reuse WP06's mocks and helpers (`hook`, `SAVED`, `SETS`, `openSavedAndLoad`, its `beforeEach` that runs `jest.clearAllMocks()` and resets `hook.savedRecipes = [SAVED]`, and its `afterEach(() => jest.restoreAllMocks())`). Add `within` to the `@testing-library/react` import if it is missing. Add:
 
 ```tsx
 it("shows save validation inline instead of alert()", () => {
   const alertSpy = jest.spyOn(window, "alert").mockImplementation(() => {});
   render(<BoxCalculator />);
-  fireEvent.click(screen.getByText(/Show saved recipes/));
-  fireEvent.click(screen.getByText("Saved CAD box"));
+  openSavedAndLoad();
   fireEvent.change(screen.getByPlaceholderText(/Recipe name/), { target: { value: "   " } });
   fireEvent.click(screen.getByRole("button", { name: "Update" }));
   expect(screen.getByText(/Give your recipe a name of 1 to/)).toBeInTheDocument();
@@ -1349,9 +1519,20 @@ it("shows save validation inline instead of alert()", () => {
   expect(alertSpy).not.toHaveBeenCalled();
 });
 
+it("reports a failed save on the button and inline", async () => {
+  hook.saveRecipe.mockResolvedValue(null);
+  render(<BoxCalculator />);
+  openSavedAndLoad();
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "Update" }));
+  });
+  expect(screen.getByRole("button", { name: "Save failed" })).toBeInTheDocument();
+  expect(screen.getByText("We couldn't save this recipe. Please try again.")).toBeInTheDocument();
+});
+
 it("asks in a dialog before it stops sharing", async () => {
-  const confirmSpy = jest.spyOn(window, "confirm");
-  const shared = { ...SAVED, id: 4, name: "Shared box", shareCode: "abc123", isPublic: true };
+  const confirmSpy = jest.spyOn(window, "confirm").mockImplementation(() => true);
+  const shared = { ...SAVED, id: 4, name: "Shared box", shareCode: "d".repeat(32), isPublic: true };
   hook.savedRecipes = [shared];
   hook.setRecipeSharing.mockResolvedValue({ ...shared, shareCode: null, isPublic: false });
   render(<BoxCalculator />);
@@ -1360,13 +1541,31 @@ it("asks in a dialog before it stops sharing", async () => {
   fireEvent.click(screen.getByRole("button", { name: "Stop sharing" }));
   const dialog = screen.getByRole("dialog", { name: "Stop sharing this recipe?" });
   expect(hook.setRecipeSharing).not.toHaveBeenCalled();
-  fireEvent.click(within(dialog).getByRole("button", { name: "Stop sharing" }));
-  await waitFor(() => expect(hook.setRecipeSharing).toHaveBeenCalledWith(4, false));
+  await act(async () => {
+    fireEvent.click(within(dialog).getByRole("button", { name: "Stop sharing" }));
+  });
+  expect(hook.setRecipeSharing).toHaveBeenCalledWith(4, false);
+  expect(screen.queryByRole("dialog")).toBeNull();
+  expect(screen.getByRole("button", { name: "Make shareable" })).toBeInTheDocument();
   expect(confirmSpy).not.toHaveBeenCalled();
+});
+
+it("keeps sharing when the stop-sharing dialog is cancelled", () => {
+  const shared = { ...SAVED, id: 4, name: "Shared box", shareCode: "d".repeat(32), isPublic: true };
+  hook.savedRecipes = [shared];
+  render(<BoxCalculator />);
+  fireEvent.click(screen.getByText(/Show saved recipes/));
+  fireEvent.click(screen.getByText("Shared box"));
+  fireEvent.click(screen.getByRole("button", { name: "Stop sharing" }));
+  const dialog = screen.getByRole("dialog", { name: "Stop sharing this recipe?" });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+  expect(screen.queryByRole("dialog")).toBeNull();
+  expect(hook.setRecipeSharing).not.toHaveBeenCalled();
+  expect(screen.getByRole("button", { name: "Copy share link" })).toBeInTheDocument();
 });
 ```
 
-Also add a case where `hook.saveRecipe.mockResolvedValue(null)` after a valid Update: the button reads "Save failed" and "We couldn't save this recipe. Please try again." is shown. Import `within` and `waitFor` if the file does not yet.
+The `mockImplementation(() => true)` on the `confirm` spy keeps jsdom's "not implemented" error out of the output if a regression calls it; the assertion still fails in that case.
 
 ### 7. `app/lib/__tests__/userMessages.test.ts` (new)
 
@@ -1386,13 +1585,15 @@ pnpm install --frozen-lockfile
 # Types: expect no output, exit 0.
 pnpm exec tsc --noEmit
 
-# Lint the touched files: expect no new errors versus the baseline recorded in "Before you start"
-# (pre-existing: HoldingsTable static-components errors, owned by WP17).
+# Lint the touched files: the error count must not exceed the baseline recorded in "Before you start"
+# check 6 (same file list plus the new files; pre-existing: HoldingsTable static-components errors,
+# owned by WP17). The new files (app/components/ui, app/lib/userMessages.ts, app/__tests__) must add 0 errors.
+# jest.setup.ts is not linted (eslint ignores it) but tsc covers it.
 pnpm exec eslint app/components/ui app/components/CardRinkPromo.tsx app/components/MarketView/MarketView.tsx \
   app/components/ProductPrices/index.tsx app/components/ProductPrices/shared \
   app/components/BoxCalculator app/components/Portfolio app/account app/privacy app/error.tsx \
   app/global-error.tsx app/stats app/compare app/lib/userMessages.ts app/__tests__ \
-  app/page.tsx app/prices app/market app/product app/box-calculator jest.setup.ts
+  app/page.tsx app/prices app/market app/product app/box-calculator
 
 # Focused tests: all pass.
 pnpm test --ci app/__tests__/uiConventions.test.ts app/components/ui app/lib/__tests__/userMessages.test.ts \
@@ -1421,19 +1622,20 @@ Manual checks. Run locally against the stub (catalog is empty, which is fine for
 2. `/prices`: no "Ready to buy Pokémon cards?" card anywhere; one "Partner store" block below the grid.
 3. DevTools Elements on any of the six pages: the promo is `<aside aria-label="Partner store">`; no `<footer>` exists inside `<main>`.
 4. `/box-calculator`: primary button, focus rings and NAV figures are the same blue as the rest of the site (#2563eb); no gray-tinted neutrals. Signed in, clear the recipe name and press Save/Update: a red inline message appears under the name row and no browser popup opens.
-5. A product card with a negative return on `/prices` (preview, real data): the percentage and the card's left stripe are the same rose colour (#e11d48), not the brand red.
-6. `/privacy`: "Pokéfin" everywhere; the Contact paragraph links to the GitHub repository; "contact the operator" jumps to it.
-7. `/account` (preview, signed in): "Delete Account" opens a centred dialog; the page behind is not clickable; Escape closes it and focus returns to the button; "Delete account" stays disabled until DELETE is typed. Do not complete the deletion unless it is a throwaway account. In DevTools Network, set "Offline" and press "Export my data": the message reads "We couldn't reach Pokéfin. Check your connection and try again."
+5. A product card with a negative return on `/prices` (preview, real data): the percentage is rose-700 (`--pf-loss-text`, #be123c) next to the rose-600 left stripe (`--pf-loss`, #e11d48), both from the loss palette; neither is the brand red #dc2626 used by the Pokéball buttons. (Text uses the darker `-text` shade for contrast; WP14 set that.)
+6. `/privacy`: "Pokéfin" everywhere; the Contact paragraph's link opens `https://github.com/0xDario/Pokefin/issues/new` in a new tab; "contact the operator" jumps to the Contact heading.
+7. `/account` (preview, signed in): "Delete Account" opens a centred dialog with focus in the "Type DELETE to confirm" field; the page behind is not clickable and does not scroll; Escape closes it and focus returns to the button; pressing inside the field, dragging and releasing on the dark backdrop does not close it; a plain click on the backdrop does; "Delete account" stays disabled until DELETE is typed. Do not complete the deletion unless it is a throwaway account. In DevTools Network, set "Offline" and press "Export my data": the message reads "We couldn't reach Pokéfin. Check your connection and try again."
 8. `/portfolio` (preview, signed in): one "My Portfolio" heading; Import and Add Holding buttons sit right-aligned under it; the trash icon on a holding opens "Delete this holding?" naming the product.
 9. Stop sharing a shared recipe on `/box-calculator` (preview): a dialog asks first; no native popup.
 
 ## Owner actions
 
-None required.
+None required before merge or deploy. No migrations, environment variables or data changes.
 
-Optional, after merge:
-1. Privacy contact. The default link points to `https://github.com/0xDario/Pokefin`. If you prefer email, edit `PRIVACY_CONTACT_URL` in `frontend/app/privacy/page.tsx` to `mailto:<your address>` and redeploy. Confirm by opening `/privacy` and clicking "Pokéfin GitHub repository".
+Recommended after merge:
+1. Privacy contact. The default link opens a new public GitHub issue (`https://github.com/0xDario/Pokefin/issues/new`), which is a working channel but a public one. For GDPR requests a private channel is better: edit `PRIVACY_CONTACT_URL` in `frontend/app/privacy/page.tsx` to `mailto:<your address>`, change the link text to "email the operator" and delete the sentence starting "Issues are public", then bump `LAST_UPDATED` and redeploy. Confirm by opening `/privacy` and clicking the link. If you keep the issue link, keep GitHub issues enabled on the repository.
 2. Promo policy. This PR applies the plan's decision (one CardRinkTCG block per page, below the content; the compact banner is removed). If the store relationship needs more placements, reverting step 4 alone restores the banners; follow the pitfalls on storage and placement if you do.
+3. "Seller Tools" in the primary nav (F092's IA suggestion) was left unchanged. Decide whether it should move to the footer or be renamed "Shopify Price Compare"; that is a follow-up change to `Header.tsx`.
 
 ## Acceptance criteria
 
@@ -1447,6 +1649,8 @@ Optional, after merge:
 - [ ] Box Calculator validation errors render inline with `role="alert"`; the Save button's failure label is "Save failed".
 - [ ] `/stats` empty state and the compare market-data error contain no "Supabase" or "migration".
 - [ ] `/portfolio` has exactly one `<h1>`.
+- [ ] `/privacy` Contact section has `id="contact"` and a working link (`PRIVACY_CONTACT_URL`); "contact the operator" links to `#contact`.
+- [ ] `ConfirmDialog` tests cover Escape (keydown and `cancel`), backdrop press-and-release, a browser-forced close (dismiss when idle, reopen when busy), busy blocking, typed confirmation and focus return.
 - [ ] "Pokéfin"/"Pokémon" in every changed UI string; `import.ts` and data fixtures still say "Pokemon".
 - [ ] No three-dot ellipsis remains in UI strings (`grep -rnE '[A-Za-z]\.\.\.["<]' frontend/app --include=*.tsx` is empty).
 - [ ] `tsc`, the full jest suite and `pnpm build:stub` pass; lint errors do not increase.
@@ -1477,4 +1681,4 @@ fix(ui): one palette, one promo per page, user-facing copy and dialogs
 
 PR title: `WP15: visual consistency, promo placement and user-facing copy`
 
-PR body summary: link `audits/remediation/WP15-visual-polish-and-copy.md`; list F091 (cluster F091, F099; slate-400 contrast is WP14), F097 (cluster F092, F097, F101), F103. Describe the visible changes per page (market table no longer below an ad, one partner block per page, consistent blue and rose, dialogs instead of popups, typed DELETE for account deletion, single portfolio heading). State that the `<footer>` to `<aside>` change is for honest semantics, not landmark de-duplication (F097 verifier), and that `rel="sponsored"` was deliberately not added. Note the deviation: `ConfirmDialog` is self-contained rather than built on WP14's `Modal`, and a follow-up may consolidate them. Paste the Verification output. Under "Noticed, out of scope": "Seller Tools" in the primary nav (F092 IA suggestion), no confirmation on the saved-recipe trash button, "Found N products" pluralisation.
+PR body summary: link `audits/remediation/WP15-visual-polish-and-copy.md`; list F091 (cluster F091, F099; slate-400 contrast is WP14), F097 (cluster F092, F097, F101), F103. Describe the visible changes per page (market table no longer below an ad, one partner block per page, consistent blue and rose, dialogs instead of popups, typed DELETE for account deletion, single portfolio heading). State that the `<footer>` to `<aside>` change is for honest semantics, not landmark de-duplication (F097 verifier), and that `rel="sponsored"` was deliberately not added. Note the deviation: `ConfirmDialog` is self-contained rather than built on WP14's `Dialog` (it blocks dismissal while busy, has no X button and supports typed confirmation), as WP14's spec anticipates, and a follow-up may consolidate them. Paste the Verification output. Under "Noticed, out of scope": "Seller Tools" in the primary nav (F092 IA suggestion), no confirmation on the saved-recipe trash button, "Found N products" pluralisation.

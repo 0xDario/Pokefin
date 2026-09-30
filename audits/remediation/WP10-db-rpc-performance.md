@@ -1,11 +1,11 @@
 # WP10: Database: bounded market RPCs and portfolio history RPC
 
 - **Findings covered**
-  - F142 (full, cluster members F142, F080): `get_market_product_metrics()` materialises every `product_price_history` row ever written into an unindexed CTE and runs six correlated "latest row on or before day N" subqueries per active product against it; it runs twice per revalidation (once under `get_market_product_summaries`, once under `get_set_analytics`) and is callable by anon. Production: mean 734-903 ms per summaries call, about ten 3 s statement timeouts (HTTP 500s) per day.
+  - F142 (full, cluster members F142, F080): `get_market_product_metrics()` materialises every `product_price_history` row ever written into an unindexed CTE and runs six correlated "latest row on or before day N" subqueries per active product against it; it runs twice per revalidation (once under `get_market_product_summaries`, once under `get_set_analytics`) and is callable by anon. Production: mean 734-903 ms per summaries call, about ten 3 s statement timeouts (HTTP 500s) per day. This package implements the verifier correction's first sentence (bound `daily_history` to 366 days, LATERAL index reads for the anchors). F080's anon-amplification concern is addressed by that bound: each anonymous call becomes a bounded, index-driven read instead of a whole-history scan. The correction's "longer term" metrics table and F080's anon revoke are not in any package of this plan; step 10c records them as an open follow-up in `audits/HARDENING_FOLLOWUPS.md`. The "hundreds of server calls per hour" part is F143 (WP11).
   - F148 (full): `get_market_product_volume_metrics()` computes `day_freshness` over the whole `product_sales_history` table with no date bound and no index matching its predicates.
   - F145 (full): `getPortfolioHistory` pages every daily price row for every held product to the browser (up to 300 serial 1000-row pages) to compute one value per day.
 - **Priority rationale**: the metrics RPC is behind every catalog page and already times out in production; this is the cheapest change that removes the timeouts before WP11 changes caching.
-- **Effort**: M (6 to 8 hours: 3 migrations and a check script, one route, repo/client additions, 5 test files, docs).
+- **Effort**: M (6 to 8 hours: 3 migrations and a check script, one route, repo/client additions, 4 new and 2 updated Jest files plus one pytest file, docs).
 - **Depends on**: WP01 (migrations 0024/0025, including `portfolio_holdings_portfolio_id_idx`), WP05 (`/api/portfolio` routes, `lib/server/portfolioRepo.ts`, `lib/portfolioApi.ts`, `lib/portfolioInput.ts`, the rewritten `usePortfolioData.ts`). WP06 is not a dependency, but it claims migration number 0026 (see "Before you start" for numbering).
 - **Unblocks**: WP11 (caching and revalidation build on the bounded RPCs), WP21 (database hardening and least-privilege role).
 - **Suggested branch name**: `remediation/wp10-db-rpc-performance`
@@ -49,6 +49,8 @@ grep -n "export type Parsed" frontend/app/lib/portfolioInput.ts
 grep -n "getPortfolioHistory(portfolioId, TIMEFRAME_DAYS\[timeframe\], holdings, controller.signal)" \
   frontend/app/components/Portfolio/hooks/usePortfolioData.ts
 grep -n "rejectIfNotAppRequest\|export function reject" frontend/app/lib/csrf.ts
+grep -n "export async function requireRouteUser\|export function jsonNoStore" frontend/app/lib/routeAuth.ts   # expect 2 lines
+grep -n "requireRouteUser\|jsonNoStore" frontend/app/api/portfolio/route.ts                                    # the pattern step 7 copies
 
 # 3. Free migration numbers
 ls migrations | sort
@@ -57,7 +59,7 @@ ls migrations | sort
 Assumptions to check, and what to do if one fails:
 
 - **Migration numbers.** This spec uses `0027`, `0028`, `0029`, assuming WP01 added `0024`/`0025` and WP06 added `0026`. If `ls migrations` shows a different highest number N, use N+1, N+2, N+3 in order (index, market functions, portfolio history) and substitute them everywhere this spec says 0027/0028/0029, including the comments inside the SQL files, the check script header, the README and HARDENING_FOLLOWUPS text.
-- **WP05 missing.** If `findPortfolioId`, `PortfolioApiError`, `Parsed` or the WP05 hook call are absent, stop: this package extends WP05's files and must not recreate them. The migrations (steps 1-4) and the Python test (step 11) do not depend on WP05 and may be done first.
+- **WP05 missing.** If `findPortfolioId`, `PortfolioApiError`, `Parsed`, `requireRouteUser`/`jsonNoStore` (`app/lib/routeAuth.ts`) or the WP05 hook call are absent, stop: this package extends WP05's files and must not recreate them. The migrations (steps 1-4) and the Python test (step 11) do not depend on WP05 and may be done first.
 - **The GET gate helper.** WP05 step 6 adds `rejectIfNotAppRequest` to `csrf.ts` unless WP04 already added an equivalent. Use whatever name `frontend/app/api/portfolio/route.ts` imports for its GET gate.
 - **The price-history index.** The new anchors depend on an index on `product_price_history (product_id, recorded_at DESC)`. `0023:133-134` creates `idx_price_history_product_recorded`; production also carries an equivalent under another name. The owner confirms it in Owner actions step 2.
 - **verify_migration.py needs no change.** The plan asked to "update verify_migration.py for changed functions". It is fully generic: it derives every expectation from the file passed on the command line and hard-codes no function name (`grep -n "market\|portfolio" verify_migration.py` finds only docstring mentions). Running it on the new files is the update. The one construct it refuses, a partial index whose predicate compares against a literal (`verify_migration.py:185`), is why the index lives in its own file (step 1) and is checked with a catalog query instead. Do not edit `verify_migration.py`.
@@ -556,7 +558,7 @@ ALTER FUNCTION public.get_market_product_volume_metrics()
 
 ### Step 3. `audits/remediation/sql/WP10-market-metrics-equivalence.sql` (new, owner check for F142)
 
-A read-only script the owner runs in the Supabase SQL editor. It defines session-local copies of the OLD body (`20260506:32-196`) and the NEW body (from 0028) in `pg_temp`, and compares old, new and the live `public.get_market_product_metrics()` on one snapshot, with a 1e-9 relative float tolerance, inside `BEGIN ... ROLLBACK`. Generate it (do not hand-copy the bodies) from the repo root:
+A script the owner runs in the Supabase SQL editor. It changes nothing in the `public` schema: it defines session-local copies of the OLD body (`20260506:32-196`) and the NEW body (from 0028) in `pg_temp` (they disappear when the connection closes) and compares old, new and the live `public.get_market_product_metrics()` on one snapshot, with a 1e-9 relative float tolerance. It deliberately has no `BEGIN ... ROLLBACK` wrapper: the Supabase SQL editor shows only the LAST statement's result, so a trailing `ROLLBACK` would hide the result row (WP01 records the same rule). It uses `CREATE OR REPLACE FUNCTION pg_temp....` so a second run on a pooled connection that still holds the temp functions does not fail with "already exists". Generate it (do not hand-copy the bodies) from the repo root:
 
 ```bash
 mkdir -p audits/remediation/sql
@@ -579,9 +581,9 @@ RT='RETURNS TABLE (
 cat <<'EOF'
 -- WP10 equivalence check for get_market_product_metrics (review finding F142).
 --
--- Read-only. Creates two session-local copies of the function in pg_temp
--- (dropped automatically when the session ends) and compares, on one
--- snapshot:
+-- Changes nothing in public. Creates three session-local functions in
+-- pg_temp (dropped automatically when the connection closes) and compares,
+-- on one snapshot:
 --   old  = the body from migrations/20260506_market_performance_functions.sql
 --   new  = the body from migrations/0028_bounded_market_metrics.sql
 --   live = public.get_market_product_metrics() as deployed right now
@@ -589,32 +591,34 @@ cat <<'EOF'
 -- summation order in a parallel aggregate cannot report a false difference.
 --
 -- Run the WHOLE file in the Supabase SQL editor (select nothing first; the
--- editor runs only the selection when there is one) or with
--- psql -f. Expected result, one row:
+-- editor runs only the selection when there is one) or with psql -f. The
+-- editor shows only the last statement's result, which is why the final
+-- SELECT is the last statement and there is no BEGIN/ROLLBACK. Do not run it
+-- through a read-only connection (for example Supabase MCP in read-only
+-- mode): CREATE FUNCTION pg_temp... fails there.
+-- Expected result, one row:
 --   old_vs_new_missing = 0, old_vs_new_differing = 0,
 --   live_vs_new_differing = 0 after 0028 is applied
 --   (before it is applied, live is the old body, so live_vs_new_differing
 --   equals old_vs_new_differing, which must also be 0).
--- Run it on the same UTC day you compare: every anchor is relative to
--- current_date.
+-- Every anchor is relative to current_date, so old, new and live are all
+-- computed inside this one statement on the same day.
 
-BEGIN;
-
-CREATE FUNCTION pg_temp.near(a double precision, b double precision)
+CREATE OR REPLACE FUNCTION pg_temp.near(a double precision, b double precision)
 RETURNS boolean LANGUAGE sql IMMUTABLE AS $n$
   SELECT (a IS NULL AND b IS NULL)
       OR (a IS NOT NULL AND b IS NOT NULL
           AND abs(a - b) <= 1e-9 * greatest(1, abs(a), abs(b)))
 $n$;
 
-CREATE FUNCTION pg_temp.metrics_old()
+CREATE OR REPLACE FUNCTION pg_temp.metrics_old()
 EOF
 echo "$RT"
 echo 'LANGUAGE sql STABLE AS $old$'
 sed -n 32,196p migrations/20260506_market_performance_functions.sql
 echo '$old$;'
 echo
-echo 'CREATE FUNCTION pg_temp.metrics_new()'
+echo 'CREATE OR REPLACE FUNCTION pg_temp.metrics_new()'
 echo "$RT"
 echo 'LANGUAGE sql STABLE AS $new$'
 awk '/^CREATE OR REPLACE FUNCTION public.get_market_product_metrics/{f=1}
@@ -664,13 +668,11 @@ SELECT
                      OR live_new_differs) AS live_vs_new_differing,
   current_date AS compared_on
 FROM diff;
-
-ROLLBACK;
 EOF
 } > "$OUT"
 ```
 
-Sanity checks after generating: `sed -n 32p migrations/20260506_market_performance_functions.sql` prints `WITH active_products AS (` and `sed -n 196p` prints `LEFT JOIN trend_365 ON trend_365.product_id = anchors.product_id;` (that file is frozen, so these line numbers are stable). `grep -c "LEFT JOIN LATERAL" "$OUT"` prints 6. `grep -c '^\$old\$;$\|^\$new\$;$' "$OUT"` prints 2. On the local replica (Verification, optional) the script returns `products 298 | 0 | 0 | 0`, and a deliberate edit of one anchor bound in the new body makes it return 237 differing rows, so it does detect differences.
+Sanity checks after generating: `sed -n 32p migrations/20260506_market_performance_functions.sql` prints `WITH active_products AS (` and `sed -n 196p` prints `LEFT JOIN trend_365 ON trend_365.product_id = anchors.product_id;` (that file is frozen, so these line numbers are stable). `grep -c "LEFT JOIN LATERAL" "$OUT"` prints 6. `grep -c '^\$old\$;$\|^\$new\$;$' "$OUT"` prints 2. `grep -c "^CREATE OR REPLACE FUNCTION pg_temp\." "$OUT"` prints 3. `grep -c "BEGIN;\|ROLLBACK;" "$OUT"` prints 0. `tail -1 "$OUT"` prints `FROM diff;`. On the local replica (Verification, optional) the script returns `products 298 | 0 | 0 | 0`, and a deliberate edit of one anchor bound in the new body makes it return 237 differing rows, so it does detect differences.
 
 ### Step 4. `migrations/0029_portfolio_history_rpc.sql` (new, F145)
 
@@ -900,15 +902,18 @@ The portfolio id comes from `findPortfolioId` (WP05), never from the request. `s
 
 ### Step 7. `frontend/app/api/portfolio/history/route.ts` (new)
 
+It follows WP05 step 8a (`app/api/portfolio/route.ts`) exactly: header gate, then `createRouteSupabaseClient()`, then WP05's `requireRouteUser` (401 only when the session is authoritatively absent, 503 when the auth service could not answer; a bare `getUser()` null check would answer 401 during an auth outage and show "Your session has expired", the F063 behaviour WP04 removed), then the repo. Every response the handler builds goes through `jsonNoStore`. Do not define a local `NO_STORE` or call `supabase.auth.getUser()` directly.
+
 ```ts
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest } from "next/server";
 import { createRouteSupabaseClient } from "../../../lib/routeSupabase";
 import { rejectIfNotAppRequest } from "../../../lib/csrf";
+import { jsonNoStore, requireRouteUser } from "../../../lib/routeAuth";
 import { parseHistoryDays } from "../../../lib/portfolioInput";
 import { loadPortfolioHistory } from "../../../lib/server/portfolioRepo";
 import { logCaughtError } from "../../../lib/logger";
 
-const NO_STORE = { "Cache-Control": "no-store" } as const;
+const LOAD_FAILED = "Failed to load portfolio history";
 
 /**
  * GET /api/portfolio/history?days=N: the caller's portfolio value history,
@@ -925,44 +930,27 @@ export async function GET(req: NextRequest) {
   if (forbidden) return forbidden;
 
   const days = parseHistoryDays(req.nextUrl.searchParams.get("days"));
-  if (!days.ok) {
-    return NextResponse.json({ error: days.error }, { status: 400, headers: NO_STORE });
-  }
+  if (!days.ok) return jsonNoStore({ error: days.error }, 400);
 
   try {
     const supabase = await createRouteSupabaseClient();
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-    if (!user) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401, headers: NO_STORE });
-    }
+    const auth = await requireRouteUser(supabase);
+    if (auth.response) return auth.response;
 
-    const result = await loadPortfolioHistory(supabase, user.id, days.value);
+    const result = await loadPortfolioHistory(supabase, auth.user.id, days.value);
     if (result.status === "rpc_missing") {
-      return NextResponse.json(
-        { error: "Portfolio history is not available yet" },
-        { status: 501, headers: NO_STORE }
-      );
+      return jsonNoStore({ error: "Portfolio history is not available yet" }, 501);
     }
-    if (result.status === "error") {
-      return NextResponse.json(
-        { error: "Failed to load portfolio history" },
-        { status: 500, headers: NO_STORE }
-      );
-    }
-    return NextResponse.json({ points: result.points }, { headers: NO_STORE });
+    if (result.status === "error") return jsonNoStore({ error: LOAD_FAILED }, 500);
+    return jsonNoStore({ points: result.points });
   } catch (error) {
     logCaughtError("portfolio_history_get_failed", error);
-    return NextResponse.json(
-      { error: "Failed to load portfolio history" },
-      { status: 500, headers: NO_STORE }
-    );
+    return jsonNoStore({ error: LOAD_FAILED }, 500);
   }
 }
 ```
 
-Status codes: 403 without `x-pokefin-request: 1` (no Origin check: browsers omit Origin on same-origin GET, WP05 step 6), 400 for a bad `days`, 401 without a session, 501 when the RPC is not deployed, 500 on any other failure, 200 `{ points }`. Every response after the 403 carries `Cache-Control: no-store`. If your `csrf.ts` GET helper has a different name (see Before you start), import that instead. The route is covered by the proxy's existing `/api/:path*` rate limit (`frontend/proxy.ts:95-100`); nothing to add.
+Status codes: 403 without `x-pokefin-request: 1` (no Origin check: browsers omit Origin on same-origin GET, WP05 step 6a), 400 for a bad `days`, 401 when the session is authoritatively absent, 503 when the auth service could not answer, 501 when the RPC is not deployed, 500 on any other failure, 200 `{ points }`. Every response except the 403 (built inside `csrf.ts`) carries `Cache-Control: no-store`. If your `csrf.ts` GET helper or WP05's `routeAuth.ts` exports have different names (see Before you start), import what `app/api/portfolio/route.ts` imports instead. Export nothing from this file except `GET`. The route is covered by the proxy's existing `/api/:path*` rate limit (`frontend/proxy.ts:94-101`); nothing to add.
 
 ### Step 8. `frontend/app/lib/portfolioApi.ts`: `fetchPortfolioHistory`
 
@@ -1003,7 +991,7 @@ export async function fetchPortfolioHistory(
 
 ### Step 9. `frontend/app/lib/portfolio.ts`: route first, browser fold only as fallback
 
-9a. Rename the existing exported `getPortfolioHistory` (WP05 step 10d signature `(portfolioId, days, holdings, signal?)`) to `getPortfolioHistoryInBrowser`. Do not change its body. Replace its doc comment (`/** Get portfolio value history for charting */`) with:
+9a. Rename the existing exported `getPortfolioHistory` (WP05 step 10d signature `(portfolioId, days, holdings, signal?)`) to `getPortfolioHistoryInBrowser`. Do not change its body. Replace its three-line doc comment (`/**`, ` * Get portfolio value history for charting`, ` */`) with:
 
 ```ts
 /**
@@ -1063,7 +1051,7 @@ export async function getPortfolioHistory(
 
 9d. In the module doc comment WP05 wrote at the top of the file ("Reference-data reads for the portfolio UI: product search, the catalog the Collectr import matcher uses, and the portfolio value history."), change "and the portfolio value history" to "and the in-browser fallback for the portfolio value history (the primary path is GET /api/portfolio/history)".
 
-9e. Do not touch `usePortfolioData.ts`: its call `getPortfolioHistory(portfolioId, TIMEFRAME_DAYS[timeframe], holdings, controller.signal)` keeps working, including abort (the fetch rejects with an AbortError, which the hook ignores because `controller.signal.aborted` is true) and error (the hook logs `portfolio_history_fetch_failed` and shows an empty chart, as it did when the old function returned `[]`).
+9e. Do not touch `usePortfolioData.ts` (not even WP05's comment "Until WP10, getPortfolioHistory reports a failed read as []": the in-browser fallback still does, so not caching an empty series stays correct): its call `getPortfolioHistory(portfolioId, TIMEFRAME_DAYS[timeframe], holdings, controller.signal)` keeps working, including abort (the fetch rejects with an AbortError, which the hook ignores because `controller.signal.aborted` is true) and error (the hook logs `portfolio_history_fetch_failed` and shows an empty chart, as it did when the old function returned `[]`).
 
 ### Step 10. Documentation
 
@@ -1079,7 +1067,7 @@ verifier by design (a partial index whose predicate compares against a
 literal); check it with the query in its header.
 ```
 
-10c. `audits/HARDENING_FOLLOWUPS.md` section 7: insert this bullet as the first bullet of section 7 that describes migrations (above the WP06 or WP01 "pending apply" bullet if present, otherwise above "**Migration 0022 applied**"):
+10c. `audits/HARDENING_FOLLOWUPS.md` section 7 ("## 7. Round-2 follow-ups"): insert these two bullets, the WP10 one first, as the first bullets of section 7 that describe migrations (above the WP06 or WP01 "pending apply" bullet if present, otherwise above "**Migration 0022 applied**"):
 
 ```markdown
 - **Migrations 0027, 0028 and 0029: pending apply** (WP10, review findings
@@ -1095,7 +1083,17 @@ literal); check it with the query in its header.
   confirmed applied and the chart works, delete `getPortfolioHistoryInBrowser`,
   `fetchPortfolioPriceHistory`, the paging constants and the 501 fallback
   branch in `frontend/app/lib/portfolio.ts`.
+- **Open (review F080, clustered into F142): market RPCs still compute on
+  read and stay executable by anon.** 0028 bounds each call's cost, which
+  removes the amplification that grew with history. Not scheduled in the
+  remediation plan: having `main.py` write a per-product metrics table at the
+  end of each run so `get_market_product_summaries` / `get_set_analytics`
+  become indexed reads, then giving the server its own role and revoking
+  anon EXECUTE on the market RPCs. Revisit if the Postgres logs show
+  statement timeouts on these functions again after 0028.
 ```
+
+Insert the "Open (review F080 ...)" bullet directly below the WP10 "pending apply" bullet.
 
 10d. `audits/HARDENING_FOLLOWUPS.md`: in the section 7 bullet WP05 extended ("Signed-in data ran as anon ... parts 1 and 2 fixed ... history still reads product_price_history on the anonymous client until WP10."), replace that last sentence with: "Portfolio history now comes from GET /api/portfolio/history (RPC get_portfolio_history, migration 0029, WP10); the anonymous-client computation remains only as the fallback for a database without 0029." If the sentence is not there, skip 10d.
 
@@ -1179,9 +1177,12 @@ def test_volume_day_freshness_is_bounded_and_listings_is_not():
     day_freshness = s[s.index("day_freshness as ("):s.index("sales_agg as (")]
     assert "sh.bucket_date >= current_date - 63" in day_freshness, (
         f"{name}: day_freshness must be bounded to 63 days (F148)")
-    latest_listings = s[s.index("latest_listings as ("):]
-    latest_listings = latest_listings[:latest_listings.index(")")]
-    assert "snapshot_date >=" not in latest_listings, (
+    # The whole CTE, up to the function's final SELECT. (Cutting at the first
+    # ")" would stop inside "distinct on (lh.product_id)" and check nothing.)
+    latest_listings = s[s.index("latest_listings as ("):s.index("select ap.id as product_id")]
+    assert "order by lh.product_id, lh.snapshot_date desc" in latest_listings, (
+        f"{name}: could not find the latest_listings CTE body")
+    assert " where " not in latest_listings and "snapshot_date >" not in latest_listings, (
         f"{name}: latest_listings must stay unbounded; listings_snapshot_date is "
         "returned for stale products on purpose (0022, F148 verifier correction)")
 
@@ -1226,8 +1227,8 @@ def test_search_path_is_pinned_after_the_last_definition(fn):
 - **Do not bound `day_freshness` below 3 days or use a different column.** Its only consumer is `newest_day_bucket >= current_date - 3`; 63 matches `sales_agg`'s existing bound (`0022:138`).
 - **Do not use `CREATE INDEX CONCURRENTLY`.** `apply_migration` wraps the file in a transaction, where CONCURRENTLY errors.
 - **Do not put the partial index in 0028.** `verify_migration.py` refuses it and the function checks would then exit 1 instead of 0.
-- **Do not edit `verify_migration.py`, `schema.sql` or any existing migration.** Migrations are append-only (`README.md:434-438`); the verifier is generic and needs no change (see Before you start).
-- **Do not revoke anon's EXECUTE on the market RPCs.** The server fetches them with the anon key (`serverMarketData.ts:42-49`), and `get_market_product_summaries` / `get_set_analytics` are SECURITY INVOKER, so they need anon EXECUTE on `get_market_product_metrics` too. Least privilege for these is WP21; the F080 rate-limit / cache-table ideas and the "hundreds of server calls per hour" investigation (F143) are WP11. Do not add a `market_product_metrics_cache` table here.
+- **Do not edit `verify_migration.py`, `schema.sql` or any existing migration.** Existing migrations are already applied in production, so a change to one would never reach the database; a change always goes in a new numbered file. The verifier is generic and needs no change (see Before you start).
+- **Do not revoke anon's EXECUTE on the market RPCs.** The server fetches them with the anon key (`serverMarketData.ts:42-49`), and `get_market_product_summaries` / `get_set_analytics` are SECURITY INVOKER, so they need anon EXECUTE on `get_market_product_metrics` too. Do not add a `market_product_metrics_cache` table, a PostgREST rate limit or a dedicated server role here either. F080 (clustered into F142) is handled in this package by bounding the per-call cost, which removes the amplification (cost no longer grows with history; about 100x cheaper on the replica). The remaining F080 ideas (compute-on-write cache table, a server-only role, revoking anon) are NOT scheduled by any work package in this plan: WP11 covers only the server's own call volume (F143) and WP21 covers F133/F081/F135, and neither spec touches the market RPC ACL. Step 10c records them as an open follow-up; do not describe them as covered by WP11 or WP21.
 - **Do not make `get_portfolio_history` SECURITY DEFINER**, and do not take the portfolio id from the request. RLS is the authorisation; the route looks the id up from the session.
 - **Do not call `get_portfolio_history` from the browser Supabase client.** That client is anonymous (the session cookie is HttpOnly); with EXECUTE revoked from anon it fails with `permission denied`, and even with EXECUTE RLS would return zero rows, a silently empty chart. Always go through `/api/portfolio/history`.
 - **Do not read `portfolio_lots` in the RPC.** The browser fold never did, and nothing writes it; adding it would double-count if lots are ever mirrored from holdings.
@@ -1240,15 +1241,16 @@ def test_search_path_is_pinned_after_the_last_definition(fn):
 
 ## Tests
 
-Route and repo tests need `/** @jest-environment node */` (`next/server` throws under jsdom) and `jest.mock("server-only", () => ({}))` where the module under test imports it. All TypeScript skeletons below were run green against the code in steps 5-9 in a scratch copy of `frontend/` (27 + 4 tests).
+Route and repo tests need `/** @jest-environment node */` (`next/server` throws under jsdom) and `jest.mock("server-only", () => ({}))` where the module under test imports it. The skeletons below were run green by the spec writer against steps 5-9; review then changed the route (step 7) to WP05's `requireRouteUser` and added the 503 case to test 1, so run them and fix any mismatch against the code, not by weakening an assertion.
 
 ### 1. `frontend/app/api/portfolio/__tests__/history.route.test.ts` (new)
 
-Cases: 403 without the header (and `getUser` not called); 400 for `""`, `?days=`, `0`, `367`, `abc`, `7.5`, `-1`, `1e2`, `99999` (repo not called, `no-store` set); 401 without a user (repo not called); 200 `{ points }` with `no-store`, no `origin` header needed, repo called as `(supabase, "user-1", 30)`; 200 for 365 and 366; 501 on `rpc_missing`; 500 on `error`; 500 when the repo throws.
+Cases: 403 without the header (and `getUser` not called); 400 for `""`, `?days=`, `0`, `367`, `abc`, `7.5`, `-1`, `1e2`, `99999` (repo not called, `no-store` set); 401 without a user (repo not called); 503 when the auth service could not answer (repo not called); 200 `{ points }` with `no-store`, no `origin` header needed, repo called as `(supabase, "user-1", 30)`; 200 for 365 and 366; 501 on `rpc_missing`; 500 on `error`; 500 when the repo throws. As in WP05's `routes.test.ts`, do not mock `lib/routeAuth` or `lib/authSession`: the real ones run, so the 401 versus 503 split is covered.
 
 ```ts
 /** @jest-environment node */
 import { NextRequest } from "next/server";
+import { AuthRetryableFetchError } from "@supabase/supabase-js";
 
 const getUser = jest.fn();
 jest.mock("../../../lib/routeSupabase", () => ({
@@ -1298,6 +1300,17 @@ it("401 without a user; the repo is not called", async () => {
   getUser.mockResolvedValue({ data: { user: null }, error: null });
   const res = await GET(req("?days=30"));
   expect(res.status).toBe(401);
+  expect(res.headers.get("cache-control")).toBe("no-store");
+  expect(loadMock).not.toHaveBeenCalled();
+});
+
+it("503, not 401, when the auth service could not answer", async () => {
+  getUser.mockResolvedValue({
+    data: { user: null },
+    error: new AuthRetryableFetchError("fetch failed", 0),
+  });
+  const res = await GET(req("?days=30"));
+  expect(res.status).toBe(503);
   expect(loadMock).not.toHaveBeenCalled();
 });
 
@@ -1342,6 +1355,12 @@ Cases: RPC called with `{ p_portfolio_id: 7, p_days: 30 }` and rows mapped (`poi
 ```ts
 /** @jest-environment node */
 jest.mock("server-only", () => ({}));
+// Same mock as WP05's portfolioRepo.test.ts: keeps the module-level Supabase
+// client and next/cache out of this test.
+jest.mock("../../serverMarketData", () => ({
+  getCachedMarketProductSummaries: jest.fn(),
+  fetchNewestPricedAtForProducts: jest.fn(),
+}));
 jest.mock("../../logger", () => ({ logCaughtError: jest.fn(), logSupabaseError: jest.fn() }));
 
 import { logSupabaseError } from "../../logger";
@@ -1484,9 +1503,13 @@ Cases: URL `/api/portfolio/history?days=30`, `method: "GET"`, header `x-pokefin-
 import { fetchPortfolioHistory, PortfolioApiError } from "../portfolioApi";
 
 const fetchMock = jest.fn();
+const originalFetch = global.fetch;
 beforeEach(() => {
   fetchMock.mockReset();
   global.fetch = fetchMock as unknown as typeof fetch;
+});
+afterAll(() => {
+  global.fetch = originalFetch;
 });
 
 describe("fetchPortfolioHistory", () => {
@@ -1535,7 +1558,14 @@ Add a `describe("parseHistoryDays")`: `"1"`, `"30"`, `"365"`, `"366"` are ok wit
 
 ### 7. `tests/test_wp10_market_rpc_bounds.py` (new, step 11)
 
-8 tests. They must pass with the new migrations present and fail when `0027`-`0029` are removed from a copy of `migrations/` (checked while writing this spec: 8 passed with them, 8 failed without; removing only the `ALTER FUNCTION public.get_portfolio_history ... SET search_path` fails exactly the search_path case).
+8 tests. They must pass with the new migrations present and fail when `0027`-`0029` are removed from a copy of `migrations/` (checked during review: 8 passed with them; 7 failed and 1 passed without them, the passing one being the volume function's search_path case, which `0022` already satisfies). Removing only the `ALTER FUNCTION public.get_portfolio_history ... SET search_path` fails exactly the search_path case, and adding `WHERE lh.snapshot_date >= current_date - 30` to `latest_listings` in a copy of 0028 fails exactly `test_volume_day_freshness_is_bounded_and_listings_is_not`. Prove the regression signal yourself:
+
+```bash
+rm -rf /tmp/wp10_guard && mkdir /tmp/wp10_guard && cp migrations/*.sql /tmp/wp10_guard/ \
+  && rm /tmp/wp10_guard/0027_*.sql /tmp/wp10_guard/0028_*.sql /tmp/wp10_guard/0029_*.sql
+POKEFIN_MIGRATIONS_DIR=/tmp/wp10_guard python3 -m pytest tests/test_wp10_market_rpc_bounds.py -q; echo "exit=$?"
+# expect "7 failed, 1 passed" and exit=1
+```
 
 ## Verification
 
@@ -1553,28 +1583,33 @@ pnpm exec jest app/api/portfolio app/lib/server \
 TZ=America/Toronto pnpm exec jest app/lib/__tests__/portfolio.freshness.test.ts   # WP05's DST case, still green
 pnpm test --ci                                           # expect all green
 pnpm build:stub                                          # WP00; expect success and "/api/portfolio/history" listed with the ƒ (Dynamic) marker
-grep -rn "supabase" app/lib/portfolioApi.ts app/api/portfolio/history/route.ts   # expect no import of ./supabase or ../supabase
+grep -nE "from \"(\./|\.\./)+supabase\"" app/lib/portfolioApi.ts app/lib/server/portfolioRepo.ts \
+  app/api/portfolio/history/route.ts                     # expect no output (no anonymous browser client here)
 ```
 
-From the repo root:
+From the repo root. `verify_migration.py` prints the SQL to stdout and its summary lines (`-- function ...`, `-- privilege ...`, `! REFUSED ...`) to stderr, so capture them separately:
 
 ```bash
-python3 verify_migration.py migrations/0028_bounded_market_metrics.sql > /tmp/wp10_0028.sql; echo "exit=$?"
-# expect exit=0 and these two header lines:
+python3 verify_migration.py migrations/0028_bounded_market_metrics.sql > /tmp/wp10_0028.sql 2> /tmp/wp10_0028.txt; echo "exit=$?"
+cat /tmp/wp10_0028.txt
+# expect exit=0 and exactly these lines (plus "-- run the statement below; every row must say OK"):
 # -- function get_market_product_metrics(): body 8e8f39b53d71592dae0bd60dde9bebbf, non-strict, parallel u, security invoker, sql, volatility s, config search_path=public
 # -- function get_market_product_volume_metrics(): body 9a9c8ac90c17a34636e1aee8be0c5f0b, non-strict, parallel u, security invoker, sql, volatility s, config search_path=public
-head -3 /tmp/wp10_0028.sql
 
-python3 verify_migration.py migrations/0029_portfolio_history_rpc.sql > /tmp/wp10_0029.sql; echo "exit=$?"
+python3 verify_migration.py migrations/0029_portfolio_history_rpc.sql > /tmp/wp10_0029.sql 2> /tmp/wp10_0029.txt; echo "exit=$?"
+cat /tmp/wp10_0029.txt
 # expect exit=0 and:
-# -- function get_portfolio_history(p_portfolio_id bigint, p_days integer): body 2f9e67a2ae57801575c18009e257ddcf, ..., security invoker, sql, volatility s, config search_path=public
-# -- privilege EXECUTE ... for public: revoked / anon: revoked / authenticated: granted / service_role: granted
-head -6 /tmp/wp10_0029.sql
+# -- function get_portfolio_history(p_portfolio_id bigint, p_days integer): body 2f9e67a2ae57801575c18009e257ddcf, non-strict, parallel u, security invoker, sql, volatility s, config search_path=public
+# -- privilege EXECUTE on public.get_portfolio_history(bigint, integer) for public: revoked
+# -- privilege EXECUTE on public.get_portfolio_history(bigint, integer) for anon: revoked
+# -- privilege EXECUTE on public.get_portfolio_history(bigint, integer) for authenticated: granted
+# -- privilege EXECUTE on public.get_portfolio_history(bigint, integer) for service_role: granted
 
 python3 verify_migration.py migrations/0027_sales_history_day_fresh_index.sql; echo "exit=$?"
 # expect exit=1 with "! REFUSED product_sales_history_day_fresh_idx: the predicate compares against a literal ..." (by design)
 
 python3 -m pytest tests/test_wp10_market_rpc_bounds.py -v      # expect 8 passed
+# plus the regression-signal check in Tests, item 7 (expect 7 failed, 1 passed without 0027-0029)
 python3 -m pytest tests/ -q                                     # expect no new failures (WP01's volatility guard included)
 grep -rn $'\xe2\x80\x94' migrations/0027_*.sql migrations/0028_*.sql migrations/0029_*.sql \
   audits/remediation/sql/WP10-market-metrics-equivalence.sql    # expect no output (no em dashes)
@@ -1700,7 +1735,7 @@ Apply in this order, and apply 0027-0029 **before merging** this PR (Vercel depl
 
 2. **Prerequisites.** (a) WP01's 0024/0025 and WP05 are merged and applied. (b) The price-history index exists: `SELECT indexname, indexdef FROM pg_indexes WHERE schemaname = 'public' AND tablename = 'product_price_history';` must show a btree on `(product_id, recorded_at DESC)` (name `idx_price_history_product_recorded` or the older production name). If none exists, stop and apply `0023`'s `CREATE INDEX IF NOT EXISTS idx_price_history_product_recorded ...` statement first. (c) `SELECT current_setting('TimeZone');` returns `UTC` (the RPCs use `current_date`; so do the existing ones).
 
-3. **Pre-apply equivalence (5 minutes).** Paste the whole of `audits/remediation/sql/WP10-market-metrics-equivalence.sql` and Run. Expect one row: `old_vs_new_missing = 0`, `old_vs_new_differing = 0`, `live_vs_new_differing = 0`. If either old_vs_new column is non-zero, stop and report the row: do not apply 0028. The script ends in `ROLLBACK` and leaves nothing behind.
+3. **Pre-apply equivalence (5 minutes).** Paste the whole of `audits/remediation/sql/WP10-market-metrics-equivalence.sql` and Run. Expect one row: `old_vs_new_missing = 0`, `old_vs_new_differing = 0`, `live_vs_new_differing = 0`. If either old_vs_new column is non-zero, stop and report the row: do not apply 0028. The script only creates three `pg_temp` functions, which vanish when the editor's connection closes; it changes nothing in `public`. If the editor shows "Success. No rows returned" instead of a result row, you ran a selection or an old copy of the script: select nothing and paste the file from the repo again.
 
 4. **Apply 0027, then 0028.** Preferred: Supabase MCP `apply_migration` with names `0027_sales_history_day_fresh_index` and `0028_bounded_market_metrics` and the full file contents. Alternative: SQL editor, paste the whole file, nothing selected, Run. Do 0027 when the scraper is not writing (it briefly blocks writes to `product_sales_history`). Then:
    - 0027: run the verification query in its header. Expect one row, `valid = true`, definition ending `WHERE ((granularity = 'day'::text) AND (quantity_sold IS NOT NULL))`.
@@ -1708,26 +1743,37 @@ Apply in this order, and apply 0027-0029 **before merging** this PR (Vercel depl
    - Re-run the equivalence script. Expect `0 | 0 | 0` again (now `live` is the new body).
    - `EXPLAIN (ANALYZE) SELECT * FROM public.get_market_product_metrics();` Execution Time should be a small fraction of step 1's (expect well under 300 ms).
 
-5. **Apply 0029** (MCP name `0029_portfolio_history_rpc`). Verify: `python3 verify_migration.py migrations/0029_portfolio_history_rpc.sql`, paste, Run: expect 5 rows, all `OK` (1 function, 4 privileges). Then prove RLS as a real user (replace the email; `ROLLBACK` leaves nothing):
+5. **Apply 0029** (MCP name `0029_portfolio_history_rpc`). Verify: `python3 verify_migration.py migrations/0029_portfolio_history_rpc.sql`, paste, Run: expect 5 rows, all `OK` (1 function, 4 privileges). Then prove RLS as a real user. Replace `YOUR_ACCOUNT_EMAIL`, select nothing, and run the whole snippet as one Run. It has no `BEGIN`/`ROLLBACK` on purpose: the editor shows only the last statement's result, and it sends the snippet as one batch, which Postgres runs as one implicit transaction, so the `true` (local) settings and `SET LOCAL ROLE` end with the batch. The two portfolio ids are read while still running as `postgres`, before the role switch; read after it, RLS would hide the other user's portfolio, the id would be NULL, and the "other user" check would pass without testing anything.
 
    ```sql
-   BEGIN;
+   SELECT set_config('wp10.me',
+            (SELECT id::text FROM auth.users WHERE email = 'YOUR_ACCOUNT_EMAIL'), true),
+          set_config('wp10.mine',
+            (SELECT p.id::text FROM public.portfolios p JOIN auth.users u ON u.id = p.user_id
+              WHERE u.email = 'YOUR_ACCOUNT_EMAIL' LIMIT 1), true),
+          set_config('wp10.other',
+            (SELECT h.portfolio_id::text FROM public.portfolio_holdings h
+               JOIN public.portfolios p ON p.id = h.portfolio_id
+               JOIN auth.users u ON u.id = p.user_id
+              WHERE u.email <> 'YOUR_ACCOUNT_EMAIL' LIMIT 1), true);
    SELECT set_config('request.jwt.claims',
-     json_build_object('sub', (SELECT id FROM auth.users WHERE email = 'YOUR_ACCOUNT_EMAIL'),
-                       'role', 'authenticated')::text, true);
+            json_build_object('sub', current_setting('wp10.me'), 'role', 'authenticated')::text,
+            true);
    SET LOCAL ROLE authenticated;
-   SELECT count(*) AS points, min(point_date), max(point_date), max(held_products)
-     FROM public.get_portfolio_history(
-       (SELECT id FROM public.portfolios LIMIT 1), 30);
-   SELECT count(*) AS other_users_points
-     FROM public.get_portfolio_history(
-       (SELECT min(id) FROM public.portfolios WHERE user_id <> (SELECT auth.uid())), 30);
-   ROLLBACK;
+   SELECT
+     (SELECT count(*) FROM public.get_portfolio_history(
+        nullif(current_setting('wp10.mine'), '')::bigint, 30)) AS points,
+     (SELECT max(point_date) FROM public.get_portfolio_history(
+        nullif(current_setting('wp10.mine'), '')::bigint, 30)) AS last_point,
+     nullif(current_setting('wp10.other'), '') IS NOT NULL AS other_portfolio_found,
+     (SELECT count(*) FROM public.get_portfolio_history(
+        nullif(current_setting('wp10.other'), '')::bigint, 30)) AS other_users_points,
+     current_user AS ran_as;
    ```
 
-   Expect `points = 31` ending on today's UTC date when your portfolio has holdings (0 when it has none), and `other_users_points = 0`. Also `SELECT has_function_privilege('anon', 'public.get_portfolio_history(bigint, integer)', 'EXECUTE');` must return `false`.
+   Expect `ran_as = authenticated`, `points = 31` and `last_point` = today's UTC date when your portfolio has holdings (0 and NULL when it has none), `other_portfolio_found = true` and `other_users_points = 0`. If `other_portfolio_found` is false, no other user has holdings yet and the cross-user check proved nothing; say so in HARDENING_FOLLOWUPS. An error `invalid input syntax for type uuid: ""` means the email matched no row in `auth.users`; fix the email and run again. (This snippet was replayed on the local scaffold with a Supabase-style `auth.uid()`: 31 points, other user 0, `current_user` back to `postgres` afterwards.) Then run, as separate Runs: `SELECT current_user;` (must return `postgres`, proving the role switch ended with the batch) and `SELECT has_function_privilege('anon', 'public.get_portfolio_history(bigint, integer)', 'EXECUTE');` (must return `false`).
 
-6. **Merge and check the site.** After the deploy: sign in, open `/portfolio`. In DevTools > Network: one `GET /api/portfolio/history?days=30` answering 200 with 31 points, and no requests to `/rest/v1/product_price_history`. Click 1Y: one request with `days=365` and 366 points; the chart matches what it showed before for the same range. A 501 in that request means 0029 is not applied (the chart still renders through the fallback; apply step 5).
+6. **Merge and check the site.** After the deploy: sign in, open `/portfolio`. In DevTools > Network: one `GET /api/portfolio/history?days=30` answering 200 with 31 points, and no requests to `/rest/v1/product_price_history`. Click 1Y: one request with `days=365` and 366 points; the chart matches what it showed before for the same range. A 501 in that request means PostgREST does not see `get_portfolio_history` (the chart still renders through the fallback). If step 5 was done, PostgREST's schema cache has not reloaded: run `NOTIFY pgrst, 'reload schema';` in the SQL editor, wait 10 seconds and reload the page. If step 5 was not done, do it.
 
 7. **After 24 hours.** Re-run the step 1 `pg_stat_statements` query (optionally `SELECT pg_stat_statements_reset();` right after step 4 so the means cover only the new body). Expect `get_market_product_summaries` and `get_set_analytics` mean well under 300 ms and max under 1 s. In Dashboard > Logs > Postgres, search "canceling statement due to statement timeout": expect none for these functions.
 
@@ -1739,12 +1785,12 @@ Apply in this order, and apply 0027-0029 **before merging** this PR (Vercel depl
 - [ ] `verify_migration.py` on 0028 exits 0 with body hashes `8e8f39b53d71592dae0bd60dde9bebbf` (metrics) and `9a9c8ac90c17a34636e1aee8be0c5f0b` (volume), both `security invoker`, `volatility s`, `config search_path=public`.
 - [ ] `verify_migration.py` on 0029 exits 0 with body hash `2f9e67a2ae57801575c18009e257ddcf`, `security invoker`, PUBLIC and anon revoked, authenticated and service_role granted.
 - [ ] `get_market_product_metrics` has 6 `LEFT JOIN LATERAL` anchors, no `FROM daily_history dh WHERE dh.product_id = ap.id`, and `daily_history` bounded with `recorded_at >= current_date - 366`; `latest_listings` in the volume function has no date bound.
-- [ ] `audits/remediation/sql/WP10-market-metrics-equivalence.sql` exists, contains `BEGIN;` and ends with `ROLLBACK;`, and has exactly 6 `LEFT JOIN LATERAL`.
+- [ ] `audits/remediation/sql/WP10-market-metrics-equivalence.sql` exists, has exactly 6 `LEFT JOIN LATERAL` and 3 `CREATE OR REPLACE FUNCTION pg_temp.` lines, contains no `BEGIN;` or `ROLLBACK;`, and its last line is `FROM diff;` (the Supabase editor shows only the last statement's result).
 - [ ] `tests/test_wp10_market_rpc_bounds.py` passes (8 tests).
-- [ ] `GET /api/portfolio/history` exists with the status codes in step 7; its tests pass.
+- [ ] `GET /api/portfolio/history` exists with the status codes in step 7 (403, 400, 401, 503, 501, 500, 200), uses WP05's `requireRouteUser` and `jsonNoStore` (`grep -c "requireRouteUser\|jsonNoStore" app/api/portfolio/history/route.ts` from `frontend/` prints at least 2, and `grep -c "auth.getUser" app/api/portfolio/history/route.ts` prints 0); its tests pass.
 - [ ] `getPortfolioHistory` makes one `fetch` to `/api/portfolio/history` and no `product_price_history` query unless the route answered 501 (tests 3 and 4).
 - [ ] `pnpm exec tsc --noEmit`, `pnpm test --ci` and `pnpm build:stub` pass; no new lint errors in touched files.
-- [ ] `README.md` and `audits/HARDENING_FOLLOWUPS.md` carry the step 10 edits with 0027-0029 marked "pending apply".
+- [ ] `README.md` and `audits/HARDENING_FOLLOWUPS.md` carry the step 10 edits with 0027-0029 marked "pending apply", and section 7 has the "Open (review F080 ...)" bullet directly below the WP10 bullet.
 - [ ] (Owner) Equivalence script returns `0 | 0 | 0` before and after applying 0028.
 - [ ] (Owner) `verify_migration.py` queries return all `OK` for 0028 (2 rows) and 0029 (5 rows); the 0027 header query returns one valid index.
 - [ ] (Owner) The portfolio chart loads with one `/api/portfolio/history` request per timeframe and no `product_price_history` requests.
@@ -1779,4 +1825,4 @@ perf(db): bound market metrics RPCs; compute portfolio history in SQL
 
 PR title: `WP10: bounded market metrics RPCs and a portfolio history RPC (F142, F148, F145)`
 
-PR body summary: what was slow (unbounded history scan plus about 1,800 correlated CTE scans per call, twice per revalidation; production mean 734-903 ms and daily 3 s timeouts; portfolio chart paging thousands of rows to the browser), what changed (three migrations, the route, the fallback), the equivalence evidence (replica: 0 differing rows across metrics, summaries, set analytics and volume; 17 s to 0.15 s), why `latest_listings` stays unbounded, why `verify_migration.py` needed no change and why 0027 is a separate file, the Verification output, the Owner actions checklist (apply 0027-0029 before merge, run the equivalence script before and after 0028), and out-of-scope notes: anon EXECUTE on the market RPCs and direct PostgREST rate limiting (WP21), revalidation frequency and the metrics cache table idea (WP11), removal of the browser fallback after 0029 is confirmed (follow-up in HARDENING_FOLLOWUPS).
+PR body summary: what was slow (unbounded history scan plus about 1,800 correlated CTE scans per call, twice per revalidation; production mean 734-903 ms and daily 3 s timeouts; portfolio chart paging thousands of rows to the browser), what changed (three migrations, the route, the fallback), the equivalence evidence (replica: 0 differing rows across metrics, summaries, set analytics and volume; 17 s to 0.15 s), why `latest_listings` stays unbounded, why `verify_migration.py` needed no change and why 0027 is a separate file, the Verification output, the Owner actions checklist (apply 0027-0029 before merge, run the equivalence script before and after 0028), and out-of-scope notes: server revalidation frequency and the hundreds of summaries calls per hour (F143, WP11); anon EXECUTE on the market RPCs, direct PostgREST rate limiting and the compute-on-write metrics table (F080 residual, not scheduled in the plan, recorded as an open item in HARDENING_FOLLOWUPS); removal of the browser fallback after 0029 is confirmed (follow-up in HARDENING_FOLLOWUPS).

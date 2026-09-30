@@ -7,7 +7,7 @@
 - **Priority rationale**: these are the three most visible defects on the two busiest surfaces (every page's header on phones, and the `/prices` catalog), each is a small contained edit, and they are independent of the auth and data work.
 - **Effort**: S, about 2 hours including the new Header test.
 - **Depends on**: WP00 (for `pnpm build:stub` in Verification). If WP00 has not merged, skip the `build:stub` checks and say so in the PR body; nothing else in this package needs WP00.
-- **Unblocks**: WP08 (which reworks `ProductPrices/index.tsx` and assumes the toast is gone), WP14 (the header items of F030/F094 are done here, so WP14 covers only the Portfolio modals and form labels), WP15.
+- **Unblocks**: WP08 (hard dependency in the plan: it rewrites `ProductPrices/index.tsx` and assumes the toast and the `historyLoading,` destructure line are gone). Soft: WP04 (edits `Header.tsx` on top of this PR's refs and effects and extends this PR's `Header.test.tsx` mock with `sessionStatus`), WP09 (removes the per-card `historyLoading` prop after this PR removed the hook-level one), WP11 and WP13 (keep the "updated daily" strings written here), WP14 (the header items of F030/F094 are done here, so WP14 covers only the Portfolio modals and form labels and does not touch `Header.tsx`).
 - **Suggested branch name**: `remediation/wp03-ui-hotfixes`
 - **Risk level**: low. Presentational and event-handling changes in three client components plus copy edits; no data, auth, API or schema change.
 
@@ -41,12 +41,13 @@ grep -rn 'historyLoading' app --include=*.ts --include=*.tsx                # ex
 grep -rn 'refreshed hourly' app                                             # expect exactly 6: Footer.tsx:89,111; page.tsx:207; prices/page.tsx:27; layout.tsx:29,33
 ls app/components/__tests__/Header.test.tsx 2>&1                            # expect "No such file"
 pnpm exec eslint app/components/Header.tsx app/components/ProductPrices/index.tsx app/components/ProductPrices/hooks/useProductData.ts app/components/Footer.tsx app/layout.tsx app/page.tsx app/prices/page.tsx   # expect no output (clean baseline)
+pnpm test --ci 2>&1 | grep -E '^Test Suites:|^Tests:'                        # write both lines down; Verification compares against them
 ```
 
 Assumptions to check:
 
 - `useAuth()` still returns `{ user, profile, loading, signOut, ... }` (`app/context/AuthContext.tsx:13-22`). The plan runs WP03 before WP04, so this should hold. If WP04 has already landed and the Header reads a `sessionStatus` field, keep the Header's auth-slot rendering exactly as you find it, and add `sessionStatus` to the test's `MockAuth` type and `mockAuth` objects with WP04's literal values: `"anonymous"` in the top-level `beforeEach` and `"authenticated"` in the "Header user dropdown" `beforeEach` (WP04 step 6d uses exactly these). Keep `loading: false` in the mock either way.
-- WP02 may have added `prefetch={false}` to the four `/auth/*` Links in `Header.tsx`. If present, keep it. The test's `next/link` mock below already swallows a `prefetch` prop.
+- No earlier package edits `Header.tsx`, `Footer.tsx`, `ProductPrices/index.tsx`, `useProductData.ts` or the copy files (WP02's spec explicitly leaves `Header.tsx` and `Footer.tsx` alone and forbids adding `prefetch={false}` there). Confirm with `git diff --stat a188fea -- app/components/Header.tsx app/components/Footer.tsx app/components/ProductPrices/index.tsx app/components/ProductPrices/hooks/useProductData.ts app/layout.tsx app/page.tsx app/prices/page.tsx` (run from `frontend/`): expect no output. If any file shows a change, every line number in this spec for that file is unreliable: locate each block by the quoted code instead, and keep the other package's change. The test's `next/link` mock below swallows a `prefetch` prop in case one is ever added.
 - Only one component consumes the hook-level `historyLoading` (`ProductPrices/index.tsx:100`). `MarketView.tsx:207-212`, `RecentlyReleased.tsx:24-25` and `MarketView/__tests__/useProductData.test.tsx` do not read it. Re-run the `historyLoading` grep above; if any other file destructures `historyLoading` from `useProductData`, do not remove it from the hook (skip step 4) and note that in the PR.
 
 ## Implementation steps
@@ -60,6 +61,8 @@ Write the full test file from the Tests section below. The test finds the panels
 ```bash
 pnpm test --ci app/components/__tests__/Header.test.tsx
 ```
+
+This step is how the package honours the F008 verifier's correction ("add a Header test (native mousedown -> await -> click) rather than only act-wrapped fireEvent"): the `tap` helper dispatches native `MouseEvent`s, and the mousedown and the click run in separate `act` calls so React commits the mousedown update before the click, which is the gap the verifier showed the bug depends on. The fail-first run below proves the helper reproduces the bug.
 
 Expected against the unfixed Header (ids added, nothing else): exactly 4 of the 9 cases fail: "opens from the hamburger and exposes its state" (no `aria-expanded`), "closes when the X is tapped (mousedown then click)", "closes on Escape and returns focus to the toggle", and "toggles with aria-expanded and closes on Escape with focus restored". The other 5 pass already (keyboard click-only close, non-Escape key, outside tap, link choice, dropdown re-tap): they guard existing behaviour. If "closes when the X is tapped" passes against the unfixed code, your `tap` helper is not reproducing the browser's mousedown, flush, click sequence: re-check that each dispatch is in its own `act(async ...)` call. If it still passes, switch the helper to the F008 verifier's exact sequence (native mousedown outside `act`, a macrotask yield, then the click):
 
@@ -202,7 +205,7 @@ Re-run `pnpm test --ci app/components/__tests__/Header.test.tsx`: all cases pass
 
 ### 3. Remove the global toast: `frontend/app/components/ProductPrices/index.tsx`
 
-3a. Delete lines 235-245 entirely: the `{/* History Loading Indicator */}` comment, the `{historyLoading && !loading && ( <div className="fixed top-4 right-4 ..."> ... )}` block (through its closing `)}` at :244), and the blank line at :245 after it. The result must be: line 233 `{loading && <div className="text-slate-600">Loading products...</div>}`, line 234 blank, line 235 `{/* Flat View */}`. Exactly one blank line between them, not two.
+3a. Delete lines 235-245 entirely: the `{/* History Loading Indicator */}` comment, the `{historyLoading && !loading && ( <div className="fixed top-4 right-4 ..."> ... )}` block (through its closing `)}` at :244), and the blank line at :245 after it. Do 3a before 3b. Right after 3a (before 3b shifts everything up by one line) the result must be: line 233 `{loading && <div className="text-slate-600">Loading products...</div>}`, line 234 blank, line 235 `{/* Flat View */}`. Exactly one blank line between them, not two.
 
 3b. In the `useProductData` destructure at lines 96-103, delete the `historyLoading,` line. Result:
 
@@ -236,7 +239,7 @@ Run `grep -n useMemo app/components/ProductPrices/hooks/useProductData.ts` first
 
 ### 5. Correct the refresh-cadence copy (six strings, five files)
 
-The wording is "updated daily" everywhere. Rationale: `main.py:1082` only re-prices a product whose last update is more than 23 hours old, and the scheduler runs every 4 hours (`main.py:1537`), so any given price changes about once a day. "Several times a day" would be wrong for any single product.
+The wording is "updated daily" everywhere. Rationale: `main.py:1082` only re-prices a product whose last update is more than 23 hours old, and production runs the scraper every 4 hours (host cron `0 */4 * * *` calling `--run-now`, documented in the comment at `main.py:1069-1073`; the in-process scheduler at `main.py:1528-1538` uses the same 4-hour boundaries), so any given price changes once a day. "Several times a day" would be wrong for any single product.
 
 5a. `frontend/app/layout.tsx:29` and `:33` (the `description` and `openGraph.description` strings, currently identical). Replace both string literals with:
 
@@ -535,8 +538,17 @@ pnpm exec eslint app/components/Header.tsx app/components/__tests__/Header.test.
 pnpm test --ci app/components/__tests__/Header.test.tsx app/components/MarketView/__tests__/useProductData.test.tsx
 # expect: 2 suites passed, all Header cases green
 
-pnpm test --ci
-# expect: every suite passes (same count as before plus 1 suite)
+pnpm test --ci 2>&1 | grep -E '^Test Suites:|^Tests:'
+# expect: 0 failed; "Test Suites" total = baseline total + 1; "Tests" total = baseline total + 9
+
+# Mutation check: the regression test must catch the bug if the guard is removed.
+sed -i 's|^      if (mobileMenuButtonRef.current?.contains(target)) return;$|      // WP03-MUTATION if (mobileMenuButtonRef.current?.contains(target)) return;|' app/components/Header.tsx
+grep -c 'WP03-MUTATION' app/components/Header.tsx                           # expect: 1 (if 0, the sed did not match; find the line by hand)
+pnpm test --ci app/components/__tests__/Header.test.tsx 2>&1 | grep -E '✕|^Tests:'
+# expect: exactly 1 failed, "closes when the X is tapped (mousedown then click)"
+sed -i 's|^      // WP03-MUTATION if (mobileMenuButtonRef|      if (mobileMenuButtonRef|' app/components/Header.tsx
+grep -c 'WP03-MUTATION' app/components/Header.tsx                           # expect: 0
+pnpm test --ci app/components/__tests__/Header.test.tsx 2>&1 | grep -E '^Tests:'   # expect: 9 passed
 
 grep -rn 'refreshed hourly' app                         # expect: no output
 grep -rn 'updated daily' app | wc -l                    # expect: 6
@@ -562,7 +574,7 @@ Manual checks (use `pnpm dev` with a real `.env.local` if you have one, otherwis
 1. Mobile menu, pointer: Chrome DevTools, device toolbar, iPhone 12 Pro (390 px wide). Tap the hamburger: the panel opens and the icon becomes an X. Tap the X: the panel closes on the first tap and stays closed. Correct means no flicker and no second tap needed.
 2. Mobile menu, keyboard: same viewport, reload, press Tab until the hamburger is focused. A red ring is visible around it. Press Enter: the panel opens. Press Tab once or twice to reach a link, then Escape: the panel closes and the red ring is back on the hamburger.
 3. Screen reader label: with the panel open, inspect the button in DevTools, Accessibility pane: name "Close main menu", "Expanded: true". Closed: "Open main menu", "Expanded: false".
-4. Desktop dropdown (signed in, so this needs a real `.env.local` or the preview URL; window 1280 px wide): click the avatar with the mouse: the menu opens and the avatar shows no ring. Press Escape: the menu closes, focus returns to the avatar, and the red ring appears on it (Escape is a keyboard interaction, so the programmatic focus matches `:focus-visible`; this is correct). Pressing Escape again does nothing.
+4. Desktop dropdown (signed in, so this needs a real `.env.local` or the preview URL; window 1280 px wide): click the avatar with the mouse: the menu opens and the avatar shows no ring. Press Escape: the menu closes. In the DevTools console run `document.activeElement.textContent`: it contains the username, which proves focus is on the avatar. Whether the red ring shows at that moment depends on the browser's `:focus-visible` heuristic (Chrome usually shows it after a key press, Safari may not); either is correct, so do not "fix" it. Then press Tab until the avatar is focused from the keyboard: the red ring must be visible. Pressing Escape with the menu closed does nothing.
 5. `/prices` with real data: scroll the full catalog at desktop and at 390 px. No blue box ever appears at the top right; the Sign Up button or avatar and the hamburger stay visible and clickable the whole time. Cards still show the grey pulsing sparkline skeleton, then their sparkline.
 6. Copy: the footer of any page reads "Sealed Pokémon TCG market data, with prices updated daily from TCGPlayer." and "Prices updated daily from TCGPlayer"; `/` hero and `/prices` subheading say "updated daily"; View Source on `/` shows `updated daily` in both `<meta name="description">` and `<meta property="og:description">`.
 
@@ -618,6 +630,6 @@ PR body summary:
 
 - What: WP03 of the remediation plan (`audits/remediation/WP03-ui-hotfixes.md`). Fixes F022 (with F008), F032 (with the toast part of F090), and the copy part of F151.
 - User-visible: the mobile X closes the menu; Escape works on both header menus; no blue toast over the header on `/prices`; copy says prices are updated daily.
-- Not in this PR: revalidation and cache TTLs (WP11), auth-slot skeleton (WP04), dialog and label accessibility beyond the header (WP14), per-card loading state (WP09/WP19). F090 also mentions a bare "Found 0 products" empty state and native `alert()`/`confirm()` dialogs; those are outside the F032 cluster's verified scope and are not changed here, so list them under "Noticed, out of scope" in the PR body.
+- Not in this PR: revalidation and cache TTLs (WP11), auth-slot skeleton (WP04), dialog and label accessibility beyond the header (WP14), per-card loading state (WP09/WP19). F090 also mentions a bare "Found 0 products" empty state and native `alert()`/`confirm()` dialogs; those are outside the F032 cluster's verified scope and are not changed here. Say so in the PR body with their owners: the zero-result empty state is WP13 (F093) and the native dialogs are WP15 (F103).
 - Verification: paste the output of every command in the spec's Verification section and tick the manual checks.
 - Owner actions: none.

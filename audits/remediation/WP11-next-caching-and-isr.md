@@ -4,15 +4,15 @@
   - F151 (full, cluster members F151, F123): every server cache revalidates hourly although prices change at most once per product per day, nothing ever calls `revalidateTag`, and production still issues 370 to 670 `get_market_product_summaries` calls a day (302 in one hour) despite the 1 hour cache. The "refreshed hourly" copy was already fixed by WP03; this package does the caching half.
   - F147 (full): `/product/[id]` is fully dynamic (no `revalidate`, no `generateStaticParams`), so every visit and every crawler hit is a serverless render that the CDN never caches.
   - F143 (full for `/compare` and `/box-calculator`): both tools call the heavy summaries RPC from each visitor's browser instead of receiving server-cached data like `/market`. The `/portfolio` leg was moved server-side by WP05 and is not touched here.
-  - F146 (full, as scoped by the plan): the server fallback path fetches a year of price history oldest-first and truncates at 50k rows, so the rows that survive are the oldest and the 1D to 3M returns come out null.
-  - F150 (full): the client exchange-rate cache never expires and pins the hard-coded 1.36 fallback into the tab forever after one failed read.
+  - F146 (partial, the verifier's "simplest low-risk fix"): the server fallback path fetches a year of price history oldest-first and truncates at 50k rows, so the rows that survive are the oldest and the 1D to 3M returns come out null. This package orders the 367-day fetch newest first. Not done here, and not scheduled by any package in the plan: the `get_latest_prices` RPC that would replace the three "newest price per product" paging loops, and removing the up-to-55 serial page requests (both need a migration; WP11 adds none). List them as follow-ups in the PR.
+  - F150 (full for the defect, partial for the call sites): the client exchange-rate cache never expires and pins the hard-coded 1.36 fallback into the tab forever after one failed read. Fixed in `exchangeRate.ts` for every caller. `/compare` also gets the server-cached rate. `/portfolio` keeps its client read (now with the 1 hour TTL): it is a signed-in client page that WP04, WP05 and WP13 all edit, and turning it into a server wrapper is not worth one PostgREST read per tab per hour. Say so in the PR.
   - F068 (full, as corrected by the verifier): `/prices` and `/market` serialise about 300 KB of product and volume JSON into the RSC payload, roughly a third of it fields no client component reads.
 - **Priority rationale**: the nested-cache bug found while scoping F151 is the main load generator on the database's heaviest RPC, and fixing it together with ISR and event-driven revalidation cuts that load by an order of magnitude while making pages fresher, not staler.
 - **Effort**: M, about 9 to 12 hours including tests.
-- **Depends on**: WP05 (portfolio route handlers call `getCachedMarketProductSummaries` server-side and add `fetchNewestPricedAtForProducts` to `serverMarketData.ts`), WP06 (rewrites `BoxCalculator.tsx`, adds `compareSetsNewestFirst` to `useBoosterBoxPrices.ts`), WP10 (bounded summaries and volume RPCs, so the fewer remaining calls are also cheap). Also relies on already-merged WP00 (`pnpm build:stub`), WP03 ("updated daily" copy), WP07 (`app/lib/format.ts`, `StalePriceNote` in `ProductCard.tsx`, deterministic dates in the compare page) and WP08 (`prices/page.tsx` without `<Suspense>`).
+- **Depends on**: WP05 (portfolio route handlers call `getCachedMarketProductSummaries` server-side and add `fetchNewestPricedAtForProducts` to `serverMarketData.ts`), WP06 (rewrites `BoxCalculator.tsx`, adds `compareSetsNewestFirst` to `useBoosterBoxPrices.ts`), WP10 (bounded summaries and volume RPCs, so the fewer remaining calls are also cheap). Also relies on already-merged WP00 (`pnpm build:stub`), WP03 ("updated daily" copy), WP07 (`app/lib/format.ts`, `StalePriceNote` in `ProductCard.tsx`, deterministic dates in the compare page), WP08 (`prices/page.tsx` without `<Suspense>`) and WP09 (edits `clientMarketData.ts`, `MarketView.tsx` and `RecentlyReleased.tsx`, so their line numbers have moved).
 - **Unblocks**: WP18 (splits the compare page; after this PR its client code lives in `app/compare/CompareDashboard.tsx`), WP20 (types and currency context build on `VolumeMetricsSummary` and the exchange-rate changes here). WP12 edits `exchangeRate.ts` and the tool pages too; rebase it on this PR if it has not merged yet.
 - **Suggested branch name**: `remediation/wp11-next-caching-and-isr`
-- **Risk level**: medium. It changes how long every public page and data cache lives; a mistake shows stale prices for up to a day. The daily backstop, the unit tests and the post-deploy checks bound that. No migrations.
+- **Risk level**: medium. It changes how long every public page and data cache lives; a mistake shows stale prices for up to a day. The daily backstop, the unit tests and the post-deploy checks bound that. No migrations. Known limit: a wrapper fallback (the 1.36 rate, `{}` volume, the set-analytics JS fallback) is not stored in the Data Cache, but the ISR page rendered with it is, until the next scraper revalidation (at most about 4 hours while the scraper runs) or the daily backstop. The tool pages treat the rate fallback as "absent" and fetch in the browser; `useVolumeMetrics` does the same for `{}`.
 
 ## Why
 
@@ -20,7 +20,7 @@ Every market cache in `app/lib/serverMarketData.ts` revalidates on an hourly clo
 
 ## Before you start
 
-Read these files fully first (paths relative to `frontend/` unless they start with the repo root):
+Read these files fully first (paths relative to `frontend/` unless they start with the repo root). Every `file:line` in this spec is at the base commit of the plan, before WP05, WP06, WP07 and WP09 edited these files. In `serverMarketData.ts` everything from `guardedPrice` down sits about 30 lines lower after WP05 and WP07; `compare/page.tsx`, `BoxCalculator.tsx`, `MarketView.tsx` and `RecentlyReleased.tsx` have moved too. Locate every edit by the quoted code, never by the number alone.
 
 - `app/lib/serverMarketData.ts` (926 lines at the base of this plan; WP05 and WP07 add about 30 lines). Key places: `fetchPriceHistoryPages` :81-128, `fetchNewestPricedAt` :141-167, `fetchSetAnalyticsFallback` :341-583 (the nested call is at :343), `fetchProductDetail` :600-732 (the nested call is at :603), `fetchLatestExchangeRate` :734-751, `fetchProductsWithFallbackReturns` :753-816, `fetchMarketProductSummaries` :818-827, `fetchVolumeMetrics` :835-853, `fetchSetAnalytics` :855-889, the five `unstable_cache` exports :891-926.
 - `node_modules/next/dist/server/web/spec-extension/unstable-cache.js:114-160` (why nesting bypasses the cache: `case 'unstable-cache': isNestedUnstableCache = true` at :147, and the cache read is skipped when that flag is set at :160) and `:183-214` (a stale entry read during ISR regeneration is refreshed in the foreground, so a page regenerated after `revalidateTag(tag, "max")` gets fresh data).
@@ -358,8 +358,7 @@ async function fetchProductDetailRows(
   productId: number
 ): Promise<ProductDetailRows> {
   const supabase = createMarketDataSupabaseClient();
-  // ... move the current lines 608-648 here unchanged: startDate,
-  // salesStartDate and the Promise.all of the three queries ...
+  // MOVE BLOCK A here unchanged (see the list below this code).
 
   if (error) {
     throw error;
@@ -367,8 +366,7 @@ async function fetchProductDetailRows(
 
   const history = groupHistoryRowsByProduct(historyRows || [])[productId] || [];
 
-  // ... move the current lines 696-717 here unchanged: the salesHistory and
-  // listings blocks, including their logSupabaseError calls ...
+  // MOVE BLOCK B here unchanged.
 
   return { history, salesHistory, listings };
 }
@@ -391,16 +389,23 @@ async function loadProductDetail(
   }
   const { history, salesHistory, listings } = rows;
 
-  // ... keep the current lines 656-694 here (from the comment "This page has
-  // the product's own price history in hand" through the `const product:
-  // Product = {...}` literal), with the comment block at 666-679 replaced by
-  // the text below ...
+  // MOVE BLOCK C here, with its "Deliberately NOT compared" comment replaced
+  // by the text given below.
 
-  // ... keep the current lines 719-731 (siblings and the return) ...
+  // MOVE BLOCK D here unchanged.
 }
 ```
 
-Replace the comment block currently at :666-679 (it says the summary is cached for an hour while the history is queried live) with:
+The four blocks, all taken from the current `fetchProductDetail` body (base line numbers in brackets, find them by the quoted first and last lines):
+
+- **Block A** [608-648]: from `const startDate = new Date();` through the `]);` that closes the `Promise.all` of the three queries (`product_price_history`, `product_sales_history`, `product_listings_history`). It declares `historyRows`, `error`, `salesRows`, `salesError`, `listingsRows`, `listingsError`.
+- **Block B** [696-717]: from `let salesHistory: SalesHistoryEntry[] = [];` through the closing `}` of the `if (listingsError) { ... } else { ... }` block, including both `logSupabaseError` calls.
+- **Block C** [656-694]: from the comment line `// This page has the product's own price history in hand, so it decides` through the `};` that closes `const product: Product = { ... };`.
+- **Block D** [719-731]: from `// Siblings share the same set.` through `return { product, history, salesHistory, listings, siblings };`.
+
+After the move, the old `if (error) { logSupabaseError("server_product_history_failed", error); }` block and the old `fetchProductDetail` function are gone; nothing else from its body is left behind.
+
+Inside block C, replace the comment block that starts `// Deliberately NOT compared against the newest history row's VALUE here,` and ends `// and a price an hour old is well inside a 14-day tolerance.` (base :666-679; it says the summary is cached for an hour while the history is queried live) with:
 
 ```ts
   // Deliberately NOT compared against the newest history row's VALUE here,
@@ -594,7 +599,7 @@ export async function fetchLatestExchangeRateClient(): Promise<ExchangeRateSnaps
     return exchangeRatePromise;
   }
 
-  exchangeRatePromise = (async () => {
+  const request = (async (): Promise<ExchangeRateSnapshot> => {
     try {
       const { data, error } = await supabase
         .from("exchange_rates")
@@ -606,9 +611,13 @@ export async function fetchLatestExchangeRateClient(): Promise<ExchangeRateSnaps
       if (error || !data) {
         throw error ?? new Error("No exchange rate data found.");
       }
+      const rate = data.usd_to_cad;
+      if (typeof rate !== "number" || !Number.isFinite(rate) || rate <= 0) {
+        throw new Error("exchange_rates returned no usable usd_to_cad");
+      }
 
       const snapshot: ExchangeRateSnapshot = {
-        rate: data.usd_to_cad,
+        rate,
         date: data.recorded_at ?? null,
       };
       exchangeRateCache = snapshot;
@@ -619,18 +628,26 @@ export async function fetchLatestExchangeRateClient(): Promise<ExchangeRateSnaps
       // Never cached: one transient failure must not pin the hard-coded rate
       // into the tab. An expired real rate beats the constant, so prefer it.
       return exchangeRateCache ?? { rate: DEFAULT_EXCHANGE_RATE, date: null };
-    } finally {
-      exchangeRatePromise = null;
     }
   })();
 
-  return exchangeRatePromise;
+  // Cleared here, not in a finally inside the IIFE: if the query threw
+  // synchronously, that finally would run before this assignment and leave a
+  // settled promise in exchangeRatePromise for the life of the tab.
+  exchangeRatePromise = request;
+  try {
+    return await request;
+  } finally {
+    if (exchangeRatePromise === request) {
+      exchangeRatePromise = null;
+    }
+  }
 }
 ```
 
 8b. `frontend/app/lib/clientMarketData.ts` doc comment of `MARKET_PRODUCTS_TTL_MS` (:23-35): replace the last sentence ("An hour matches the server-side getCachedMarketProductSummaries revalidate, so both halves of the app age their view of the catalog at the same rate.") with: `An hour is well inside the scraper's 4-hour cadence, so a long-lived tab picks up each scrape within the hour; the server side refreshes on the scraper's revalidate hook (serverMarketData.ts).` Do not change any value in this file.
 
-8c. `frontend/app/components/ProductPrices/hooks/useVolumeMetrics.ts`: the comment inside the hook (:25-28) says "unstable_cache stores that for an hour". Replace those four comment lines with: `// Gate on content, not existence: getCachedVolumeMetrics returns {} when the RPC fails, and the page rendered with it keeps that {} until it regenerates. Treating {} as "data supplied" would suppress the client fetch and leave every volume surface blank with no retry path.` (Step 11 changes this file's types too.)
+8c. `frontend/app/components/ProductPrices/hooks/useVolumeMetrics.ts`: the comment inside the hook (:25-28) says "unstable_cache stores that for an hour". Replace those four comment lines with: `// Gate on content, not existence: getCachedVolumeMetrics returns {} when the RPC fails, and the page rendered with it keeps that {} until it regenerates. Treating {} as "data supplied" would suppress the client fetch and leave every volume surface blank with no retry path.` Wrap it at the file's usual width, one `//` per line. In the comment above the final `return` (base :55-58), the words `a navigation that crosses the hourly` / `server-cache boundary` span two lines; replace them with `a navigation after the server cache refreshed` and re-wrap those two comment lines. (Step 11 changes this file's types too.)
 
 ### Step 9. `/compare` server-fed (F143)
 
@@ -690,7 +707,12 @@ import { buildMarketProductMap, type MarketProduct } from "./marketProducts";
 
 ```ts
 type CompareDashboardProps = {
-  /** sku map built on the server (buildMarketProductMap). Empty or absent: fetched in the browser. */
+  /**
+   * sku map built on the server (buildMarketProductMap). Absent when the
+   * server had no catalog (failed read or empty stub): fetched in the
+   * browser. Present but empty means "the catalog has no sku products", which
+   * a browser fetch would not change.
+   */
   initialMarketProducts?: Record<string, MarketProduct>;
   /** Server-cached rate. Absent when the server only had the hard-coded fallback: fetched in the browser. */
   initialExchangeRate?: ExchangeRateSnapshot;
@@ -701,11 +723,11 @@ type CompareDashboardProps = {
 - Replace the four state lines for `marketProducts`, `exchangeRate`, `exchangeRateDate`, `loadingMarket` (:312-317) with:
 
 ```ts
-  // Gate on content, like useProductData: an empty map means the server had
-  // nothing (the stub build, or the summaries failed), so the browser fetches.
-  const needsProducts =
-    initialMarketProducts === undefined ||
-    Object.keys(initialMarketProducts).length === 0;
+  // page.tsx passes undefined when it had no catalog at all (the stub build,
+  // or the summaries failed), so only then does the browser fetch. Do not
+  // gate on the map being empty: a catalog with no sku products legitimately
+  // builds {}, and refetching it in every browser would bring back F143.
+  const needsProducts = initialMarketProducts === undefined;
   const needsRate = initialExchangeRate === undefined;
 
   const [marketProducts, setMarketProducts] = useState<
@@ -794,7 +816,11 @@ export default async function ComparePage() {
 
   return (
     <CompareDashboard
-      initialMarketProducts={products ? buildMarketProductMap(products) : undefined}
+      // No catalog at all (failed read, or the empty WP00 stub): let the
+      // browser try. A real catalog always has rows.
+      initialMarketProducts={
+        products && products.length > 0 ? buildMarketProductMap(products) : undefined
+      }
       // date === null is the hard-coded fallback; let the browser try instead.
       initialExchangeRate={exchangeRate.date !== null ? exchangeRate : undefined}
     />
@@ -1101,10 +1127,11 @@ Before applying it, re-run the reader check, because WP07 to WP09 added client c
 
 ```bash
 grep -rnE "\.sku\b|price_recorded_at|sets\??\.id\b|generation_id|generations\??\.id" \
-  app/components/ProductPrices app/components/MarketView
-# expect: price_recorded_at only in ProductCard.tsx's StalePriceNote and in types;
-# nothing else. If another reader of a dropped field appears, keep that field
-# in toCatalogProduct and note it in the PR.
+  app/components/ProductPrices app/components/MarketView | grep -v __tests__
+# expect exactly: types/index.ts (price_recorded_at at :56, generation_id at
+# :67 and :92, declarations only) and ProductCard.tsx (price_recorded_at inside
+# WP07's StalePriceNote). If another reader of a dropped field appears, keep
+# that field in toCatalogProduct and note it in the PR.
 ```
 
 11c. Prop and hook types (types only, no logic change):
@@ -1219,7 +1246,7 @@ def trigger_site_revalidation(session=None) -> bool:
 - Imports: below `from secrets_loader import load_supabase_credentials` add `from revalidate_hook import should_revalidate_site, trigger_site_revalidation`.
 - `fetch_and_store_exchange_rate` (:961-1022): make it return whether a row was stored. After `logger.info("Exchange rate stored in Supabase successfully.")` add `return True`; in the inner `except Exception as e:` (insert failed) add `return False` after the warning; in the outer `except Exception as e:` add `return False` after the error log. Add to the docstring: `Returns True when a new row was stored.`
 - `update_prices` (:1055): make it return the number of products it updated. In the early exit `if not products_to_update:` change `return` to `return 0`. After the final `logger.info(... listings snapshots written ...)` at the end of the function (:1302-1306) add `return updated_count`. Add to the docstring: `Returns the number of products updated.`
-- Add this function directly above the `# === Run Script ===` comment (:1488):
+- Add this function directly above the `# === Run Script ===` comment (:1489), after the blank lines that end the previous function:
 
 ```python
 def run_jobs_once():
@@ -1266,12 +1293,12 @@ REVALIDATE_SECRET=
 - `README.md`, in the scraper env-file heredoc (:113-116), add two lines after `SUPABASE_SERVICE_ROLE_KEY=...`:
 
 ```
-REVALIDATE_URL=https://www.pokefin.ca/api/revalidate
+REVALIDATE_URL=https://your-site-host/api/revalidate
 REVALIDATE_SECRET=the-same-value-as-in-vercel
 ```
 
-and one sentence below the block: `After each run that writes data, the scraper POSTs to REVALIDATE_URL so the site refreshes its caches; leave both unset locally to skip it. The host in REVALIDATE_URL must be the canonical one (no redirect), because the hook does not follow redirects.`
-- `run_scraper.sh`, in the comment that lists the env file contents (:25-28), add `#   REVALIDATE_URL=https://www.pokefin.ca/api/revalidate` and `#   REVALIDATE_SECRET=...` lines.
+and one sentence below the block: `After each run that writes data, the scraper POSTs to REVALIDATE_URL so the site refreshes its caches; leave both unset locally to skip it. Use the host that answers without a redirect (pokefin.ca or www.pokefin.ca, whichever serves 200), because the hook does not follow redirects.` Do not hard-code one of the two hosts here: the repo references both (`layout.tsx:34` uses `pokefin.ca`, `.env.example` suggests `www.pokefin.ca`), and only the owner's check in Owner actions step 2 settles which one redirects.
+- `run_scraper.sh`, in the comment that lists the env file contents (:25-28), add `#   REVALIDATE_URL=https://<site host, no redirect>/api/revalidate` and `#   REVALIDATE_SECRET=<same value as the Vercel env var>` lines directly after the `SUPABASE_SERVICE_ROLE_KEY` line.
 
 ## Pitfalls: do not do this
 
@@ -1279,7 +1306,8 @@ and one sentence below the block: `After each run that writes data, the scraper 
 - **Do not call `revalidateTag(tag)` with one argument.** Next 16 deprecates it (it logs a warning and behaves like `{ expire: 0 }`). Do not use `updateTag`: it throws outside Server Actions (`revalidate.js`, `updateTag`). Do not use `{ expire: 0 }`: it makes the first visitor after every scrape wait on the summaries RPC and, if that times out, on the 55-query fallback. `"max"` is correct because regeneration refreshes stale data caches in the foreground.
 - **Do not set `revalidate: false`** on the caches (F123's suggestion). The daily backstop keeps the site current if the scraper host or the hook dies.
 - **Do not return a fallback from inside an `unstable_cache` callback** for the exchange rate, volume metrics or set analytics. With a 24 hour backstop a cached fallback would stick until the next scrape. Throw inside, degrade in the exported wrapper.
-- **Do not make `fetchMarketProductSummaries` throw instead of falling back** (F146 verifier). At build time `unstable_cache` has no stale entry to serve, so a throw fails the build instead of keeping the previous page, and WP05's `/api/portfolio` would lose prices during an RPC outage. Keep the fallback; only reorder it.
+- **Do not make `fetchMarketProductSummaries` throw instead of falling back** (F146 verifier). At build time `unstable_cache` has no stale entry to serve, so a throw fails the build instead of keeping the previous page, and WP05's `/api/portfolio` would lose prices during an RPC outage. Keep the fallback; only reorder it. Accepted consequence, state it in the PR: the fallback catalog (6M and 1Y returns null) is now cached until the next scraper revalidation instead of for one hour. (On a stale entry a failing RPC is not reached at all: `unstable_cache` keeps serving the previous value when a refresh throws, `unstable-cache.js:190-196`, but the summaries function does not throw, so the fallback result replaces it.)
+- **Do not gate `/compare` on the sku map being empty.** `page.tsx` passes `undefined` when it had no catalog; an empty map is a real answer and must not make every browser fetch the catalog again.
 - **Do not change the order in `fetchNewestPricedAt`.** Its 14-day window is complete; only the two 367-day callers pass `newestFirst`.
 - **Do not add a CSRF check to `/api/revalidate`** and do not remove `/api/*` from the proxy matcher. The scraper sends no Origin header, so `rejectIfCsrfFails` would 403 every call; the route has no cookie authority to protect. The proxy's per-IP limit stays as a brute-force brake.
 - **Do not compare the secret with `===` or call `timingSafeEqual` on the raw strings.** `===` leaks timing; `timingSafeEqual` throws on unequal lengths. Hash both sides first, as the route does.
@@ -1448,11 +1476,8 @@ function query(result: Result) {
   return chain;
 }
 
+/** A MarketSummaryRow. Every product is in set 1, so they are siblings. */
 function summaryRow(id: number) {
-  // Return the same object as summaryRow() in clientMarketData.cache.test.ts
-  // (copy its fields), with `id` set to this id, `usd_price: 10`, `set_id: 1`
-  // for every product (so they are siblings) and `price_recorded_at` = today
-  // at T09:00:00.
   return {
     id,
     usd_price: 10,
@@ -1485,19 +1510,30 @@ beforeEach(() => {
   jest.clearAllMocks();
   nextCache.__store.clear();
   nextCache.__nested.length = 0;
+  // Default: a healthy database. Every case overrides only what it tests.
+  // Without this default rpc() returns undefined, the destructure in
+  // fetchMarketProductSummaries throws, and the detail cases fail for the
+  // wrong reason.
+  rpcMock.mockImplementation(async (name: string) =>
+    name === "get_market_product_summaries"
+      ? { data: [summaryRow(1), summaryRow(2)], error: null }
+      : { data: [], error: null }
+  );
   fromMock.mockImplementation(() => query({ data: [], error: null }));
 });
 ```
 
+Use `mockImplementationOnce` (or a `name`/`table` switch) to make a single call fail; do not replace the default for the whole file.
+
 Cases:
 - **every cache uses the daily backstop and a known tag**: every `__registry` entry has `options.revalidate === 86400` and every tag is in `Object.values(CACHE_TAGS)`; the key parts include `"product-detail-rows"` and do not include `"product-detail"`.
-- **product detail reads the summaries from their cache, never nested**: `rpcMock` resolves `{ data: [summaryRow(1), summaryRow(2)], error: null }` for `"get_market_product_summaries"`. `await getCachedProductDetail(1)` and `await getCachedProductDetail(2)` both return non-null with `siblings` of length 1; `__nested` is empty; `rpcMock` was called with `"get_market_product_summaries"` exactly once.
-- **an unknown product id makes no per-product queries**: `await getCachedProductDetail(999)` is `null` and `fromMock` was not called.
-- **a failed history query is not cached**: `fromMock` for `"product_price_history"` first returns `query({ data: null, error: { message: "down" } })`; the detail still resolves with `history: []`; switch the mock to return one history row; a second call for the same id returns that row (the failure was not stored).
+- **product detail reads the summaries from their cache, never nested**: with the default mocks, `await getCachedProductDetail(1)` and `await getCachedProductDetail(2)` both return non-null with `siblings` of length 1; `__nested` is empty; `rpcMock.mock.calls.filter(([name]) => name === "get_market_product_summaries")` has length 1.
+- **an unknown product id makes no per-product queries**: with the default mocks, `await getCachedProductDetail(999)` is `null` and `fromMock` was not called.
+- **a failed history query is not cached**: `fromMock.mockImplementation((table: string) => table === "product_price_history" ? query({ data: null, error: { message: "down" } }) : query({ data: [], error: null }))`; `(await getCachedProductDetail(1))?.history` equals `[]`. Then `fromMock.mockImplementation((table: string) => table === "product_price_history" ? query({ data: [{ product_id: 1, usd_price: 10, recorded_at: "2026-09-24T09:00:00" }], error: null }) : query({ data: [], error: null }))`; a second `getCachedProductDetail(1)` returns `history` equal to `[{ usd_price: 10, recorded_at: "2026-09-24T09:00:00" }]` (the failure was not stored).
 - **a failed exchange-rate read is not cached**: `fromMock` for `"exchange_rates"` returns `query({ data: null, error: { code: "PGRST116" } })`; `getCachedExchangeRate()` resolves `{ rate: 1.36, date: null }`; switch to `query({ data: { usd_to_cad: 1.41, recorded_at: "2026-09-25T00:00:00" }, error: null })`; the next call resolves `{ rate: 1.41, date: "2026-09-25T00:00:00" }`.
 - **a malformed rate is rejected**: `data: { usd_to_cad: null, recorded_at: null }` yields `{ rate: 1.36, date: null }`.
 - **a failed volume read is not cached**: `get_market_product_volume_metrics` errors once (result `{}`), then succeeds with one row (result has that product id).
-- **set analytics falls back outside any cache callback**: `get_set_analytics` resolves `{ data: null, error: { message: "timeout" } }`, summaries resolve `[]`; `getCachedSetAnalytics()` resolves `[]` and `__nested` is empty.
+- **set analytics falls back outside any cache callback**: `rpcMock.mockImplementation(async (name: string) => name === "get_set_analytics" ? { data: null, error: { message: "timeout" } } : { data: [], error: null })` (summaries resolve `[]`); `getCachedSetAnalytics()` resolves `[]`, `__nested` is empty, and `rpcMock` was called with `"get_market_product_summaries"` (the fallback read the summaries).
 
 ### 3. `frontend/app/lib/__tests__/serverMarketData.fallbackOrder.test.ts` (new)
 
@@ -1549,18 +1585,19 @@ it("pages the 367-day fallback newest first and the freshness window oldest firs
 });
 ```
 
-Add a second case: with the long window mocked to return rows newest first (`recordedDaysAgo(1)` then `recordedDaysAgo(8)` for product 42, prices 110 and 100) and the tolerance window returning the day-1 row with `usd_price` equal to `PRODUCT_ROW.usd_price` (set `PRODUCT_ROW.usd_price` to 110 in this case), `products[0].returns?.["7D"]` is `10` (within `toBeCloseTo(10, 5)`), proving the grouping re-sorts and the short returns survive.
+Add a second case, "keeps the short-window returns when the long window arrives newest first". Copy `recordedDaysAgo` from the freshness test. Build the same `fromMock` shape as the first case, with these differences: the `products` query resolves `{ data: [{ ...PRODUCT_ROW, usd_price: 110 }], error: null }` (a copy; do not mutate `PRODUCT_ROW`), and `range(from)` resolves `from === 0 ? rows : []`, where `rows` is, for the year bound (the earlier of the two `gte` bounds, compare them as strings), `[{ product_id: 42, usd_price: 110, recorded_at: recordedDaysAgo(1) }, { product_id: 42, usd_price: 100, recorded_at: recordedDaysAgo(8) }]` (newest first, as the real query now returns them), and for the tolerance bound `[{ product_id: 42, usd_price: 110, recorded_at: recordedDaysAgo(1) }]`. Tell the bounds apart the way the freshness test's `mockSupabase` does (`bound >= toleranceBound`, with `toleranceBound` 20 days back). Then `const [product] = await getCachedMarketProductSummaries();` and `expect(product.returns?.["7D"]).toBeCloseTo(10, 5)`, proving the grouping re-sorts and the short returns survive.
 
 `serverMarketData.freshness.test.ts` must pass unchanged (its mocks ignore `order` arguments; `groupHistoryRowsByProduct` re-sorts).
 
 ### 4. `frontend/app/lib/__tests__/exchangeRate.test.ts` (new)
 
-Copy the `jest.mock("../supabase", ...)` and `jest.mock("../logger", ...)` pattern and the `jest.resetModules()` plus `await import("../exchangeRate")` per test from `clientMarketData.cache.test.ts`. `fromMock` returns a chain `select().order().limit().single()` resolving to the queued result. Cases:
+The first line of the file is `export {};`. The file has no static import (the module under test is imported dynamically), so without it TypeScript treats the file as a global script and its `const fromMock` collides with the one in `clientMarketData.cache.test.ts` (`tsc` error TS2451; WP09 hit the same thing). Copy the `jest.mock("../supabase", ...)` and `jest.mock("../logger", ...)` pattern and the `jest.resetModules()` plus `const { fetchLatestExchangeRateClient, EXCHANGE_RATE_TTL_MS } = await import("../exchangeRate")` per test from `clientMarketData.cache.test.ts`. `fromMock` returns a chain `select().order().limit().single()` resolving to the queued result (a failure is `{ data: null, error: { message: "down" } }`, a success `{ data: { usd_to_cad: 1.41, recorded_at: "2026-09-25T00:00:00" }, error: null }`). Cases:
 - two calls inside the TTL make one query;
 - after advancing `Date.now` past `EXCHANGE_RATE_TTL_MS` (`jest.spyOn(Date, "now")`), a call queries again and returns the new rate;
 - a failure on the first ever call returns `{ rate: 1.36, date: null }`, and the next call queries again (the fallback was not cached);
 - a failure after an expired good value returns that expired value (rate and date), not 1.36;
-- two concurrent calls share one in-flight query.
+- a row with `usd_to_cad: null` returns `{ rate: 1.36, date: null }` and is not cached (the next call queries again);
+- two concurrent calls share one in-flight query, and a third call after both resolve (inside the TTL) makes no query.
 
 ### 5. `frontend/app/lib/__tests__/catalogProjection.test.ts` (new)
 
@@ -1607,9 +1644,10 @@ WP06's `compareSetsNewestFirst` cases keep importing it from `../hooks/useBooste
 
 `marketProducts.test.ts`: products without sku are skipped; `marketPriceUsd` is null for a null price; `productType` prefers `label` over `name`; `setName`, `releaseDate`, `lastUpdated` map through.
 
-`CompareDashboard.test.tsx` (jsdom): mock `../../lib/exchangeRate` (`fetchLatestExchangeRateClient: jest.fn()`) and `../../lib/clientMarketData` (`fetchMarketProductsClient: jest.fn()`). Cases:
-- with `initialMarketProducts={{ "SKU-1": {...} }}` and `initialExchangeRate={{ rate: 1.4, date: "2026-09-25T00:00:00" }}`: neither mock is called, the text `1 USD = 1.4000 CAD` is present, and "Loading market data" is absent;
-- with no props: both mocks are called once, and after they resolve the rate text shows the mocked rate;
+`CompareDashboard.test.tsx` (jsdom): mock `../../lib/exchangeRate` (`fetchLatestExchangeRateClient: jest.fn()`) and `../../lib/clientMarketData` (`fetchMarketProductsClient: jest.fn()`), import both names statically and cast each with `as jest.Mock`. In `beforeEach`, `jest.clearAllMocks()`, then `fetchLatestExchangeRateClient.mockResolvedValue({ rate: 1.3333, date: "2026-09-24T00:00:00" })` and `fetchMarketProductsClient.mockResolvedValue([])` (an unresolved `jest.fn()` returns `undefined`, and `buildMarketProductMap(undefined)` would throw into the error banner). The rate text sits inside `Exchange rate: 1 USD = ... CAD`, so match it with a regex, not an exact string. Cases:
+- with `initialMarketProducts={{ "SKU-1": { sku: "SKU-1", marketPriceUsd: 10 } }}` and `initialExchangeRate={{ rate: 1.4, date: "2026-09-25T00:00:00" }}`: neither mock is called, `screen.getByText(/1 USD = 1\.4000 CAD/)` is present, and `screen.queryByText(/Loading market data/)` is null;
+- with `initialMarketProducts={{}}` (a catalog with no sku products) and a rate: `fetchMarketProductsClient` is not called;
+- with no props: both mocks are called once, and `await screen.findByText(/1 USD = 1\.3333 CAD/)` resolves;
 - with products but no rate: only `fetchLatestExchangeRateClient` is called.
 
 ### 9. `tests/test_revalidate_hook.py` (new, repo root)
@@ -1799,8 +1837,8 @@ grep -rn "revalidate: 3600" app                          # no output
 grep -rn "unstable_cache(" app --include=*.ts | grep -v __tests__ | wc -l
 # expect 5 (exchange rate, summaries, volume, set analytics, product-detail rows)
 grep -n "revalidateTag(" app/api/revalidate/route.ts     # one call, with "max"
-grep -rn "fetchMarketProductsClient\|fetchLatestExchangeRateClient" app/compare app/box-calculator
-# expect: only app/compare/CompareDashboard.tsx (the fallback effect)
+grep -rn "fetchMarketProductsClient\|fetchLatestExchangeRateClient" app/compare app/box-calculator | grep -v __tests__
+# expect: only app/compare/CompareDashboard.tsx (the import lines and the fallback effect)
 
 pnpm build:stub
 # expect: exit 0. In the route table:
@@ -1844,7 +1882,7 @@ Do these in this order. If they are skipped, the site still works but refreshes 
    ```
    Confirm after the next scheduled run: `grep -E "Site caches revalidated|Site revalidation" <repo>/scraper.log | tail -3` shows `Site caches revalidated.` (or "not needed" for a run that wrote nothing). A line with `HTTP 30x` means the URL uses the redirecting host; switch to the canonical one.
 4. **Confirm ISR on product pages.** `curl -sI https://<canonical-host>/product/<any id> | grep -iE "x-vercel-cache|cache-control"` twice: the second response shows `x-vercel-cache: HIT` (or `STALE`), and `cache-control` is not `private, no-cache, no-store`.
-5. **Confirm the tools no longer call the RPC from the browser.** Open `/compare` and `/box-calculator` with DevTools, Network tab, filter `supabase.co`: no request to `rpc/get_market_product_summaries`. The set picker in the box calculator is populated immediately.
+5. **Confirm the tools no longer call the RPC from the browser.** Open `/compare` and `/box-calculator` with DevTools, Network tab, filter `supabase.co`: no request to `rpc/get_market_product_summaries` and none to `exchange_rates` (both pages receive the server-cached rate unless the server only had the 1.36 fallback). The set picker in the box calculator is populated as soon as the page hydrates. If `/compare` still requests the summaries, check that the production catalog is not empty and that `CompareDashboard` gates on `initialMarketProducts === undefined`.
 6. **Confirm the database load drop after 48 hours.** Supabase dashboard, Logs, API (edge) logs, filter on path `rpc/get_market_product_summaries`, group by day: server-originated calls per day fall from 370 to 670 to under 100, and the `canceling statement due to statement timeout` count in Postgres logs trends to zero (WP10 bounds the RPC itself).
 7. **Optional: confirm a single function region.** Vercel, Settings, Functions, Function Region: exactly one region selected. Several regions each keep their own Data Cache and multiply cold misses.
 8. **Optional: measure F068.** Compare before and after deploy: `curl -s -H 'Accept-Encoding: br' -o /dev/null -w '%{size_download}\n' https://<canonical-host>/prices` should be about 20 KB smaller.
@@ -1856,7 +1894,7 @@ Do these in this order. If they are skipped, the site still works but refreshes 
 - [ ] A failed exchange-rate, volume or product-history read is not cached (tests pass).
 - [ ] `POST /api/revalidate` returns 503 without a configured secret, 401 with a wrong or missing header, 200 with the right one, and calls `revalidateTag(tag, "max")` for exactly `market-products`, `set-analytics`, `exchange-rate`.
 - [ ] `/product/[id]` exports `revalidate = 86400` and a `generateStaticParams` returning `[]`; `pnpm build:stub` does not list it as ƒ.
-- [ ] `/compare` and `/box-calculator` are server components that pass initial data; their client components fetch only when that data is absent or empty.
+- [ ] `/compare` and `/box-calculator` are server components that pass initial data; `CompareDashboard` fetches the catalog only when `initialMarketProducts` is `undefined` (an empty map does not refetch), and `useBoosterPackPrices` fetches only when the server data is absent or has no sets.
 - [ ] The 367-day fallback history is requested newest first; `fetchNewestPricedAt` still oldest first.
 - [ ] `fetchLatestExchangeRateClient` re-fetches after 1 hour and never caches the 1.36 fallback.
 - [ ] `/prices` and `/market` pass projected products (no `sku`, `sets.id`, `generation_id`, `generations.id`; `price_recorded_at` only for unpriced products; returns rounded to 2 dp) and two-field volume metrics.
@@ -1886,9 +1924,9 @@ perf(cache): scrape-triggered revalidation, product ISR, server-fed tools
 - Client exchange-rate cache gets a 1h TTL and never caches the fallback
 - /prices and /market send projected products and two-field volume metrics
 
-Review findings: F151, F123, F147, F143, F146, F150, F068
+Review findings: F151, F123, F147, F143, F068; F146 and F150 in part (see PR body)
 ```
 
 PR title: `perf(cache): scrape-triggered revalidation, product ISR, server-fed tools (WP11)`
 
-PR body summary: what was wrong (hourly clock on data that changes daily; a nested `unstable_cache` that bypassed the summaries cache on every product-page miss, the likely source of ~300 RPC calls an hour; dynamic product pages; two tools running the heavy RPC per browser; oldest-first fallback truncation; a never-expiring client rate; oversized RSC props); what changed, step by step; the decisions and why (`"max"` not `{ expire: 0 }`; throw inside caches, degrade outside; keep a narrower per-product cache; keep `price_recorded_at` for unpriced products because of WP07's StalePriceNote, correcting the F068 verifier); the Owner actions checklist verbatim (secret in Vercel before merge, scraper env after deploy, the curl checks); test and build output pasted from Verification; follow-ups not done here: the `/portfolio` search still uses the client summaries fetch (WP05 decision), `ExchangeRateService.ts` is unused, and the compare page's own `DEFAULT_EXCHANGE_RATE = 1.35` differs from `1.36` (WP20).
+PR body summary: what was wrong (hourly clock on data that changes daily; a nested `unstable_cache` that bypassed the summaries cache on every product-page miss, the likely source of ~300 RPC calls an hour; dynamic product pages; two tools running the heavy RPC per browser; oldest-first fallback truncation; a never-expiring client rate; oversized RSC props); what changed, step by step; the decisions and why (`"max"` not `{ expire: 0 }`; throw inside caches, degrade outside; keep a narrower per-product cache; keep `price_recorded_at` for unpriced products because of WP07's StalePriceNote, correcting the F068 verifier); the Owner actions checklist verbatim (secret in Vercel before merge, scraper env after deploy, the curl checks); test and build output pasted from Verification; follow-ups not done here: the `/portfolio` search still uses the client summaries fetch (WP05 decision) and `/portfolio` still reads the exchange rate in the browser (now with a 1 hour TTL; F150 partial); F146's `get_latest_prices` RPC and the up-to-55 serial history pages on the fallback path are not scheduled by any package (they need a migration); the fallback catalog is now cached until the next scrape instead of an hour; `ExchangeRateService.ts` is unused; and the compare page's own `DEFAULT_EXCHANGE_RATE = 1.35` differs from `1.36` (WP20).

@@ -51,7 +51,7 @@ sed -n '66,78p' app/lib/rateLimit.ts
 
 # 2. The proxy keys buckets by class and IP only.
 grep -n 'rateLimit(`' proxy.ts
-# expect: proxy.ts:34  const result = rateLimit(`${routeClass}:${ip}`, limit, windowMs);
+# expect: 34:    const result = rateLimit(`${routeClass}:${ip}`, limit, windowMs);
 
 # 3. Captcha is optional and error.message is echoed (F019, F132).
 grep -n "captchaToken\|error.message" app/api/auth/*/route.ts
@@ -59,7 +59,7 @@ grep -n "captchaToken\|error.message" app/api/auth/*/route.ts
 
 # 4. Browser-side reset with no options (F019, F079).
 grep -n "resetPasswordForEmail" app/context/AuthContext.tsx
-# expect: AuthContext.tsx:184  await supabase.auth.resetPasswordForEmail(email);
+# expect: 184:    const { error } = await supabase.auth.resetPasswordForEmail(email);
 
 # 5. The callback keys off type=recovery and ignores the exchange result (F079).
 grep -n 'type === "recovery"\|exchangeCodeForSession' app/auth/callback/route.ts
@@ -82,22 +82,27 @@ ls app/api/auth/__tests__ app/auth/callback/__tests__ 2>&1 | head -2
 
 # 9. The browser client still auto-exchanges ?code= (F079).
 grep -n "flowType" app/lib/supabase.ts
-# expect: app/lib/supabase.ts:24  auth: { flowType: "pkce" },
+# expect: 24:  auth: { flowType: "pkce" },
 
 # 10. Lint baseline for the files you will touch (record the count; it must not grow).
 pnpm exec eslint proxy.ts next.config.ts app/lib app/api/auth app/auth app/account/page.tsx app/context 2>&1 | tail -3
+
+# 11. Test baseline (record the "Tests:" line; Verification compares against it).
+pnpm test --ci 2>&1 | grep -E "^(Test Suites|Tests):"
 ```
 
 Assumptions to check:
 
 - WP03 may have landed first and changed "refreshed hourly" copy or `Header.tsx`. This PR does not touch `Header.tsx`, `Footer.tsx` or any copy outside the auth forms, so there is no conflict.
 - If WP04 has already landed (it should not; it depends on this WP), `AuthContext.tsx` no longer imports `supabase`, and the account username form posts to a route. Apply steps 11 and 16 to the current code: change only `resetPassword`, `updatePassword` and the password section.
-- WP01 lands before this PR and edits the export handler and export error text in `account/page.tsx` (`:115-140`, `:331-339`). Step 16 only adds `role="alert"` to the export error `<div>`; keep whatever text WP01 left.
+- WP01 lands before this PR but does not edit `account/page.tsx` (its spec forbids it). Step 16 only adds `role="alert"` to the export error `<div>`; keep its text as it is.
 - If line numbers differ, match on the quoted code, not the number.
 
 ## Implementation steps
 
 Do the steps in order. Steps 1 to 3 create shared modules the later steps import.
+
+Line numbers: every line number in a step refers to the file as it is at the start of this PR, before any edit. When a step first inserts imports or state lines, the later numbers in that same step still refer to the original file, so they will be off by the number of lines you added. Always locate the edit by the quoted code or the element described (for example "the error `<div>`", "the email `<input>`"), and use the number only as a hint.
 
 ### 1. `frontend/app/lib/validation.ts`: add password and username rules
 
@@ -225,7 +230,17 @@ export function mapAuthError(
   const code = typeof error?.code === "string" ? error.code : undefined;
   const status = typeof error?.status === "number" ? error.status : undefined;
 
-  const known = code ? BY_CODE[code] : undefined;
+  // A wrong current password on /account must never read as "signed out"
+  // (401). If GoTrue ever reports it as invalid_credentials instead of
+  // current_password_mismatch, keep it a 400 with the right message.
+  if (context === "update_password" && code === "invalid_credentials") {
+    return authMessage("currentPasswordIncorrect", 400);
+  }
+
+  // Own-property lookup only: a code such as "constructor" or "toString"
+  // must not resolve to an Object.prototype member.
+  const known =
+    code && Object.prototype.hasOwnProperty.call(BY_CODE, code) ? BY_CODE[code] : undefined;
   if (known) return authMessage(known.key, known.status);
 
   // GoTrue answers "Database error saving new user" (HTTP 500, which
@@ -370,6 +385,16 @@ Add imports after line 4:
 import { authMessage, mapAuthError } from "../../../lib/authErrors";
 ```
 
+Change the body declaration at line 20 to `let body: { email?: unknown; password?: unknown; captchaToken?: unknown } | null;` and insert directly after the `try { ... } catch { ... }` block (after line 25):
+
+```ts
+  // A JSON body of `null` parses fine; without this guard `body.email`
+  // throws and the route answers a bare 500.
+  if (!body || typeof body !== "object") {
+    return NextResponse.json({ error: "Invalid body" }, { status: 400 });
+  }
+```
+
 Replace lines 29-30 with:
 
 ```ts
@@ -411,6 +436,8 @@ import { authMessage, mapAuthError } from "../../../lib/authErrors";
 import { authCallbackUrl } from "../../../lib/siteUrl";
 import { PASSWORD_MIN_LENGTH, isValidUsername } from "../../../lib/validation";
 ```
+
+Add `| null` to the body type (the closing `};` at line 21 becomes `} | null;`) and insert the same `if (!body || typeof body !== "object")` guard as step 6 directly after the `try { ... } catch { ... }` block (after line 26).
 
 Replace lines 31-32 with:
 
@@ -468,6 +495,8 @@ Replace lines 51-57 (the error branch) with:
 
 Decision: no migration is added to make `handle_new_user` tolerant of a taken username. After format validation the only trigger failure left is the UNIQUE violation, which `mapAuthError` turns into a 409 with a clear "username may already be taken" message. A tolerant trigger would create accounts with a NULL username, which the UI cannot handle until WP04.
 
+Known limitation, accepted: auth-js turns every GoTrue 500 into an `AuthRetryableFetchError` with no `code`, so a sign-up that fails with a different 500 (for example "Error sending confirmation email" from a broken SMTP setup) also shows the `usernameUnavailable` text. That text is worded "may already be taken" on purpose. Do not branch on the message text to tell them apart; the original message is still in the `sign_up_failed` log line for the owner.
+
 ### 8. `frontend/app/api/auth/update-password/route.ts`: length check, current password, fixed messages
 
 Line numbers below refer to the file before this step; apply the edits from the bottom of the file up (error branch, then `updateUser`, then the unauthenticated branch, then the inserts, then imports) so earlier numbers stay valid.
@@ -479,7 +508,7 @@ import { authMessage, mapAuthError } from "../../../lib/authErrors";
 import { PASSWORD_MIN_LENGTH } from "../../../lib/validation";
 ```
 
-Change the body type at line 17 to `let body: { password?: unknown; currentPassword?: unknown };`.
+Change the body type at line 17 to `let body: { password?: unknown; currentPassword?: unknown } | null;` and insert the same `if (!body || typeof body !== "object")` guard as step 6 directly after the `try { ... } catch { ... }` block (after line 22).
 
 Insert after the `if (!password)` block (after line 27):
 
@@ -691,7 +720,7 @@ export async function GET(request: NextRequest) {
 }
 ```
 
-Write the comment exactly as shown: the Verification grep for `resetPasswordForEmail` must match only the forgot-password route. The `type === "recovery"` branch is gone. `redirectType` is a code-side fallback that also covers a recovery link whose `next` was lost; the primary route is `next=/auth/reset-password` from step 9. Keep the inline `createServerClient`; WP20 consolidates it.
+Copy the comments as shown and do not add the word `resetPasswordForEmail` to any comment in this file (or anywhere else outside `app/api/auth/forgot-password/route.ts`): the Verification grep expects exactly one match. The `type === "recovery"` branch is gone. `redirectType` is a code-side fallback that also covers a recovery link whose `next` was lost; the primary route is `next=/auth/reset-password` from step 9. Keep the inline `createServerClient`; WP20 consolidates it.
 
 Also fix the stale comment in `frontend/app/auth/reset-password/page.tsx:35-37` in step 15.
 
@@ -867,9 +896,9 @@ import {
 
 - Replace lines 72-75 (the `if (error) {` branch through `} else {`) with the same block as step 13: `if (error) {`, the four statements `setError(error.message)`, `setLoading(false)`, `setCaptchaToken(undefined)`, `turnstileRef.current?.reset()`, then `} else {`.
 - Line 118: add `role="alert"` to the error `<div>`.
-- Username input (lines 126-134): add `name="nickname"`, `autoComplete="nickname"`, `maxLength={USERNAME_MAX_LENGTH}`. Line 135 hint text becomes `{USERNAME_HINT}`. The display handle is not the sign-in identifier; marking it `username` would make password managers save "pokefan123" and later fill it into the login email field. This deliberately differs from item 4 of the F024 verifier correction (which suggests `username` on this field and `email` on the email field): that same correction puts `autoComplete="username"` on the login email field, and the two only stay consistent if the signup email field is the `username` one too. Do not "fix" it back.
+- Username input (lines 126-134): add `name="nickname"`, `autoComplete="nickname"`, `maxLength={USERNAME_MAX_LENGTH}`. In the hint `<p>` right below it (line 135), replace the text `Letters, numbers, and underscores only` with `{USERNAME_HINT}`; keep the `<p>` and its class. The display handle is not the sign-in identifier; marking it `username` would make password managers save "pokefan123" and later fill it into the login email field. This deliberately differs from item 4 of the F024 verifier correction (which suggests `username` on this field and `email` on the email field): that same correction puts `autoComplete="username"` on the login email field, and the two only stay consistent if the signup email field is the `username` one too. Do not "fix" it back.
 - Email input (lines 140-148): add `name="email"`, `autoComplete="username"`.
-- Password input (lines 153-161): add `name="new-password"`, `autoComplete="new-password"`, `minLength={PASSWORD_MIN_LENGTH}`. Line 162 hint becomes `{PASSWORD_HINT}`.
+- Password input (lines 153-161): add `name="new-password"`, `autoComplete="new-password"`, `minLength={PASSWORD_MIN_LENGTH}`. In the hint `<p>` right below it (line 162), replace the text `At least 8 characters` with `{PASSWORD_HINT}`; keep the `<p>` and its class.
 - Confirm input (lines 167-175): add `autoComplete="new-password"`, `minLength={PASSWORD_MIN_LENGTH}`.
 - Turnstile (lines 178-181): add `ref`, `onExpire`, `onError` as in step 13.
 
@@ -908,7 +937,7 @@ import {
             />
 ```
 
-- Password input (lines 148-156): add `name="new-password"`, `autoComplete="new-password"`, `minLength={PASSWORD_MIN_LENGTH}`; line 157 hint becomes `{PASSWORD_HINT}`.
+- Password input (lines 148-156): add `name="new-password"`, `autoComplete="new-password"`, `minLength={PASSWORD_MIN_LENGTH}`; in the hint `<p>` right below it (line 157), replace the text `At least 8 characters` with `{PASSWORD_HINT}`; keep the `<p>` and its class.
 - Confirm input (lines 162-170): add `autoComplete="new-password"`, `minLength={PASSWORD_MIN_LENGTH}`.
 
 ### 16. `frontend/app/account/page.tsx`: password section, current password, alert roles
@@ -957,9 +986,9 @@ import {
 ```
 
   (The class string is copied from the existing new-password input at `:276`.)
-- New password input (lines 270-278): add `autoComplete="new-password"`, `minLength={PASSWORD_MIN_LENGTH}`; line 279 hint becomes `{PASSWORD_HINT}`.
+- New password input (lines 270-278): add `autoComplete="new-password"`, `minLength={PASSWORD_MIN_LENGTH}`; in the hint `<p>` right below it (line 279), replace the text `At least 8 characters` with `{PASSWORD_HINT}`; keep the `<p>` and its class.
 - Confirm input (lines 289-297): add `autoComplete="new-password"`, `minLength={PASSWORD_MIN_LENGTH}`.
-- Add `role="alert"` to the four error `<div>`s: password `:301`, username `:235`, export `:332`, delete `:353`. Attribute only: do not change their text, class or the handlers that set them (WP01, WP04 and WP15 own those).
+- Add `role="alert"` to the four error `<div>`s: password `:301`, username `:235`, export `:332`, delete `:353`. Attribute only: do not change their text, class or the handlers that set them (WP04 and WP15 own later edits to those).
 
 Do not touch `handleUsernameUpdate`, the rest of the username form, or the export and delete handlers. `setPasswordError(error.message)` at line 104 stays: the message is now a fixed string from the server. Do not add a current-password field to `/auth/reset-password`: that page runs on a recovery session, which GoTrue exempts.
 
@@ -996,7 +1025,7 @@ the known tradeoff for shipping without an external account.
 - Section 2 table (lines 71-79). Edit exactly these cells and rows; leave the others alone:
   - "Minimum password length" row: Required value becomes `12 (app enforces the same value since WP02: app/lib/validation.ts PASSWORD_MIN_LENGTH)`. Status stays `Done`.
   - "Redirect URLs allowlist" row: Required value becomes `https://pokefin.ca/auth/callback**` (+ `http://localhost:3000/auth/callback**` for dev); Status becomes `Pending (WP02 owner action 2)`.
-  - "Captcha protection" row: append to the Required value `. App requires a token on sign-in, sign-up and forgot-password (WP02); Supabase is the only verifier`. Status becomes `Pending (WP02 owner action 1)`.
+  - "Captcha protection" row: append to the Required value `. App requires a token on sign-in, sign-up and forgot-password (WP02; closes the forgot-password part of audits/authentication-flow.md F-12); Supabase is the only verifier`. Status becomes `Pending (WP02 owner action 1)`.
   - Add a row after "Minimum password length": `| Require current password on password change | Auth → Providers → Email (or Sign In / Providers → Email) | On; fallback: "Secure password change" | Pending (WP02 owner action 6) | F078 |`.
   - Owners mark rows `Done` only after the checks in Owner actions pass.
 
@@ -1136,6 +1165,9 @@ Add cases: exhausting `/api/auth/sign-in` leaves `/api/auth/sign-up` and `/api/a
    - the real shape of a GoTrue 500 (`{ name: "AuthRetryableFetchError", status: 500, message: "Database error saving new user" }`, no `code`) with context `sign_up` gives status 409 and `usernameUnavailable`; the same with `sign_in` gives 500 and `generic`; `{ status: 503 }` and `{ status: 0 }` with `sign_up` give `generic` (not `usernameUnavailable`).
    - an unknown code with status 422 gives `generic` with status 422; `{ status: 429 }` gives `rateLimited`; `null` gives `generic` 500.
    - a raw message is never returned: `mapAuthError({ code: "x", status: 400, message: "relation profiles violates ..." } as never, "sign_in").body.error` equals `AUTH_MESSAGES.generic`.
+   - `{ code: "invalid_credentials", status: 400 }` with context `update_password` gives 400 `currentPasswordIncorrect`; the same with `sign_in` gives 401 `invalidCredentials`.
+   - `{ code: "constructor", status: 400 }` and `{ code: "toString", status: 400 }` give 400 `generic` (own-property lookup).
+   - `authMessage("captchaRequired", 400)` returns `{ status: 400, body: { error: AUTH_MESSAGES.captchaRequired, code: "captchaRequired" } }`.
 
 4. `frontend/app/lib/__tests__/validation.test.ts` (update): `PASSWORD_MIN_LENGTH === 12`; `USERNAME_RE` accepts `"abc"`, `"a_1"`, `"x".repeat(32)`; rejects `"ab"`, `"x".repeat(33)`, `"bad name"`, `"émile"`, `""`; `isValidUsername(42) === false`.
 
@@ -1203,10 +1235,13 @@ describe("sign-in", () => {
 });
 ```
 
+   Rules for the remaining cases. `jest.clearAllMocks()` clears calls but keeps implementations, so a `mockResolvedValue` set in one test leaks into the next. In every case that reaches a Supabase call, set that mock's resolved value inside the test itself: `signInWithPassword` and `signUp` resolve `{ data: { user: null, session: null }, error: null }` for success; `getUser` resolves `{ data: { user: { id: "u1" } }, error: null }` for a signed-in user and `{ data: { user: null }, error: null }` for "no user"; `updateUser` resolves `{ data: { user: null }, error: null }`; `resetPasswordForEmail` resolves `{ data: {}, error: null }`. For an error case resolve `{ data: <same success shape with nulls>, error: <the error object> }`. Every sign-up case that is not testing the username uses `username: "ash_ketchum"`, and every sign-up or update-password case that is not testing length uses `GOOD_PASSWORD` (21 characters), so each case fails on the one rule it tests.
+
    Remaining cases to write in the same style:
+   - all four routes: a JSON body of `null` (`post(path, null)`) gives 400 `{ error: "Invalid body" }` and no Supabase mock is called.
    - sign-in: `post(..., body, { "x-pokefin-request": "0" })` gives 403 (the helper cannot delete the header, so override it); captcha token is forwarded as `options.captchaToken`; an 8-character password with a captcha token still reaches `signInWithPassword` (no length check on sign-in).
    - sign-up: username `"ab"`, `"x".repeat(33)` and `"bad name"` give 400 `invalidUsername`; an 11-character password gives 400 `weakPassword`; missing captcha gives 400 `captchaRequired`; in all three `mockAuth.signUp` is not called. A valid request calls `signUp` with `options.emailRedirectTo === "https://pokefin.ca/auth/callback"` and `options.data.username`. A Supabase error `{ name: "AuthRetryableFetchError", status: 500, message: "Database error saving new user" }` (no `code`, which is what auth-js 2.112.2 produces for a GoTrue 500) gives 409 `usernameUnavailable`, and the raw message is not in the body.
-   - update-password: an 11-character password gives 400 `weakPassword` and `getUser` is not called; `getUser` returning no user gives 401 `sessionExpired`; with `getUser` returning `{ data: { user: { id: "u1" } }, error: null }` and `updateUser` returning `{ data: { user: null }, error: null }`: body `{ password: GOOD_PASSWORD }` calls `updateUser` with exactly `{ password: GOOD_PASSWORD }`, and body `{ password: GOOD_PASSWORD, currentPassword: "old-password-1" }` calls it with exactly `{ password: GOOD_PASSWORD, current_password: "old-password-1" }`; `updateUser` returning `{ code: "current_password_mismatch", status: 400 }` gives 400 `currentPasswordIncorrect`; `{ code: "reauthentication_needed", status: 400 }` gives 400 `reauthenticationNeeded`.
+   - update-password: an 11-character password gives 400 `weakPassword` and `getUser` is not called; `getUser` resolving `{ data: { user: null }, error: null }` gives 401 `sessionExpired` and `updateUser` is not called; with `getUser` returning `{ data: { user: { id: "u1" } }, error: null }` and `updateUser` returning `{ data: { user: null }, error: null }`: body `{ password: GOOD_PASSWORD }` calls `updateUser` with exactly `{ password: GOOD_PASSWORD }`, and body `{ password: GOOD_PASSWORD, currentPassword: "old-password-1" }` calls it with exactly `{ password: GOOD_PASSWORD, current_password: "old-password-1" }`; `updateUser` returning `{ code: "current_password_mismatch", status: 400 }` gives 400 `currentPasswordIncorrect`; `{ code: "reauthentication_needed", status: 400 }` gives 400 `reauthenticationNeeded`.
    - forgot-password: missing captcha gives 400 `captchaRequired`; `"not-an-email"` gives 400 `invalidEmail`; a valid request calls `resetPasswordForEmail("a@b.co", { captchaToken: "t", redirectTo: "https://pokefin.ca/auth/callback?next=%2Fauth%2Freset-password" })` and returns 200 `{ ok: true }`; `{ code: "over_email_send_rate_limit", status: 429 }` gives 429 `emailRateLimited`; a JSON body of `null` gives 400.
 
 6. `frontend/app/auth/callback/__tests__/route.test.ts` (new):
@@ -1287,7 +1322,7 @@ pnpm test --ci app/lib/__tests__/rateLimit.test.ts app/lib/__tests__/proxy.rateL
 # expect: all suites pass
 
 pnpm test --ci
-# expect: all suites pass; the total test count is the pre-PR count plus the new cases (record both in the PR)
+# expect: all suites pass; the "Tests:" total is higher than the baseline from "Before you start" check 11 (record both in the PR)
 
 pnpm build:stub
 # expect: build succeeds; /api/auth/forgot-password listed as a dynamic route (ƒ)
@@ -1304,7 +1339,7 @@ grep -rn "resetPasswordForEmail" app | grep -v __tests__
 grep -n 'type === "recovery"' app/auth/callback/route.ts
 # expect: no output
 grep -n "detectSessionInUrl" app/lib/supabase.ts
-# expect: app/lib/supabase.ts:24  auth: { flowType: "pkce", detectSessionInUrl: false },
+# expect: 24:  auth: { flowType: "pkce", detectSessionInUrl: false },
 grep -n "current_password" app/api/auth/update-password/route.ts
 # expect: one line, the updateUser call
 grep -rn 'autoComplete="current-password"' app/auth/login/page.tsx app/account/page.tsx
@@ -1365,6 +1400,7 @@ Manual checks:
 - [ ] Signup, reset-password and account forms show "At least 12 characters" and reject 11-character passwords client-side; sign-up and update-password routes reject them with 400.
 - [ ] The sign-up route rejects usernames that fail `/^[A-Za-z0-9_]{3,32}$/` with 400, and a GoTrue 500 becomes 409 "We could not create your account. That username may already be taken...".
 - [ ] No `/api/auth/*` route returns `error.message`; every Supabase error branch returns `mapAuthError(...)` output (`{ error, code }` from `AUTH_MESSAGES`), and every new captcha, username and password check returns `authMessage(...)` output. The pre-existing fixed strings ("Invalid body", "Email and password are required", "Password is required", the CSRF "Forbidden" and "Payload too large") are unchanged.
+- [ ] A JSON body of `null` gets 400 "Invalid body" (not a 500) from sign-in, sign-up, update-password and forgot-password.
 - [ ] `/account` has a "Current Password" field (`autoComplete="current-password"`), and `POST /api/auth/update-password` forwards it as `current_password` only when present; the reset-password page sends no current password.
 - [ ] Every auth input has the `autoComplete` value from steps 12 to 16; every error box on the login, signup, forgot-password, reset-password and account pages has `role="alert"`.
 - [ ] `.next/images-manifest.json` has `"unoptimized": true` and `next.config.ts` has no `remotePatterns`.
@@ -1406,4 +1442,4 @@ fix(auth): rate-limit credentials not pages, require captcha, wire password rese
 
 PR title: `fix(auth): rate-limit credentials not pages, require captcha, wire password reset (WP02)`
 
-PR body summary: list the findings covered (F077, F019, F079, F024, F132, F075, F078) with one line each as in the metadata above; paste the Verification output (tsc, lint counts before and after, jest summary, `pnpm build:stub` tail, the `images-manifest` grep, and the manual curl loop results); copy the Owner actions section verbatim as a checklist; note the interactions: WP04 rebases onto the `AuthContext.resetPassword` and `updatePassword(newPassword, currentPassword?)` changes and the account password section (it must keep the two-argument `updatePassword` and its `{ password, currentPassword }` body when it rewrites `AuthContext`, and should use `autoComplete="nickname"` rather than `"username"` on the account username input for the reason in step 14); WP04's fallback route name `/api/auth/reset-password` is not needed because the route here is `/api/auth/forgot-password`; WP12's pitfall "do not remove `images.remotePatterns`" is superseded by F075 here; WP13 should render `?error=auth_link` on the login page and move `safeNextPath` to `app/lib/redirects.ts`; WP20 consolidates the callback's inline Supabase client; WP17 owns CSP. List any out-of-scope issues noticed (for example the plain-text 429 body for document requests, or `/auth/:path*` still in the proxy matcher, which costs one `getUser()` per auth page load) instead of fixing them.
+PR body summary: list the findings covered (F077, F019, F079, F024, F132, F075, F078) with one line each as in the metadata above; paste the Verification output (tsc, lint counts before and after, jest summary, `pnpm build:stub` tail, the `images-manifest` grep, and the manual curl loop results); copy the Owner actions section verbatim as a checklist; note the interactions: WP04 rebases onto the `AuthContext.resetPassword` and `updatePassword(newPassword, currentPassword?)` changes and the account password section (it must keep the two-argument `updatePassword` and its `{ password, currentPassword }` body when it rewrites `AuthContext`, and should use `autoComplete="nickname"` rather than `"username"` on the account username input for the reason in step 14; `account/page.tsx` gains two import lines here, `validation` and `authErrors`, so WP04's "add 1 after WP02's import line" hints are off by one more and it must match on code); WP04's fallback route name `/api/auth/reset-password` is not needed because the route here is `/api/auth/forgot-password`; WP12's pitfall "do not remove `images.remotePatterns`" is superseded by F075 here; WP13 should render `?error=auth_link` on the login page and move `safeNextPath` to `app/lib/redirects.ts`; WP20 consolidates the callback's inline Supabase client; WP17 owns CSP. List any out-of-scope issues noticed (for example the plain-text 429 body for document requests, or `/auth/:path*` still in the proxy matcher, which costs one `getUser()` per auth page load) instead of fixing them.

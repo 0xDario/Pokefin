@@ -7,13 +7,13 @@
 - **Priority rationale**: `/prices` is the primary public catalog; this PR puts its content in the first HTML and removes a full-catalog download per keystroke, and it must land before WP09 reworks the same card list.
 - **Effort**: M (5 to 7 hours, including the manual browser checks).
 - **Depends on**: WP03 (removes the "Loading price history" toast and `historyLoading` from the `useProductData` destructure in `index.tsx`; fixes the "updated daily" copy in `prices/page.tsx`), WP07 (deterministic date formatting in `ProductCard.tsx` and `GroupHeader.tsx`, a hard prerequisite: once cards are server-rendered, any viewer-timezone formatting in them becomes a hydration mismatch on every card), WP00 (`pnpm build:stub`, `scripts/supabase-stub.mjs`).
-- **Unblocks**: WP09 (edits the card list, which now lives in one `useMemo` named `cardList`), WP19 (the F045 verifier requires any shared URL-state helper to be built on `window.location`, not `useSearchParams`; `app/lib/locationSearch.ts` from this PR is that helper), WP20 (F105's currency context must read `?currency=` through `useLocationSearch`, never `useSearchParams` in the layout), WP11 and WP13 (they edit `prices/page.tsx`, which no longer has a `<Suspense>` wrapper).
+- **Unblocks**: WP09 (edits the card list, which now lives in one `useMemo` named `cardList`, and its precheck greps `index.tsx` for the text `useSearchParams`, so this PR must leave that word out of `index.tsx` entirely, comments included), WP13 (uses `updateUrlState`, `PRICES_URL_DEFAULTS` and the `SUPABASE_STUB_FIXTURE=catalog` stub), WP20 (edits this file's `onCurrencyChange={(currency) => updateUrlState({ currency })}` and `useCurrencyConversion(initialExchangeRate, initialUrlState.currency)` lines), WP11 and WP13 (they edit `prices/page.tsx`, which no longer has a `<Suspense>` wrapper). WP19 does not add URL state to `/market` (verifier correction to F045); any future URL state elsewhere (for example `/box-calculator`'s `?recipe=`) should reuse `app/lib/locationSearch.ts` instead of `useSearchParams`.
 - **Suggested branch name**: `remediation/wp08-prices-url-state-and-ssr`
 - **Risk level**: medium. It changes how the busiest page renders (server HTML plus hydration instead of client-only) and how its URL is written; mistakes show up as hydration errors or filters that reset, both covered by the new tests and the manual checks.
 
 ## Why
 
-Today a visitor opening `/prices` gets the page title and a grey "Loading…" line; the filter bar and every product card only appear after about 230 kB of JavaScript has downloaded and hydrated, which is one to two seconds on a mid-range phone, and crawlers and link previews see no products at all. The cause is one hook: `useSearchParams()` in a statically prerendered route makes Next skip everything up to the nearest `<Suspense>` in the static HTML, and here that is the whole catalog. Typing in the search box is also expensive: each letter triggers `router.replace`, which Next 16 treats as a navigation that re-downloads the entire catalog payload and re-renders all ~306 cards, so typing "booster" downloads the catalog seven times. Finally, the URL sync only goes one way: with a filter applied, clicking "Prices" in the header or pressing Back snaps the URL back to the old filter. After this PR the prerendered HTML contains the controls and every card, typing makes zero network requests and writes the URL once, 250 ms after the user pauses, and navigations that change the query (header link, back/forward) re-apply the URL's filters.
+Today a visitor opening `/prices` gets the page title and a grey "Loading…" line; the filter bar and every product card only appear after about 230 kB of JavaScript has downloaded and hydrated, which is one to two seconds on a mid-range phone, and crawlers and link previews see no products at all. The cause is one hook: `useSearchParams()` in a statically prerendered route makes Next skip everything up to the nearest `<Suspense>` in the static HTML, and here that is the whole catalog. Typing in the search box is also expensive: each letter triggers `router.replace`, which Next 16 treats as a navigation that re-downloads the entire catalog payload and re-renders all ~306 cards, so typing "booster" downloads the catalog seven times. Finally, the URL sync only goes one way: with a filter applied, clicking "Prices" in the header or pressing Back snaps the URL back to the old filter. After this PR the prerendered HTML contains the controls and every card, typing makes zero page (RSC) requests and writes the URL once, 250 ms after the user pauses (cards that newly scroll into view still fetch their own price history, as today), and navigations that change the query (header link, back/forward) re-apply the URL's filters.
 
 ## Before you start
 
@@ -40,12 +40,15 @@ grep -n 'Suspense' app/prices/page.tsx
 #   expect: line 1 (import) and lines 30-37 (comment + wrapper)
 
 # WP03 landed (toast gone)
-grep -rn 'Loading price history' app          # expect: no output
+grep -rn 'Loading price history' app/components/ProductPrices   # expect: no output
+#   (MarketView/MarketView.tsx:569 still contains that text on purpose; WP03 keeps it. Do not touch it.)
 grep -n 'historyLoading' app/components/ProductPrices/index.tsx
 #   expect: exactly 3 hits, the per-card `historyLoading={loadingProductIds.includes(product.id)}` props
+grep -n 'refreshed hourly\|updated daily' app/prices/page.tsx
+#   expect: exactly 1 hit, containing "updated daily"
 
-# WP07 landed (no viewer-locale or viewer-timezone formatting in server-rendered card markup)
-grep -nE 'toLocale|resolvedOptions' app/components/ProductPrices/cards/ProductCard.tsx app/components/ProductPrices/cards/GroupHeader.tsx
+# WP07 landed (no viewer-locale or viewer-timezone formatting anywhere in the server-rendered /prices tree)
+grep -rnE 'toLocale|resolvedOptions' app/components/ProductPrices --include=*.tsx --include=*.ts | grep -v __tests__
 #   expect: no output. If there is output, STOP: WP07 has not landed. Server-rendering the cards
 #   with `toLocaleString(undefined, { timeZone: <viewer zone> })` makes every card a hydration
 #   mismatch and React 19 would re-render the page on the client, undoing this PR's gain.
@@ -101,6 +104,8 @@ Design in one paragraph, so every step makes sense. The container stops calling 
 **Correction to the plan's decision "subscribe to popstate + a custom event".** That alone does not fix F054's main case. When the header `<Link href="/prices">` navigates within `/prices`, Next's `HistoryUpdater` writes the URL with `window.history.pushState(historyState, ...)` where `historyState.__NA === true` (`app-router.js:52-66`); the patched `pushState` passes such calls straight to the original (`app-router.js:255-257`), so no DOM event fires, and `useSyncExternalStore` only re-reads `window.location.search` during a render of the container, which happens before `HistoryUpdater`'s insertion effect writes the URL. The store would stay stale and the filters would not clear. The `LocationSearchSignal` leaf fixes this: `useSearchParams()` re-renders it on every committed router URL change, and its effect runs after `HistoryUpdater` has written the URL. Keeping `useSearchParams` in an isolated leaf is exactly the "Option B" of the F012 finding and costs one empty client-rendered boundary.
 
 **Correction to the plan's decision "lastWrittenQuery ref".** A ref cannot be read during render (`react-hooks/refs` is an error in eslint-plugin-react-hooks 7.1.1), and doing the re-seed in an effect trips `react-hooks/set-state-in-effect`. The re-seed below runs during render with state only: when the URL changes, it re-seeds unless the URL already describes the current state. Our own writes always describe the current state, so they never re-seed. The ledger that the ref would have provided moves into `locationSearch.ts` as `pendingEchoes`, which also handles a real race: Next turns each `replaceState` into an `ACTION_RESTORE` transition, and on a busy phone the restore for write N can commit after write N+1, making `HistoryUpdater` briefly put the older query back in the address bar. Without the ledger that echo would reset the search box mid-typing.
+
+**Difference from the F012 verifier's check "`grep -c BAILOUT_TO_CLIENT_SIDE_RENDERING prices.html` == 0".** That check assumes Option A (no `useSearchParams` anywhere on the page). This design is Option B, which the same verdict accepts: the empty `LocationSearchSignal` leaf keeps one bailout marker with nothing inside it. The Verification section therefore accepts 1 marker, but only in the exact empty form it prints, and still requires the verifier's other check (`<select` count of 2 or more) plus the cards themselves.
 
 All code below was type-checked (`tsc --noEmit`), linted with the repo's ESLint config and its tests run (full suite green) on a copy of `frontend/` with WP03's toast removal applied.
 
@@ -431,7 +436,7 @@ export function serializePricesState(state: PricesUrlState): string {
 
 ### 4. Replace `frontend/app/components/ProductPrices/index.tsx`
 
-Replace the whole file with the version below. Changes versus the current file, with the current line numbers:
+Replace the whole file with the version below. Changes versus the current file, with line numbers as of review time (commit a188fea; WP03 deleted line 100 and lines 235-245, so after WP03 subtract 1 from the numbers between 101 and 234 and 12 from those after 245; the numbers are for orientation only, since the whole file is replaced):
 
 - Imports (`:3-4`): drop `useRef`, `usePathname`, `useRouter`, `useSearchParams`; add `Suspense`, `useDeferredValue`, `LocationSearchSignal`, the `urlState` helpers and `createDebouncedSearchWriter`/`useLocationSearch`. The `Currency` type import is no longer needed.
 - `DEFAULTS`, `VIEW_MODES`, `SORT_KEYS`, `SORT_DIRS`, `CHART_TIMEFRAMES`, `CURRENCIES`, `pickEnum` (`:44-64`): deleted, now in `utils/urlState.ts`.
@@ -513,8 +518,8 @@ export default function ProductPrices({
   initialVolumeMetrics,
 }: ProductPricesProps) {
   // "" on the server and during hydration, the real query string afterwards.
-  // Reading the URL this way (not useSearchParams) keeps the catalog in the
-  // prerendered HTML (F012).
+  // Reading the URL this way (not through the App Router's search-params
+  // hook) keeps the catalog in the prerendered HTML (F012).
   const locationSearch = useLocationSearch();
 
   // First-render seed. During hydration locationSearch is "", so this is the
@@ -756,8 +761,8 @@ export default function ProductPrices({
   return (
     <div className="p-3 md:p-6 bg-[var(--pf-bg)] min-h-screen">
       {/* Re-announces the URL after App Router navigations. Its own boundary:
-          it calls useSearchParams, which must not bail the catalog out of the
-          static HTML. */}
+          it reads the App Router's search params, which must not bail the
+          catalog out of the static HTML. */}
       <Suspense fallback={null}>
         <LocationSearchSignal />
       </Suspense>
@@ -812,6 +817,8 @@ export default function ProductPrices({
 ```
 
 Note on `setSelectedCurrency` during render: it is the `useState` setter from `useCurrencyConversion`, a hook called by this component, so calling it conditionally during render is the same supported pattern as the other setters. Do not change `useCurrencyConversion`.
+
+After saving, `grep -c 'useSearchParams\|next/navigation' app/components/ProductPrices/index.tsx` must print `0`. The word `useSearchParams` must not appear in this file even in a comment: WP09's precheck (`grep -n "useSearchParams" app/components/ProductPrices/index.tsx || echo "WP08 ok"`) treats any hit as "WP08 not landed".
 
 ### 5. Edit `frontend/app/prices/page.tsx`
 
@@ -1212,9 +1219,11 @@ describe("createDebouncedSearchWriter", () => {
 ```tsx
 import { render } from "@testing-library/react";
 
-let currentSearch = "";
+// The "mock" prefix is required: jest.mock factories may only reference
+// out-of-scope variables whose names start with "mock".
+let mockCurrentSearch = "";
 jest.mock("next/navigation", () => ({
-  useSearchParams: () => new URLSearchParams(currentSearch),
+  useSearchParams: () => new URLSearchParams(mockCurrentSearch),
 }));
 
 jest.mock("../../lib/locationSearch", () => ({
@@ -1236,7 +1245,7 @@ describe("LocationSearchSignal", () => {
     rerender(<LocationSearchSignal />); // same params: no new report
     expect(reportMock).toHaveBeenCalledTimes(1);
 
-    currentSearch = "gen=XY";
+    mockCurrentSearch = "gen=XY";
     rerender(<LocationSearchSignal />);
     expect(reportMock).toHaveBeenCalledTimes(2);
     expect(reportMock).toHaveBeenLastCalledWith("gen=XY");
@@ -1318,7 +1327,7 @@ describe("serializePricesState", () => {
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { renderToString } from "react-dom/server";
 import { hydrateRoot, type Root } from "react-dom/client";
-import type { Product } from "../types";
+import type { Product, ProductVolumeMetrics } from "../types";
 
 // The App Router's committed query, as LocationSearchSignal sees it. Tests
 // that simulate a Next.js navigation call reportRouterSearch() directly.
@@ -1380,12 +1389,28 @@ const PRODUCTS: Product[] = [
   makeProduct(2, "Beta Set", "Gen Two", "Elite Trainer Box"),
 ];
 
+// Non-empty on purpose: useVolumeMetrics treats {} as "no server data" and
+// starts a client fetch whose late state update would log act() warnings.
+const VOLUME: Record<number, ProductVolumeMetrics> = {
+  1: {
+    product_id: 1,
+    units_sold_7d: 1,
+    units_sold_30d: 4,
+    units_sold_prior_30d: 3,
+    transaction_count_30d: 4,
+    active_listings: 10,
+    total_quantity_available: 12,
+    lowest_listing_price: 99,
+    listings_snapshot_date: "2026-07-01",
+  },
+};
+
 function Page() {
   return (
     <ProductPrices
       initialProducts={PRODUCTS}
       initialExchangeRate={1.36}
-      initialVolumeMetrics={{}}
+      initialVolumeMetrics={VOLUME}
     />
   );
 }
@@ -1665,7 +1690,7 @@ pnpm exec eslint app/lib/locationSearch.ts app/lib/__tests__/locationSearch.test
   app/components/LocationSearchSignal.tsx app/components/__tests__/LocationSearchSignal.test.tsx \
   app/components/ProductPrices/index.tsx app/components/ProductPrices/utils/urlState.ts \
   app/components/ProductPrices/utils/sorting.ts app/components/ProductPrices/__tests__ \
-  app/prices/page.tsx
+  app/prices/page.tsx scripts/supabase-stub.mjs scripts/build-with-stub.mjs scripts/supabase-stub.test.mjs
 #   expect: no output (zero errors, zero warnings)
 
 pnpm test --ci app/lib/__tests__/locationSearch.test.tsx app/components/__tests__/LocationSearchSignal.test.tsx \
@@ -1678,10 +1703,11 @@ pnpm test --ci
 pnpm run test:scripts
 #   expect: all pass, including the 3 new fixture tests
 
-grep -rn 'useSearchParams' app --include=*.ts --include=*.tsx | grep -v __tests__
-#   expect exactly: app/components/LocationSearchSignal.tsx (import + call) and app/components/BoxCalculator/BoxCalculator.tsx (out of scope)
-grep -n 'router.replace\|useRouter\|usePathname' app/components/ProductPrices/index.tsx
-#   expect: no output
+grep -rln 'from "next/navigation"' app --include=*.ts --include=*.tsx | xargs grep -ln 'useSearchParams' | grep -v __tests__
+#   expect exactly two files: app/components/LocationSearchSignal.tsx and app/components/BoxCalculator/BoxCalculator.tsx (out of scope).
+#   (app/lib/locationSearch.ts mentions useSearchParams in comments only and does not import next/navigation, so it is not listed.)
+grep -c 'useSearchParams\|next/navigation\|router.replace\|useRouter\|usePathname' app/components/ProductPrices/index.tsx
+#   expect: 0
 
 # Build with the empty stub
 pnpm build:stub
@@ -1706,19 +1732,26 @@ wc -c .next/server/app/prices.html; gzip -c .next/server/app/prices.html | wc -c
 
 If the fixture build fails on a page other than `/prices` (the fixture also feeds `/`, `/market`), note the error in the PR, confirm the empty-stub build passes, and do not change other pages to make the fixture pass.
 
-Manual checks in a browser. Use `pnpm dev` with real Supabase credentials in `.env.local` if you have them. Otherwise run the stub on the default port in one terminal, `cd frontend && SUPABASE_STUB_FIXTURE=catalog node scripts/supabase-stub.mjs`, and the app in another, `cd frontend && NEXT_PUBLIC_SUPABASE_URL=http://127.0.0.1:54321 NEXT_PUBLIC_SUPABASE_KEY=stub-anon-key pnpm dev`. Then open `http://localhost:3000/prices`:
+Manual checks in a browser. Use `pnpm dev` with real Supabase credentials in `.env.local` if you have them. Otherwise run the stub on the default port in one terminal, `cd frontend && SUPABASE_STUB_FIXTURE=catalog node scripts/supabase-stub.mjs`, and the app in another, `cd frontend && NEXT_PUBLIC_SUPABASE_URL=http://127.0.0.1:54321 NEXT_PUBLIC_SUPABASE_KEY=stub-anon-key pnpm dev`. With the stub, the browser's own Supabase calls (price-history fetches for sparklines) fail with CORS errors in the Console because the stub sends no CORS headers; ignore those, they are not part of this PR. Then open `http://localhost:3000/prices`.
 
-1. View Source (not DevTools Elements): the filter bar, "Found N products" and the product cards are in the HTML; there is no "Loading…".
-2. DevTools, disable JavaScript, reload: controls and cards are visible (not interactive). Re-enable JavaScript.
-3. DevTools Console after a normal reload: no "Hydration failed" or "did not match" errors.
-4. DevTools Network, filter `_rsc`, then type `booster` in the search box: zero requests. The address bar changes to `?q=booster` once, about 250 ms after you stop typing. The input never lags behind your typing.
-5. Open `/prices?q=beta` (fixture) or `/prices?q=booster` (real data) directly: the full catalog paints first, then filters to the matching cards once the page is interactive; the address bar is not rewritten; no console errors. This first paint of the unfiltered catalog is the accepted tradeoff (see below).
-6. Pick a generation, then click "Prices" in the header: the filter resets to "All Generations", all cards show, the address bar is `/prices`, and it stays `/prices`.
-7. Pick a generation, click a product card, press Back: `/prices?gen=...` comes back with the filter applied. Now click "Prices" in the header, then press Back: the filter is re-applied; press Forward: it clears.
-8. Open `/prices?utm_source=test`, change the sort: the URL is `/prices?utm_source=test&sort=...`.
-9. On `/`, submit the hero search form with `booster`: `/prices?q=booster` loads with the search box filled and results filtered after hydration.
+`next dev` renders every request on the server and never produces the static-prerender bailout, so View Source in dev shows the cards even without this PR. Whether the static HTML contains the catalog is proved only by the two `build:stub` DOM checks above; do not use dev-mode View Source as evidence for F012.
+
+1. DevTools Console after a normal reload of `/prices` and of `/prices?q=beta` (fixture) or `/prices?q=booster` (real data): no "Hydration failed", "did not match" or "hydration mismatch" errors.
+2. DevTools Console with the DevTools sensor panel set to another time zone (for example Asia/Tokyo), reload: still no hydration errors (this proves WP07's deterministic formatting holds now that the cards are server-rendered).
+3. DevTools Network, filter `_rsc`, then type `booster` in the search box: zero requests. The address bar changes to `?q=booster` once, about 250 ms after you stop typing. The input never lags behind your typing.
+4. Open `/prices?q=beta` (fixture) or `/prices?q=booster` (real data) directly: the full catalog paints first, then filters to the matching cards once the page is interactive; the address bar is not rewritten; no console errors. This first paint of the unfiltered catalog is the accepted tradeoff (see below).
+5. Pick a generation, then click "Prices" in the header: the filter resets to "All Generations", all cards show, the address bar is `/prices`, and it stays `/prices`.
+6. Pick a generation, click a product card, press Back: `/prices?gen=...` comes back with the filter applied. Now click "Prices" in the header, then press Back: the filter is re-applied; press Forward: it clears.
+7. Open `/prices?utm_source=test`, change the sort: the URL is `/prices?utm_source=test&sort=...`.
+8. On `/`, submit the hero search form with `booster`: `/prices?q=booster` loads with the search box filled and results filtered after hydration.
 
 Accepted tradeoff (write it in the PR): visits that arrive with a query string (the home search form, shared links) see the unfiltered catalog in the static HTML until hydration, then the filtered list. Before this PR the same visitors saw "Loading…" for the same period, so first content arrives earlier for everyone and nobody waits longer. Rendering per-query HTML would require dynamic rendering of `/prices` and lose the static/ISR page, which is not worth it.
+
+Known limitations (write them in the PR; do not try to fix them in this package):
+
+- Pressing Back or Forward to leave a filtered `/prices` (for example back to `/`) fires `popstate` before Next.js commits the next page, so the catalog re-renders unfiltered for a frame or two before the next page replaces it. The URL and the next page are correct; only that brief flash is visible. The listener is needed so back/forward within `/prices` re-applies filters and drops a pending write.
+- If a `<Link>` navigation away from `/prices` commits within the few milliseconds between a debounced write and its App Router echo, that echo stays in `pendingEchoes`. The next mount of `/prices` then renders one pass with the stale query before `LocationSearchSignal`'s mount report clears it and re-seeds from the real URL.
+- If the user types during the short window after hydration and before the `LocationSearchSignal` boundary has mounted, its mount report counts as an external change and drops that one pending URL write. The next keystroke schedules a new write.
 
 ## Owner actions
 
@@ -1728,7 +1761,7 @@ Optional post-deploy check (the executor has no production access): after the Ve
 
 ## Acceptance criteria
 
-- [ ] `grep -rn 'useSearchParams' frontend/app --include=*.tsx | grep -v __tests__` lists only `LocationSearchSignal.tsx` and `BoxCalculator.tsx`.
+- [ ] The only non-test files that import from `next/navigation` and mention `useSearchParams` are `LocationSearchSignal.tsx` and `BoxCalculator.tsx` (the first grep in Verification), and `grep -c 'useSearchParams\|next/navigation' frontend/app/components/ProductPrices/index.tsx` prints `0`.
 - [ ] `frontend/app/prices/page.tsx` has no `Suspense` and no `export const dynamic`.
 - [ ] `pnpm exec tsc --noEmit` exits 0; ESLint on every touched file reports nothing.
 - [ ] `pnpm test --ci` passes with 33 more tests than before; `pnpm run test:scripts` passes.
@@ -1777,5 +1810,6 @@ PR body summary:
 - Before/after: the two `/tmp/check-prices-html.sh` outputs (baseline and after, empty stub) plus the fixture output, and the `prices.html` raw and gzip sizes.
 - Accepted tradeoff: query-string visits see the unfiltered catalog until hydration (previously "Loading…").
 - Deviations from the plan, with reasons: the `LocationSearchSignal` leaf (Next navigations fire no DOM event), the echo ledger instead of a `lastWrittenQuery` ref (lint rules and the late-restore race).
-- Follow-ups not done here: `BoxCalculator.tsx:74` has the same bailout on `/box-calculator` and can reuse `useLocationSearch`; WP19 and WP20 must build their URL state on `app/lib/locationSearch.ts`.
+- Known limitations: the three bullets under "Known limitations" in Verification.
+- Follow-ups not done here: `BoxCalculator.tsx:74` has the same bailout on `/box-calculator` and can reuse `useLocationSearch`; any future URL state should build on `app/lib/locationSearch.ts` rather than `useSearchParams`.
 - Verification output from every command in the Verification section.

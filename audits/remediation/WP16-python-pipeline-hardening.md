@@ -582,6 +582,8 @@ Design notes (do not change without reason):
 - The ratio test is against the stored `products.usd_price`. A held value lives in its own table, not on `products`, because `products` is readable by anon through PostgREST and its rows are shipped to the frontend.
 - A held or rejected price leaves `last_updated` untouched, so `fetch_products_needing_update` selects the product again on the next cron run (4 hours later, not tomorrow). That next run is the "second consecutive observation".
 - `load_pending_prices` returning `None` (table missing or unreadable) makes the run behave as before this package, with an ERROR line, rather than freezing every moving price.
+- `HISTORY_FLUSH_EVERY = 25` means the sales batch flushes after almost every product, because one product can contribute up to about 30 daily sales buckets. That is expected (about one extra upsert per product per run), not a bug; do not raise the threshold back to 100.
+- `backfill_historical_prices.py` also inserts `product_price_history` rows. It is not changed here: F083 is about the cron scraper, and the backfill's rows are covered by the new CHECK (its insert falls back to one row at a time, so one out-of-range row fails alone).
 
 ### Step 6. `main.py`: rewrite the body of `update_prices` (F083, F084, F136)
 
@@ -1198,7 +1200,7 @@ copy of the environment with every `SUPABASE_*`, `SMTP_*`, `SHOPIFY_*`,
 `REVALIDATE_*` and other secret-looking variable removed.
 ```
 
-15c. `audits/HARDENING_FOLLOWUPS.md` section 7 (`## 7. Round-2 follow-ups`, `:139`): insert this bullet immediately above the first existing `- **Migration` bullet of that section (the newest-first run of migration bullets):
+15c. `audits/HARDENING_FOLLOWUPS.md` section 7 (`## 7. Round-2 follow-ups`, `:139`). The first bullet of that section is the old bullet about migrations 0008 to 0014; leave it first. The newest-first run of migration bullets starts right below it. Insert this bullet directly above the topmost bullet added by WP10, WP06 or WP01 (their text starts with "**Migrations 0027, 0028 and 0029", "**Migration 0026" or "**Migrations 0024 and 0025"), whichever is highest in the file. If none of those is present, insert it directly above the bullet that starts with `- **Migration 0022 applied**`:
 
 ```markdown
 - **Migration 0030: pending apply** (WP16, review finding F083). Adds
@@ -1261,7 +1263,7 @@ Do not write "applied" yourself.
 - `TestCreateDriver`: non-root keeps the sandbox; root and `POKEFIN_CHROME_NO_SANDBOX=1` disable it; the Service `env` keeps `PATH`/`HOME` and drops `SUPABASE_SERVICE_ROLE_KEY`, `SMTP_PASS`, `REVALIDATE_SECRET`, `SHOPIFY_ADMIN_API_TOKEN`; `set_page_load_timeout(30)` is called; the scrubbed env is never empty.
 - `TestPageLoadTimeout`: a `TimeoutException` from `driver.get` keeps the API price and skips image extraction.
 - `TestFetchValidatedImage`: metadata IP and foreign hosts refused without a request; private resolution refused; the extra host plus a session works with `allow_redirects=False` and `stream=True`; 302, `text/html`, oversize `Content-Length`, oversize stream, wrong magic bytes and too-small bodies are refused.
-- `TestBackfillUsesValidatedFetch`: `backfill_thumbnails.main()` routes every fetch through `fetch_validated_image` with `extra_allowed_hosts=("test.supabase.co",)` and uploads nothing when it refuses.
+- `TestBackfillUsesValidatedFetch`: `backfill_thumbnails.main()` routes every fetch through `fetch_validated_image` with `extra_allowed_hosts` set to the host of `SUPABASE_URL` only (`("test.supabase.co",)` under the mocked `secretsFile`) and uploads nothing when it refuses.
 - `TestRenderPdf`: success with a temp `--user-data-dir` that is removed afterwards and `start_new_session=True`; timeout kills the process group and returns False; non-zero exit and a missing binary return False; a stale PDF from an earlier run is deleted and not reported.
 - `TestComparePricesToken`: the token comes from `SHOPIFY_ADMIN_API_TOKEN`; `--shopify-token` exits 2 before any network call, names the env var, and never prints the token.
 - `TestDeadCodeRemoved`: no `check_shopify_prices`, no `import uuid`, no `price_monitor` in `main.py`.
@@ -1698,6 +1700,10 @@ class TestBackfillUsesValidatedFetch:
     def test_backfill_routes_every_fetch_through_the_guard(self):
         import main
         import backfill_thumbnails
+        from urllib.parse import urlparse
+        # "test.supabase.co" from the mocked secretsFile, unless the shell
+        # running the tests exports SUPABASE_URL (secrets_loader prefers it).
+        expected_host = urlparse(backfill_thumbnails.SUPABASE_URL).hostname
         products = [{"id": 1, "image_url": "http://169.254.169.254/latest/meta-data"}]
         with patch.object(backfill_thumbnails, "fetch_products_with_images", return_value=products), \
              patch.object(main, "fetch_validated_image", return_value=None) as guarded, \
@@ -1705,7 +1711,7 @@ class TestBackfillUsesValidatedFetch:
              patch.object(sys, "argv", ["backfill_thumbnails.py", "--force"]):
             assert backfill_thumbnails.main() == 0
         guarded.assert_called_once()
-        assert guarded.call_args.kwargs["extra_allowed_hosts"] == ("test.supabase.co",)
+        assert guarded.call_args.kwargs["extra_allowed_hosts"] == (expected_host,)
         upload.assert_not_called()
 
 
@@ -1778,8 +1784,11 @@ class TestRenderPdf:
 class TestComparePricesToken:
     def test_token_comes_from_the_environment(self):
         import compare_prices
-        with patch.dict(os.environ, {"SHOPIFY_ADMIN_API_TOKEN": "shpat_env"}), \
-             patch.object(compare_prices, "SHOPIFY_STORE_DOMAIN", "store.myshopify.com"):
+        # Both variables set explicitly: an exported SHOPIFY_STORE_DOMAIN in
+        # the test shell would otherwise win over the module attribute.
+        with patch.dict(os.environ, {"SHOPIFY_ADMIN_API_TOKEN": "shpat_env",
+                                     "SHOPIFY_STORE_DOMAIN": "store.myshopify.com"}), \
+             patch.object(compare_prices, "SHOPIFY_STORE_DOMAIN", "other.myshopify.com"):
             domain, token, _ = compare_prices._get_shopify_credentials(None, None)
         assert token == "shpat_env"
         assert domain == "store.myshopify.com"
@@ -1835,10 +1844,15 @@ Run from the repo root (`/home/user/Pokefin`) with the venv from "Before you sta
 # 4. Shell syntax. Expect no output, exit 0.
 bash -n run_scraper.sh
 
-# 5. Migration parser. Expect exit=3, 26 "-- privilege ..."/"-- rls ..." lines, and
-#    "NOT VERIFIED (out of scope, check by hand): 1 x CREATE (table/type/etc), 2 x DO block".
-python3 verify_migration.py migrations/0030_price_plausibility_guard.sql > /tmp/wp16_0030_check.sql; echo "exit=$?"
-grep -c "^-- privilege\|^-- rls" /tmp/wp16_0030_check.sql     # expect 26
+# 5. Migration parser. verify_migration.py writes the SQL to paste to STDOUT and its
+#    "-- privilege ..." / "-- rls ..." / "NOT VERIFIED ..." summary to STDERR, so capture
+#    them separately. Expect exit=3, 26 summary lines, and the line
+#    "-- NOT VERIFIED (out of scope, check by hand): 1 x CREATE (table/type/etc), 2 x DO block".
+python3 verify_migration.py migrations/0030_price_plausibility_guard.sql \
+  > /tmp/wp16_0030_check.sql 2> /tmp/wp16_0030_check.txt; echo "exit=$?"
+grep -c "^-- privilege\|^-- rls" /tmp/wp16_0030_check.txt     # expect 26
+grep -n "NOT VERIFIED" /tmp/wp16_0030_check.txt               # expect the line above
+head -1 /tmp/wp16_0030_check.sql                              # expect: WITH pv_expected(src, objkind, obj, role, priv, want, fname, types) AS (
 
 # 6. Static proofs. Each comment states the expected output.
 grep -n "import uuid\|price_monitor\|check_shopify_prices\|_flush_price_history_batch\|price_history_batch" main.py   # no output
@@ -1852,8 +1866,17 @@ grep -n "flock -n 9\|9>&-" run_scraper.sh                            # 3 hits (f
 grep -n "price_update_interval_hours = 23" main.py                   # 1 hit
 grep -rn $'\xe2\x80\x94' migrations/0030_price_plausibility_guard.sql tests/test_pipeline_hardening.py   # no output
 
-# 7. Scope. Expect no output.
-git diff --stat master -- frontend schema.sql verify_migration.py secrets_loader.py run_weekly_report.sh migrations/000* migrations/001* migrations/0020* migrations/0021* migrations/0022* migrations/0023*
+# 7. Scope. Run after committing. Compare with the point this branch left master
+#    (a local "master" can be stale, so use origin/master).
+git fetch origin master
+BASE="$(git merge-base HEAD origin/master)"
+git diff --stat "$BASE" HEAD -- frontend schema.sql verify_migration.py secrets_loader.py run_weekly_report.sh   # expect no output
+git diff --name-status "$BASE" HEAD -- migrations   # expect exactly one line: A	migrations/0030_price_plausibility_guard.sql
+git diff --name-status "$BASE" HEAD   # expect exactly these 11 paths (A = added, M = modified), nothing else:
+#   M .gitignore, M README.md, M audits/HARDENING_FOLLOWUPS.md, M backfill_thumbnails.py,
+#   M compare_prices.py, M generate_weekly_report.py, M main.py,
+#   A migrations/0030_price_plausibility_guard.sql, M run_scraper.sh,
+#   M tests/test_new_functions.py, A tests/test_pipeline_hardening.py
 ```
 
 Frontend commands (`tsc`, lint, jest, `pnpm build:stub` from WP00) are not affected: this package changes no file under `frontend/`. Step 7 above proves that; running them is optional.
@@ -1885,11 +1908,11 @@ Manual check B, migration replay (optional; needs a local Postgres 16, as in WP1
    SELECT max(usd_price) AS max_product_price FROM public.products;
    ```
 
-   Expect zero rows from the first query. If any `products` row is listed, null it so the scraper refills it: `UPDATE public.products SET usd_price = NULL WHERE usd_price <= 0 OR usd_price >= 1000000;`. If any `product_price_history` row is listed, confirm it is bogus and delete it by id. If `max_product_price` is above 250000, raise `PRICE_ABSOLUTE_MAX_USD` in `main.py` (keep it below 1000000) before deploying, so a real price never sits near the cap.
+   Expect zero rows from the first query. If any `products` row is listed, null it so the scraper refills it: `UPDATE public.products SET usd_price = NULL WHERE usd_price <= 0 OR usd_price >= 1000000;`. If any `product_price_history` row is listed, confirm it is bogus and delete it by id. If `max_product_price` is above 250000, do not deploy the scraper yet: open a one-line follow-up PR that raises `PRICE_ABSOLUTE_MAX_USD` in `main.py` to about twice that maximum (it must stay below 1000000, and `test_caps_match_migration` enforces that), merge it, then continue. Do not edit `main.py` on the scraper host, because the next `git pull` would conflict.
 
-2. **Apply 0030.** Preferred: Supabase MCP `apply_migration` with name `0030_price_plausibility_guard` and the full file contents. Alternative: SQL editor, paste the whole file, make sure no text is selected, Run. Do it while the scraper is not running (it briefly locks `products` and `product_price_history`; the history table is ~141k rows, so seconds). If it fails with `violates check constraint`, step 1 found rows you did not fix; the transaction rolled back, nothing changed.
+2. **Apply 0030, after the PR is merged to master** (so the file you apply is the one `verify_migration.py` checks; the merged code runs safely before or after the apply because it fails open when the table is missing). Preferred: Supabase MCP `apply_migration` with name `0030_price_plausibility_guard` and the full file contents. Alternative: SQL editor, paste the whole file, make sure no text is selected, Run. Do it while the scraper is not running (it briefly locks `products` and `product_price_history`; the history table is ~141k rows, so seconds). If it fails with `violates check constraint`, step 1 found rows you did not fix; the transaction rolled back, nothing changed.
 
-3. **Verify 0030.** Run the two header queries: the `pg_constraint` query returns 2 rows with `convalidated = true`. Then run `python3 verify_migration.py migrations/0030_price_plausibility_guard.sql` locally, paste the printed SQL into the SQL editor, Run: expect 26 rows, all `OK`. Also `SELECT has_table_privilege('anon', 'public.product_price_pending', 'SELECT');` returns `false`.
+3. **Verify 0030.** Run the two header queries: the `pg_constraint` query returns 2 rows with `convalidated = true`. Then run `python3 verify_migration.py migrations/0030_price_plausibility_guard.sql` locally, paste the printed SQL into the SQL editor, Run: expect 26 rows, all `OK`. Also `SELECT has_table_privilege('anon', 'public.product_price_pending', 'SELECT');` returns `false`. The Supabase Security Advisor will now list an INFO-level "RLS Enabled No Policy" entry for `public.product_price_pending`. That is intended (only `service_role`, which bypasses RLS, may use the table; WP21 adds a policy for its scraper role); do not add a policy for `anon` or `authenticated` to silence it.
 
 4. **Deploy the scraper code on the scraper host** (after the PR merges and after step 3): `cd ~/pokefin && git pull`. `requirements.txt` is unchanged. Confirm `command -v flock` prints a path (package `util-linux`). Check which user cron runs it as: `crontab -l` for your user and `sudo crontab -l` for root; the line calls `run_scraper.sh`.
 
