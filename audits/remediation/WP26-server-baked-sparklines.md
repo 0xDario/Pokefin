@@ -3,9 +3,9 @@
 - **Goal**: on the home page and `/prices`, every product's sparkline is in the first paint (drawn from the server HTML, no pop-in, no fake line); on `/market`, whose Trend column is hidden until "all columns" is on, the lines arrive with one CDN-cached request when the column is first shown, so the default `/market` document carries no series. Scrolling the whole catalog makes zero history requests, the "Period" control changes the sparkline window with at most one CDN-cached request, and none of these three routes can load the Supabase client library.
 - **Why now / value**: after WP09 and WP12 the three most visited routes still load the 66 kB gz supabase-js chunk right after hydration and make 15 to 30 batched history requests per full `/prices` scroll, only to draw 96x40 px lines (research/performance-excellence.md §1 item 1, §7.1). WP30, WP32, WP33 and WP37 all render sparklines on new surfaces; if this lands first they inherit the cheap path instead of copying the client-fetch one.
 - **Effort**: L, 14 to 16 hours (migration and DB tests 2.5 h, server cache and three routes 2 h, client data layer and components 4 h, `/market` and home wiring 1.5 h, perf gate, fixture and cache check 2.5 h, scraper warm 0.5 h, tests and verification 2 h). Plus about 1 hour of owner time.
-- **Depends on**: WP09 (SVG `MiniSparkline`, `historyLoadingStore`, the history batcher this package deletes), WP10 (migrations 0027 to 0029 exist, so 0035 replays after them), WP11 (`cacheTags.ts`, `DAILY_BACKSTOP_SECONDS`, `getCachedProductDetailRows`, `getCachedExchangeRateSnapshot`, ISR pages, `revalidate_hook.py`), WP12 (`supabaseLoader.ts` and its ESLint guard, extended here), WP19 (`MarketView/columns.tsx`, `MarketTableRow.tsx`, `MarketCellContext`), WP21 (replay harness and CI job "Database replay and Python tests", `pokefin_scraper` role, schema baseline), WP22 (perf fixture, `perf-measure.mjs`, `perf-budget.mjs`, `perf-budgets.json`, `lighthouserc.json`, the CI perf steps), WP23 (`Skeleton`, the "No history" sparkline state, `SegmentedControl`, the `--pf-chart-line` token and its `stroke-chart-line` utility). Also reads WP08 (`PRICES_URL_DEFAULTS`, `cardList`), WP20 (`app/types/market.ts`, `CurrencyProvider`, `pnpm types:db`, `import "client-only"`).
+- **Depends on**: WP09 (SVG `MiniSparkline`, `historyLoadingStore`, the history batcher this package deletes), WP10 (migrations 0027 to 0029 exist, so 0040 replays after them), WP11 (`cacheTags.ts`, `DAILY_BACKSTOP_SECONDS`, `getCachedProductDetailRows`, `getCachedExchangeRateSnapshot`, ISR pages, `revalidate_hook.py`), WP12 (`supabaseLoader.ts` and its ESLint guard, extended here), WP19 (`MarketView/columns.tsx`, `MarketTableRow.tsx`, `MarketCellContext`), WP21 (replay harness and CI job "Database replay and Python tests", `pokefin_scraper` role, schema baseline), WP22 (perf fixture, `perf-measure.mjs`, `perf-budget.mjs`, `perf-budgets.json`, `lighthouserc.json`, the CI perf steps), WP23 (`Skeleton`, the "No history" sparkline state, `SegmentedControl`, the `--pf-chart-line` token and its `stroke-chart-line` utility). Also reads WP08 (`PRICES_URL_DEFAULTS`, `cardList`), WP20 (`app/types/market.ts`, `CurrencyProvider`, `pnpm types:db`, `import "client-only"`).
 - **Unblocks**: WP30 (list rows use `MiniSparkline size="row"` and `sparklineFor`), WP32 (home movers and header read `getCachedSparklines`), WP33 (screener rows), WP37 (set pages). WP27's planned `/api/public/catalog` follows the route pattern and the `proxy.ts` matcher exclusion added here.
-- **Placement**: after WP22 (the budget gate proves the gain) and WP23 (Skeleton and the "No history" state). It can run in parallel with WP25. It reserves migration **0035** and keeps that number even if it merges before 0033 and 0034. It must land before WP30, WP32, WP33 and WP37.
+- **Placement**: after WP22 (the budget gate proves the gain) and WP23 (Skeleton and the "No history" state). It can run in parallel with WP25. It reserves migration **0040** and keeps that number even if it merges before 0038 and 0039. It must land before WP30, WP32, WP33 and WP37.
 - **Suggested branch name**: `remediation/wp26-server-baked-sparklines`
 - **Risk level**: medium. It replaces the data path of every sparkline and every on-demand chart on the three busiest routes and changes the `proxy.ts` matcher; mistakes show as blank or wrong lines, so the encoding is pinned by the same anchor strings in SQL, TypeScript and Python tests, and the migration is additive and read-only.
 
@@ -106,7 +106,7 @@ Design system use: `Skeleton` (flat bars in the slot and the chart area), WP23's
 
 ### D2. The encoded series (data definition)
 
-Computed by `public.get_catalog_sparklines(p_days, p_points)` (migration 0035). Dates are UTC calendar days, as everywhere else in the schema (`recorded_at` is `timestamp without time zone` holding UTC).
+Computed by `public.get_catalog_sparklines(p_days, p_points)` (migration 0040). Dates are UTC calendar days, as everywhere else in the schema (`recorded_at` is `timestamp without time zone` holding UTC).
 
 | Period | `p_days` | `p_points` | Point spacing |
 |---|---:|---:|---|
@@ -247,8 +247,8 @@ test -f perf-budgets.json && test -f scripts/fixtures/perf.mjs && test -f script
 # WP23: Skeleton, "No history", chart-line token
 test -f app/components/ui/Skeleton.tsx && grep -c "No history" app/components/MarketView/MiniSparkline.tsx   # 1
 grep -n "pf-chart-line" app/globals.css | head -3                                                # the token and its @theme colour
-# Migration 0035 is free (0033 and 0034 may or may not exist: WP25 runs in parallel)
-ls ../migrations | grep -c '^0035_'                                                              # 0
+# Migration 0040 is free (0038 and 0039 may or may not exist: WP25 runs in parallel)
+ls ../migrations | grep -c '^0040_'                                                              # 0
 ```
 
 If `grep -n "pf-chart-line" app/globals.css` shows the token but no `@theme` colour that produces the `stroke-chart-line` utility (a line like `--color-chart-line: var(--pf-chart-line);`), use `stroke-[var(--pf-chart-line)]` wherever this spec writes `stroke-chart-line`.
@@ -277,12 +277,12 @@ Tools: PostgreSQL 16 or 17 locally (or Docker) for WP21's replay harness and the
 
 ## Implementation steps
 
-### Step 1. `migrations/0035_catalog_sparklines.sql` (new)
+### Step 1. `migrations/0040_catalog_sparklines.sql` (new)
 
 The body below was run on PostgreSQL 16 while writing this spec: applied twice in a row without error, every anchor in D2 and every case in the DB test reproduced exactly, and 1Y over 306 products with 116k history rows took about 210 ms (3M about 90 ms, 7D about 20 ms), well inside anon's 3 s statement timeout.
 
 ```sql
--- Migration 0035: server-baked catalog sparklines (WP26).
+-- Migration 0040: server-baked catalog sparklines (WP26).
 --
 -- Every sparkline on /, /prices and /market used to be drawn in the browser
 -- from a year of product_price_history rows fetched per card through
@@ -473,7 +473,7 @@ cd .. && PGSERVER_URL=postgresql://postgres:postgres@localhost:55432/postgres sc
 
 ### Step 2. Database types
 
-The site calls the function through the typed client (WP20), so `app/types/database.ts` must contain it. The owner applies 0035 to production first (Owner actions, item 1: it is additive and read-only), then:
+The site calls the function through the typed client (WP20), so `app/types/database.ts` must contain it. The owner applies 0040 to production first (Owner actions, item 1: it is additive and read-only), then:
 
 ```bash
 cd frontend && SUPABASE_ACCESS_TOKEN=... pnpm types:db
@@ -492,7 +492,7 @@ import type { ChartTimeframe } from "../types/market";
 /**
  * Server-baked sparklines (WP26, research/performance-excellence.md §7.1).
  *
- * The database (migration 0035, get_catalog_sparklines) turns each product's
+ * The database (migration 0040, get_catalog_sparklines) turns each product's
  * daily prices into a fixed number of points, scales them between the
  * series' own low and high, and writes each point as one base64url
  * character: level 0 (the low) is "A", level 63 (the high) is "_". The shape
@@ -577,7 +577,7 @@ export function isSparklinePayload(value: unknown): value is SparklinePayload {
   return Object.values(series as Record<string, unknown>).every(isValidSeries);
 }
 
-/** Mirror of the SQL encoder (migration 0035, CTE "encoded"). */
+/** Mirror of the SQL encoder (migration 0040, CTE "encoded"). */
 export function encodeSparkline(values: readonly number[]): string | null {
   if (values.length < 2 || values.length > SPARKLINE_MAX_POINTS) return null;
   if (!values.every((value) => Number.isFinite(value))) return null;
@@ -735,7 +735,7 @@ export const getCachedExchangeRateSnapshot = unstable_cache(
 // ---- WP26: baked sparklines and on-demand history -------------------------
 
 /**
- * One call of get_catalog_sparklines (migration 0035) for `period`. Rejects
+ * One call of get_catalog_sparklines (migration 0040) for `period`. Rejects
  * on any error, so unstable_cache never stores a failure (see the comment
  * above DAILY_BACKSTOP_SECONDS). Products without a line are left out.
  */
@@ -1095,7 +1095,7 @@ Keep the `.then(...)` and `.catch(...)` that follow unchanged.
 grep -rn "lib/exchangeRate\|from \"./exchangeRate\"\|fetchLatestExchangeRateClient" app --include=*.ts --include=*.tsx | grep -v __tests__
 ```
 
-No output: `git rm app/lib/exchangeRate.ts` and its test (`git rm app/lib/__tests__/exchangeRate.test.ts`), and remove any `jest.mock` of it from other test files. Any output: leave the module and list the importers in the PR as follow-ups.
+No output: `git rm app/lib/exchangeRate.ts` and its test (`git rm app/lib/__tests__/exchangeRate.test.ts`), and remove any `jest.mock` of it from other test files. This also removes WP38's once-per-tab `client_exchange_rate_stale` report (WP38 step 13b); that is intended: the browser now reads `/api/public/rate`, whose server read (`getCachedExchangeRateSnapshot`, through `fetchLatestExchangeRate`) still logs `exchange_rate_stale` (WP38 step 6d), and `isExchangeRateStale` stays in `app/lib/currency.ts` for WP27. If a WP38 case for `client_exchange_rate_stale` exists in another test file, delete that case with the module. Any output: leave the module and list the importers in the PR as follow-ups.
 
 ### Step 10. `frontend/app/components/MarketView/MiniSparkline.tsx`: draw the encoded series
 
@@ -1119,7 +1119,7 @@ const BOX: Record<SparklineSize, string> = {
 
 interface MiniSparklineProps {
   /**
-   * Encoded series (lib/sparkline.ts, baked by migration 0035).
+   * Encoded series (lib/sparkline.ts, baked by migration 0040).
    * undefined: not available yet (flat bar). null: no line ("No history").
    */
   series?: string | null;
@@ -1378,7 +1378,7 @@ grep -rn "fetchProductHistoryClient\|fetchVolumeMetrics" app --include=*.ts --in
 # expect no output (serverMarketData.ts has its own private fetchVolumeMetrics: it is a different function; if it appears, ignore that line)
 ```
 
-Then delete from `clientMarketData.ts`: `fetchProductHistoryClient` and the whole WP09 batcher that serves it (the doc comment block "Price history is read in batches (F070)", `HISTORY_BATCH_WINDOW_MS`, `HISTORY_PAGE_SIZE`, `HISTORY_MAX_PAGES`, `HISTORY_EXTRA_DAYS`, `type HistoryRow`, `type HistoryWaiter`, `pendingHistoryByTimeframe`, `historyFlushTimer`, `historyIdsPerRequest`, `readFreshHistory`, `storeHistory`, `queryHistoryChunk`, `flushHistoryQueue`), the `productHistoryCache` and `productHistoryPromiseCache` declarations, `fetchVolumeMetrics` with its doc comment and its caches, and every import that becomes unused (`pnpm exec eslint app/lib/clientMarketData.ts` names them). Keep `fetchNewestPricedAtClient`, `fetchProductsFallback`, `fetchMarketProductsClient` and their caches: `/compare`, `/box-calculator` and `/portfolio` still use them.
+Then delete from `clientMarketData.ts`: `fetchProductHistoryClient` and the whole WP09 batcher that serves it (the doc comment block "Price history is read in batches (F070)", `HISTORY_BATCH_WINDOW_MS`, `HISTORY_PAGE_SIZE`, `HISTORY_MAX_PAGES`, `HISTORY_EXTRA_DAYS`, `type HistoryRow`, `type HistoryWaiter`, `pendingHistoryByTimeframe`, `historyFlushTimer`, `historyIdsPerRequest`, `readFreshHistory`, `storeHistory`, `queryHistoryChunk`, `flushHistoryQueue`), the `productHistoryCache` and `productHistoryPromiseCache` declarations, `fetchVolumeMetrics` with its doc comment and its caches, and every import that becomes unused (`pnpm exec eslint app/lib/clientMarketData.ts` names them). Keep `fetchNewestPricedAtClient`, `fetchLatestPricesClient` (WP38: the `get_latest_prices` read behind portfolio search and import), `fetchProductsFallback`, `fetchMarketProductsClient` and their caches: `/compare`, `/box-calculator` and `/portfolio` still use them.
 
 ### Step 13. `frontend/app/components/ProductPrices/cards/ProductCard.tsx`
 
@@ -1738,7 +1738,7 @@ None of these files is in `ANON_CLIENT_FORBIDDEN_FILES` (check: `grep -n "ANON_C
 18a. Add below `PRICE_STALENESS_DAYS`:
 
 ```js
-// WP26: server-baked sparklines, mirroring migration 0035 and
+// WP26: server-baked sparklines, mirroring migration 0040 and
 // app/lib/sparkline.ts (the anchors in scripts/perf-fixture.test.mjs keep the
 // three encoders equal).
 export const SPARKLINE_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
@@ -2166,8 +2166,8 @@ Expected: `app/lib/clientMarketData.ts`, `app/lib/portfolio.ts`, `app/components
 ### Step 24. Documentation
 
 - `frontend/README.md`, in WP22's "Performance budgets (CI)" section, add: "`forbiddenChunks` in `perf-budgets.json` lists chunks (found by a marker string) that must not be reachable, initially or lazily, from the given routes; `/`, `/prices` and `/market` must never be able to load supabase-js (WP26). Public data on those routes comes from server props or `app/lib/publicMarketApi.ts` (`/api/public/sparklines/[period]`, `/api/public/history/[id]`, `/api/public/rate`). `node scripts/check-public-cache.mjs [origin] [--require-vercel-hit]` proves those routes are cached."
-- `README.md` (repo root): where the database functions are listed (search for `get_set_analytics`), add "`get_catalog_sparklines(p_days, p_points)` (migration 0035): one 6-bit base64url series per active product for the sparklines, NULL when the 14-day price gate withholds the price." In the scraper section where WP11 documented `REVALIDATE_URL`, add one sentence: "After a successful revalidation the hook also GETs `/`, `/prices`, `/market` and the five `/api/public/sparklines/*` periods so they regenerate before visitors arrive."
-- `audits/HARDENING_FOLLOWUPS.md` section 7: add, as the newest migration bullet, "**Migration 0035** (WP26, `get_catalog_sparklines`): applied to production on <date>." Leave the date for the owner.
+- `README.md` (repo root): where the database functions are listed (search for `get_set_analytics`), add "`get_catalog_sparklines(p_days, p_points)` (migration 0040): one 6-bit base64url series per active product for the sparklines, NULL when the 14-day price gate withholds the price." In the scraper section where WP11 documented `REVALIDATE_URL`, add one sentence: "After a successful revalidation the hook also GETs `/`, `/prices`, `/market` and the five `/api/public/sparklines/*` periods so they regenerate before visitors arrive."
+- `audits/HARDENING_FOLLOWUPS.md` section 7: add, as the newest migration bullet, "**Migration 0040** (WP26, `get_catalog_sparklines`): applied to production on <date>." Leave the date for the owner.
 
 ### Step 25. Update the tests that the API change breaks
 
@@ -2243,7 +2243,7 @@ const RAMP_90_BUCKETS = [
   147, 150, 153, 156, 159, 161, 164, 167, 170, 173, 175, 178, 181, 184, 187, 189,
 ];
 
-describe("encodeSparkline mirrors migration 0035", () => {
+describe("encodeSparkline mirrors migration 0040", () => {
   it("encodes the shared anchors", () => {
     expect(encodeSparkline([1, 2, 3, 4, 5, 6, 7])).toBe("ALVgq1_");
     expect(encodeSparkline(RAMP_90_BUCKETS)).toBe("ACEHJKMORTUWZbdehjlnprtvxz1357-_");
@@ -2339,11 +2339,11 @@ import { PRICE_STALENESS_TOLERANCE_DAYS } from "../marketPulse";
 import { SPARKLINE_ALPHABET, SPARKLINE_FLAT_LEVEL, SPARKLINE_MAX_LEVEL } from "../sparkline";
 
 const SQL = fs.readFileSync(
-  path.resolve(__dirname, "../../../../migrations/0035_catalog_sparklines.sql"),
+  path.resolve(__dirname, "../../../../migrations/0040_catalog_sparklines.sql"),
   "utf8"
 );
 
-describe("migration 0035 and lib/sparkline.ts agree", () => {
+describe("migration 0040 and lib/sparkline.ts agree", () => {
   it("uses the same alphabet", () => {
     expect(SQL).toContain(`'${SPARKLINE_ALPHABET}'`);
   });
@@ -2704,7 +2704,7 @@ Run from `frontend/` (`pnpm run test:scripts`), so ESLint finds `eslint.config.m
 
 ```python
 """
-Database checks for migration 0035 (WP26): public.get_catalog_sparklines.
+Database checks for migration 0040 (WP26): public.get_catalog_sparklines.
 
 Skipped unless POKEFIN_TEST_DATABASE_URL points at a database rebuilt by
 scripts/db/replay_migrations.sh (CI job "Database replay and Python tests").
@@ -2933,7 +2933,7 @@ pnpm dlx @lhci/cli@0.15.1 autorun && node scripts/perf-lhci-summary.mjs
 kill %1
 
 # Database (repo root): deployment check, replay and the DB tests
-cd .. && python3 verify_migration.py migrations/0035_catalog_sparklines.sql > /tmp/wp26_0035_check.sql; echo "exit=$?"
+cd .. && python3 verify_migration.py migrations/0040_catalog_sparklines.sql > /tmp/wp26_0040_check.sql; echo "exit=$?"
 #   exit=0; stderr lists 4 expectations: the function (security invoker, volatility s,
 #   config search_path=public,pg_temp) and EXECUTE revoked for public, granted to anon and authenticated
 PGSERVER_URL=postgresql://postgres:postgres@localhost:55432/postgres scripts/db/replay_migrations.sh
@@ -2962,7 +2962,7 @@ Manual checks (`node scripts/perf-serve.mjs` and a browser at `http://127.0.0.1:
 
 ## Owner actions
 
-1. **Apply migration 0035 to production before merge** (Supabase SQL editor or MCP `apply_migration`, contents of `migrations/0035_catalog_sparklines.sql`). It is additive and read-only. Then run the four verification queries in the file's header: 0 rows, 0 rows, about 300 drawn, and an `EXPLAIN ANALYZE` well under 1 s. Then prove the applied object is the file's (the repo's rule since the 2026-08-13 incident): `python3 verify_migration.py migrations/0035_catalog_sparklines.sql`, paste the printed statement into the SQL editor with nothing selected, Run: 4 rows, all `OK`. Record the date in `audits/HARDENING_FOLLOWUPS.md` (step 24) and refresh `schema.sql` as WP21 describes.
+1. **Apply migration 0040 to production before merge** (Supabase SQL editor or MCP `apply_migration`, contents of `migrations/0040_catalog_sparklines.sql`). It is additive and read-only. Then run the four verification queries in the file's header: 0 rows, 0 rows, about 300 drawn, and an `EXPLAIN ANALYZE` well under 1 s. Then prove the applied object is the file's (the repo's rule since the 2026-08-13 incident): `python3 verify_migration.py migrations/0040_catalog_sparklines.sql`, paste the printed statement into the SQL editor with nothing selected, Run: 4 rows, all `OK`. Record the date in `audits/HARDENING_FOLLOWUPS.md` (step 24) and refresh `schema.sql` as WP21 describes.
 2. **Database types**: run `pnpm types:db` with your `SUPABASE_ACCESS_TOKEN` and push `frontend/app/types/database.ts` to the branch, or give the executor a token (step 2). WP20's "Database types" workflow fails on master until production and the file agree.
 3. **Preview cache check** (acceptance): if the preview deployment is protected, create a "Protection Bypass for Automation" secret in Vercel (Project, Settings, Deployment Protection; free) and run from `frontend/`: `VERCEL_AUTOMATION_BYPASS_SECRET=<secret> node scripts/check-public-cache.mjs https://<preview host> --require-vercel-hit`. Expected: `ok`, with `x-vercel-cache: HIT` on each second request. Paste the output into the PR.
 4. **Approve or reject any `Perf budget raise` lines** in the PR body; if the `/prices` document is above its 70 kB br target, decide between accepting the raised limit until WP30 or holding the PR.
@@ -2970,7 +2970,7 @@ Manual checks (`node scripts/perf-serve.mjs` and a browser at `http://127.0.0.1:
 
 ## Acceptance criteria
 
-- [ ] `migrations/0035_catalog_sparklines.sql` exists, replays once and twice (WP21 harness), is `SECURITY INVOKER`, `STABLE`, pins `search_path`, and grants EXECUTE to `anon` and `authenticated` only; `python3 verify_migration.py migrations/0035_catalog_sparklines.sql` exits 0 with 4 expectations; `tests/test_wp26_catalog_sparklines.py` passes in CI (17 cases: 13 test functions, one of them parametrised 5 ways).
+- [ ] `migrations/0040_catalog_sparklines.sql` exists, replays once and twice (WP21 harness), is `SECURITY INVOKER`, `STABLE`, pins `search_path`, and grants EXECUTE to `anon` and `authenticated` only; `python3 verify_migration.py migrations/0040_catalog_sparklines.sql` exits 0 with 4 expectations; `tests/test_wp26_catalog_sparklines.py` passes in CI (17 cases: 13 test functions, one of them parametrised 5 ways).
 - [ ] The anchor strings `ALVgq1_` and `ACEHJKMORTUWZbdehjlnprtvxz1357-_` are produced by the SQL, `encodeSparkline` and the perf fixture's encoder (tests 1, 13, 16).
 - [ ] `/` and `/prices` render sparklines from the server HTML: `renderToString` of `MiniSparkline` contains the path, and the perf build's `/prices` HTML contains one `<path d="M0 ` per drawn product. `/market` embeds no series (its page passes no `initialSparklines`) and requests one period only while "all columns" is on (test 8, manual check).
 - [ ] A product withheld by the 14-day rule renders "No history" and no line (perf fixture 900300 to 900305; unit and SSR tests).
@@ -2989,14 +2989,14 @@ Manual checks (`node scripts/perf-serve.mjs` and a browser at `http://127.0.0.1:
 ## Rollback
 
 - Frontend and hook: revert the PR (`git revert -m 1 <merge commit>`). The previous client path (WP09 batcher, WP12 lazy loader) comes back with it; `perf-budgets.json`, `lighthouserc.json` and `ci.yml` revert in the same commit, so the gate matches the code.
-- Database: the function is read-only and unused after the revert, so it can stay. To remove it, after the revert is deployed: `DROP FUNCTION IF EXISTS public.get_catalog_sparklines(integer, integer);`, then `pnpm types:db` and a one-line migration `migrations/NNNN_drop_catalog_sparklines.sql` (next free number) with the same statement, so replay matches production.
+- Database: the function is read-only and unused after the revert, so it can stay. To remove it, after the revert is deployed: `DROP FUNCTION IF EXISTS public.get_catalog_sparklines(integer, integer);`, then `pnpm types:db` and a one-line migration `migrations/NNNN_drop_catalog_sparklines.sql` (NNNN is the first free number above 0047 (numbers up to 0047 are reserved; see `audits/remediation/00-PLAN.md`, "Migration registry")) with the same statement, so replay matches production.
 - Scraper machine: `git pull` after the revert (the hook stops warming).
 
 ## Commit and PR
 
 Commits (each builds and passes its tests; end each message with the attribution lines your session requires):
 
-1. `feat(db): get_catalog_sparklines, server-baked sparkline series (WP26)`: migration 0035, `tests/test_wp26_catalog_sparklines.py`, `app/types/database.ts`.
+1. `feat(db): get_catalog_sparklines, server-baked sparkline series (WP26)`: migration 0040, `tests/test_wp26_catalog_sparklines.py`, `app/types/database.ts`.
 2. `feat(api): public read routes for sparklines, history and rate (WP26)`: `sparkline.ts`, `compactHistory.ts`, `publicRoute.ts`, `serverMarketData.ts`, the three routes, `proxy.ts`, tests 1 to 6 and 10.
 3. `feat(ui): baked sparklines, on-demand history, Period control (WP26)`: `publicMarketApi.ts`, `CurrencyContext.tsx`, `MiniSparkline.tsx`, hooks, `ProductCard.tsx`, `/prices`, home and `/market` wiring, `clientMarketData.ts` and `exchangeRate.ts` cleanup, ESLint guard, tests 7 to 9, 11, 15 and the step 25 updates.
 4. `perf: forbidden-chunk gate, sparkline fixture, public cache check (WP26)`: `perf.mjs`, `perf-measure.mjs`, `perf-budget.mjs`, `perf-budgets.json`, `check-public-cache.mjs`, `ci.yml`, `lighthouserc.json`, tests 12 to 14.
@@ -3007,9 +3007,9 @@ PR title: `WP26: server-baked sparklines and public read routes`
 
 PR body:
 
-- What: sparklines baked by `get_catalog_sparklines` (migration 0035) and embedded in `/` and `/prices`; other periods, and `/market`'s Trend column (only while shown), from `/api/public/sparklines/[period]` (ISR); full charts from `/api/public/history/[id]` (ISR); fallback rate from `/api/public/rate`; "CHART" renamed "Period"; WP09's per-card history loading and batcher removed; supabase-js unreachable from the three routes (ESLint and `perf-budgets.json` `forbiddenChunks`); scraper warms 8 URLs after each revalidation.
+- What: sparklines baked by `get_catalog_sparklines` (migration 0040) and embedded in `/` and `/prices`; other periods, and `/market`'s Trend column (only while shown), from `/api/public/sparklines/[period]` (ISR); full charts from `/api/public/history/[id]` (ISR); fallback rate from `/api/public/rate`; "CHART" renamed "Period"; WP09's per-card history loading and batcher removed; supabase-js unreachable from the three routes (ESLint and `perf-budgets.json` `forbiddenChunks`); scraper warms 8 URLs after each revalidation.
 - Numbers: before and after table from `.perf/wp26-before.json` and `.perf/budget-result.json` (JS, document and flight per route), Lighthouse script KiB before and after, and the `check-public-cache` outputs (CI and preview).
 - `Perf budget raise: <key> <reason>` lines, one per raised limit (step 26).
 - Owner actions 1 to 5, with 1 and 2 marked done or pending.
 - Follow-ups: the remaining browser Supabase reads from step 23 (file and function per line); WP30 reduces the Period to a single return per card and must not rename the control again; WP33 must update `WARM_PATHS` when `/market` moves; `/market`'s expanded row says "Price history not available yet." after a failed request (fixed when WP33 replaces the view); the two ISR routes cache every distinct path they are asked for, 404s included (`app-route` stores any status), so a crawler walking random `/api/public/history/<n>` ids creates cache entries the way it already can on `/product/<n>` (WP11). Watch Vercel's ISR write usage after deploy; if it climbs, open a follow-up to reject unknown ids before the route renders (for both routes and `/product/[id]`).
-- Migration: 0035 (reserved in 01-PRODUCT-DIRECTION.md §8; 0033 and 0034 belong to WP25).
+- Migration: 0040 (reserved in 01-PRODUCT-DIRECTION.md §8; 0038 and 0039 belong to WP25).

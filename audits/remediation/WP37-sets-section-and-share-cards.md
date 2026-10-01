@@ -4,21 +4,21 @@
 - **Why now / value**: set pages are signature feature 9 (`01-PRODUCT-DIRECTION.md` §5) and the main search entry point the site lacks: people search set names, and today `/stats` is a 1,680 px wide table with no set pages, no links from rows and an "Invest Score" label (`research/ui-audit.md` top-10 item 6; `research/trust-seo-brand.md` §11.1 to §11.4). Every input now exists: WP29's set indices, WP25's daily stats, WP26's baked sparklines, WP24's labels and JSON-LD helpers, WP31's quote model for the share card. It closes Track 2.
 - **Effort**: L, about 16 hours (migration and DB tests 2 h, set data layer 2.5 h, `/sets` 3 h, set page 3 h, product page, nav, footer, sitemap and redirects 1.5 h, share cards 2 h, perf and smoke wiring 1 h, tests and verification 1 h). Plus about 30 minutes of owner time.
 - **Depends on**: WP13 (`app/lib/site.ts`, `sitemap.ts`, the `redirects()` block in `next.config.ts`, `productMeta.ts` with `buildProductMetadata`, `getProductLabel`, `productPath`, `parseProductId`, `NotFoundPanel`), WP21 (`scripts/db/replay_migrations.sh`, `verify_migration.py`, CI job "Database replay and Python tests", `pokefin_scraper`), WP22 (`perf-budgets.json`, `scripts/fixtures/perf.mjs`, `perf-fixture.test.mjs`, `pnpm perf:budget`, `prod-smoke-lib.mjs`, `prod-smoke.mjs`, `prod-confirm.mjs`), WP23 (`PageHeader`, `ProvenanceLine`, `AsOf`, `Stat`, `Delta`, `Badge`, `DataList`/`DataListRow`, `EmptyState`, `Skeleton`, `buttonClasses`, tokens, `format.ts` percent helpers, the conventions ratchet), WP24 (`MetricLabel`, `DecisionNote`, `PROVENANCE_SENTENCE`, `metricDefinitions.ts`, `setAnalytics.ts` with `formatCompositePercentile`, `jsonLd.ts` with `serializeJsonLd` and `buildBreadcrumbJsonLd`, `methodology.ts`, `MethodologyArticle.tsx`, the `/stats` label work this package moves), WP26 (`getCachedSparklines`, `sparklineFor`, `pickSparklines`, `decodeSparkline`, `MiniSparkline`, `forbiddenChunks`, `PUBLIC_ROUTE_CLIENT_FILES`), WP29 (`getCachedIndexSummary`, `getCachedIndexSeries`, `currentSummaries`, `sliceIndexRange`, `addDaysToKey`, `utcTodayKey`, `INDEX_RULES`, `IndexChart`, `niceStep`, the `set-<sets.id>` index codes and their perf fixture), WP31 (`buildQuote`, `todayUtcKey` in `productModel.ts`, the new product page composition, `SiblingList.tsx`). Through them: WP07 (`format.ts`), WP11 (`cacheTags.ts`, `DAILY_BACKSTOP_SECONDS`, ISR with empty `generateStaticParams`), WP20 (`pnpm types:db`, `app/types/market.ts`, async root layout), WP25 (`getCachedProductStats`, `fetchAllRows`, `product_daily_stats`, `vol_weekly_52w`). Soft, each with a default in Before you start: WP27 (`navConfig.ts`, `FOOTER_BROWSE`, `setSearchHref`, `PokefinMark`), `IntentLink` (WP11 step 13a; WP30 step 1 recreates it when missing), WP32 (`app/components/Price.tsx`), WP33 (`REDIRECT_CHECKS` and `judgeRedirect` in `prod-smoke-lib.mjs`).
-- **Unblocks**: nothing in Track 2 (last package). Deferred next-wave items build on it: type and era hubs (`/sealed/[slug]`, `/eras/[slug]`) reuse `product_types.slug` and `generations.slug` from 0041 and the hub components, editorial guides link set hubs.
-- **Placement**: last package of Track 2, after WP31 (product header data and breadcrumb location) and WP29 (set indices). It reserves migration **0041** and keeps that number if it merges out of order. Its redirect change supersedes WP13's `/stats` target: `/stats` and `/analytics` each answer one 308 to `/sets`.
+- **Unblocks**: nothing in Track 2 (last package). Deferred next-wave items build on it: type and era hubs (`/sealed/[slug]`, `/eras/[slug]`) reuse `product_types.slug` and `generations.slug` from 0047 and the hub components, editorial guides link set hubs.
+- **Placement**: last package of Track 2, after WP31 (product header data and breadcrumb location) and WP29 (set indices). It reserves migration **0047** and keeps that number if it merges out of order. Its redirect change supersedes WP13's `/stats` target: `/stats` and `/analytics` each answer one 308 to `/sets`.
 - **Suggested branch name**: `remediation/wp37-sets-section-and-share-cards`
 - **Risk level**: medium. A migration adds NOT NULL unique columns to three reference tables (validated twice on PostgreSQL 16, idempotent, additive), and the package replaces a public route, the product breadcrumb and every product's share image; each change has a unit test, the redirects are checked by the daily smoke test, and rollback is a revert plus an optional column drop.
 
 ## Why
 
-Today a collector who wants "Prismatic Evolutions sealed prices" has no page to land on: the set name is plain text on product pages, `/stats` and `/analytics` serve the same 20-column table under two URLs, its rows link nowhere, and it leads with an "Invest Score" (`research/ui-audit.md` "The 10 highest-leverage" item 6; `research/trust-seo-brand.md` §11.4). Set pages are how collectors think and how they search, so they are both the missing browse path and the site's best programmatic SEO surface, provided each page carries real data and a summary derived from it rather than thin boilerplate (`research/trust-seo-brand.md` §11.3, thin-content rules). Shared links are the other gap: a product link pasted into a chat shows a bare photo with no price, and caches of that card outlive the price, so the card must state its day and never show a withheld price (`research/trust-seo-brand.md` §11.8; `01-PRODUCT-DIRECTION.md` §2 principle 1). This package adds name slugs (migration 0041), `/sets` with presets and a server-rendered risk/return chart, `/sets/[slug]` with the WP29 set index or a median-of-constituents line, linked breadcrumbs and set links on product pages, set hubs in the sitemap and footer, and dynamic share images for products and sets, all server-rendered with zero client charting code (`research/performance-excellence.md` §7.1; `01-PRODUCT-DIRECTION.md` §3.4, §6.1).
+Today a collector who wants "Prismatic Evolutions sealed prices" has no page to land on: the set name is plain text on product pages, `/stats` and `/analytics` serve the same 20-column table under two URLs, its rows link nowhere, and it leads with an "Invest Score" (`research/ui-audit.md` "The 10 highest-leverage" item 6; `research/trust-seo-brand.md` §11.4). Set pages are how collectors think and how they search, so they are both the missing browse path and the site's best programmatic SEO surface, provided each page carries real data and a summary derived from it rather than thin boilerplate (`research/trust-seo-brand.md` §11.3, thin-content rules). Shared links are the other gap: a product link pasted into a chat shows a bare photo with no price, and caches of that card outlive the price, so the card must state its day and never show a withheld price (`research/trust-seo-brand.md` §11.8; `01-PRODUCT-DIRECTION.md` §2 principle 1). This package adds name slugs (migration 0047), `/sets` with presets and a server-rendered risk/return chart, `/sets/[slug]` with the WP29 set index or a median-of-constituents line, linked breadcrumbs and set links on product pages, set hubs in the sitemap and footer, and dynamic share images for products and sets, all server-rendered with zero client charting code (`research/performance-excellence.md` §7.1; `01-PRODUCT-DIRECTION.md` §3.4, §6.1).
 
 ## Design
 
 ### D1. Decisions (binding)
 
 1. **URLs**: `/sets` and `/sets/<slug>`, where the slug comes from the set **name**, never the code (`sets.code` is not unique). Product URLs stay `/product/[id]`.
-2. **Slugs are stored** (migration 0041): `pokefin_slugify(text)` (IMMUTABLE), a `slug` column on `sets`, `product_types` and `generations` (NOT NULL, unique, format CHECK), a deterministic fill (oldest row keeps the bare slug, the next gets `-<qualifier>`, then `-<id>`), and BEFORE INSERT triggers that set a missing slug by the same rule. Renaming a row never changes its slug. The owner runs the collision query before applying.
+2. **Slugs are stored** (migration 0047): `pokefin_slugify(text)` (IMMUTABLE), a `slug` column on `sets`, `product_types` and `generations` (NOT NULL, unique, format CHECK), a deterministic fill (oldest row keeps the bare slug, the next gets `-<qualifier>`, then `-<id>`), and BEFORE INSERT triggers that set a missing slug by the same rule. Renaming a row never changes its slug. The owner runs the collision query before applying.
 3. **A name-derived slug that is not stored redirects** (308, `permanentRedirect`) to the stored slug of the earliest-released set with that name. This makes `setSearchHref(name)` work without a slug in the search payload, and keeps old links working after a rename.
 4. **Redirects**: `/analytics` and `/stats` each answer exactly one 308 to `/sets` (WP13's `/stats` to `/analytics` entry is replaced, not chained). `app/analytics/` and `app/stats/` are deleted.
 5. **Indexing**: a set hub with fewer than 3 priced products (`MIN_PRICED_PRODUCTS_FOR_INDEXING`) renders but carries `robots: noindex, follow`, is left out of the sitemap, out of the `/sets` ItemList JSON-LD and out of the footer. No set-by-type pages; type and era hubs are deferred (the slug columns exist for them).
@@ -33,7 +33,7 @@ Today a collector who wants "Prismatic Evolutions sealed prices" has no page to 
 ### D2. Data flow
 
 ```text
- public.sets (+slug, 0041) ----------------------- getCachedSetDirectory()        unstable_cache, tag market-products
+ public.sets (+slug, 0047) ----------------------- getCachedSetDirectory()        unstable_cache, tag market-products
  get_market_product_summaries (0023 gates) ------- getCachedMarketProductSummaries() (WP11)
         |                                                   |
         +--------- buildSetCatalog(directory, products) ----+--> footer links (root layout), sitemap rows, noindex rule
@@ -288,16 +288,17 @@ Descriptions: set page "Daily TCGplayer Market Price, 30-day and 1-year change a
 ## Before you start
 
 Read:
-- `audits/remediation/01-PRODUCT-DIRECTION.md` §2, §3 (type, colour roles, density, charts), §4.1, §5 item 9, §6, §8 (migration registry); `research/trust-seo-brand.md` §11.1 to §11.8 and §13 (`0041_taxonomy_slugs.sql` sketch); `research/ui-audit.md` (top-10 item 6, `/stats`); `research/performance-excellence.md` §7.1.
+- `audits/remediation/01-PRODUCT-DIRECTION.md` §2, §3 (type, colour roles, density, charts), §4.1, §5 item 9, §6, §8 (migration registry); `research/trust-seo-brand.md` §11.1 to §11.8 and §13 (the `0041_taxonomy_slugs.sql` sketch, provisional number; this package's file is `0047_taxonomy_slugs.sql`); `research/ui-audit.md` (top-10 item 6, `/stats`); `research/performance-excellence.md` §7.1.
 - Specs, for the exact names you call: WP13 steps 2, 5, 7, 8 (`redirects.ts`, `redirects()`, `productMeta.ts`, `sitemap.ts`); WP24 steps 5, 6, 7, 10, 16, 22, 23 (`metricDefinitions.ts`, `MetricLabel`, `jsonLd.ts`, methodology, `/stats`, conventions test, sitemap); WP26 steps 3, 5, 10, 17, 19 (`sparkline.ts`, `getCachedSparklines`, `MiniSparkline`, ESLint list, `forbiddenChunks`); WP29 steps 8, 9, 10, 14, 21 to 23; WP31 decisions, steps 6, 12, 16; WP27 steps 4 and 24 (`navConfig.ts`, footer); WP33 step 25d (`REDIRECT_CHECKS`).
 - Current code (paths from `frontend/` unless they start with `migrations/`, `tests/` or `scripts/db/`): `next.config.ts`, `app/layout.tsx`, `app/sitemap.ts`, `app/analytics/page.tsx`, `app/stats/page.tsx` and every test under `app/stats/`, `app/product/[id]/page.tsx`, `productMeta.ts`, `SiblingList.tsx`, `productModel.ts`, `app/lib/serverMarketData.ts` (find `fetchAllRows`, `createMarketDataSupabaseClient`, `getCachedProductStats`, `getCachedIndexSeries`, `getCachedSparklines`, `DAILY_BACKSTOP_SECONDS`, `logCaughtError`), `app/lib/jsonLd.ts`, `app/lib/metricDefinitions.ts`, `app/content/methodology.ts`, `app/methodology/MethodologyArticle.tsx`, `app/components/Footer.tsx`, `app/components/nav/navConfig.ts`, `app/components/ui/*`, `app/indices/sealed/IndexChart.tsx`, `app/components/brand/PokefinMark.tsx`, `app/__tests__/uiConventions.test.ts` and its baseline, `app/__tests__/sitemap.test.ts`, `app/product/[id]/__tests__/productMeta.test.ts`, `eslint.config.mjs`, `jest.config.js`, `perf-budgets.json`, `scripts/fixtures/perf.mjs`, `scripts/perf-fixture.test.mjs`, `scripts/prod-smoke-lib.mjs`, `scripts/prod-smoke.mjs`, `scripts/prod-smoke-lib.test.mjs`, `scripts/prod-confirm.mjs`. Repo root: `schema.sql` (the `sets`, `product_types`, `generations` tables), `migrations/0001_enable_rls_and_policies.sql` (read policies), `verify_migration.py`, `scripts/db/replay_migrations.sh`, `tests/test_wp29_market_index_db.py` (fixture style).
 
 Confirm the starting state (repo root):
 
 ```bash
-# Migration number: 0041 is free; WP21 ends at 0032 and 0033 to 0040 belong to WP25 to WP36.
-ls migrations | grep -E '^0041_'                                     # no output
-ls migrations | grep -cE '^00(3[3-9]|40)_'                            # 8 (0033 to 0040), or fewer if a parallel package is unmerged
+# Migration number: 0047 is free (registry in audits/remediation/00-PLAN.md). 0038 to 0046 belong to WP25 to WP36
+# (WP25 0038 and 0039, WP26 0040, WP28 0041, WP29 0042, WP33 0043, WP34 0044, WP35 0045, WP36 0046).
+ls migrations | grep -E '^0047_'                                     # no output
+ls migrations | grep -cE '^00(3[89]|4[0-6])_'                         # 9 (0038 to 0046), or fewer if a parallel package is unmerged
 # WP21
 ls migrations/0032_* scripts/db/replay_migrations.sh verify_migration.py tests/test_db_roles_integration.py
 # WP25 (through WP29) and WP29
@@ -361,11 +362,11 @@ Tooling: PostgreSQL 16 or 17 for the database tests (Docker `postgres:17` or `/u
 
 Baseline (record for the PR): from `frontend/`: `pnpm exec tsc --noEmit` (exit 0), `pnpm lint` (0 errors), `pnpm test --ci` (all pass, note the count), `pnpm run test:scripts`. From the repo root: `python -m pytest tests/ -q`.
 
-The work has two phases, like WP25 and WP29. **Phase A** is every step except step 21; at its end open a draft PR titled `[waiting for DB types] WP37: ...` and hand the owner Owner actions 1 to 3. In phase A `tsc` fails only on the new `.from("sets").select(...)` read in `serverMarketData.ts` (the generated `Database` type has no `slug` yet); that is the only allowed failure. **Phase B** (step 21) regenerates `app/types/database.ts` once 0041 is in production.
+The work has two phases, like WP25 and WP29. **Phase A** is every step except step 21; at its end open a draft PR titled `[waiting for DB types] WP37: ...` and hand the owner Owner actions 1 to 3. In phase A `tsc` fails only on the new `.from("sets").select(...)` read in `serverMarketData.ts` (the generated `Database` type has no `slug` yet); that is the only allowed failure. **Phase B** (step 21) regenerates `app/types/database.ts` once 0047 is in production.
 
-`next build` type-checks, so that one error also fails `pnpm build:stub`, which Verification steps 5 to 7 and step 18h need. Two ways, in this order of preference (WP33 uses the same rule): (1) if the owner can apply 0041 and push the types quickly, do step 21 first and then the builds; (2) otherwise measure on a temporary, uncommitted edit of the generated file: in `app/types/database.ts` add `slug: string` to the `Row` of `sets`, `product_types` and `generations`, and `slug?: string` to each table's `Insert` and `Update`, run the builds, then discard it with `git checkout app/types/database.ts` before any commit (`git status` must not list the file). Never commit a hand edit of `database.ts`. The draft PR's CI build fails until phase B; that is expected.
+`next build` type-checks, so that one error also fails `pnpm build:stub`, which Verification steps 5 to 7 and step 18h need. Two ways, in this order of preference (WP33 uses the same rule): (1) if the owner can apply 0047 and push the types quickly, do step 21 first and then the builds; (2) otherwise measure on a temporary, uncommitted edit of the generated file: in `app/types/database.ts` add `slug: string` to the `Row` of `sets`, `product_types` and `generations`, and `slug?: string` to each table's `Insert` and `Update`, run the builds, then discard it with `git checkout app/types/database.ts` before any commit (`git status` must not list the file). Never commit a hand edit of `database.ts`. The draft PR's CI build fails until phase B; that is expected.
 
-**Deploy order**: 0041 must be in production before this frontend deploys. Without `sets.slug` the directory read fails, so `/sets` shows its error state, set pages fail to render and `sitemap()` throws (Next then keeps the previous sitemap). Phase B enforces the order, because the types are generated from production.
+**Deploy order**: 0047 must be in production before this frontend deploys. Without `sets.slug` the directory read fails, so `/sets` shows its error state, set pages fail to render and `sitemap()` throws (Next then keeps the previous sitemap). Phase B enforces the order, because the types are generated from production.
 
 ## Implementation steps
 
@@ -373,12 +374,12 @@ Order: 1 to 3 (database), 4 to 9 (data layer, definitions), 10 to 12 (pages), 13
 
 Conventions for every file this package creates: token utilities only, no raw palette class, no hex colour outside `app/lib/ogTheme.ts`, no `"use client"` (no new client component), no em dash, none of WP24's banned words, `prefetch={false}` on every `next/link` except `IntentLink`, every number tabular.
 
-### Step 1. `migrations/0041_taxonomy_slugs.sql` (new)
+### Step 1. `migrations/0047_taxonomy_slugs.sql` (new)
 
 Create the file with exactly this content:
 
 ```sql
--- Migration 0041: URL slugs for sets, product types and generations (WP37).
+-- Migration 0047: URL slugs for sets, product types and generations (WP37).
 --
 -- /sets/[slug] pages use name slugs, never set codes: people search names,
 -- and sets.code is not unique (research/trust-seo-brand.md section 11.2).
@@ -636,7 +637,7 @@ Notes:
 ### Step 2. Check the migration
 
 ```bash
-python3 verify_migration.py migrations/0041_taxonomy_slugs.sql > /tmp/wp37_0041.sql; echo "exit=$?"
+python3 verify_migration.py migrations/0047_taxonomy_slugs.sql > /tmp/wp37_0047.sql; echo "exit=$?"
 # expect exit=3 and on stderr:
 #   -- function pokefin_slugify(p_input text): body 0acd2b2288172fa5334e0bda517f5d80, strict, parallel s, security invoker, sql, volatility i, config search_path=pg_catalog
 #   -- function pokefin_free_slug(p_table text, p_id bigint, p_base text, p_qualifier text): body 580af54a4d46654002eb178d905d4f49, non-strict, parallel u, security invoker, plpgsql, volatility s, config search_path=public,pg_temp
@@ -650,7 +651,7 @@ The hashes hold when the file is copied verbatim; a different hash means the bod
 ```bash
 PGSERVER_URL=postgresql://postgres:postgres@localhost:55432/postgres scripts/db/replay_migrations.sh
 # expect "OK: <N> files replayed once (replay_once) and twice (replay_twice)", N one more than before
-psql postgresql://postgres:postgres@localhost:55432/replay_twice -At -f /tmp/wp37_0041.sql | cut -d'|' -f4 | sort | uniq -c
+psql postgresql://postgres:postgres@localhost:55432/replay_twice -At -f /tmp/wp37_0047.sql | cut -d'|' -f4 | sort | uniq -c
 # expect: 12 OK
 ```
 
@@ -671,7 +672,7 @@ Runs in WP21's CI job "Database replay and Python tests" against the replayed da
 
 ```python
 """
-Database checks for migration 0041 (WP37): taxonomy slugs.
+Database checks for migration 0047 (WP37): taxonomy slugs.
 
 Skipped unless POKEFIN_TEST_DATABASE_URL points at a database rebuilt by
 scripts/db/replay_migrations.sh (CI job "Database replay and Python tests").
@@ -884,7 +885,7 @@ python -m pytest tests/ -q        # every earlier DB test still passes: their IN
 
 ```ts
 /**
- * URL slugs for sets (WP37, migration 0041). The database owns every stored
+ * URL slugs for sets (WP37, migration 0047). The database owns every stored
  * slug: pokefin_slugify, the disambiguation step and the default-slug
  * triggers. This mirror has one job: building a set link from a set NAME
  * where no slug is at hand (global search, the home page's "All products"
@@ -915,7 +916,7 @@ export function isTaxonomySlug(value: unknown): value is string {
   );
 }
 
-/** Mirror of public.pokefin_slugify (migration 0041). "" when nothing is left. */
+/** Mirror of public.pokefin_slugify (migration 0047). "" when nothing is left. */
 export function slugifyTaxonomyName(input: string): string {
   const lowered = input.toLowerCase().replace(/&/g, " and ").replace(/['’]/g, "");
   let folded = "";
@@ -1511,7 +1512,7 @@ import { toSetDirectory, type SetDailyPriceRow, type SetDirectoryEntry } from ".
 ```ts
 // ---- WP37: set directory and the median line's daily prices ----
 
-/** Columns of public.sets the set hubs read (slug: migration 0041). Listed, not "*". */
+/** Columns of public.sets the set hubs read (slug: migration 0047). Listed, not "*". */
 const SET_DIRECTORY_SELECT = "id, slug, name, code, release_date, expansion_type, generation_id";
 
 /** Every set with its URL slug: about 60 rows, one page. */
@@ -4212,7 +4213,7 @@ test("WebP photos still fail, so share cards must not embed them", async () => {
 ```js
 /**
  * WP37: the URL slug of a fixture set name. Fixture names are ASCII words, so
- * pokefin_slugify (migration 0041) reduces to this; perf-fixture.test.mjs
+ * pokefin_slugify (migration 0047) reduces to this; perf-fixture.test.mjs
  * checks it on the shared ASCII anchors.
  */
 export function fixtureSetSlug(name) {
@@ -4231,7 +4232,7 @@ export function fixtureSetSlug(name) {
 
 ```js
   // WP37: public.sets as the set hubs read it (no random draws). The oldest
-  // set's stored slug carries its id, as 0041 gives a duplicate name, so its
+  // set's stored slug carries its id, as 0047 gives a duplicate name, so its
   // name-derived URL exercises the set page's 308 (Verification step 6).
   const setRows = sets.map((set, i) => ({
     id: set.id,
@@ -4363,12 +4364,12 @@ The PR states the one allowed raise: "hex ratchet: lib/ogTheme.ts 9, share image
 
 ### Step 20. Documentation
 
-- `README.md` (repo root), pages list: replace `/stats` and `/analytics` with `/sets` (every set on one table, presets, risk and return chart; `/stats` and `/analytics` redirect) and `/sets/[slug]` (a set's products, index or median line, summary); mention the product and set share images. In the migrations section add one line for `0041_taxonomy_slugs.sql`: "URL slugs for sets, product types and generations; a missing slug is filled on insert; renaming never changes a slug; to move a URL, update `slug` by hand (the old name-derived URL keeps redirecting)."
+- `README.md` (repo root), pages list: replace `/stats` and `/analytics` with `/sets` (every set on one table, presets, risk and return chart; `/stats` and `/analytics` redirect) and `/sets/[slug]` (a set's products, index or median line, summary); mention the product and set share images. In the migrations section add one line for `0047_taxonomy_slugs.sql`: "URL slugs for sets, product types and generations; a missing slug is filled on insert; renaming never changes a slug; to move a URL, update `slug` by hand (the old name-derived URL keeps redirecting)."
 - `frontend/README.md`, the perf budgets section: list `/sets` and `/sets/[slug]`.
 
 ### Step 21. Phase B: generated types
 
-After the owner has applied 0041 (Owner action 2):
+After the owner has applied 0047 (Owner action 2):
 
 ```bash
 cd frontend
@@ -4394,7 +4395,7 @@ Do not edit the generated file. Remove `[waiting for DB types]` from the PR titl
 - **Do not put prices in `<title>` or the meta description** (they go stale in search results; `research/trust-seo-brand.md` §11.7).
 - **Do not index thin hubs**: fewer than 3 priced products means `noindex, follow`, no sitemap entry, no ItemList entry, no footer link. Do not create set-by-type, type or era pages in this package.
 - **Do not write summary copy by hand or with an LLM**, and do not fill a missing number with a placeholder: drop the sentence.
-- **Do not edit migrations 0001 to 0040**, and do not change `get_set_analytics` or `get_market_product_summaries`: the hubs join the cached summaries and the set directory in TypeScript (`research/trust-seo-brand.md` §11.2).
+- **Do not edit migrations 0001 to 0046**, and do not change `get_set_analytics` or `get_market_product_summaries`: the hubs join the cached summaries and the set directory in TypeScript (`research/trust-seo-brand.md` §11.2).
 - **Do not change a stored slug automatically on rename.** URL stability is the point; the name-derived redirect covers renamed sets.
 - **Do not raise a perf `target`**, and do not raise or remove a budget key without a `Perf budget raise:` line (WP22 D11).
 - **Do not move `MiniSparkline` or `IndexChart`** to new folders; import them where they are.
@@ -4429,7 +4430,7 @@ const ANCHORS: Array<[string, string]> = [
   ["a".repeat(90), "a".repeat(80)],
 ];
 
-describe("slugifyTaxonomyName mirrors pokefin_slugify (migration 0041)", () => {
+describe("slugifyTaxonomyName mirrors pokefin_slugify (migration 0047)", () => {
   it.each(ANCHORS)("%j -> %j", (input, expected) => {
     expect(slugifyTaxonomyName(input)).toBe(expected);
   });
@@ -5417,11 +5418,11 @@ Manual checks (perf server, Chrome device toolbar at 390 x 844 and at 1440 x 900
 
 ## Owner actions
 
-1. **Before applying 0041, check for slug collisions** (SQL editor, read-only; the expression is `pokefin_slugify` inlined because the function does not exist yet):
+1. **Before applying 0047, check for slug collisions** (SQL editor, read-only; the expression is `pokefin_slugify` inlined because the function does not exist yet):
 
 ```sql
--- WP37 owner check A1: name slugs that collide, per table, BEFORE applying 0041.
--- The expression is pokefin_slugify (0041) inlined, because the function does not exist yet.
+-- WP37 owner check A1: name slugs that collide, per table, BEFORE applying 0047.
+-- The expression is pokefin_slugify (0047) inlined, because the function does not exist yet.
 WITH src AS (
   SELECT 'sets' AS tbl, id, name AS source, format('code %s, released %s', code, coalesce(release_date::text, 'unknown')) AS detail,
          release_date AS sort_date
@@ -5447,15 +5448,15 @@ HAVING count(*) > 1 OR base = ''
 ORDER BY tbl, base;
 ```
 
-   No rows is the normal result. A row lists names that would share a slug, in fill order: the first keeps the bare slug, the next gets `-<code>` (sets) or `-<name>` (product types), then `-<id>`. An empty `base` row is a name with no letters or digits; it gets `set-<id>`, `type-<id>` or `era-<id>`. If you prefer other slugs, apply 0041 and then set them by hand before the deploy, for example `UPDATE public.sets SET slug = 'crown-zenith-galarian-gallery' WHERE id = 123;` (lower-case letters, digits and single hyphens; the CHECK rejects anything else). Paste the result into the PR.
-2. **Apply `migrations/0041_taxonomy_slugs.sql` before the PR merges** (the frontend reads `sets.slug`; see Deploy order in Before you start) in the Supabase SQL editor (paste the whole file) or with `supabase db push`. Then run the verification query the executor attaches (`/tmp/wp37_0041.sql`): every row OK. Spot-check: `SELECT name, code, slug FROM public.sets ORDER BY release_date DESC NULLS LAST LIMIT 15;` and `SELECT count(*) FROM public.sets WHERE slug IS NULL;` (0).
+   No rows is the normal result. A row lists names that would share a slug, in fill order: the first keeps the bare slug, the next gets `-<code>` (sets) or `-<name>` (product types), then `-<id>`. An empty `base` row is a name with no letters or digits; it gets `set-<id>`, `type-<id>` or `era-<id>`. If you prefer other slugs, apply 0047 and then set them by hand before the deploy, for example `UPDATE public.sets SET slug = 'crown-zenith-galarian-gallery' WHERE id = 123;` (lower-case letters, digits and single hyphens; the CHECK rejects anything else). Paste the result into the PR.
+2. **Apply `migrations/0047_taxonomy_slugs.sql` before the PR merges** (the frontend reads `sets.slug`; see Deploy order in Before you start) in the Supabase SQL editor (paste the whole file) or with `supabase db push`. Then run the verification query the executor attaches (`/tmp/wp37_0047.sql`): every row OK. Spot-check: `SELECT name, code, slug FROM public.sets ORDER BY release_date DESC NULLS LAST LIMIT 15;` and `SELECT count(*) FROM public.sets WHERE slug IS NULL;` (0).
 3. **Generate the database types** for phase B: `pnpm types:db` in `frontend/` with your `SUPABASE_ACCESS_TOKEN`, or give the executor a token for one run; push `app/types/database.ts` to the PR branch.
 4. **After deploy**: `curl -sI https://www.pokefin.ca/stats` and `.../analytics` (one 308 each to `/sets`); open `/sets` and two set pages on a phone; paste a product link and a set link into Discord or the X card validator and check the date line; in Google Search Console resubmit `sitemap.xml` and, after a week, check that set pages are being indexed (URL Inspection on one `/sets/<slug>`). The daily smoke test now checks `/sets`, one set page and both redirects.
 5. **Renaming a set later** never changes its slug. To move a set's URL, update `slug` by hand; the old URL then 404s unless it is the name-derived slug of the set's current name, which redirects.
 
 ## Acceptance criteria
 
-- [ ] `migrations/0041_taxonomy_slugs.sql` exists; `verify_migration.py` exits 3 with no REFUSED line; the verification query returns 12 OK on `replay_twice`; WP21's replay harness passes; `tests/test_wp37_taxonomy_slugs.py` passes 27 of 27 twice in a row; every earlier DB test passes.
+- [ ] `migrations/0047_taxonomy_slugs.sql` exists; `verify_migration.py` exits 3 with no REFUSED line; the verification query returns 12 OK on `replay_twice`; WP21's replay harness passes; `tests/test_wp37_taxonomy_slugs.py` passes 27 of 27 twice in a row; every earlier DB test passes.
 - [ ] `sets`, `product_types` and `generations` each have a NOT NULL, unique `slug` with the format CHECK and a BEFORE INSERT default-slug trigger; duplicates resolve deterministically (oldest keeps the bare slug, then `-<qualifier>`, then `-<id>`); renaming keeps the slug.
 - [ ] `/analytics` and `/stats` each answer a single 308 to `/sets` (query kept); `app/analytics/` and `app/stats/` no longer exist; the daily smoke test checks both redirects.
 - [ ] `/sets` is server-rendered with no client component of its own: a sortable table (44 px rows, visible sort state, `aria-sort`) with Performance, Risk and Liquidity presets, composite score as "Top N%", consistency as integers, a `DataList` on phones, the column definitions disclosure and the decision note.
@@ -5476,7 +5477,7 @@ ORDER BY tbl, base;
 ## Rollback
 
 1. **Code**: revert the merge commit (`git revert -m 1 <merge sha>`) and deploy. Browsers cache a 308 permanently, so in the same revert commit add temporary redirects back, before WP13's list: `{ source: "/sets", destination: "/analytics", permanent: false }` and `{ source: "/sets/:slug", destination: "/analytics", permanent: false }` (307, not cached); remove them once WP37 is re-applied. The share images disappear and product pages return to WP13's photo card.
-2. **Database**: the slug columns, triggers and functions are harmless to keep (nothing else reads them). To remove them, write a new numbered migration at the next free number (never edit 0041):
+2. **Database**: the slug columns, triggers and functions are harmless to keep (nothing else reads them). To remove them, write a new numbered migration at the first free number above 0047 (numbers up to 0047 are reserved; see `audits/remediation/00-PLAN.md`, "Migration registry") (never edit 0047):
 
 ```sql
 DROP TRIGGER IF EXISTS sets_default_slug ON public.sets;
@@ -5497,13 +5498,13 @@ DROP FUNCTION IF EXISTS public.pokefin_slugify(text);
 Branch: `remediation/wp37-sets-section-and-share-cards`.
 
 Commits (each builds and passes its tests):
-1. `feat(db): URL slugs for sets, product types and generations (0041, WP37)`: the migration, `tests/test_wp37_taxonomy_slugs.py`, README migration line.
+1. `feat(db): URL slugs for sets, product types and generations (0047, WP37)`: the migration, `tests/test_wp37_taxonomy_slugs.py`, README migration line.
 2. `feat(sets): set data layer, /sets and set pages (WP37)`: `taxonomySlug.ts`, `setHubs.ts`, `setHubsData.ts`, `serverMarketData.ts`, `jsonLd.ts`, `riskReturnChart.ts`, `Breadcrumbs.tsx`, `app/sets/**`, their tests.
 3. `feat(nav): /sets replaces /analytics and /stats; breadcrumbs and set links (WP37)`: `next.config.ts`, deleted `app/analytics` and `app/stats`, `navConfig.ts`, `Footer.tsx`, `layout.tsx`, product page, `SiblingList.tsx`, `productBreadcrumbs.ts`, `productMeta.ts`, `sitemap.ts`, link fixes, their tests.
 4. `feat(og): dated share images for products and sets (WP37)`: `assets/og/*`, `ogTheme.ts`, `ogPhoto.ts`, `shareCard.ts`, `components/og/*`, the two `opengraph-image.tsx`, `og-formats.test.mjs`, their tests.
 5. `docs(methodology): set pages (WP37)`: `methodology.ts`, `MethodologyArticle.tsx`, `metricDefinitions.ts`.
 6. `perf: set routes in budgets, fixture and production checks (WP37)`: `perf.mjs`, `perf-fixture.test.mjs`, `perf-budgets.json`, `eslint.config.mjs`, `prod-smoke-lib.mjs`, `prod-smoke.mjs`, `prod-confirm.mjs`, `prod-smoke-lib.test.mjs`, conventions baseline, `frontend/README.md`.
-7. (phase B) `chore(types): regenerate database types for 0041 (WP37)`.
+7. (phase B) `chore(types): regenerate database types for 0047 (WP37)`.
 
 Commit 2 message body:
 

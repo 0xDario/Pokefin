@@ -1760,7 +1760,8 @@ export default function MethodologyArticle({ current }: { current: MethodologyCu
           <Section id="volume">
             <p>
               Units sold come from TCGplayer&apos;s daily sales buckets. Units sold (7d) and (30d) sum the daily
-              buckets in the window. Volume trend compares the last 30 days with the 30 days before, as a percent
+              buckets in the window. Each window ends on the last complete day: the day before the newest daily
+              bucket, which is still filling, and never later than yesterday. Volume trend compares the last 30 days with the 30 days before, as a percent
               change; the earlier window uses weekly buckets when fewer than {PRIOR_WINDOW_MIN_DAY_COVERAGE} of its
               days have daily data. Sales figures are hidden when daily data stopped more than{" "}
               {DAILY_DATA_STALENESS_TOLERANCE_DAYS} days ago.

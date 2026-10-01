@@ -3,9 +3,9 @@
 - **Goal**: every new metric Track 2 shows (52-week range, tracked high, liquidity, supply trend, weekly volatility) and every CAD figure comes from an indexed, precomputed, freshness-gated table, and Canadian users can see historical CAD at the Bank of Canada rate of that day instead of today's rate.
 - **Why now / value**: WP28 to WP37 all read these two tables. Without them each feature would add a per-request window function over the full price history (the class of RPC WP10 had to bound because it timed out), and every CAD chart, return and cost basis would keep leaving out the currency move.
 - **Effort**: L, 14 to 16 hours (two migrations validated on scratch Postgres, one SQL-level test module, two backfill scripts, one scraper hook, three small frontend modules, two cached fetchers, methodology v1.1, tests).
-- **Depends on**: WP10 (bounded market RPCs, migrations 0027 to 0029), WP11 (`cacheTags.ts`, `DAILY_BACKSTOP_SECONDS`, `run_jobs_once()`, `revalidate_hook.py`), WP16 (post-WP16 `main.py`, migration 0030), WP20 (`CurrencyProvider`, `app/types/market.ts`, `pnpm types:db`, generated `app/types/database.ts`), WP21 (`pokefin_scraper` role in 0032, `scraper_db.py`, `pg_db` in `main.py`, `scripts/db/replay_migrations.sh`, CI job "Database replay and Python tests"), WP22 (perf fixture and `pnpm perf:budget`), WP24 (`/methodology`, `app/content/methodology.ts`, `app/lib/metricDefinitions.ts`).
+- **Depends on**: WP38 (end of Track 1: the volume RPC's complete-day window anchor in migration 0037, which step 1's `sales_newest` CTE mirrors, and the scraper's one-row-per-date Valet FX writer), WP10 (bounded market RPCs, migrations 0027 to 0029), WP11 (`cacheTags.ts`, `DAILY_BACKSTOP_SECONDS`, `run_jobs_once()`, `revalidate_hook.py`), WP16 (post-WP16 `main.py`, migration 0030), WP20 (`CurrencyProvider`, `app/types/market.ts`, `pnpm types:db`, generated `app/types/database.ts`), WP21 (`pokefin_scraper` role in 0032, `scraper_db.py`, `pg_db` in `main.py`, `scripts/db/replay_migrations.sh`, CI job "Database replay and Python tests"), WP22 (perf fixture and `pnpm perf:budget`), WP24 (`/methodology`, `app/content/methodology.ts`, `app/lib/metricDefinitions.ts`).
 - **Unblocks**: WP28 (extends `refresh_market_analytics`), WP29 (index reads `product_daily_stats`, its cron follows the 00:30 UTC finalisation), WP31, WP32, WP33, WP34, WP35, WP36 (`fx_daily`, stats), WP37.
-- **Placement**: after WP21 (scraper role, replay harness, baseline) and WP24 (methodology page to extend). Parallel with WP26 and WP27. Reserves migrations **0033** and **0034**; keeps them even if it merges out of order.
+- **Placement**: after WP21 (scraper role, replay harness, baseline), WP38 (end of Track 1) and WP24 (methodology page to extend). Parallel with WP26 and WP27. Reserves migrations **0038** and **0039**; keeps them even if it merges out of order.
 - **Suggested branch name**: `remediation/wp25-market-analytics-foundation`
 - **Risk level**: medium. It adds a SECURITY DEFINER function the scraper calls every run; the risk is contained by an additive schema (no existing object changes), a hook that never raises, EXECUTE limited to `pokefin_scraper` and `service_role`, and a database test module that proves every gate.
 
@@ -57,7 +57,7 @@ All percent columns are percent points (`12.5` means +12.5%). `NULL` always mean
 | `distinct_prices_365d` | Distinct daily prices in `D - 364 .. D` | The weekly report's liquidity screen (`>= 3`) |
 | `obs_90d` | Price rows in `D - 89 .. D` | Coverage badge |
 | `vol_weekly_52w` | Monday grid: for each of the 53 Mondays ending with the last Monday `<= D`, the newest daily price in the 7 days ending that Monday. Weekly log returns between consecutive grid Mondays. `stddev_samp * sqrt(52) * 100` | Needs 26 returns, else `NULL`. Not gated. Replaces the daily-gap volatility on new surfaces only |
-| `units_sold_7d`, `units_sold_30d`, `tx_30d` | Sums of daily buckets in `D - 6 .. D` and `D - 29 .. D` | 0018 to 0021 rules: newest non-null bucket `>= D - 3` and no interior hole |
+| `units_sold_7d`, `units_sold_30d`, `tx_30d` | Sums of daily buckets in `A - 6 .. A` and `A - 29 .. A`, where the anchor `A` is the last complete day: `least(newest usable bucket - 1, D - 1)` while that bucket is `>= D - 3`, else `D - 1` (WP38's rule, review N02, so these equal the volume RPC's figures) | 0018 to 0021 rules: newest non-null bucket `>= D - 3` and no interior hole |
 | `active_listings`, `qty_available`, `lowest_ask_usd` | Newest listings snapshot `<= D` | `NULL` when the snapshot is older than `D - 3` (0022) |
 | `listings_snapshot_date` | Its date | Never nulled |
 | `ask_premium_pct` | `(lowest_ask_usd / usd_price - 1) * 100` | Needs a fresh price and a fresh snapshot. Ask excludes shipping |
@@ -96,8 +96,9 @@ Read:
 Confirm the starting state (repo root):
 
 ```bash
-# Migration numbers: nothing may use 0033 to 0041 yet except this package's files
-ls migrations | grep -E '^00(3[3-9]|4[01])_'          # expect no output
+# Migration numbers (registry in audits/remediation/00-PLAN.md): Track 2 owns 0038 to 0047 and none exists yet.
+# 0033 and 0034 (WP21 phase B, optional) and 0035 to 0037 (WP38) may exist; they are Track 1.
+ls migrations | grep -E '^00(3[89]|4[0-7])_'          # expect no output
 
 # WP10 landed, and which anchor variant it shipped
 ls migrations/0027_* migrations/0028_* migrations/0029_*  # expect 3 files
@@ -145,13 +146,13 @@ Tooling:
 
 Baseline, from `frontend/`: `pnpm exec tsc --noEmit` (exit 0), `pnpm lint` (0 errors, WP17), `pnpm test --ci` (all pass). From the repo root: `python -m pytest tests/ -q` (all pass; the DB modules skip without `POKEFIN_TEST_DATABASE_URL`). Record the counts for the PR.
 
-The work has two phases, like WP21. **Phase A** (steps 1 to 14 and 16) needs nothing from the owner; at its end open a draft PR titled `[waiting for DB types] ...` and hand the owner Owner actions 1 to 3. **Phase B** (step 15) regenerates `frontend/app/types/database.ts` once 0033 and 0034 are in production, then finishes the PR. `tsc` fails on the two new `.from(...)` reads until phase B; that is expected and the only allowed failure in phase A.
+The work has two phases, like WP21. **Phase A** (steps 1 to 14 and 16) needs nothing from the owner; at its end open a draft PR titled `[waiting for DB types] ...` and hand the owner Owner actions 1 to 3. **Phase B** (step 15) regenerates `frontend/app/types/database.ts` once 0038 and 0039 are in production, then finishes the PR. `tsc` fails on the two new `.from(...)` reads until phase B; that is expected and the only allowed failure in phase A.
 
 ## Implementation steps
 
-### Step 1. `migrations/0033_product_daily_stats.sql` (new)
+### Step 1. `migrations/0038_product_daily_stats.sql` (new)
 
-Create the file with exactly this content. It was applied twice in a row to a Supabase-shaped scratch database without error, and every test in step "Tests" item 1 passed against it.
+Create the file with exactly this content. It was applied twice in a row to a Supabase-shaped scratch database without error, and every test in step "Tests" item 1 passed against it. The `sales_newest`/`sales` CTEs (windows ending on the last complete day, WP38's rule) were added afterwards by the plan maintainer and checked on PostgreSQL 16.13: the file applied twice, and `refresh_market_analytics(current_date)` returned 14/60/30 for 31 days of 2 a day, NULL 30-day figures for a holed window, 70/300/30 for flat demand of 10 a day with a partial newest bucket of 4 visited 0 to 3 days ago, and NULL for a product last visited 4 days ago.
 
 ```sql
 -- Migration: product_daily_stats, one precomputed analytics row per active
@@ -191,10 +192,10 @@ Create the file with exactly this content. It was applied twice in a row to a Su
 -- refresh_market_analytics is SECURITY DEFINER so its callers need no table
 -- privileges: EXECUTE goes to pokefin_scraper (0032, the scraper) and
 -- service_role only. It is idempotent: INSERT ... ON CONFLICT DO UPDATE.
--- 0034 replaces refresh_market_analytics to add the FX step; later packages
+-- 0039 replaces refresh_market_analytics to add the FX step; later packages
 -- (WP28, WP29) replace it again to add theirs, keeping every earlier call.
 --
--- Idempotent on its own. Once 0034 or a later file has replaced
+-- Idempotent on its own. Once 0039 or a later file has replaced
 -- refresh_market_analytics, re-run only the newest file that defines it:
 -- re-running this one would put back the version without the later steps.
 --
@@ -437,27 +438,49 @@ BEGIN
       FROM weekly_ret
      GROUP BY product_id
   ),
-  -- Daily sales buckets in the 30-day window ending on the day (0021 rules).
-  sales AS (
+  -- Newest usable daily sales bucket on or before the day (0018 to 0021
+  -- rules), and where the windows end. The bucket of the scraper's last
+  -- visit is partial (main.py stores it and fixes it on the next visit), so
+  -- the windows end on the day before the newest usable bucket, never later
+  -- than p_day - 1 (WP38, review N02). A stale product (newest usable bucket
+  -- older than p_day - 3, or none) keeps p_day - 1; its windows are withheld
+  -- below either way. Same rule as get_market_product_volume_metrics (WP38's
+  -- 0037) and getVolumeWindowAnchorKey() in marketPulse.ts.
+  sales_newest AS (
     SELECT sh.product_id,
-           max(sh.bucket_date) FILTER (WHERE sh.quantity_sold IS NOT NULL) AS newest_day,
-           sum(sh.quantity_sold) FILTER (WHERE sh.bucket_date >= p_day - 6) AS u7,
+           max(sh.bucket_date) AS newest_day,
+           CASE WHEN max(sh.bucket_date) >= p_day - 3
+                THEN least(max(sh.bucket_date) - 1, p_day - 1)
+                ELSE p_day - 1 END AS anchor_day
+      FROM public.product_sales_history sh
+      JOIN active a ON a.id = sh.product_id
+     WHERE sh.granularity = 'day'
+       AND sh.quantity_sold IS NOT NULL
+       AND sh.bucket_date BETWEEN p_day - 29 AND p_day
+     GROUP BY sh.product_id
+  ),
+  -- Daily sales buckets in the 7- and 30-day windows ending on anchor_day
+  -- (0021 rules: unbroken windows only).
+  sales AS (
+    SELECT sn.product_id,
+           sn.newest_day,
+           sum(sh.quantity_sold) FILTER (WHERE sh.bucket_date >= sn.anchor_day - 6) AS u7,
            count(*) FILTER (WHERE sh.quantity_sold IS NOT NULL
-                              AND sh.bucket_date >= p_day - 6) AS n7,
+                              AND sh.bucket_date >= sn.anchor_day - 6) AS n7,
            (max(sh.bucket_date) FILTER (WHERE sh.quantity_sold IS NOT NULL
-                                          AND sh.bucket_date >= p_day - 6)
+                                          AND sh.bucket_date >= sn.anchor_day - 6)
             - min(sh.bucket_date) FILTER (WHERE sh.quantity_sold IS NOT NULL
-                                            AND sh.bucket_date >= p_day - 6) + 1) AS span7,
+                                            AND sh.bucket_date >= sn.anchor_day - 6) + 1) AS span7,
            sum(sh.quantity_sold) AS u30,
            count(*) FILTER (WHERE sh.quantity_sold IS NOT NULL) AS n30,
            (max(sh.bucket_date) FILTER (WHERE sh.quantity_sold IS NOT NULL)
             - min(sh.bucket_date) FILTER (WHERE sh.quantity_sold IS NOT NULL) + 1) AS span30,
            sum(sh.transaction_count) AS tx30
-      FROM public.product_sales_history sh
-      JOIN active a ON a.id = sh.product_id
+      FROM sales_newest sn
+      JOIN public.product_sales_history sh ON sh.product_id = sn.product_id
      WHERE sh.granularity = 'day'
-       AND sh.bucket_date BETWEEN p_day - 29 AND p_day
-     GROUP BY sh.product_id
+       AND sh.bucket_date BETWEEN sn.anchor_day - 29 AND sn.anchor_day
+     GROUP BY sn.product_id, sn.newest_day
   ),
   -- Newest listings snapshot on or before the day, and the snapshots 7 and
   -- 30 days before it (3 days of tolerance, the 0022 gate).
@@ -701,7 +724,7 @@ GRANT SELECT ON TABLE public.product_stats_latest TO anon, authenticated;
 Check it (repo root):
 
 ```bash
-python3 verify_migration.py migrations/0033_product_daily_stats.sql > /tmp/wp25_0033.sql; echo "exit=$?"
+python3 verify_migration.py migrations/0038_product_daily_stats.sql > /tmp/wp25_0038.sql; echo "exit=$?"
 # expect exit=3 and on stderr:
 #   -- function refresh_product_daily_stats(p_day date): body <md5>, non-strict, parallel u, security invoker, plpgsql, volatility v, config search_path=public,pg_temp
 #   -- function refresh_market_analytics(p_day date): body <md5>, non-strict, parallel u, security definer, plpgsql, volatility v, config search_path=public,pg_temp
@@ -714,13 +737,13 @@ python3 verify_migration.py migrations/0033_product_daily_stats.sql > /tmp/wp25_
 #   -- NOT VERIFIED (out of scope, check by hand): 1 x CREATE (table/type/etc), 1 x CREATE VIEW, 2 x DO block
 ```
 
-With the file copied verbatim the two body hashes are `b519a333d1786c3c25775e3eda136435` and `d3390e5adcfa952e1ccc639046e7c52f`. Any edit changes them, which is fine: what matters is that the generated query returns OK rows after apply.
+With the file copied verbatim the two body hashes are `8ab7303b3a0165f88e66911bcddd46fe` and `d3390e5adcfa952e1ccc639046e7c52f`. Any edit changes them, which is fine: what matters is that the generated query returns OK rows after apply.
 
 ### Step 1b. Only if WP10 shipped its neutral variant: bound the catalog's return anchors
 
 Skip this step when the WP10 check in Before you start printed 5 lines (the default). When it printed nothing, the owner kept WP10 behaviour-neutral, and WP10's "Owner decision" paragraph and `01-PRODUCT-DIRECTION.md` §9 item 5 make this package apply the anchor-age rule to the catalog RPC, so the catalog, the daily statistics and `/methodology#returns` state one rule.
 
-1. Append to the end of `migrations/0033_product_daily_stats.sql`, after section 5, a section headed
+1. Append to the end of `migrations/0038_product_daily_stats.sql`, after section 5, a section headed
 
 ```sql
 -- ============================================================
@@ -730,12 +753,12 @@ Skip this step when the WP10 check in Before you start printed 5 lines (the defa
 ```
 
 followed by, copied verbatim from `audits/remediation/WP10-db-rpc-performance.md` step 2 (the default variant, with the five `AND h.recorded_at >= current_date - 14` / `- 37` / `- 104` / `- 194` / `- 379` lines), the statement from `CREATE OR REPLACE FUNCTION public.get_market_product_metrics()` through `ALTER FUNCTION public.get_market_product_metrics()` and its `  SET search_path = public;` line. Do not copy WP10's file header. The function keeps its `RETURNS TABLE`, so `CREATE OR REPLACE` keeps its ACL; the `ALTER FUNCTION` re-pins `search_path`.
-2. Check: `diff <(sed -n '/^CREATE OR REPLACE FUNCTION public.get_market_product_metrics/,/SET search_path = public;/p' migrations/0028_bounded_market_metrics.sql) <(sed -n '/^CREATE OR REPLACE FUNCTION public.get_market_product_metrics/,/SET search_path = public;/p' migrations/0033_product_daily_stats.sql)` prints the five anchor-age lines as additions and otherwise only lines that start with `--` after their indentation (WP10's neutral variant rewords a comment). Any other difference means the copy is wrong: copy it again.
-3. In `tests/test_wp10_market_rpc_bounds.py`, restore `test_metrics_return_anchors_have_a_maximum_age` exactly as WP10's spec step 11 prints it. Its `effective()` helper reads the last definition in apply order, which is now 0033's.
-4. Expected side effects: `verify_migration.py migrations/0033_product_daily_stats.sql` prints one more function line (`get_market_product_metrics`); after apply, 0028's verification query reports `MISMATCH` for `get_market_product_metrics` (superseded by 0033, the expected cross-file result). Add both to the PR. The methodology text (step 14) is the same in both variants, because after this step every return has the bound.
-5. Owner action 2 gains one check: run `SELECT count(*) FILTER (WHERE return_7d IS NULL) AS r7, count(*) FILTER (WHERE return_30d IS NULL) AS r30, count(*) FILTER (WHERE return_365d IS NULL) AS r365 FROM public.get_market_product_summaries() WHERE usd_price IS NOT NULL;` once before applying 0033 and once after, and paste both rows into the PR. Each count may only grow (the rule blanks returns whose lookback price is too old; it never changes a non-NULL value). Do not use WP10's equivalence script here: in the neutral variant it was generated with no tolerance and would report every intended NULL as a difference.
+2. Check: `diff <(sed -n '/^CREATE OR REPLACE FUNCTION public.get_market_product_metrics/,/SET search_path = public;/p' migrations/0028_bounded_market_metrics.sql) <(sed -n '/^CREATE OR REPLACE FUNCTION public.get_market_product_metrics/,/SET search_path = public;/p' migrations/0038_product_daily_stats.sql)` prints the five anchor-age lines as additions and otherwise only lines that start with `--` after their indentation (WP10's neutral variant rewords a comment). Any other difference means the copy is wrong: copy it again.
+3. In `tests/test_wp10_market_rpc_bounds.py`, restore `test_metrics_return_anchors_have_a_maximum_age` exactly as WP10's spec step 11 prints it. Its `effective()` helper reads the last definition in apply order, which is now 0038's.
+4. Expected side effects: `verify_migration.py migrations/0038_product_daily_stats.sql` prints one more function line (`get_market_product_metrics`); after apply, 0028's verification query reports `MISMATCH` for `get_market_product_metrics` (superseded by 0038, the expected cross-file result). Add both to the PR. The methodology text (step 14) is the same in both variants, because after this step every return has the bound.
+5. Owner action 2 gains one check: run `SELECT count(*) FILTER (WHERE return_7d IS NULL) AS r7, count(*) FILTER (WHERE return_30d IS NULL) AS r30, count(*) FILTER (WHERE return_365d IS NULL) AS r365 FROM public.get_market_product_summaries() WHERE usd_price IS NOT NULL;` once before applying 0038 and once after, and paste both rows into the PR. Each count may only grow (the rule blanks returns whose lookback price is too old; it never changes a non-NULL value). Do not use WP10's equivalence script here: in the neutral variant it was generated with no tolerance and would report every intended NULL as a difference.
 
-### Step 2. `migrations/0034_fx_daily.sql` (new)
+### Step 2. `migrations/0039_fx_daily.sql` (new)
 
 This file also replaces `refresh_market_analytics` so it runs the FX step before the stats step, and schedules the nightly job. Create it with exactly this content:
 
@@ -744,9 +767,10 @@ This file also replaces `refresh_market_analytics` so it runs the FX step before
 -- the FX step of refresh_market_analytics (WP25; research/
 -- data-opportunities.md section 3.14).
 --
--- exchange_rates gets one insert per scraper run (about six rows per rate
--- date) and none on weekends or Canadian bank holidays, so it cannot be
--- joined by day. fx_daily holds exactly one row per day: the rate of the
+-- exchange_rates got one insert per scraper run until WP38 (about six rows
+-- per rate date; since WP38 the scraper stores one row per Bank of Canada
+-- date, older days keep their duplicates) and none on weekends or Canadian
+-- bank holidays, so it cannot be joined by day. fx_daily holds exactly one row per day: the rate of the
 -- newest Bank of Canada date on or before that day (the newest inserted row
 -- of that date), carried forward for at most 14 days. source says whether
 -- the day had its own rate ('boc') or carries an earlier one
@@ -755,7 +779,7 @@ This file also replaces `refresh_market_analytics` so it runs the FX step before
 -- rather than converted at a stale rate (the 0023 principle).
 --
 -- Written by refresh_fx_daily(p_through), which refresh_market_analytics
--- calls; this file replaces refresh_market_analytics (0033) to add that step.
+-- calls; this file replaces refresh_market_analytics (0038) to add that step.
 -- Mirrored by frontend/app/lib/fx.ts (FX_CARRY_MAX_DAYS, drift-tested).
 --
 -- Also schedules the nightly job that finalises the previous UTC day at
@@ -882,7 +906,7 @@ $$;
 REVOKE ALL ON FUNCTION public.refresh_fx_daily(date) FROM PUBLIC, anon, authenticated;
 
 -- ============================================================
--- 3. refresh_market_analytics with the FX step (replaces 0033's body)
+-- 3. refresh_market_analytics with the FX step (replaces 0038's body)
 -- ============================================================
 
 CREATE OR REPLACE FUNCTION public.refresh_market_analytics(p_day date)
@@ -944,14 +968,14 @@ END $$;
 Check it:
 
 ```bash
-python3 verify_migration.py migrations/0034_fx_daily.sql > /tmp/wp25_0034.sql; echo "exit=$?"
+python3 verify_migration.py migrations/0039_fx_daily.sql > /tmp/wp25_0039.sql; echo "exit=$?"
 # expect exit=3 and on stderr: 2 function lines (refresh_fx_daily: security invoker; refresh_market_analytics:
 # security definer, body f3b51f9acfca12f5ed2a97afe5f6d263 when copied verbatim), 22 privilege lines,
 # "-- rls public.fx_daily: enabled", and
 #   -- NOT VERIFIED (out of scope, check by hand): 1 x CREATE (table/type/etc), 5 x DO block
 ```
 
-After both are applied, the 0033 query reports one `MISMATCH` (`refresh_market_analytics`, body): 0034 superseded it. That is the expected cross-file result (`verify_migration.py` docstring, "Across files the rule does not apply"). Every other row of both queries says OK (39 for 0033, 25 for 0034).
+After both are applied, the 0038 query reports one `MISMATCH` (`refresh_market_analytics`, body): 0039 superseded it. That is the expected cross-file result (`verify_migration.py` docstring, "Across files the rule does not apply"). Every other row of both queries says OK (39 for 0038, 25 for 0039).
 
 Replay locally (WP21 harness):
 
@@ -972,7 +996,7 @@ PGSERVER_URL=postgresql://postgres:postgres@localhost:55432/postgres scripts/db/
 ```python
     def refresh_market_analytics(self, day: date) -> dict:
         """
-        public.refresh_market_analytics(day) (migrations 0033/0034). EXECUTE is
+        public.refresh_market_analytics(day) (migrations 0038/0039). EXECUTE is
         granted to pokefin_scraper; the function is SECURITY DEFINER, so the
         role needs no privilege on the analytics tables. Returns the function's
         summary: {"day", "fx_rows", "product_rows", "ms"}.
@@ -1017,7 +1041,7 @@ Next to `revalidate_hook.py`. It imports neither `main` nor Selenium, so its tes
 """
 Refresh Pokéfin's precomputed market analytics (WP25).
 
-public.refresh_market_analytics(p_day) (migrations 0033 and 0034) rewrites
+public.refresh_market_analytics(p_day) (migrations 0038 and 0039) rewrites
 fx_daily through p_day and every active product's product_daily_stats row for
 p_day. main.run_jobs_once calls refresh_after_run() after each successful
 scraper run, before the site revalidation hook, so the pages it refreshes
@@ -1025,7 +1049,7 @@ read the new rows. pg_cron finalises the previous UTC day at 00:30 UTC.
 
 Two backends, matching main.py's (WP21):
   pg_db     scraper_db.ScraperDB connected as pokefin_scraper (EXECUTE granted
-            by 0033/0034). Used when POKEFIN_DB_BACKEND=postgres.
+            by 0038/0039). Used when POKEFIN_DB_BACKEND=postgres.
   supabase  supabase-py with the service key: PostgREST RPC. The default
             until the owner cuts the scraper over.
 
@@ -1082,7 +1106,7 @@ def refresh_after_run(day: date | None = None, *, pg_db=None, supabase=None) -> 
         if _is_missing_function(e):
             logger.warning(
                 "Market analytics refresh skipped: public.refresh_market_analytics does not "
-                "exist yet (apply migrations 0033 and 0034)."
+                "exist yet (apply migrations 0038 and 0039)."
             )
         else:
             logger.error(f"Market analytics refresh failed for {day}: {type(e).__name__}: {e}")
@@ -1142,7 +1166,7 @@ API (series FXUSDCAD), for every business day in a range that has no row yet
 (WP25).
 
 exchange_rates starts at the scraper's first run, so without this backfill
-fx_daily (migration 0034) has no rate for older price history or for older
+fx_daily (migration 0039) has no rate for older price history or for older
 portfolio purchase dates, and CAD history before that day is withheld. The
 Valet API is free, needs no key, and returns the same daily rate the
 scraper reads from the Bank of Canada's HTML table.
@@ -1177,7 +1201,7 @@ DEFAULT_START = date(2020, 1, 1)
 REQUEST_TIMEOUT_SECONDS = 30
 INSERT_CHUNK = 500
 PAGE_SIZE = 1000
-# Same sanity band as fx_daily_rate_sane (0034).
+# Same sanity band as fx_daily_rate_sane (0039).
 RATE_MIN, RATE_MAX = 0.5, 3.0
 
 
@@ -1387,7 +1411,7 @@ if __name__ == "__main__":
 Append at the end of the file (WP20 created it; domain types live here):
 
 ```ts
-// ---- WP25: product_daily_stats (migration 0033) ----
+// ---- WP25: product_daily_stats (migration 0038) ----
 
 /**
  * One product_daily_stats row (or product_stats_latest, the same columns).
@@ -1437,7 +1461,7 @@ export interface ProductDailyStats {
 
 ```ts
 /**
- * product_daily_stats (migration 0033): the TypeScript side (WP25).
+ * product_daily_stats (migration 0038): the TypeScript side (WP25).
  *
  * The constants mirror the literals in refresh_product_daily_stats and are
  * drift-tested against the SQL (marketStatsConstants.test.ts), so
@@ -1464,7 +1488,7 @@ export function returnAnchorToleranceDays(days: number): number {
   return days <= 30 ? RETURN_ANCHOR_TOLERANCE_SHORT_DAYS : RETURN_ANCHOR_TOLERANCE_LONG_DAYS;
 }
 
-/** The windows product_daily_stats stores (the VALUES list in 0033). */
+/** The windows product_daily_stats stores (the VALUES list in 0038). */
 export const RETURN_ANCHOR_WINDOWS = [
   { key: "ret_7d", label: "7D", days: 7, toleranceDays: RETURN_ANCHOR_TOLERANCE_SHORT_DAYS },
   { key: "ret_30d", label: "1M", days: 30, toleranceDays: RETURN_ANCHOR_TOLERANCE_SHORT_DAYS },
@@ -1601,7 +1625,7 @@ export function statsFor(snapshot: ProductStatsSnapshot, productId: number): Pro
 /**
  * USD to CAD at the Bank of Canada rate of each day (WP25).
  *
- * fx_daily (migration 0034) holds one rate per UTC day: the newest Bank of
+ * fx_daily (migration 0039) holds one rate per UTC day: the newest Bank of
  * Canada rate on or before that day, carried over weekends and holidays for
  * at most FX_CARRY_MAX_DAYS. A CAD return is (P1 x FX1) / (P0 x FX0) - 1, so
  * converting history at today's rate leaves the currency move out.
@@ -1613,7 +1637,7 @@ export function statsFor(snapshot: ProductStatsSnapshot, productId: number): Pro
  * and calls toCadAtDatedRates or rateOn itself.
  */
 
-/** Mirrors the 14 in refresh_fx_daily (0034); drift-tested. */
+/** Mirrors the 14 in refresh_fx_daily (0039); drift-tested. */
 export const FX_CARRY_MAX_DAYS = 14;
 
 /** One fx_daily row as PostgREST returns it. */
@@ -1811,7 +1835,7 @@ async function fetchAllRows<T>(
 }
 
 /**
- * Columns of product_stats_latest (migration 0033). Listed, not "*", so a
+ * Columns of product_stats_latest (migration 0038). Listed, not "*", so a
  * column a later migration adds does not silently grow every cached payload.
  * A template literal with no substitutions keeps its literal type, which
  * supabase-js needs to type the rows.
@@ -1846,7 +1870,7 @@ async function fetchProductStatsLatest(): Promise<ProductStatsSnapshot> {
   return rows.length ? toProductStatsSnapshot(rows, { today }) : EMPTY_PRODUCT_STATS;
 }
 
-/** fx_daily (migration 0034), oldest first, as a dense daily series. */
+/** fx_daily (migration 0039), oldest first, as a dense daily series. */
 async function fetchFxDaily(): Promise<FxDailySeries> {
   const supabase = createMarketDataSupabaseClient();
   const rows = await fetchAllRows("fx_daily", (from, to) =>
@@ -2278,7 +2302,7 @@ Check: `grep -cP '\x{2014}' frontend/app/methodology/MethodologyArticle.tsx` pri
 
 ### Step 15. Phase B: generated types
 
-After the owner has applied 0033 and 0034 (Owner action 2):
+After the owner has applied 0038 and 0039 (Owner action 2):
 
 ```bash
 cd frontend
@@ -2313,14 +2337,14 @@ and below the block: `Run the FX backfill first. Both connect as pokefin_scraper
   (00:30 UTC). Read through the view `product_stats_latest`.
 - `fx_daily`: one Bank of Canada USD to CAD rate per UTC day, carried forward
   over weekends and holidays for at most 14 days.
-- Gates and formulas: `migrations/0033_product_daily_stats.sql`,
-  `migrations/0034_fx_daily.sql`, and `/methodology`.
+- Gates and formulas: `migrations/0038_product_daily_stats.sql`,
+  `migrations/0039_fx_daily.sql`, and `/methodology`.
 ```
 
 16c. `audits/HARDENING_FOLLOWUPS.md` section 7: add as the newest bullet of the migration run (directly above the newest existing "**Migration" bullet):
 
 ```markdown
-- **Migrations 0033 and 0034: pending apply** (WP25). `product_daily_stats`,
+- **Migrations 0038 and 0039: pending apply** (WP25). `product_daily_stats`,
   `product_stats_latest`, `refresh_market_analytics(date)` (SECURITY DEFINER,
   EXECUTE for pokefin_scraper and service_role only), `fx_daily`, and the
   pg_cron job `pokefin-finalise-market-analytics` (scheduled only when pg_cron
@@ -2329,7 +2353,7 @@ and below the block: `Run the FX backfill first. Both connect as pokefin_scraper
 
 ## Pitfalls: do not do this
 
-- **Do not re-run 0033 after 0034 is applied.** 0033's `CREATE OR REPLACE` would put back the version of `refresh_market_analytics` without the FX step. The same holds for every later package that replaces the function: only re-run the newest file that defines it. To schedule the cron job after enabling pg_cron, run the single `SELECT cron.schedule(...)` statement from Owner action 3, not a migration.
+- **Do not re-run 0038 after 0039 is applied.** 0038's `CREATE OR REPLACE` would put back the version of `refresh_market_analytics` without the FX step. The same holds for every later package that replaces the function: only re-run the newest file that defines it. To schedule the cron job after enabling pg_cron, run the single `SELECT cron.schedule(...)` statement from Owner action 3, not a migration.
 - **Do not gate series columns on freshness** (tracked high, 52-week high and low, distinct prices, observation count, volatility), and do not leave price-anchored columns ungated. That split is 0023's rule; the DB test checks both halves.
 - **Do not compare `products.usd_price` against a past day's row.** It is today's value; the agreement check applies only when the row is also the product's newest.
 - **Do not use a raw `max(usd_price)` for the tracked high or the 52-week range.** One thin-market print would set it (the Steam Siege ETB case in `generate_weekly_report.py`).
@@ -2359,8 +2383,8 @@ The SQL fixture test. Skipped unless `POKEFIN_TEST_DATABASE_URL` is set; CI's "D
 
 ```python
 """
-Database checks for migrations 0033 (product_daily_stats,
-refresh_market_analytics) and 0034 (fx_daily), run against a database rebuilt
+Database checks for migrations 0038 (product_daily_stats,
+refresh_market_analytics) and 0039 (fx_daily), run against a database rebuilt
 by scripts/db/replay_migrations.sh.
 
 Skipped unless POKEFIN_TEST_DATABASE_URL points at that replayed database as a
@@ -2582,11 +2606,13 @@ def add_listing(admin, pid, day, qty, ask, listings=10):
 
 def test_sales_listings_and_derived_supply(admin, catalog, today):
     pid = make_product(admin, catalog, daily(today, 5, 0, 50.0))
-    add_sales(admin, pid, today, 30, qty=2, tx=1)
+    # 31 days: the windows end yesterday (today's bucket is the partial one),
+    # so today - 30 .. today - 1 is the full 30-day window.
+    add_sales(admin, pid, today, 31, qty=2, tx=1)
     add_listing(admin, pid, today, qty=30, ask=55.0)
     add_listing(admin, pid, today - timedelta(days=30), qty=60, ask=50.0)
     holed = make_product(admin, catalog, daily(today, 5, 0, 50.0))
-    add_sales(admin, holed, today, 30, qty=2, tx=1, skip={15})
+    add_sales(admin, holed, today, 31, qty=2, tx=1, skip={15})
     old_listing = make_product(admin, catalog, daily(today, 5, 0, 50.0))
     add_listing(admin, old_listing, today - timedelta(days=5), qty=30, ask=55.0)
     refresh(admin, today)
@@ -2607,6 +2633,31 @@ def test_sales_listings_and_derived_supply(admin, catalog, today):
     o = stats(admin, today, old_listing)
     assert o["active_listings"] is None and o["qty_available"] is None
     assert o["listings_snapshot_date"] == today - timedelta(days=5)
+
+
+def test_sales_windows_end_on_the_last_complete_day(admin, catalog, today):
+    # Flat demand of 10 a day; the newest bucket (the day of the last visit)
+    # is a partial 4. Same cases as WP38's volume RPC test: whether the last
+    # visit was today or 1 to 3 days ago, the windows hold complete days only.
+    pids = []
+    for visit_age in range(4):
+        pid = make_product(admin, catalog, daily(today, 5, 0, 50.0))
+        last_visit = today - timedelta(days=visit_age)
+        add_sales(admin, pid, last_visit, 40, qty=10, tx=1)
+        admin.execute(
+            "UPDATE public.product_sales_history SET quantity_sold = 4 "
+            "WHERE product_id = %s AND bucket_date = %s",
+            (pid, last_visit),
+        )
+        pids.append(pid)
+    stale = make_product(admin, catalog, daily(today, 5, 0, 50.0))
+    add_sales(admin, stale, today - timedelta(days=4), 40, qty=10, tx=1)
+    refresh(admin, today)
+    for pid in pids:
+        s = stats(admin, today, pid)
+        assert (s["units_sold_7d"], s["units_sold_30d"], s["tx_30d"]) == (70, 300, 30)
+    s = stats(admin, today, stale)
+    assert s["units_sold_7d"] is None and s["units_sold_30d"] is None
 
 
 # ---------------------------------------------------------------- liquidity
@@ -2871,7 +2922,7 @@ class TestRefreshAfterRun:
         supabase.rpc.return_value.execute.side_effect = Exception(
             "PGRST202 Could not find the function public.refresh_market_analytics(p_day)")
         assert market_analytics.refresh_after_run(date(2026, 9, 30), supabase=supabase) is None
-        assert "apply migrations 0033 and 0034" in caplog.text
+        assert "apply migrations 0038 and 0039" in caplog.text
 
     def test_other_errors_are_logged_not_raised(self, caplog):
         pg_db = MagicMock()
@@ -3228,7 +3279,7 @@ describe("return anchors agree everywhere", () => {
     for (const w of RETURN_ANCHOR_WINDOWS) expect(w.toleranceDays).toBe(returnAnchorToleranceDays(w.days));
   });
 
-  it("the catalog RPC (0028, or 0033 after step 1b) bounds every window except 1D the same way", () => {
+  it("the catalog RPC (0028, or 0038 after step 1b) bounds every window except 1D the same way", () => {
     const sql = newestDefinition("get_market_product_metrics");
     for (const [label, days] of Object.entries(RETURN_WINDOW_DAYS)) {
       if (days === 1) continue;
@@ -3254,7 +3305,7 @@ If WP24 left `DAILY_DATA_STALENESS_TOLERANCE_DAYS` or `LISTINGS_STALENESS_TOLERA
 - `RETURN_ANCHOR_WINDOWS` labels are a subset of `Object.keys(RETURN_WINDOW_DAYS)` from `marketMath.ts` and each `days` equals `RETURN_WINDOW_DAYS[label]`.
 - `returnAnchorToleranceDays`: 7 for 7 and 30, 14 for 90, 180 and 365.
 - Read-time gate. Build one full row (every column non-null, `is_price_fresh: true`, `day: "2026-09-29"`). With `{ today: "2026-10-01" }` (2 days) the row is unchanged. With `{ today: "2026-10-02" }` (3 days) every key of `STALE_ROW_WITHHELD_COLUMNS` is `null`, `is_price_fresh` is `false`, and `tracked_high_usd`, `high_52w`, `low_52w`, `vol_weekly_52w`, `distinct_prices_365d`, `obs_90d`, `price_day`, `listings_snapshot_date` and `first_tracked_day` keep their values. Without `options` the 3-day-old row is unchanged (fixtures and WP33's test rely on that). A row whose `day` is not a date string is skipped, as before.
-- `STALE_ROW_WITHHELD_COLUMNS` contains every price-anchored column of the 0033 header's gate list (`usd_price`, the five `ret_*`, `dd_from_high_pct`, `pos_in_52w`, `ask_premium_pct`, `liquidity_score`) and none of `tracked_high_usd`, `high_52w`, `low_52w`, `vol_weekly_52w`, `distinct_prices_365d`, `obs_90d`.
+- `STALE_ROW_WITHHELD_COLUMNS` contains every price-anchored column of the 0038 header's gate list (`usd_price`, the five `ret_*`, `dd_from_high_pct`, `pos_in_52w`, `ask_premium_pct`, `liquidity_score`) and none of `tracked_high_usd`, `high_52w`, `low_52w`, `vol_weekly_52w`, `distinct_prices_365d`, `obs_90d`.
 
 ### 8. `frontend/app/lib/__tests__/serverMarketData.stats.test.ts` (new, `@jest-environment node`)
 
@@ -3312,8 +3363,8 @@ Step 12 changes nothing there; WP20's tests keep passing unchanged. `fx.test.ts`
 Repo root:
 
 ```bash
-python3 verify_migration.py migrations/0033_product_daily_stats.sql > /dev/null; echo "exit=$?"   # exit=3
-python3 verify_migration.py migrations/0034_fx_daily.sql > /dev/null; echo "exit=$?"             # exit=3
+python3 verify_migration.py migrations/0038_product_daily_stats.sql > /dev/null; echo "exit=$?"   # exit=3
+python3 verify_migration.py migrations/0039_fx_daily.sql > /dev/null; echo "exit=$?"             # exit=3
 
 PGSERVER_URL=postgresql://postgres:postgres@localhost:55432/postgres scripts/db/replay_migrations.sh
 # "OK: <N> files replayed once (replay_once) and twice (replay_twice)"
@@ -3322,7 +3373,7 @@ python -m pytest tests/ -q
 # all pass; tests/test_wp25_market_analytics_db.py skips (22 more skipped than the baseline)
 
 POKEFIN_TEST_DATABASE_URL=postgresql://postgres:postgres@localhost:55432/replay_once python -m pytest tests/ -q
-# all pass, 0 skipped from tests/test_wp25_market_analytics_db.py (22 passed) and
+# all pass, 0 skipped from tests/test_wp25_market_analytics_db.py (23 passed) and
 # tests/test_db_roles_integration.py; run it twice: the second run must pass too
 
 python -m pytest tests/test_wp25_scripts.py tests/test_main.py -q      # all pass
@@ -3368,7 +3419,7 @@ Manual checks (`pnpm dev` is not needed; `pnpm perf:serve` serves the stub build
 ## Owner actions
 
 1. **Depth checks first.** Run the read-only queries in `research/data-opportunities.md` §7 in the Supabase SQL editor and paste the results into the PR. They set expectations: listings history length decides when `qty_change_30d_pct` fills in, and the FX range decides how far back the Valet backfill must go (the default is 2020-01-01).
-2. **Apply the migrations** with Supabase MCP `apply_migration` (preferred) or the SQL editor, in order: `0033_product_daily_stats.sql`, then `0034_fx_daily.sql`. The 0034 output shows either "pg_cron job ... scheduled" or the NOTICE with the statement to run. Then run each file's `verify_migration.py` query: 0033 returns 39 OK and one `MISMATCH` for `refresh_market_analytics` body (superseded by 0034, expected); 0034 returns 25 OK. Then:
+2. **Apply the migrations** with Supabase MCP `apply_migration` (preferred) or the SQL editor, in order: `0038_product_daily_stats.sql`, then `0039_fx_daily.sql`. The 0039 output shows either "pg_cron job ... scheduled" or the NOTICE with the statement to run. Then run each file's `verify_migration.py` query: 0038 returns 39 OK and one `MISMATCH` for `refresh_market_analytics` body (superseded by 0039, expected); 0039 returns 25 OK. Then:
 
 ```sql
 SELECT public.refresh_market_analytics((now() AT TIME ZONE 'UTC')::date);   -- note "ms"; expect well under 10000
@@ -3386,7 +3437,7 @@ SELECT cron.schedule('pokefin-finalise-market-analytics', '30 0 * * *',
 SELECT jobname, schedule, active FROM cron.job WHERE jobname = 'pokefin-finalise-market-analytics';  -- 1 row
 ```
 
-The next day: `SELECT status, return_message, start_time FROM cron.job_run_details WHERE jobid = (SELECT jobid FROM cron.job WHERE jobname = 'pokefin-finalise-market-analytics') ORDER BY start_time DESC LIMIT 3;` shows `succeeded`. Do not re-apply 0033 to schedule it.
+The next day: `SELECT status, return_message, start_time FROM cron.job_run_details WHERE jobid = (SELECT jobid FROM cron.job WHERE jobname = 'pokefin-finalise-market-analytics') ORDER BY start_time DESC LIMIT 3;` shows `succeeded`. Do not re-apply 0038 to schedule it.
 
 4. **Types for phase B.** Run `pnpm types:db` with your access token and push `frontend/app/types/database.ts` to the branch, or give the executor a token.
 5. **Backfills** (from the repo root, with the scraper env sourced: `set -a && source ~/.config/pokefin/env && set +a`):
@@ -3410,16 +3461,16 @@ SELECT count(*) FILTER (WHERE vol_weekly_52w IS NOT NULL) AS vol,
 
 Paste the outputs into the PR.
 
-6. **After merge**, watch the next scraper run's log for `Market analytics refreshed for <date>: {...}` before `Site caches revalidated.` (or `Site revalidation not needed` on a run that wrote nothing). A `Market analytics refresh skipped: ... apply migrations 0033 and 0034` line means step 2 was not done on this database.
-7. **Record it.** In `audits/HARDENING_FOLLOWUPS.md` section 7, change "**Migrations 0033 and 0034: pending apply**" to "**Migrations 0033 and 0034 applied** (YYYY-MM-DD, via Supabase MCP)", add the refresh `ms`, the backfill counts and whether pg_cron is scheduled. Refresh `schema.sql` from production as README "Database" describes (WP21: `pg_dump --schema-only --schema=public ... | python3 scripts/db/normalize_dump.py -`), so CI's drift step stops reporting the two new tables. Commit both to master as `docs: record migrations 0033-0034 as applied`.
+6. **After merge**, watch the next scraper run's log for `Market analytics refreshed for <date>: {...}` before `Site caches revalidated.` (or `Site revalidation not needed` on a run that wrote nothing). A `Market analytics refresh skipped: ... apply migrations 0038 and 0039` line means step 2 was not done on this database.
+7. **Record it.** In `audits/HARDENING_FOLLOWUPS.md` section 7, change "**Migrations 0038 and 0039: pending apply**" to "**Migrations 0038 and 0039 applied** (YYYY-MM-DD, via Supabase MCP)", add the refresh `ms`, the backfill counts and whether pg_cron is scheduled. Refresh `schema.sql` from production as README "Database" describes (WP21: `pg_dump --schema-only --schema=public ... | python3 scripts/db/normalize_dump.py -`), so CI's drift step stops reporting the two new tables. Commit both to master as `docs: record migrations 0038-0039 as applied`.
 
 ## Acceptance criteria
 
-- [ ] `migrations/0033_product_daily_stats.sql` and `migrations/0034_fx_daily.sql` exist with the content of steps 1 and 2 (0033 plus section 6 only if step 1b applied); no other migration file changed.
+- [ ] `migrations/0038_product_daily_stats.sql` and `migrations/0039_fx_daily.sql` exist with the content of steps 1 and 2 (0038 plus section 6 only if step 1b applied); no other migration file changed.
 - [ ] The PR states which WP10 variant was found. Either way, `marketStatsConstants.test.ts` proves every catalog anchor except 1D carries the `window + tolerance` bound.
 - [ ] `scripts/db/replay_migrations.sh` passes with both files (applied once and twice).
-- [ ] `verify_migration.py` exits 3 for both; after apply, every row is OK except 0033's superseded `refresh_market_analytics` body.
-- [ ] `tests/test_wp25_market_analytics_db.py`: 22 passed against `replay_once`, twice in a row; skipped without the env var.
+- [ ] `verify_migration.py` exits 3 for both; after apply, every row is OK except 0038's superseded `refresh_market_analytics` body.
+- [ ] `tests/test_wp25_market_analytics_db.py`: 23 passed against `replay_once`, twice in a row; skipped without the env var.
 - [ ] The DB tests prove: stale product has `usd_price`, returns, drawdown, position, ask premium and liquidity `NULL` with the tracked high kept; a one-day spike does not set the tracked high; each return anchor is accepted exactly at `window + tolerance` days and rejected one day later; a weekend carries Friday's rate as `carry_forward`; no FX row more than 14 days after the newest rate; refresh under 10 s at production size.
 - [ ] anon and authenticated can SELECT `product_daily_stats`, `product_stats_latest` and `fx_daily`, and cannot TRUNCATE, DELETE or execute any of the three refresh functions; `pokefin_scraper` can execute `refresh_market_analytics` and cannot delete from `product_daily_stats`.
 - [ ] `main.run_jobs_once` calls `refresh_after_run` after a successful `update_prices` and before `trigger_site_revalidation`; a failed refresh still revalidates; `tests/test_main.py` passes.
@@ -3437,7 +3488,7 @@ Paste the outputs into the PR.
 
 - **Code**: revert the PR commit. The scraper stops calling the refresh; the fetchers disappear (nothing calls them); `/methodology` returns to v1.0. The tables stay and are harmless.
 - **Stop the nightly job only**: `SELECT cron.unschedule('pokefin-finalise-market-analytics');`
-- **Database** (after the code revert, as a new numbered migration `NNNN_drop_market_analytics.sql` at the next free number, never by editing 0033 or 0034):
+- **Database** (after the code revert, as a new numbered migration `NNNN_drop_market_analytics.sql` at the first free number above 0047 (numbers up to 0047 are reserved; see `audits/remediation/00-PLAN.md`, "Migration registry"), never by editing 0038 or 0039):
 
 ```sql
 DO $$ BEGIN
@@ -3470,13 +3521,13 @@ Every Track 2 metric needs window functions over the whole price history,
 and every CAD figure was converted at today's rate, so a Canadian's CAD
 return left out the currency move.
 
-- 0033: product_daily_stats (one row per active product per UTC day) with
+- 0038: product_daily_stats (one row per active product per UTC day) with
   bounded return anchors, tracked high (max of a 3-row rolling min), 52-week
   range, weekly volatility, sales and listings under the 0018-0023 gates,
   sell-through, supply change and a liquidity percentile; written by
   refresh_market_analytics(p_day), SECURITY DEFINER, EXECUTE for
   pokefin_scraper and service_role only; view product_stats_latest.
-- 0034: fx_daily (BoC rate per day, carried at most 14 days) and the
+- 0039: fx_daily (BoC rate per day, carried at most 14 days) and the
   00:30 UTC pg_cron job that finalises D-1 when pg_cron is enabled.
 - Scraper refreshes after each successful run, before revalidation.
 - Backfills: Bank of Canada Valet into exchange_rates; 400 days of stats.

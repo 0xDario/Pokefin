@@ -3,9 +3,9 @@
 - **Goal**: on one screen of `/product/[id]`, a collector sees whether a sealed product is cheap relative to its own history (52-week range, tracked high, CAGR only when a year exists), its MSRP (x MSRP, cost per pack, pack NAV) and the market (Sealed Index or set index overlay), and whether they could sell it (units sold, sell-through, days of supply, liquidity percentile). Every number carries the TCGplayer day it describes, CAD is shown at the Bank of Canada rate of that day, and the page ends in actions: Add to portfolio, Watch (slot for WP34), Open in Box NAV, View on TCGplayer.
 - **Why now / value**: this is signature feature 1 of `01-PRODUCT-DIRECTION.md` §5. Every input now exists: `product_daily_stats` and `fx_daily` (WP25), MSRP and pack contents (WP28), the index route (WP29), `Stat`/`Delta`/`RangeBar`/`AsOf` (WP23), `MetricLabel`/`ReportLink` (WP24). Today the page is a dead end with a type-only H1, a USD-only price with no date and no change, contradictory CAGR and drawdown figures, and the chart 1.5 screens down on phones.
 - **Effort**: L, about 15 to 16 hours (page model and chart model with tests 5 h, header, stats, pulse, siblings and actions components 4 h, chart panel and Recharts implementation 3.5 h, portfolio add flow and proxy 1.5 h, methodology, definitions, verification and PR 1.5 h).
-- **Depends on**: WP05 (`AddHoldingModal` mounted only while open, `portfolioApi.ts`), WP12 (`ProductImage` `priority` hero), WP13 (`productMeta.ts`: `parseProductId`, `productPath`, `getProductLabel`, `getProductDisplayName`, JSON-LD, `loading.tsx`, `not-found.tsx`; `redirects.ts`), WP18 (`lib/marketMath.ts`), WP20 (`useCurrency`, `app/types/market.ts`), WP22 (`perf-budgets.json` route `/product/900001`, `pnpm perf:budget`, perf fixture), WP23 (`Stat`, `Delta`, `RangeBar`, `AsOf`, `Skeleton`, `EmptyState`, `SegmentedControl`, `Badge`, `buttonClasses`, tokens), WP24 (`MetricLabel`, `ReportLink`, `metricDefinitions.ts`, `/methodology`), WP25 (`getCachedProductStats`, `getCachedFxDaily`, `fetchAllRows`, `lib/fx.ts`, `lib/marketStats.ts`), WP28 (soft: `getCachedProductAttributes`, `boxCalculatorHref`, `NAV_STATUS_TEXT`, stats columns `msrp_multiple` to `nav_status`), WP29 (soft: `GET /api/public/index/[code]`, `getCachedIndexSummary`, index codes `sealed` and `set-<sets.id>`). Through them: WP07 (`format.ts`), WP11 (ISR product page, `getCachedProductDetailRows`, `getCachedExchangeRate`, `app/components/IntentLink.tsx` from its step 13a), WP14 (contrast tokens), WP15 (promo last in `<main>`), WP17 (blocking lint and tests). Optional, with a default for each case in Before you start: WP26 (`getCachedProductHistory`), WP27 (header currency toggle), WP33 (may have added the `maxDrawdown1y` definition first), WP36 (may have rewritten the `#limits` bullet first).
+- **Depends on**: WP38 (`applyLatestPrices` in `app/lib/portfolio.ts`, used by step 18a), WP05 (`AddHoldingModal` mounted only while open, `portfolioApi.ts`), WP12 (`ProductImage` `priority` hero), WP13 (`productMeta.ts`: `parseProductId`, `productPath`, `getProductLabel`, `getProductDisplayName`, JSON-LD, `loading.tsx`, `not-found.tsx`; `redirects.ts`), WP18 (`lib/marketMath.ts`), WP20 (`useCurrency`, `app/types/market.ts`), WP22 (`perf-budgets.json` route `/product/900001`, `pnpm perf:budget`, perf fixture), WP23 (`Stat`, `Delta`, `RangeBar`, `AsOf`, `Skeleton`, `EmptyState`, `SegmentedControl`, `Badge`, `buttonClasses`, tokens), WP24 (`MetricLabel`, `ReportLink`, `metricDefinitions.ts`, `/methodology`), WP25 (`getCachedProductStats`, `getCachedFxDaily`, `fetchAllRows`, `lib/fx.ts`, `lib/marketStats.ts`), WP28 (soft: `getCachedProductAttributes`, `boxCalculatorHref`, `NAV_STATUS_TEXT`, stats columns `msrp_multiple` to `nav_status`), WP29 (soft: `GET /api/public/index/[code]`, `getCachedIndexSummary`, index codes `sealed` and `set-<sets.id>`). Through them: WP07 (`format.ts`), WP11 (ISR product page, `getCachedProductDetailRows`, `getCachedExchangeRate`, `app/components/IntentLink.tsx` from its step 13a), WP14 (contrast tokens), WP15 (promo last in `<main>`), WP17 (blocking lint and tests). Optional, with a default for each case in Before you start: WP26 (`getCachedProductHistory`), WP27 (header currency toggle), WP33 (may have added the `maxDrawdown1y` definition first), WP36 (may have rewritten the `#limits` bullet first).
 - **Unblocks**: WP34 (fills the `watch` slot of `ProductActions`), WP37 (breadcrumbs and the dynamic share card read `buildQuote` from `productModel.ts`), and the deferred "compare up to 5 products" overlay (reuses `lib/productChart.ts`).
-- **Placement**: Track 2, after WP29 and WP28, so the overlays and x MSRP exist. Both are soft: the benchmark toggles are hidden while WP29's route is absent (a test forces the flag on when it lands), and every WP28 figure hides when its data is absent, so this package can start after WP25 if curation lags. It must precede WP34 and WP37. No migration (the last reserved number is WP37's 0041 and WP33's 0042; this package adds none).
+- **Placement**: Track 2, after WP29 and WP28, so the overlays and x MSRP exist. Both are soft: the benchmark toggles are hidden while WP29's route is absent (a test forces the flag on when it lands), and every WP28 figure hides when its data is absent, so this package can start after WP25 if curation lags. It must precede WP34 and WP37. No migration (the registry in `00-PLAN.md` gives Track 2 0038 to 0047, the last being WP37's 0047; this package adds none).
 - **Suggested branch name**: `remediation/wp31-product-decision-page`
 - **Risk level**: medium. It rewrites the page behind every product URL and changes one shared read (full price history instead of 367 days) and the auth redirect's `next` value; URL, canonical, metadata and JSON-LD are untouched, and every rule has a unit test.
 
@@ -2781,6 +2781,14 @@ Adjustments:
 - `getCachedExchangeRate()` returns `{ rate, date }` (WP11); pass it as `latestRate`. If its field names differ, map them to `{ rate, date }` inline.
 - The hero keeps WP12's `priority` prop; do not add `priority` anywhere else.
 
+16b. `app/product/[id]/productMeta.ts`, `buildProductMetadata`: this package puts CAD on the page (the quote header and the chart), so the description gains the sentence WP13 deliberately left out (WP13 Pitfalls: "WP31 adds CAD and the sentence"). Change only the description line to:
+
+```ts
+    description: `Daily TCGplayer Market Price, returns, volatility and price history for ${setName} ${label}. Prices in USD and CAD.`,
+```
+
+and update the comment above it if it says the page is USD only. In WP13's `app/product/[id]/__tests__/productMeta.test.ts`, change the expected description to `"Daily TCGplayer Market Price, returns, volatility and price history for Prismatic Evolutions Elite Trainer Box. Prices in USD and CAD."`; keep every other assertion. Title, canonical, Open Graph, Twitter and JSON-LD do not change.
+
 ### Step 17. `app/product/[id]/loading.tsx`: match the new layout
 
 Replace WP13's skeleton body (keep the file's default export name and any comment explaining the route) with flat `Skeleton` bars that reserve the same boxes as the page, so the streamed page does not shift:
@@ -2822,33 +2830,31 @@ export default function Loading() {
 ```ts
 /**
  * One catalog product for the add flow (/portfolio?add=<id>, WP31), with the
- * same fresh-price rule as search results: a withheld price comes back null.
+ * same fresh-price rule as search results (WP38's applyLatestPrices): a
+ * withheld price comes back null.
  */
 export async function getProductForAdd(productId: number): Promise<ProductSearchResult | null> {
   if (!Number.isSafeInteger(productId) || productId <= 0) return null;
-  const [{ data, error }, productsById] = await Promise.all([
-    supabase
-      .from("products")
-      .select(`
+  const { data, error } = await supabase
+    .from("products")
+    .select(`
         id, usd_price, image_url, variant,
         sets ( name, code ),
         product_types ( name, label )
       `)
-      .eq("id", productId)
-      .limit(1),
-    getFreshProductsById(),
-  ]);
+    .eq("id", productId)
+    .limit(1);
   if (error) {
     logSupabaseError("product_for_add_failed", error);
     return null;
   }
   const products = (data || []) as unknown as ProductSearchResult[];
-  const [product] = await applyFreshPricesToSearchResults(products, productsById);
+  const [product] = await applyLatestPrices(products);
   return product ?? null;
 }
 ```
 
-Use the same client (`supabase` or WP12's lazy loader call) and logger helper `searchProducts` uses after WP05, WP12 and WP17; copy its form exactly, changing only the filter and limit.
+Use the same client (`supabase` or WP12's lazy loader call) and logger helper `searchProducts` uses after WP05, WP12, WP17 and WP38; copy its form exactly, changing only the filter and limit. WP38 step 8 deleted `getFreshProductsById` and `applyFreshPricesToSearchResults` and prices search results with the module-private `applyLatestPrices(products)` (one `get_latest_prices` call); check with `grep -n "async function applyLatestPrices" app/lib/portfolio.ts` (1 line) and `grep -c "getFreshProductsById" app/lib/portfolio.ts` (0).
 
 18b. `app/components/Portfolio/cards/AddHoldingModal.tsx`: add an optional prop `initialProductId?: number | null;` to the props interface and destructuring, import `getProductForAdd` from `../../../lib/portfolio`, and add after the state declarations:
 
@@ -3354,7 +3360,7 @@ This test fails the day WP29's route lands while the flag is still false, so the
 - WP24's methodology test: step 2c.
 - WP23's `uiConventions.test.ts`: must pass without raising any ratchet; the new files are token-only.
 - Any test that asserted the old product page copy ("Return Metrics", "Price History", "View on TCGPlayer", "Not enough volume history yet"): update to the new copy. Find them with `grep -rn "Return Metrics\|Not enough volume history\|Price History" app --include=*.test.*`.
-- Tests that render or read the product page or its chart (WP11's sibling `IntentLink` case, WP12's hero `priority` case, WP13's metadata and JSON-LD cases, WP24's product label cases): `grep -rln "product/\[id\]\|ProductDetailChart" app --include=*.test.* --include=*.test.tsx`. Keep every metadata, JSON-LD, canonical, hero `priority` and sibling-`IntentLink` assertion passing unchanged (they guard behaviour this package must not change); update only assertions about markup this package replaces, and list each changed assertion in the PR.
+- Tests that render or read the product page or its chart (WP11's sibling `IntentLink` case, WP12's hero `priority` case, WP13's metadata and JSON-LD cases, WP24's product label cases): `grep -rln "product/\[id\]\|ProductDetailChart" app --include=*.test.* --include=*.test.tsx`. Keep every metadata, JSON-LD, canonical, hero `priority` and sibling-`IntentLink` assertion passing unchanged (they guard behaviour this package must not change), except the product description, which step 16b extends with " Prices in USD and CAD."; update only assertions about markup this package replaces, and list each changed assertion in the PR.
 - WP11's `serverMarketData` tests that mock `product_price_history` with a single `query({...})` result: the history read is now paged (`range(0, 999)`, newest first), so give the mock a `range` method that returns the same result; assertions on the returned `history` stay as they are (it is re-sorted ascending).
 
 ## Verification
@@ -3422,7 +3428,7 @@ Manual checks against the perf server (`http://127.0.0.1:3100`):
 
 ## Acceptance criteria
 
-- [ ] H1 is `getProductDisplayName(product)`; URL, canonical, metadata, JSON-LD and breadcrumb are byte-identical to before for the same product.
+- [ ] H1 is `getProductDisplayName(product)`; URL, canonical, metadata, JSON-LD and breadcrumb are byte-identical to before for the same product, except the meta description, which ends "... for {set} {label}. Prices in USD and CAD." (step 16b).
 - [ ] Fresh price: display price in the visitor's currency with its code, "TCGplayer Market Price for {Mon D, YYYY}", the other currency at the Bank of Canada rate of the price's day, 1D/7D/30D/1Y `Delta` chips, a lowest-listing line only with a fresh snapshot ("before shipping", the gap to Market Price as neutral text, numbers from one source, dated "as of"), and a `ReportLink`.
 - [ ] Price 2 to 13 days old: `AsOf` shows "Last priced {date}" in warn text; figures still shown.
 - [ ] Withheld price (the stale fixture 900300): the header shows only "No current price. Last recorded {date}." with the methodology link and report link; the page renders no key-stats section and no return, CAGR, drawdown, volatility or NAV in the header or stats (Verification node check passes).

@@ -715,7 +715,7 @@ function MarketTableRow({
                       rel="noopener noreferrer"
                       className="text-xs font-semibold text-[var(--pf-pokeblue)] hover:underline"
                     >
-                      View on TCGPlayer &gt;
+                      View on TCGplayer &gt;
                     </a>
                   )}
                 </div>

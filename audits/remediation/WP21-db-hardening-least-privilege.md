@@ -7,7 +7,7 @@
 - **Priority rationale**: all three are low severity. F081 and F135 have no user-visible symptom. F133's only user-visible risk is abuse: one signed-up account could fill the database disk until Supabase makes the project read-only and saves fail for everyone. They come last, after the code that reads and writes these tables has settled (WP04 to WP06, WP10, WP16).
 - **Effort**: L, about 16 to 22 hours of executor time (8 h for the scraper backends and tests, 4 h for the two migrations and their tests, 6 h for the replay harness, baseline and CI, 2 h docs), plus about 2 hours of owner time spread over three sittings.
 - **Depends on**: WP06 (box_recipes route handlers, trigger and `currency` column in migration 0026), WP10 (migrations 0027 to 0029), WP16 (`product_price_pending`, migration 0030, and the rewritten `update_prices`). Also relies on WP04 (`PATCH /api/profile` updates only `username`), WP05 (portfolio route handlers) and WP11 (`run_jobs_once` in `main.py`), all of which precede those.
-- **Unblocks**: nothing in this plan. It closes the plan.
+- **Unblocks**: WP38 (migrations 0035 to 0037 follow 0031 to 0034) and the Track 2 migrations from 0038 on. It closes Track 1.
 - **Suggested branch name**: `remediation/wp21-db-hardening-least-privilege`
 - **Risk level**: medium. Two production migrations change privileges on live tables and the scraper switches credentials; every change is additive, behind a default-off flag, or has a one-statement rollback, and every SQL file in this spec was replayed on PostgreSQL 16 against a simulated production while the spec was written (and again in review). The simulation is built from `schema.sql` and the repo, not from production, so phase B's replay against the real dump is the first true test of the baseline.
 
@@ -33,9 +33,11 @@ git checkout master && git pull && git checkout -b remediation/wp21-db-hardening
 
 # 1. Earlier migrations are present. Expect 0024 ... 0030 (WP01, WP06, WP10, WP16).
 ls migrations | sort
-# The next two free numbers are the ones this package uses. The spec says
-# 0031 and 0032; if either is taken, use the next free numbers and substitute
-# them everywhere (file names, comments, README, tests).
+# 0031 and 0032 are fixed reservations for this package, and 0033/0034 for the
+# optional phase B record files (registry in audits/remediation/00-PLAN.md).
+# Never derive them from the highest file present: WP38 owns 0035 to 0037 and
+# Track 2 owns 0038 to 0047. If a 0031_ or 0032_ file that is not this
+# package's already exists, stop and ask the owner which numbers to use.
 
 # 2. F133 still open: profiles_self is FOR ALL and nothing limits columns.
 grep -n "FOR ALL TO authenticated" migrations/0014_rls_perf_and_dedupe.sql   # 4 hits, first at :56
@@ -2038,7 +2040,7 @@ grep "^-- Name:" migrations/0000_baseline.sql
 
 Expected: exit 0; the kept list contains the TABLE entries for `exchange_rates`, `generations`, `portfolio_holdings`, `portfolio_lots`, `portfolios`, `product_price_history`, `product_types`, `products`, `profiles`, `sets`, `product_price_history_backup_20260128` only if the owner kept it in A1 (plus any other production-only table), their identity SEQUENCE and PRIMARY KEY/UNIQUE entries, the FUNCTION entries for `get_price_history_deduplicated` and `handle_new_profile_portfolio` (and any other function no migration creates), production-only indexes (for example the legacy `portfolio_holdings(portfolio_id)` index that 0025 detects), production-only triggers and policies, and ROW SECURITY entries. It must not contain `box_recipes`, `auth_events`, `product_sales_history`, `product_listings_history`, `product_price_pending`, any `GRANT`, or any function a migration creates (`grep -n "delete_my_account\|export_my_data\|get_market_product" migrations/0000_baseline.sql` prints nothing).
 
-If the script exits 2 ("TRIGGER ... executes public.X(), which a migration creates"): delete that TRIGGER entry from `0000_baseline.sql` by hand and recreate it in a new migration `NNNN_record_production_triggers.sql` (next free number, `DROP TRIGGER IF EXISTS` then `CREATE TRIGGER`, a no-op on production), with a header comment saying so.
+If the script exits 2 ("TRIGGER ... executes public.X(), which a migration creates"): delete that TRIGGER entry from `0000_baseline.sql` by hand and recreate it in a new migration `migrations/0033_record_production_triggers.sql` (0033 is reserved for this file in the registry in `audits/remediation/00-PLAN.md`; never use another number), `DROP TRIGGER IF EXISTS` then `CREATE TRIGGER`, a no-op on production, with a header comment saying so. If several triggers need this, put them all in that one file.
 
 Search the baseline for anything that looks like a credential before committing: `grep -n -i "secret\|password\|apikey\|bearer" migrations/0000_baseline.sql` must print nothing but comments you can explain.
 
@@ -2101,13 +2103,13 @@ and use `127.0.0.1:55432` in the pytest command below; stop it afterwards with `
 
 If the replay fails, read the failing file and statement:
 
-- `function public.handle_new_profile_portfolio() does not exist` (0006), or `function public.get_price_history_deduplicated(bigint[], text) does not exist` (0007/0012): production dropped that object after the migration ran. (A missing `product_price_history_backup_20260128` cannot fail the replay: step 1b guards 0012's REVOKE.) Add a minimal stand-in to the END of `0000_baseline.sql` under a comment `-- Dropped in production on <date>; stand-in so <file> replays. Removed again by NNNN.` (`CREATE FUNCTION public.handle_new_profile_portfolio() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$;` or `CREATE FUNCTION public.get_price_history_deduplicated(bigint[], text) RETURNS void LANGUAGE sql AS $$ SELECT $$;`), and add `migrations/NNNN_record_out_of_band_drops.sql` (next free number) with the matching `DROP ... IF EXISTS`, which is a no-op on production. Owner action A1 tells you in advance which of these applies.
+- `function public.handle_new_profile_portfolio() does not exist` (0006), or `function public.get_price_history_deduplicated(bigint[], text) does not exist` (0007/0012): production dropped that object after the migration ran. (A missing `product_price_history_backup_20260128` cannot fail the replay: step 1b guards 0012's REVOKE.) Add a minimal stand-in to the END of `0000_baseline.sql` under a comment `-- Dropped in production on <date>; stand-in so <file> replays. Removed again by 0034.` (`CREATE FUNCTION public.handle_new_profile_portfolio() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$;` or `CREATE FUNCTION public.get_price_history_deduplicated(bigint[], text) RETURNS void LANGUAGE sql AS $$ SELECT $$;`), and put the matching `DROP ... IF EXISTS` in `migrations/0034_record_production_drift.sql` (reserved; create it if the drift check below does not), in a section headed `-- Out-of-band drops`, which is a no-op on production. There is no separate `record_out_of_band_drops` file. Owner action A1 tells you in advance which of these applies.
 - Anything else: stop and report the file, statement and error; do not edit an applied migration beyond what step 1 did.
 
 If the drift check prints a diff, classify every hunk:
 
 - **Host noise** (grants to a Supabase internal role not yet in `INTERNAL_ROLES`, an extension comment): extend the filters in `normalize_dump.py`, regenerate `schema.sql` (step 18), rerun.
-- **Production has something the chain does not produce, or differs from it** (a column default, a constraint, an index or a function body changed by hand in the dashboard): do not edit `schema.sql` or an applied migration. Add `migrations/NNNN_record_production_drift.sql` (next free number) that makes the chain produce production's state, written so it is a no-op on production (`CREATE OR REPLACE`, `IF NOT EXISTS`, DO blocks), with one header comment per hunk explaining it. List it under Owner actions for the owner to apply (it must change nothing there).
+- **Production has something the chain does not produce, or differs from it** (a column default, a constraint, an index or a function body changed by hand in the dashboard): do not edit `schema.sql` or an applied migration. Add `migrations/0034_record_production_drift.sql` (0034 is reserved for this file in the registry in `audits/remediation/00-PLAN.md`; never use another number, and if the file already holds out-of-band drops, append to it) that makes the chain produce production's state, written so it is a no-op on production (`CREATE OR REPLACE`, `IF NOT EXISTS`, DO blocks), with one header comment per hunk explaining it. List it under Owner actions for the owner to apply (it must change nothing there).
 - **The replay has something production lacks**: a migration in the repo was never applied, or was applied differently. Stop and report it: that is exactly the drift `verify_migration.py` exists for, and the owner must decide.
 
 Then run the full Python suite against the replayed database:
@@ -3156,7 +3158,7 @@ B7. Update the WP21 bullet in `audits/HARDENING_FOLLOWUPS.md` section 7 with the
 ## Acceptance criteria
 
 - [ ] `migrations/0031_user_table_write_limits.sql` and `migrations/0032_scraper_least_privilege_role.sql` exist with the content in steps 2 and 3, apply twice in a row without error, and `verify_migration.py` exits 1 with only the documented REFUSED lines.
-- [ ] `migrations/0003_integrity_constraints.sql` applies twice in a row without error; `0012` has only the step 1b guard around its backup-table REVOKE and `0001` only the step 1b comment change; no other applied migration changed (`git diff --stat master -- migrations/` lists only 0001, 0003, 0012, 0000, 0031, 0032 and any documented `NNNN_record_*` file).
+- [ ] `migrations/0003_integrity_constraints.sql` applies twice in a row without error; `0012` has only the step 1b guard around its backup-table REVOKE and `0001` only the step 1b comment change; no other applied migration changed (`git diff --stat master -- migrations/` lists only 0001, 0003, 0012, 0000, 0031, 0032 and, only if phase B needed them, `0033_record_production_triggers.sql` and `0034_record_production_drift.sql`; no other number).
 - [ ] `.github/copilot-instructions.md` (WP20's rewrite) describes the baseline/replay harness and the scraper backend flags (step 15f), or the PR body says why 15f was skipped.
 - [ ] `migrations/0000_baseline.sql` is generated by `scripts/db/prune_baseline.py` from the owner's dump, starts with the empty-database guard, contains `products.active` and the two legacy functions, and contains no GRANT, no OWNER TO, and no object a migration creates.
 - [ ] `schema.sql` is the normalised production dump with the generated header and contains `active boolean`, `is_public`, `client_idempotency_key` and `CREATE TABLE public.auth_events`.

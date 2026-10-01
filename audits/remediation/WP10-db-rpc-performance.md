@@ -1957,7 +1957,7 @@ Apply in this order, and apply 0027-0029 **before merging** this PR (Vercel depl
 
 ## Acceptance criteria
 
-- [ ] `migrations/0027_bounded_volume_metrics.sql`, `0028_bounded_market_metrics.sql`, `0029_portfolio_history_rpc.sql` exist (or the next free numbers, consistently substituted); no existing migration, `verify_migration.py` or `schema.sql` changed (`git diff --stat master -- migrations/20260506_market_performance_functions.sql migrations/0022_listings_freshness_guard.sql migrations/0023_price_freshness_guard.sql verify_migration.py schema.sql` is empty).
+- [ ] `migrations/0027_bounded_volume_metrics.sql`, `0028_bounded_market_metrics.sql`, `0029_portfolio_history_rpc.sql` exist (fixed numbers from the registry in `audits/remediation/00-PLAN.md`; never renumber them); no existing migration, `verify_migration.py` or `schema.sql` changed (`git diff --stat master -- migrations/20260506_market_performance_functions.sql migrations/0022_listings_freshness_guard.sql migrations/0023_price_freshness_guard.sql verify_migration.py schema.sql` is empty).
 - [ ] `verify_migration.py` on 0027 exits 0 with volume body hash `1bb85a0f1d3e619536c1702654af8cbf`, and on 0028 exits 0 with metrics body hash `f3102b0f63c0fd2e95b891370b9ffc75` (neutral variant: `8e8f39b53d71592dae0bd60dde9bebbf`); both `security invoker`, `volatility s`, `config search_path=public`.
 - [ ] `verify_migration.py` on 0029 exits 0 with body hash `2f9e67a2ae57801575c18009e257ddcf`, `security invoker`, PUBLIC and anon revoked, authenticated and service_role granted.
 - [ ] `get_market_product_metrics` has 6 `LEFT JOIN LATERAL` anchors, no `FROM daily_history dh WHERE dh.product_id = ap.id`, and `daily_history` bounded with `recorded_at >= current_date - 366`.

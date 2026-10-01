@@ -496,9 +496,19 @@ Several verdicts also corrected details: line numbers, impact scope, or a recomm
 
 ### New findings from the completeness pass
 
-The critic found these by reading files that no earlier finding cited. Two independent verifiers confirmed each one. Owners are listed in `audits/remediation/00-PLAN.md`.
+The critic found these by reading files that no earlier finding cited. Two independent verifiers confirmed each one. Owners:
 
-<!-- NEW_FINDINGS_OWNERS -->
+| Finding | Owning work package |
+|---|---|
+| N01 | WP38 |
+| N02 | WP38 (migration 0037 and `marketPulse.ts` together) |
+| N03 | WP17; WP38 carries the error-page "Try again" retry residual |
+| N04 | WP11 |
+| N05 | WP38 for the FX source and staleness flag; WP25 and WP27 cover the rest |
+| N06 | WP24 |
+| N07 | WP15 |
+| N08 | WP38 |
+| N09 | Report only, no code change |
 
 **N01. The Collectr import matcher picks the wrong variant and imports blank costs as $0** (Medium, `frontend/app/lib/import.ts:352`)
 - **Symptom:** a Pokémon Center or other variant row matches the lowest-id variant in its set, is labelled "exact" and is preselected. The holding is recorded against the wrong product.

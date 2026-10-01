@@ -2,12 +2,12 @@
 
 - **Goal**: an investor ranks and filters all 306 sealed products by return, risk, liquidity, supply and value in one dense 44 px table, starts from a ready-made screen such as "Off highs with thin supply", shares any view by copying the URL, and exports what they see as CSV. On a 390 px phone the same screen is a sortable two-line list with a filter sheet and a sort sheet, never a clipped table. `/market` becomes `/screener` with a 308 that keeps the query string.
 - **Why now / value**: `/market` today is a 93 px-row table that shows no sort state, prints CAGR, drawdown and volatility as `--` until each row's history is fetched, and is "unusable on a phone" (research/ui-audit.md `/market`). WP25 made every metric an indexed read of `product_daily_stats`, WP26 made sparklines free, WP30 shipped the phone row helpers and `IntentLink`, and WP23/WP24 shipped the table vocabulary and metric definitions. Supply and liquidity screens are the feature competitors cannot copy (01-PRODUCT-DIRECTION.md §5 item 4; research/competitive-landscape.md §4 item 3, §5 item 2).
-- **Effort**: L, 16 to 18 hours (migration 0042 and its DB test 2.5 h, row builder, stats column and fixture 1.5 h, metrics, URL state, filters and presets 2.5 h, table, phone list and filter UI 5 h, CSV 0.75 h, route move, nav, perf config and smoke 1.5 h, methodology 1 h, tests 2.5 h, measurement 1 h). The migration is the part above the 14 to 16 h of 01-PRODUCT-DIRECTION.md §8: "Max drawdown 1Y" is a decided Risk column and `product_daily_stats` has no such column (see D1 item 9).
+- **Effort**: L, 16 to 18 hours (migration 0043 and its DB test 2.5 h, row builder, stats column and fixture 1.5 h, metrics, URL state, filters and presets 2.5 h, table, phone list and filter UI 5 h, CSV 0.75 h, route move, nav, perf config and smoke 1.5 h, methodology 1 h, tests 2.5 h, measurement 1 h). The migration is the part above the 14 to 16 h of 01-PRODUCT-DIRECTION.md §8: "Max drawdown 1Y" is a decided Risk column and `product_daily_stats` has no such column (see D1 item 9).
 - **Depends on**: WP13 (`NoResults`, `app/sitemap.ts`, the `redirects()` block in `next.config.ts`, per-route `metadata`), WP19 (the column-descriptor pattern this package reuses; its `MarketView` files are deleted here), WP22 (`perf-budgets.json`, `lighthouserc.json`, `scripts/fixtures/perf.mjs`, `prod-smoke-lib.mjs`, `pnpm perf:budget`), WP23 (`DataList`, `DataListRow`, `Delta`, `AsOf`, `Badge`, `Button`, `PageHeader`, `ProvenanceLine`, `SegmentedControl`, `EmptyState`, token utilities, the `uiConventions` ratchet), WP24 (`MetricLabel`, `DecisionNote`, `PROVENANCE_SENTENCE`, `DECISION_NOTE`, `metricDefinitions.ts`, `/methodology` and `content/methodology.ts`), WP25 (`product_daily_stats`, `product_stats_latest`, `getCachedProductStats`, `PRODUCT_STATS_SELECT`, `ProductDailyStats`, the perf fixture's `productStats`), WP26 (`getCachedSparklines`, `sparklineFor`, `MiniSparkline` `series` and sizes, `WARM_PATHS`, `forbiddenChunks`, the public-route ESLint list), WP30 (`IntentLink`, `catalogValues.ts`, `shared/msrp.ts`, `utils/freshness.ts` with `utcDateKey` and `isPriceDayStale`, the `list` sparkline size). Through them: WP07 (`format.ts`), WP08 (`locationSearch.ts`, `LocationSearchSignal`), WP11 (cached reads and tags), WP14 (`Dialog`), WP18 (`lib/sorting.ts`), WP20 (`useCurrency`, `app/types/market.ts`, `pnpm types:db`), WP21 (replay harness, `pokefin_scraper`). Soft, each with a default in "Before you start": WP27 (`navConfig.ts`, `Dialog` `placement`, currency in the header), WP28 (x MSRP, cost per pack, premium to packs; the Value columns, "Near MSRP" and "Below pack value" appear only when the data exists), WP31 (the `maxDrawdown1y` definition), WP32 (home links through `SCREENER.href`).
 - **Unblocks**: WP35 (alert suggestions can link to a screen by URL), WP37 (the set page can deep-link to `/screener?set=<id>`), and the deferred `saved_views` table (the URL format defined here is what it would store).
-- **Placement**: Speed lane, after WP30 and WP25 (WP22 -> WP26 -> WP30 -> WP33). It reserves migration **0042**, the first number after the 0033 to 0041 registry, and keeps it even if it merges before WP34 to WP37. The migration only adds a column, a trigger and re-creates a view with the same query, so it has no ordering constraint with 0038 to 0041.
+- **Placement**: Speed lane, after WP30 and WP25 (WP22 -> WP26 -> WP30 -> WP33). It reserves migration **0043** (the registry in `00-PLAN.md` and 01-PRODUCT-DIRECTION.md §8: after WP29's 0042, before WP34's 0044) and keeps it even if it merges after WP34 to WP37. The migration only adds a column, a trigger and re-creates a view with the same query; it must sort after WP25's 0038 and WP28's 0041 (the view and the stats table it builds on), and it has no ordering constraint with 0044 to 0047, none of which touches the view or the stats table.
 - **Suggested branch name**: `remediation/wp33-screener-with-presets`
-- **Risk level**: medium. It moves a public route (a wrong redirect breaks shared links and search results; covered by a smoke check and a curl check), adds a trigger on the table the scraper writes every run (it catches its own errors and never aborts the refresh), and replaces a whole page; there is no user data involved and rollback is a revert plus one optional `DROP TRIGGER`. Deploy order matters: 0042 must be in production before the frontend ships, because the shared stats select names the new column (Owner action 1; phase B enforces it, since the types are generated from production).
+- **Risk level**: medium. It moves a public route (a wrong redirect breaks shared links and search results; covered by a smoke check and a curl check), adds a trigger on the table the scraper writes every run (it catches its own errors and never aborts the refresh), and replaces a whole page; there is no user data involved and rollback is a revert plus one optional `DROP TRIGGER`. Deploy order matters: 0043 must be in production before the frontend ships, because the shared stats select names the new column (Owner action 1; phase B enforces it, since the types are generated from production).
 
 ## Why
 
@@ -27,7 +27,7 @@ A collector-investor cannot answer "which sealed products are 20% off their high
 | 6 | A product whose price is withheld (not `is_price_fresh`, migration 0023) shows `--` in every metric column (price included), sinks to the bottom of every metric sort (nulls sort last; the Name sort stays A to Z), never matches a preset, and exports blank values | task scope; 01-PRODUCT-DIRECTION.md §2 principle 1 |
 | 7 | Returns are the USD Market Price returns from `product_daily_stats` (bounded anchors, WP25). They are the same in USD and CAD, as on `/prices` (WP30 D5). A caption says so | WP30 D5; WP25 `#returns` |
 | 8 | "Delta" in the brief means every return cell renders with WP23's `Delta` (glyph plus 1-decimal magnitude, gain/loss colour). Volume trend, supply change, from-high and premium to packs are neutral signed text (they are not returns) | 01-PRODUCT-DIRECTION.md §3.2 |
-| 9 | "Max drawdown 1Y" is stored as `product_daily_stats.max_dd_365d_pct`, written by a BEFORE trigger in migration 0042, with the product page's definition (WP31 `maxDrawdownOverYear`, WP18 `maxDrawdownPercent`). Computing it per request for 306 products would break the "indexed read of a precomputed table" rule | 01-PRODUCT-DIRECTION.md §6.1; data-opportunities.md §3.13 |
+| 9 | "Max drawdown 1Y" is stored as `product_daily_stats.max_dd_365d_pct`, written by a BEFORE trigger in migration 0043, with the product page's definition (WP31 `maxDrawdownOverYear`, WP18 `maxDrawdownPercent`). Computing it per request for 306 products would break the "indexed read of a precomputed table" rule | 01-PRODUCT-DIRECTION.md §6.1; data-opportunities.md §3.13 |
 | 10 | Filters: search, product type, era, set (single selects, same values as `/prices`), price band (USD buckets), return window range, from 52-week high, volatility, max drawdown, sell-through, days of supply, 30D supply change, liquidity percentile, x MSRP, premium to packs, Market Pulse signal, "Current price only". Min and max are inclusive; the price band's upper end is exclusive; an active range excludes rows whose value is unknown | task scope |
 | 11 | Six presets in `app/screener/presets.ts`, each a full `ScreenerState` (filters plus sort and column preset), each with `priced` on, each documented on `/methodology#screens` from the same constants. A preset whose required metric has no data anywhere is not offered | task scope |
 | 12 | A column that a filter or the sort uses is always visible, appended after the preset's columns in canonical order | ui-audit.md `/market` (sorted value must be visible) |
@@ -48,7 +48,7 @@ Every value is computed on the server by `buildScreenerRows` (`app/screener/scre
 | `r7d` `r1m` `r3m` `r1y` | 7D, 1M, 3M, 1Y | `return7d`, `return1m`, `return3m`, `return1y` | `S.ret_7d`, `ret_30d`, `ret_90d`, `ret_365d`; without `S`: `P.returns["7D" / "1M" / "3M" / "1Y"]` | `Delta` | high first | 88 each |
 | `signal` | Signal | Market Pulse (`marketPulse`) | `getPulseSignal(r1m, vtrend)` (thresholds 2% and 20%, WP24 exports them) | `Badge` neutral with `PULSE_SIGNAL_META[s].label` | not sortable | 128 |
 | `vol` | Volatility 1Y | Volatility 1Y (weekly, annualised) (`volatilityWeekly52w`) | `S.vol_weekly_52w` | `formatPercent`, 1 dp | low first | 104 |
-| `dd` | Max DD 1Y | Max drawdown (1Y) (`maxDrawdown1y`) | `S.max_dd_365d_pct` (migration 0042), a positive magnitude | `formatPercent`, 1 dp | low first | 104 |
+| `dd` | Max DD 1Y | Max drawdown (1Y) (`maxDrawdown1y`) | `S.max_dd_365d_pct` (migration 0043), a positive magnitude | `formatPercent`, 1 dp | low first | 104 |
 | `off` | From 52W high | From 52-week high (`fromHigh52w`, new) | `(S.usd_price / S.high_52w - 1) x 100` when `S.high_52w > 0` | `formatPercent`; "At high" when `>= -0.05` | most below first | 112 |
 | `units` | Sold 30D | Units sold (30d) (`unitsSold30d`) | `S.units_sold_30d`, else `V.units_sold_30d` when there is no `S` | integer | high first | 96 |
 | `vtrend` | Volume trend | Volume trend (`volumeTrend`) | `getVolumeTrendPercent(V.units_sold_30d, V.units_sold_prior_30d)` | `formatSignedPercent`, neutral | high first | 104 |
@@ -296,15 +296,15 @@ Read fully (paths from `frontend/` unless stated):
 
 - `audits/remediation/01-PRODUCT-DIRECTION.md` §2, §3, §4.1, §6; `research/ui-audit.md` "`/market` Market View", "Mobile", top-10 items 1 and 7; `research/competitive-landscape.md` §4 item 3; `research/data-opportunities.md` §3.3 to §3.5, §3.13; `research/performance-excellence.md` §13.
 - Specs: WP19 step 3 (descriptor pattern), WP22 D2 to D7 and steps 10, 12, 17, WP23 steps 8, 13, 17, 22, 24, WP24 steps 4 to 6, 10, 22, WP25 steps 1, 8, 9, 11, 13, 14, WP26 steps 3, 5, 10, 17, 19, 22, WP28 steps 1, 5, 7, 14, 15, WP30 steps 1, 4, 7, 13, WP31 step 1.
-- Code: `app/market/page.tsx`; everything in `app/components/MarketView/`; `app/lib/serverMarketData.ts` (`getCachedMarketProductSummaries`, `getCachedVolumeMetrics`, `getCachedProductStats`, `PRODUCT_STATS_SELECT`, `getCachedSparklines`); `app/lib/marketStats.ts`; `app/lib/marketPulse.ts`; `app/lib/priceGuard.ts`; `app/lib/format.ts`; `app/lib/sorting.ts`; `app/lib/sparkline.ts`; `app/lib/locationSearch.ts`; `app/components/LocationSearchSignal.tsx`; `app/components/ProductPrices/index.tsx` (how WP08 wires the URL store); `app/components/ProductPrices/utils/{catalogValues,freshness}.ts`; `app/components/ProductPrices/shared/msrp.ts`; `app/components/IntentLink.tsx`; `app/components/ui/{DataList,Delta,AsOf,Badge,Button,PageHeader,ProvenanceLine,SegmentedControl,EmptyState,Dialog,MetricLabel,DecisionNote}.tsx`; `app/components/NoResults.tsx`; `app/lib/metricDefinitions.ts`; `app/content/{methodology,disclosures}.ts`; `app/methodology/MethodologyArticle.tsx` and its test; `app/types/market.ts`; `next.config.ts`; `app/sitemap.ts`; `eslint.config.mjs`; `perf-budgets.json`; `lighthouserc.json`; `scripts/fixtures/perf.mjs`; `scripts/perf-fixture.test.mjs`; `scripts/prod-smoke-lib.mjs`, `scripts/prod-smoke.mjs`, `scripts/prod-smoke-lib.test.mjs`; `app/__tests__/uiConventions.test.ts`; repo root `revalidate_hook.py`, `tests/test_revalidate_hook.py`, `migrations/0033_*.sql`, `migrations/0036_*.sql` (if present), `tests/test_wp25_market_analytics_db.py`, `verify_migration.py`.
+- Code: `app/market/page.tsx`; everything in `app/components/MarketView/`; `app/lib/serverMarketData.ts` (`getCachedMarketProductSummaries`, `getCachedVolumeMetrics`, `getCachedProductStats`, `PRODUCT_STATS_SELECT`, `getCachedSparklines`); `app/lib/marketStats.ts`; `app/lib/marketPulse.ts`; `app/lib/priceGuard.ts`; `app/lib/format.ts`; `app/lib/sorting.ts`; `app/lib/sparkline.ts`; `app/lib/locationSearch.ts`; `app/components/LocationSearchSignal.tsx`; `app/components/ProductPrices/index.tsx` (how WP08 wires the URL store); `app/components/ProductPrices/utils/{catalogValues,freshness}.ts`; `app/components/ProductPrices/shared/msrp.ts`; `app/components/IntentLink.tsx`; `app/components/ui/{DataList,Delta,AsOf,Badge,Button,PageHeader,ProvenanceLine,SegmentedControl,EmptyState,Dialog,MetricLabel,DecisionNote}.tsx`; `app/components/NoResults.tsx`; `app/lib/metricDefinitions.ts`; `app/content/{methodology,disclosures}.ts`; `app/methodology/MethodologyArticle.tsx` and its test; `app/types/market.ts`; `next.config.ts`; `app/sitemap.ts`; `eslint.config.mjs`; `perf-budgets.json`; `lighthouserc.json`; `scripts/fixtures/perf.mjs`; `scripts/perf-fixture.test.mjs`; `scripts/prod-smoke-lib.mjs`, `scripts/prod-smoke.mjs`, `scripts/prod-smoke-lib.test.mjs`; `app/__tests__/uiConventions.test.ts`; repo root `revalidate_hook.py`, `tests/test_revalidate_hook.py`, `migrations/0038_*.sql`, `migrations/0041_*.sql` (if present), `tests/test_wp25_market_analytics_db.py`, `verify_migration.py`.
 
 Confirm the starting state:
 
 ```bash
 cd /home/user/Pokefin
 git status --short                                               # clean
-ls migrations | grep -E '^0042_'                                 # no output: 0042 is free
-ls migrations | grep -E '^00(3[3-9]|4[01])_'                     # the Track 2 migrations that exist; 0033 must be listed
+ls migrations | grep -E '^0043_'                                 # no output: 0043 is free
+ls migrations | grep -E '^00(3[89]|4[0-7])_'                     # the Track 2 migrations that exist; 0038 and 0039 (WP25) must be listed
 
 cd frontend
 # WP08
@@ -376,20 +376,20 @@ Tooling: Node and pnpm as in WP00; Python venv and local Postgres for the databa
 
 Baseline, from `frontend/`: `pnpm exec tsc --noEmit` (exit 0), `pnpm lint` (0 errors), `pnpm test --ci` (all pass), `pnpm test:scripts` (all pass). From the repo root: `python -m pytest tests/ -q`. Record the counts for the PR.
 
-The work has two phases, like WP25 and WP28. **Phase A** (steps 1 to 28) needs nothing from the owner; at its end open a draft PR titled `[waiting for DB types] feat: Screener with presets (WP33)` and hand the owner Owner actions 1 and 2. **Phase B** (step 29) regenerates `app/types/database.ts` once 0042 is in production. Until then `tsc` reports that `max_dd_365d_pct` is not a column of `product_stats_latest` in `serverMarketData.ts`; that is the only allowed `tsc` failure in phase A. Do not cast around it.
+The work has two phases, like WP25 and WP28. **Phase A** (steps 1 to 28) needs nothing from the owner; at its end open a draft PR titled `[waiting for DB types] feat: Screener with presets (WP33)` and hand the owner Owner actions 1 and 2. **Phase B** (step 29) regenerates `app/types/database.ts` once 0043 is in production. Until then `tsc` reports that `max_dd_365d_pct` is not a column of `product_stats_latest` in `serverMarketData.ts`; that is the only allowed `tsc` failure in phase A. Do not cast around it.
 
-`next build` type-checks, so that one error also fails `pnpm build:stub` in phase A, and step 28 needs a build. Two ways, in this order of preference: (1) if the owner can apply 0042 and push the types quickly, do step 29 first and then step 28; (2) otherwise measure on a temporary, uncommitted edit of the generated file: in `app/types/database.ts` add `max_dd_365d_pct: number | null` to the `Row` of `product_daily_stats` and of `product_stats_latest` and `max_dd_365d_pct?: number | null` to the table's `Insert` and `Update`, run step 28, then discard it with `git checkout app/types/database.ts` before any commit (`git status` must not list the file). Never commit a hand edit of `database.ts`; step 29 regenerates it from production. The draft PR's CI build fails until phase B; that is expected.
+`next build` type-checks, so that one error also fails `pnpm build:stub` in phase A, and step 28 needs a build. Two ways, in this order of preference: (1) if the owner can apply 0043 and push the types quickly, do step 29 first and then step 28; (2) otherwise measure on a temporary, uncommitted edit of the generated file: in `app/types/database.ts` add `max_dd_365d_pct: number | null` to the `Row` of `product_daily_stats` and of `product_stats_latest` and `max_dd_365d_pct?: number | null` to the table's `Insert` and `Update`, run step 28, then discard it with `git checkout app/types/database.ts` before any commit (`git status` must not list the file). Never commit a hand edit of `database.ts`; step 29 regenerates it from production. The draft PR's CI build fails until phase B; that is expected.
 
 ## Implementation steps
 
 Paths are relative to `frontend/` unless they start with the repo root (`migrations/`, `tests/`, `revalidate_hook.py`, `README.md`, `audits/`). Order: 1 to 6 data and shared definitions, 7 to 13 pure screener modules (no React), 14 to 19 components, 20 to 23 the route, 24 methodology, 25 to 27 perf, smoke and docs, 28 measurement, 29 phase B.
 
-### Step 1. `migrations/0042_product_max_drawdown.sql` (new, repo root)
+### Step 1. `migrations/0043_product_max_drawdown.sql` (new, repo root)
 
 Create the file with exactly this content:
 
 ```sql
--- Migration 0042: 1-year maximum drawdown in product_daily_stats (WP33).
+-- Migration 0043: 1-year maximum drawdown in product_daily_stats (WP33).
 --
 -- The Screener's Risk columns rank all active products by maximum drawdown
 -- over the last 365 days. Computed per request that is a window function over
@@ -410,10 +410,10 @@ Create the file with exactly this content:
 -- and series columns). Pages that rank on it withhold it with the price.
 --
 -- How it is written: a BEFORE INSERT OR UPDATE OF price_day, usd_price
--- trigger. refresh_product_daily_stats (0033) upserts every row with both
+-- trigger. refresh_product_daily_stats (0038) upserts every row with both
 -- columns in its SET list, so every refresh recomputes the value, and no
--- later migration has to replace refresh_market_analytics to keep it (0036
--- and 0037 replace that function; this file does not touch it). WP28's
+-- later migration has to replace refresh_market_analytics to keep it (0039
+-- and 0041 replace that function; this file does not touch it). WP28's
 -- structure step updates other columns only and does not fire the trigger.
 -- An error inside the trigger sets the column to NULL with a WARNING and
 -- never aborts the refresh.
@@ -519,7 +519,7 @@ CREATE TRIGGER product_daily_stats_max_dd
   FOR EACH ROW EXECUTE FUNCTION public.product_daily_stats_set_max_dd();
 
 -- ============================================================
--- 4. Read path: same query as 0033 and 0036, re-created for s.*
+-- 4. Read path: same query as 0038 and 0041, re-created for s.*
 -- ============================================================
 
 CREATE OR REPLACE VIEW public.product_stats_latest
@@ -552,7 +552,7 @@ Notes:
 Check the file with the repo's migration checker (from the repo root):
 
 ```bash
-python3 verify_migration.py migrations/0042_product_max_drawdown.sql > /tmp/wp33_0042.sql; echo "exit=$?"
+python3 verify_migration.py migrations/0043_product_max_drawdown.sql > /tmp/wp33_0043.sql; echo "exit=$?"
 # expect exit=3 and on stderr:
 #   -- function product_max_drawdown_365d(p_product_id bigint, p_end date): body <md5>, ... security invoker, sql, volatility s, config search_path=public,pg_temp
 #   -- function product_daily_stats_set_max_dd(): body <md5>, ... security invoker, plpgsql, volatility v, config search_path=public,pg_temp
@@ -587,7 +587,7 @@ Use the port your local Postgres listens on (WP25 uses 55432 for the Docker cont
 3a. `app/types/market.ts`, in `interface ProductDailyStats` (WP25), add as the last member (after WP28's `nav_status` if present, else after `refreshed_at`):
 
 ```ts
-  /** WP33 (migration 0042): largest peak-to-later-low fall over the 365 days ending at price_day, % (positive). Not gated. */
+  /** WP33 (migration 0043): largest peak-to-later-low fall over the 365 days ending at price_day, % (positive). Not gated. */
   max_dd_365d_pct: number | null;
 ```
 
@@ -604,7 +604,7 @@ Use the port your local Postgres listens on (WP25 uses 55432 for the Docker cont
 4a. `scripts/fixtures/perf.mjs`, in `buildPerfData`, directly above the final `return { ... };` (after every other package's block, so no earlier draw changes and every recorded limit stays valid), add:
 
 ```js
-  // WP33: max_dd_365d_pct (migration 0042). Its own PRNG stream, so every
+  // WP33: max_dd_365d_pct (migration 0043). Its own PRNG stream, so every
   // value above is unchanged. Not gated, like the SQL: stale rows keep it.
   const ddRand = mulberry32((PERF_SEED ^ 0x0033) >>> 0);
   for (const row of productStats) {
@@ -1592,7 +1592,7 @@ function baseOrder(a: ScreenerRow, b: ScreenerRow): number {
 
 /**
  * One row per catalog product, from the catalog summaries (identity, price
- * gate), the latest daily statistics (every metric, WP25, WP28, 0042) and
+ * gate), the latest daily statistics (every metric, WP25, WP28, 0043) and
  * the volume metrics (prior 30 days for the volume trend). A product whose
  * price is withheld in either source gets null in every metric (D1 item 6).
  */
@@ -3530,7 +3530,7 @@ export function judgeRedirect({ from, to, status, location }) {
 26a. `README.md` (repo root): in the pages list, replace `/market` (Market View) with `/screener` (Screener: ranked table, filters, six screens, CSV; `/market` redirects). In WP25's "Market analytics tables" subsection add the bullet:
 
 ```markdown
-- `product_daily_stats.max_dd_365d_pct` (migration 0042, WP33): largest fall
+- `product_daily_stats.max_dd_365d_pct` (migration 0043, WP33): largest fall
   from a running peak over the first price of each day in the 365 days ending
   at `price_day`. Written by the trigger `product_daily_stats_max_dd` on every
   refresh; not gated on freshness. `backfill_daily_stats.py` fills it for
@@ -3544,14 +3544,14 @@ export function judgeRedirect({ from, to, status, location }) {
 26c. `audits/HARDENING_FOLLOWUPS.md` section 7: add as the newest bullet of the migration run (directly above the newest existing "**Migration" bullet):
 
 ```markdown
-- **Migration 0042: pending apply** (WP33). `product_daily_stats.max_dd_365d_pct`,
+- **Migration 0043: pending apply** (WP33). `product_daily_stats.max_dd_365d_pct`,
   helper `product_max_drawdown_365d(bigint, date)` and trigger
   `product_daily_stats_max_dd` (EXECUTE revoked from PUBLIC, anon,
   authenticated), `product_stats_latest` re-created with the same query.
   Additive; `refresh_market_analytics` is not replaced.
 ```
 
-26d. `audits/remediation/01-PRODUCT-DIRECTION.md` §8, in the WP33 row of the table, change the Migrations cell from `none` to `0042` and the Effort cell from `L, 14 to 16 h` to `L, 16 to 18 h`, and at the end of the "Migration registry" paragraph add: "WP33 adds 0042 (1-year maximum drawdown), the first number after the registry." No other edit to that file.
+26d. `audits/remediation/01-PRODUCT-DIRECTION.md` §8 already lists WP33 with `0043` and `L, 16 to 18 h` (the plan maintainer applied this). Check with `grep -n "| WP33 |" audits/remediation/01-PRODUCT-DIRECTION.md` (one row containing `| 0043 |`). If the row still says `none`, change the Migrations cell to `0043` and the Effort cell to `L, 16 to 18 h`. No other edit to that file.
 
 ### Step 27. Conventions, copy and dead-code checks
 
@@ -3717,7 +3717,7 @@ pkill -f scripts/perf-serve.mjs
 
 ### Step 29. Phase B: generated types
 
-After the owner has applied 0042 (Owner action 1):
+After the owner has applied 0043 (Owner action 1):
 
 ```bash
 cd /home/user/Pokefin/frontend
@@ -3732,7 +3732,7 @@ Do not edit the generated file. Then mark the PR ready for review and remove `[w
 
 - **Do not fetch history or sparklines on the client.** No `useProductData`, `ensureHistoryLoaded`, `useSparklines`, `/api/public/*` call or `PriceChart` in the Screener tree. The 1Y series is in the page props; the product page owns the chart.
 - **Do not compute max drawdown, volatility or any window metric in the page or the browser.** Read `product_daily_stats` columns. If a metric is missing there, it needs a migration, not a per-request loop over history.
-- **Do not replace `refresh_market_analytics` or `refresh_product_daily_stats` in 0042.** The trigger exists so the function chain 0033, 0034, 0036, 0037 stays untouched. Do not re-run 0033 or 0036 after 0042 either (WP25/WP28 pitfalls): re-run only the newest file that defines a function.
+- **Do not replace `refresh_market_analytics` or `refresh_product_daily_stats` in 0043.** The trigger exists so the function chain 0038, 0039, 0041, 0042 stays untouched. Do not re-run 0038 or 0041 after 0043 either (WP25/WP28 pitfalls): re-run only the newest file that defines a function.
 - **Do not gate `max_dd_365d_pct` in SQL.** It is a series column (0023 split). The Screener hides it for withheld rows in `buildScreenerRows`.
 - **Do not pass the rank, a per-render array or an inline object as a row prop.** The rank is a CSS counter; `columns` comes from `columnsFor`; `ctx` is memoised; the sparkline is a string. Any unstable prop re-renders all 50 rows on every sort and breaks the INP budget.
 - **Do not derive the visible columns from `draft`.** Columns follow `applied`; otherwise a click re-renders every row urgently.
@@ -3759,7 +3759,7 @@ Run the frontend tests from `frontend/`, the Python tests from the repo root. Te
 
 ```python
 """
-Database checks for migration 0042 (product_daily_stats.max_dd_365d_pct,
+Database checks for migration 0043 (product_daily_stats.max_dd_365d_pct,
 WP33), run against a database rebuilt by scripts/db/replay_migrations.sh.
 
 Skipped unless POKEFIN_TEST_DATABASE_URL points at that replayed database as a
@@ -4216,7 +4216,7 @@ Manual, on the perf server (`node scripts/perf-serve.mjs`, `http://127.0.0.1:310
 
 ## Owner actions
 
-1. **Apply migration 0042 before this PR merges or deploys.** The PR changes the shared `PRODUCT_STATS_SELECT`, which `/prices`, product pages and the Screener all read: deployed against a database without the column, PostgREST rejects the select, `getCachedProductStats` returns its empty fallback, and every page loses its risk, supply and value statistics until the column exists. Apply in number order: every earlier numbered migration that exists in `migrations/` must already be in production (0033 at least; if 0036 is merged but not yet applied, apply 0036 first, so the view's column order matches the replay). In the Supabase SQL editor paste `migrations/0042_product_max_drawdown.sql`, run it, then run its three verification queries (expect `0`, `0`, and `true, false`). It is additive: no existing object changes, `refresh_market_analytics` is untouched. Then refresh `schema.sql` from production as README "Database" describes (WP21 Owner action C), so CI's drift step reads clean, and change the `audits/HARDENING_FOLLOWUPS.md` bullet "**Migration 0042: pending apply**" to "**Migration 0042 applied** (date, via Supabase MCP or SQL editor)".
+1. **Apply migration 0043 before this PR merges or deploys.** The PR changes the shared `PRODUCT_STATS_SELECT`, which `/prices`, product pages and the Screener all read: deployed against a database without the column, PostgREST rejects the select, `getCachedProductStats` returns its empty fallback, and every page loses its risk, supply and value statistics until the column exists. Apply in number order: every earlier numbered migration that exists in `migrations/` must already be in production (0038 at least; if 0041 is merged but not yet applied, apply 0041 first, so the view's column order matches the replay). In the Supabase SQL editor paste `migrations/0043_product_max_drawdown.sql`, run it, then run its three verification queries (expect `0`, `0`, and `true, false`). It is additive: no existing object changes, `refresh_market_analytics` is untouched. Then refresh `schema.sql` from production as README "Database" describes (WP21 Owner action C), so CI's drift step reads clean, and change the `audits/HARDENING_FOLLOWUPS.md` bullet "**Migration 0043: pending apply**" to "**Migration 0043 applied** (date, via Supabase MCP or SQL editor)".
 2. **Generated types**: run `SUPABASE_ACCESS_TOKEN=... pnpm types:db` in `frontend/` and push `app/types/database.ts` to the PR branch, or give the executor a token for it (step 29).
 3. **After deploy**: open `https://pokefin.ca/market?sort=r1y&cols=risk` once (the apex is the canonical host, WP02/WP13) and confirm it lands on `/screener?sort=r1y&cols=risk`; the daily smoke test checks it from then on. Nothing to do in Search Console: the sitemap lists `/screener` and the 308 transfers the old URL.
 4. **Optional review of the screen thresholds** in D4 (defaults are set; a change later is a methodology change with a version bump). The Value columns, "Near MSRP" and "Below pack value" appear as soon as WP28's curation (D7) has data; nothing else is needed.
@@ -4228,7 +4228,7 @@ Manual, on the perf server (`node scripts/perf-serve.mjs`, `http://127.0.0.1:310
 - [ ] Desktop table: 44 px one-line rows, product cell "{Type} · {Set}" with the variant as secondary text, a visible arrow and `aria-sort` on the sorted column, a `MetricHelpLink` on every metric header, sticky # and Product columns whose divider and row rules stay with them while the table scrolls sideways (borders on cells, `border-separate`).
 - [ ] Phone rows: a price 2 or more days old, or withheld, reads "Last priced {Mon D}" as visible text; no phone row relies on a tooltip.
 - [ ] Every focusable control in the new files uses `focus-visible:outline-hidden` with the action ring; no `outline-none` or `transition-colors` anywhere in the diff; WP24's trust test passes.
-- [ ] 0042 was applied in production before the frontend deployed; `schema.sql` refreshed; `HARDENING_FOLLOWUPS.md` records the apply.
+- [ ] 0043 was applied in production before the frontend deployed; `schema.sql` refreshed; `HARDENING_FOLLOWUPS.md` records the apply.
 - [ ] Column presets Performance, Risk, Liquidity and Value (Value only with WP28 data) replace the key/all toggle; a filtered or sorted column is always visible.
 - [ ] Every filter in D3 works, is in the URL, round-trips on reload and on a shared link, and appears as a removable chip.
 - [ ] Six presets live in `app/screener/presets.ts`, each documented on `/methodology#screens` from the same constants, and `presets.fixture.test.ts` has one passing test per preset on the WP22 perf fixture.
@@ -4239,7 +4239,7 @@ Manual, on the perf server (`node scripts/perf-serve.mjs`, `http://127.0.0.1:310
 - [ ] `perf-budgets.json` has `/screener` with JS target 165 and document target 60; `pnpm perf:budget` passes with `/screener` JS ≤ 165 kB gz; supabase-js is not reachable from `/screener`; Lighthouse `/screener` passes with calibrated thresholds.
 - [ ] CSV export: every matching row in the current order, visible columns only, fresh values only, currency in the headers, formula-safe text, one attribution line with `DECISION_NOTE`.
 - [ ] `DecisionNote anchor="screens"` sits under the results; the returns caption says returns are on the USD Market Price.
-- [ ] Migration 0042 adds `max_dd_365d_pct` with the WP31/WP18 definition through a trigger, re-creates `product_stats_latest`, replays twice cleanly, and `test_wp33_max_drawdown_db.py` passes (9 tests); WP25's DB tests still pass.
+- [ ] Migration 0043 adds `max_dd_365d_pct` with the WP31/WP18 definition through a trigger, re-creates `product_stats_latest`, replays twice cleanly, and `test_wp33_max_drawdown_db.py` passes (9 tests); WP25's DB tests still pass.
 - [ ] The smoke test checks `/screener` and the `/market` redirect; `WARM_PATHS` warms `/screener`; the ESLint public-route guard covers `app/screener` and `app/components/Screener`.
 - [ ] No raw palette class, hex value, em dash or banned word in any new file; the conventions baseline only went down; `MetricLabel`'s output is unchanged.
 - [ ] `tsc` (after phase B), lint, Jest, `test:scripts`, `build:stub` and the Python tests pass.
@@ -4247,22 +4247,22 @@ Manual, on the perf server (`node scripts/perf-serve.mjs`, `http://127.0.0.1:310
 ## Rollback
 
 1. Revert the merge commit (`git revert -m 1 <merge-sha>`) and redeploy. `/market` and Market View come back. In the same revert commit add a temporary `{ source: "/screener", destination: "/market", permanent: false }` to `next.config.ts` `redirects()`, so links shared since the release keep working (307, not cached as permanent); remove it once Market View is replaced again.
-2. Database: leave 0042 in place. The column and trigger are additive and harmless to the reverted code (it does not select the column). If the trigger itself is the problem (for example refresh warnings in the logs), run `DROP TRIGGER IF EXISTS product_daily_stats_max_dd ON public.product_daily_stats;`: new rows then get NULL, nothing else changes. Full removal, only after the frontend no longer selects the column: `DROP TRIGGER IF EXISTS product_daily_stats_max_dd ON public.product_daily_stats; DROP FUNCTION IF EXISTS public.product_daily_stats_set_max_dd(); DROP FUNCTION IF EXISTS public.product_max_drawdown_365d(bigint, date);` then re-create `product_stats_latest` after `ALTER TABLE public.product_daily_stats DROP COLUMN max_dd_365d_pct` (drop the view first, re-create it with the 0042 section 4 statement and its grants).
+2. Database: leave 0043 in place. The column and trigger are additive and harmless to the reverted code (it does not select the column). If the trigger itself is the problem (for example refresh warnings in the logs), run `DROP TRIGGER IF EXISTS product_daily_stats_max_dd ON public.product_daily_stats;`: new rows then get NULL, nothing else changes. Full removal, only after the frontend no longer selects the column: `DROP TRIGGER IF EXISTS product_daily_stats_max_dd ON public.product_daily_stats; DROP FUNCTION IF EXISTS public.product_daily_stats_set_max_dd(); DROP FUNCTION IF EXISTS public.product_max_drawdown_365d(bigint, date);` then re-create `product_stats_latest` after `ALTER TABLE public.product_daily_stats DROP COLUMN max_dd_365d_pct` (drop the view first, re-create it with the 0043 section 4 statement and its grants).
 3. Browsers that followed the 308 cache it; after a revert without step 1's temporary redirect they would keep requesting `/screener` and get a 404. That is why step 1 adds it.
 
 ## Commit and PR
 
 Commits, in order (each builds; the first two are phase A's database part):
 
-1. `feat(db): max drawdown 1Y in product_daily_stats (WP33, migration 0042)`: `migrations/0042_product_max_drawdown.sql`, `tests/test_wp33_max_drawdown_db.py`.
+1. `feat(db): max drawdown 1Y in product_daily_stats (WP33, migration 0043)`: `migrations/0043_product_max_drawdown.sql`, `tests/test_wp33_max_drawdown_db.py`.
 2. `feat(data): screener stats column, fixture and definitions (WP33)`: `app/types/market.ts`, `serverMarketData.ts` select, `scripts/fixtures/perf.mjs`, `scripts/perf-fixture.test.mjs`, `metricDefinitions.ts`, `MetricLabel.tsx` (`MetricHelpLink`), `ui/README.md`.
 3. `feat(screener): URL state, filters, presets, row builder and CSV (WP33)`: `app/screener/{types,metrics,urlState,filters,presets,screenerData,exportCsv}.ts`, `test-utils/screenerRows.ts` and their tests.
 4. `feat(screener): table, phone list, filter and sort sheets, page (WP33)`: `app/components/Screener/*`, `app/screener/page.tsx`, `globals.css`, component tests.
 5. `feat(nav): move /market to /screener with a 308 (WP33)`: `next.config.ts`, nav, links, sitemap, deleted `app/market/` and Market View files, ESLint list, updated tests.
 6. `docs(methodology): screens and 1-year drawdown (WP33)`: `content/methodology.ts`, `MethodologyArticle.tsx` and its test.
 7. `perf: /screener budgets, Lighthouse, smoke redirect check, cache warm (WP33)`: `perf-budgets.json`, `lighthouserc.json`, `check-public-cache.mjs`, `prod-smoke-lib.mjs`, `prod-smoke.mjs`, `prod-smoke-lib.test.mjs`, `revalidate_hook.py`, `tests/test_revalidate_hook.py`, `scripts/measure-screener.mjs`, conventions baseline.
-8. `docs: screener, migration 0042 (WP33)`: `README.md`, `frontend/README.md`, `audits/HARDENING_FOLLOWUPS.md`, `audits/remediation/01-PRODUCT-DIRECTION.md` registry line.
-9. Phase B: `chore(types): regenerate database types for 0042 (WP33)`: `app/types/database.ts`.
+8. `docs: screener, migration 0043 (WP33)`: `README.md`, `frontend/README.md`, `audits/HARDENING_FOLLOWUPS.md`, and `audits/remediation/01-PRODUCT-DIRECTION.md` only if step 26d had to change its WP33 row.
+9. Phase B: `chore(types): regenerate database types for 0043 (WP33)`: `app/types/database.ts`.
 
 End every commit message with the attribution lines the session's system reminder gives.
 
@@ -4274,7 +4274,7 @@ PR body:
 ## What
 - `/market` becomes `/screener` (308, query kept). A dense ranked table of every sealed product on 18 metrics in four column presets (Performance, Risk, Liquidity, Value), 17 filters in the URL, six documented screens, CSV export of the view, and a phone list with filter and sort sheets.
 - Server-rendered from `product_stats_latest` (WP25), the catalog, volume metrics and 1Y baked sparklines (WP26). No client fetch.
-- Migration 0042: `product_daily_stats.max_dd_365d_pct` (1-year max drawdown, product-page definition) written by a trigger; `refresh_market_analytics` untouched.
+- Migration 0043: `product_daily_stats.max_dd_365d_pct` (1-year max drawdown, product-page definition) written by a trigger; `refresh_market_analytics` untouched.
 - `/methodology#screens` documents every screen from the same constants (version <new>).
 
 ## Why
@@ -4292,10 +4292,10 @@ research/ui-audit.md `/market` (93 px rows, no sort state, unusable on phones), 
 Trace: screener-sort-trace.json.gz (attached). Screenshots: 1440 Performance, 1440 Risk with "Off highs with thin supply", 390 list, 390 filter sheet, 390 sort sheet.
 
 ## Checks
-tsc, lint, jest (<counts>), test:scripts, build:stub, DB tests (0042 and WP25), perf:budget, measure-screener, curl 308.
+tsc, lint, jest (<counts>), test:scripts, build:stub, DB tests (0043 and WP25), perf:budget, measure-screener, curl 308.
 
 ## Owner
-1. Apply 0042 (verification queries in the file header). 2. Types (phase B). 3. After deploy, open /market?sort=r1y&cols=risk once.
+1. Apply 0043 (verification queries in the file header). 2. Types (phase B). 3. After deploy, open /market?sort=r1y&cols=risk once.
 
 ## Follow-ups (out of scope)
 - `ControlBar` age-filter props and `AgeFilter.tsx` have no user left.

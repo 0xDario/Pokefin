@@ -1,6 +1,6 @@
 # Pokéfin Product Direction (Track 2: product excellence)
 
-Date: 2026-09-30. Status: proposed, for owner approval before specs WP22 to WP37 are written.
+Date: 2026-09-30. Status: proposed. Specs WP22 to WP37 are written on this direction; owner approval is decision ACCEPT-DIRECTION in `00-PLAN.md`.
 
 The remediation plan (`00-PLAN.md`, WP00 to WP21) fixes defects. This document sets where the product goes once those land: what Pokéfin is for, how it looks and behaves, how pages connect, which features make it best in class, the bars for speed and trust, and what it will not do. Every claim is grounded in the five research files in `research/` and the 2026-09-25 review. Citations use the form `file.md §section`.
 
@@ -201,30 +201,30 @@ Sixteen packages, one PR each, written in the house spec format before execution
 
 | ID | Package | Migrations | Effort | Runs after |
 |---|---|---|---|---|
-| WP22 | Performance budget gate, RUM and production smoke | none | L, 12 to 16 h | WP21 |
+| WP22 | Performance budget gate, RUM and production smoke | none | L, 12 to 16 h | WP21, WP38 |
 | WP23 | Design system foundation | none | L, 12 to 16 h | WP20 |
 | WP24 | Trust pages, metric definitions, disclosure | none | M, 10 to 14 h | WP23 |
-| WP25 | Market analytics foundation (daily stats, dated FX) | 0033, 0034 | L, 14 to 16 h | WP21, WP24 |
-| WP26 | Server-baked sparklines and public read routes | 0035 | L, 12 to 16 h | WP22, WP23 |
+| WP25 | Market analytics foundation (daily stats, dated FX) | 0038, 0039 | L, 14 to 16 h | WP21, WP24 |
+| WP26 | Server-baked sparklines and public read routes | 0040 | L, 12 to 16 h | WP22, WP23 |
 | WP27 | Navigation, global search, data clock, new mark | none | L, 12 to 16 h | WP24 |
-| WP28 | MSRP, pack contents, box NAV from the catalog | 0036 | M, 10 to 14 h | WP25 |
-| WP29 | Pokéfin Sealed Index and breadth | 0037 | L, 14 to 16 h | WP25 |
+| WP28 | MSRP, pack contents, box NAV from the catalog | 0041 | M, 10 to 14 h | WP25 |
+| WP29 | Pokéfin Sealed Index and breadth | 0042 | L, 14 to 16 h | WP25 |
 | WP30 | Prices: dense list, mobile catalog, card anatomy | none | L, 12 to 16 h | WP26 |
 | WP31 | Product decision page | none | L, 14 to 16 h | WP28, WP29 |
 | WP32 | Market home dashboard | none | M, 10 to 14 h | WP27, WP29 |
-| WP33 | Screener with presets (replaces Market View) | none | L, 14 to 16 h | WP30 |
-| WP34 | Watchlist | 0038 | M, 10 to 12 h | WP31, WP32 |
-| WP35 | Daily price alerts by email | 0039 | L, 14 to 16 h | WP34 |
-| WP36 | Portfolio analytics | 0040 | L, 14 to 16 h | WP29 |
-| WP37 | Sets section and share cards | 0041 | L, 14 to 16 h | WP31 |
+| WP33 | Screener with presets (replaces Market View) | 0043 | L, 16 to 18 h | WP30 |
+| WP34 | Watchlist | 0044 | M, 10 to 12 h | WP31, WP32 |
+| WP35 | Daily price alerts by email | 0045 | L, 14 to 16 h | WP34 |
+| WP36 | Portfolio analytics | 0046 | L, 14 to 16 h | WP29 |
+| WP37 | Sets section and share cards | 0047 | L, 14 to 16 h | WP31 |
 
-**Lanes that can run in parallel** once WP21 has merged:
+**Lanes that can run in parallel** once WP21 and WP38 (the last Track 1 package, `WP38-residual-data-layer-followups.md`) have merged:
 - Shell: WP23 → WP24 → WP27 → WP32.
 - Data: WP25 → WP28 and WP29 → WP31 → WP34 → WP35.
 - Speed: WP22 → WP26 → WP30 → WP33.
 - WP36 and WP37 start once their dependencies land.
 
-**Migration registry.** WP21 ends at 0032. Numbers 0033 to 0041 are reserved for the packages above in that order, and a package keeps its number even if it merges out of order. Each migration grants what WP21's `pokefin_scraper` role needs itself, must pass WP21's `replay_twice` harness, and regenerates `frontend/app/types/database.ts` with WP20's `pnpm types:db`. The research files' provisional numbers (data 0033 to 0039, trust 0040 to 0043) are superseded by this registry.
+**Migration registry.** These numbers are fixed reservations; `00-PLAN.md` (section "Migration registry") holds the full list for both tracks. WP21 owns 0031 and 0032, and its phase B may add `0033_record_production_triggers.sql` and `0034_record_production_drift.sql` (reserved even if unused). WP38 (end of Track 1, before WP22) owns 0035 to 0037. Track 2 owns 0038 to 0047 in plan order: WP25 0038 and 0039, WP26 0040, WP28 0041, WP29 0042, WP33 0043, WP34 0044, WP35 0045, WP36 0046, WP37 0047. A package keeps its number even if it merges out of order, and never takes "the next free number". Each migration grants what WP21's `pokefin_scraper` role needs itself, must pass WP21's `replay_twice` harness, and regenerates `frontend/app/types/database.ts` with WP20's `pnpm types:db`. The research files' provisional numbers (data 0033 to 0039, trust 0040 to 0043) are superseded by this registry.
 
 ---
 
@@ -261,7 +261,9 @@ The exact wording of each change is in the Track 2 plan result that accompanies 
 
 ---
 
-## 11. Owner decisions needed before the specs are written
+## 11. Owner decisions
+
+The specs are written. The authoritative list, with deadlines and defaults, is the "Owner decisions" table in `00-PLAN.md`. The Track 2 subset:
 
 - **D1.** The true CardRinkTCG relationship (owned, paid or unpaid), and whether the operator holds inventory of tracked products. Needed by WP15 and WP24.
 - **D2.** Name or named pseudonym for `/about`, plus city and province. Needed by WP24.

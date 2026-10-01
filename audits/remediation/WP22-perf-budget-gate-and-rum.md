@@ -3,9 +3,9 @@
 - **Goal**: every pull request shows, per route, its bytes and their growth since the recorded baseline, and fails when it breaks a budget or a layout-stability rule; the owner gets one GitHub issue within a week when real-user p75 on a route regresses; and a production page that renders without prices, or a signed-in flow that stops working, is reported within a day instead of months.
 - **Why now / value**: WP08, WP09, WP11 and WP12 bought the site its speed, and nothing protects it. Track 2 adds 15 more packages, most of them new UI (indices, sparklines, screener, watchlist, share cards); without a gate each one can quietly add 10 to 30 kB, and the product direction makes this package the precondition for all of them (01-PRODUCT-DIRECTION.md §6.1, "WP22 lands first"). Separately, the signed-in features were broken in production for months (WP01, WP04 to WP06) without anyone noticing; a daily smoke test is the cheapest possible alarm.
 - **Effort**: L, 14 to 16 hours (fixture and stub 4 h, measurement and budget scripts 3 h, Lighthouse CI including one calibration round trip 2 h, smoke, confirmation and RUM workflows 3 h, tests 2 h, quick wins and docs 1 h). Plus about 1 hour of owner time.
-- **Depends on**: WP00 (stub harness, `pnpm build:stub`, `pnpm test:scripts`), WP08 (opt-in `SUPABASE_STUB_FIXTURE` mechanism), WP12 (supabase-js off the hydration path; limits must be recorded after it), WP17 (blocking lint, `instrumentation-client.ts`, the `error.tsx` comment this package edits), WP21 (adds the `database` job to `ci.yml`; landing after it avoids a merge conflict). Also reads the results of WP01 (`POST /api/account/export`), WP02 (the apex `https://pokefin.ca` is the canonical host and `www` redirects to it, owner action 4; every production check here targets the apex), WP05 (`GET /api/portfolio`), WP11 (ISR product page with `generateStaticParams` returning `[]`), WP13 (`/sitemap.xml`, `/stats` redirect), WP15 (restyled error pages) and WP20 (`app/types/database.ts`, async root layout).
+- **Depends on**: WP38 (`app/error.tsx` calls `useRouter()` for its retry; test 8 mocks `next/navigation`), WP00 (stub harness, `pnpm build:stub`, `pnpm test:scripts`), WP08 (opt-in `SUPABASE_STUB_FIXTURE` mechanism), WP12 (supabase-js off the hydration path; limits must be recorded after it), WP17 (blocking lint, `instrumentation-client.ts`, the `error.tsx` comment this package edits), WP21 (adds the `database` job to `ci.yml`; landing after it avoids a merge conflict). Also reads the results of WP01 (`POST /api/account/export`), WP02 (the apex `https://pokefin.ca` is the canonical host and `www` redirects to it, owner action 4; every production check here targets the apex), WP05 (`GET /api/portfolio`), WP11 (ISR product page with `generateStaticParams` returning `[]`), WP13 (`/sitemap.xml`, `/stats` redirect), WP15 (restyled error pages) and WP20 (`app/types/database.ts`, async root layout).
 - **Unblocks**: every Track 2 package that lists it: WP23, WP26, WP27, WP29, WP30, WP31, WP32, WP33 and WP37 (each adds its routes to `frontend/perf-budgets.json` and its new public reads to `scripts/fixtures/perf.mjs`), and indirectly all later ones.
-- **Placement**: first package of Track 2, after WP21. It can move to right after WP17 if the owner wants budgets to guard WP18 to WP21; nothing else changes if it moves, because it only adds CI steps, a fixture, scripts and workflows (see "Before you start" for what to do when WP21 has not landed).
+- **Placement**: first package of Track 2, after WP21 and WP38 (the last Track 1 package). It can move to right after WP17 if the owner wants budgets to guard WP18 to WP21; nothing else changes if it moves, because it only adds CI steps, a fixture, scripts and workflows (see "Before you start" for what to do when WP21 has not landed).
 - **Suggested branch name**: `remediation/wp22-perf-budget-gate-and-rum`
 - **Risk level**: medium. It adds blocking steps to the required `Frontend (lint + typecheck + tests)` check, so a flaky assertion would block every PR; only deterministic byte counts and stable Lighthouse audits block, timings only warn, and one step can be removed in a one-line follow-up. Runtime changes are two lines of behaviour (lazy Sentry in the error boundaries, query strings stripped from Speed Insights events).
 
@@ -3018,7 +3018,7 @@ In both files:
   }, [error]);
 ```
 
-Keep everything else (WP15's markup and inline styles, WP17's behaviour). Check: `grep -n "@sentry/nextjs" app/error.tsx app/global-error.tsx` prints exactly two lines, the `void import("@sentry/nextjs")` line of each file.
+Keep everything else (WP15's markup and inline styles, WP17's behaviour, WP38's `useRouter` import and `retry` handler that calls `router.refresh()` and `reset()` inside `startTransition`, when WP38 has landed). Check: `grep -n "@sentry/nextjs" app/error.tsx app/global-error.tsx` prints exactly two lines, the `void import("@sentry/nextjs")` line of each file.
 
 ### 21. `frontend/README.md`: document the gate
 
@@ -3618,6 +3618,9 @@ const mockCaptureException = jest.fn();
 jest.mock("@sentry/nextjs", () => ({
   captureException: (...args: unknown[]) => mockCaptureException(...args),
 }));
+// WP38 step 12: the error page calls useRouter() for its "Try again" refresh;
+// without an app router mounted, the real hook throws.
+jest.mock("next/navigation", () => ({ useRouter: () => ({ refresh: jest.fn() }) }));
 
 const ORIGINAL_DSN = process.env.NEXT_PUBLIC_SENTRY_DSN;
 afterEach(() => {

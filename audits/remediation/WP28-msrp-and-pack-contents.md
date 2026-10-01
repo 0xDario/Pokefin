@@ -5,7 +5,7 @@
 - **Effort**: M, 12 to 14 hours (migration and DB tests 3 h, loader and template scripts with tests 3 h, server reads, `/prices` and calculator UI 4 h, methodology and definitions 1 h, fixture, verification and PR 2 h). Owner curation (D7) is separate: 3 to 5 hours.
 - **Depends on**: WP06 (box recipes API, `BoxRecipe.currency`, `loadRecipeIntoState`, `copyState`/`shareStatus`), WP11 (`boosterPackData.ts`, server-fed `/box-calculator`, `revalidate_hook.py`, cache tags), WP21 (`pokefin_scraper`, replay harness, schema baseline, `load_supabase_readonly_credentials`), WP23 (tokens, `AsOf`, `SegmentedControl` currency control), WP24 (`/methodology`, `metricDefinitions.ts`, `PACK_VALUE_LABELS`, `packValueBandsText`, `#box-nav`), WP25 (`product_daily_stats`, `refresh_market_analytics`, `product_stats_latest`, `getCachedProductStats`, `fetchAllRows`, perf fixture `productStats`). Through them: WP07 (`format.ts`), WP13 (`productMeta.ts`), WP17 (`nav.ts`, blocking lint and tests), WP20 (`CurrencyProvider`, `app/types/market.ts`, `pnpm types:db`), WP22 (perf fixture and budgets). Soft: WP26 (card `sparkline` prop; the card edit works with or without it), WP27 (relabels the calculator's currency control "Recipe currency" and makes it follow the header; the catalog amounts follow either), WP30 (list rows; see step 12d).
 - **Unblocks**: WP30 (x MSRP on list rows: `formatMsrpMultiple`, `initialMsrpMultiples`), WP31 (x MSRP, cost per pack, NAV with reason, "Open in Box NAV" through `boxCalculatorHref`, product release date), WP33 (Value preset and Below pack value from `premium_to_packs_pct`), WP34 (x MSRP column), WP35 (MSRP alert suggestion). WP32 lists per-product release dates as a follow-up; `product_catalog_attributes.release_date` is ready for it.
-- **Placement**: after WP25, because it replaces `refresh_market_analytics` again. Reserves migration **0036** and keeps it if it merges out of order. It can merge before or after WP29: WP29's 0037 only calls `refresh_market_analytics` and does not redefine it (WP29 spec, Pitfalls: "0037 does not replace it; it only calls it"). No other Track 2 spec redefines the function; Before you start, check 2, stops the executor if one has. WP30, WP31, WP33, WP34 and WP35 read its fields softly and hide them when absent, so curation (D7) can lag without blocking them.
+- **Placement**: after WP25, because it replaces `refresh_market_analytics` again. Reserves migration **0041** and keeps it if it merges out of order. It can merge before or after WP29: WP29's 0042 only calls `refresh_market_analytics` and does not redefine it (WP29 spec, Pitfalls: "0042 does not replace it; it only calls it"). No other Track 2 spec redefines the function; Before you start, check 2, stops the executor if one has. WP30, WP31, WP33, WP34 and WP35 read its fields softly and hide them when absent, so curation (D7) can lag without blocking them.
 - **Suggested branch name**: `remediation/wp28-msrp-and-pack-contents`
 - **Risk level**: medium. It replaces the SECURITY DEFINER refresh the scraper calls every run and adds a SECURITY DEFINER write function; both are contained by EXECUTE grants (`service_role` only for the write), an additive schema, a database test module that proves every gate and role, and a loader that writes nothing unless its input validates.
 
@@ -15,7 +15,7 @@ A collector looking at a booster box on Pokéfin today cannot see the two number
 
 ## Design
 
-### Data model (migration `0036_product_attributes.sql`)
+### Data model (migration `0041_product_attributes.sql`)
 
 | Object | Definition |
 |---|---|
@@ -183,7 +183,7 @@ Read in full:
 
 - `audits/remediation/01-PRODUCT-DIRECTION.md` §2, §3, §5 item 8, §6, §8 (migration registry); `research/data-opportunities.md` §2 ("Gates every new metric must respect"), §3.10, §4 items 2 to 4, §5.
 - `audits/remediation/WP25-market-analytics-foundation.md` steps 1, 2, 8, 9, 11, 13, 14 and Tests item 1 (the fixtures this package's DB test mirrors).
-- `migrations/0033_product_daily_stats.sql` and `migrations/0034_fx_daily.sql` (WP25), `migrations/0023_price_freshness_guard.sql`, `migrations/0032_scraper_least_privilege_role.sql` (WP21), `verify_migration.py` (docstring), `scripts/db/replay_migrations.sh`, `revalidate_hook.py`, `secrets_loader.py`, `market_analytics.py`, `scripts/backfill_daily_stats.py`.
+- `migrations/0038_product_daily_stats.sql` and `migrations/0039_fx_daily.sql` (WP25), `migrations/0023_price_freshness_guard.sql`, `migrations/0032_scraper_least_privilege_role.sql` (WP21), `verify_migration.py` (docstring), `scripts/db/replay_migrations.sh`, `revalidate_hook.py`, `secrets_loader.py`, `market_analytics.py`, `scripts/backfill_daily_stats.py`.
 - `frontend/app/lib/serverMarketData.ts` (WP25's `fetchAllRows`, `PRODUCT_STATS_SELECT`, `getCachedProductStats`), `app/lib/marketStats.ts`, `app/types/market.ts`, `app/lib/currency.ts`, `app/lib/format.ts`, `app/lib/metricDefinitions.ts`, `app/content/methodology.ts`, `app/methodology/MethodologyArticle.tsx` and its test, `app/components/ui/AsOf.tsx`, `app/components/ui/README.md` (WP23).
 - `app/components/BoxCalculator/BoxCalculator.tsx`, `nav.ts`, `types.ts`, `boosterPackData.ts`, `hooks/useBoosterBoxPrices.ts`, `__tests__/BoxCalculator.test.tsx`, `app/box-calculator/page.tsx`, `app/product/[id]/productMeta.ts`.
 - `app/prices/page.tsx`, `app/components/ProductPrices/index.tsx`, `app/components/ProductPrices/cards/ProductCard.tsx` and the ProductCard tests under `app/components/ProductPrices/__tests__/`.
@@ -192,14 +192,14 @@ Read in full:
 Confirm the starting state (repo root):
 
 ```bash
-# 1. Migration number: 0036 is reserved for this package (01-PRODUCT-DIRECTION.md section 8).
-ls migrations | grep -E '^0036_'                        # expect no output
-ls migrations/0033_* migrations/0034_*                  # expect 2 files (WP25)
+# 1. Migration number: 0041 is reserved for this package (01-PRODUCT-DIRECTION.md section 8).
+ls migrations | grep -E '^0041_'                        # expect no output
+ls migrations/0038_* migrations/0039_*                  # expect 2 files (WP25)
 
-# 2. The newest definition of refresh_market_analytics is WP25's. WP29's 0037 and the
+# 2. The newest definition of refresh_market_analytics is WP25's. WP29's 0042 and the
 #    other Track 2 migrations only call it, so they do not show up here.
 grep -lE "CREATE (OR REPLACE )?FUNCTION public\.refresh_market_analytics" migrations/*.sql | sort | tail -1
-# expect: migrations/0034_fx_daily.sql
+# expect: migrations/0039_fx_daily.sql
 
 # 3. No trigger on products rewrites columns on every UPDATE (apply_product_attributes
 #    updates products rows; a trigger that bumps last_updated would change the
@@ -207,7 +207,7 @@ grep -lE "CREATE (OR REPLACE )?FUNCTION public\.refresh_market_analytics" migrat
 grep -n "TRIGGER" migrations/0000_baseline.sql migrations/00*.sql | grep -i "ON public.products\b"   # expect no output
 ```
 
-If check 2 prints a later file, stop and report it to the owner. Do not improvise: a migration numbered above 0036 that replaces `refresh_market_analytics` would run after 0036 in every replay and drop this package's step, and 0036 cannot be edited after merge. The owner's fix is to have that later migration copy 0036's function body; say so in your report. If check 3 prints a trigger, read its function: if it only reacts to `usd_price` (WP16's plausibility guard style), continue and name it in the PR; if it sets `last_updated` or any other column on every UPDATE, stop and report it.
+If check 2 prints a later file, stop and report it to the owner. Do not improvise: a migration numbered above 0041 that replaces `refresh_market_analytics` would run after 0041 in every replay and drop this package's step, and 0041 cannot be edited after merge. The owner's fix is to have that later migration copy 0041's function body; say so in your report. If check 3 prints a trigger, read its function: if it only reacts to `usd_price` (WP16's plausibility guard style), continue and name it in the PR; if it sets `last_updated` or any other column on every UPDATE, stop and report it.
 
 ```bash
 # WP06 and WP11: recipe sharing state, server-fed calculator
@@ -263,16 +263,16 @@ If a hard check fails, stop and report which package is missing; this package ex
 
 Tooling:
 
-- Local Postgres for the database test, as in WP25: Docker (`docker run -d --name pokefin-replay -e POSTGRES_PASSWORD=postgres -p 55432:5432 postgres:17`) or the PostgreSQL 16 binaries on the dev container (`/usr/lib/postgresql/16/bin`). The SQL in this spec was applied twice in a row to a Supabase-shaped PostgreSQL 16.13 scratch database on top of WP25's 0033 and 0034 exactly as specified, and every case of the DB test (19) passed, twice in a row.
+- Local Postgres for the database test, as in WP25: Docker (`docker run -d --name pokefin-replay -e POSTGRES_PASSWORD=postgres -p 55432:5432 postgres:17`) or the PostgreSQL 16 binaries on the dev container (`/usr/lib/postgresql/16/bin`). The SQL in this spec was applied twice in a row to a Supabase-shaped PostgreSQL 16.13 scratch database on top of WP25's 0038 and 0039 exactly as specified, and every case of the DB test (19) passed, twice in a row.
 - A Python venv with `requirements.txt`, `pytest` and `psycopg[binary]` (WP21 added it).
 
 Baseline, from `frontend/`: `pnpm exec tsc --noEmit` (exit 0), `pnpm lint` (0 errors), `pnpm test --ci` (all pass). From the repo root: `python -m pytest tests/ -q` (all pass; DB modules skip without `POKEFIN_TEST_DATABASE_URL`). Record the counts for the PR.
 
-The work has two phases, like WP25. **Phase A** (steps 1 to 17) needs nothing from the owner; at its end open a draft PR titled `[waiting for DB types] feat: MSRP, pack contents, cost per pack and catalog box NAV (WP28)` and hand the owner Owner actions 1 and 2. **Phase B** (step 18) regenerates `frontend/app/types/database.ts` once 0036 is in production, then finishes the PR. In phase A, `tsc` fails on the new `.from("product_catalog_attributes")` and `.from("product_contents")` reads and on the new `product_stats_latest` columns until phase B; that is expected and the only allowed failure in phase A.
+The work has two phases, like WP25. **Phase A** (steps 1 to 17) needs nothing from the owner; at its end open a draft PR titled `[waiting for DB types] feat: MSRP, pack contents, cost per pack and catalog box NAV (WP28)` and hand the owner Owner actions 1 and 2. **Phase B** (step 18) regenerates `frontend/app/types/database.ts` once 0041 is in production, then finishes the PR. In phase A, `tsc` fails on the new `.from("product_catalog_attributes")` and `.from("product_contents")` reads and on the new `product_stats_latest` columns until phase B; that is expected and the only allowed failure in phase A.
 
 ## Implementation steps
 
-### Step 1. `migrations/0036_product_attributes.sql` (new)
+### Step 1. `migrations/0041_product_attributes.sql` (new)
 
 Create the file with exactly this content:
 
@@ -305,7 +305,7 @@ Create the file with exactly this content:
 --   * Every price-anchored column is NULL when the product's price is
 --     withheld, like the rest of product_daily_stats.
 --
--- refresh_market_analytics (0033, 0034) is replaced to run the new step after
+-- refresh_market_analytics (0038, 0039) is replaced to run the new step after
 -- the per-product stats step, keeping every earlier call. Later packages that
 -- replace it again must keep refresh_product_structure_stats(p_day) after
 -- refresh_product_daily_stats(p_day). product_stats_latest is re-created so
@@ -502,7 +502,7 @@ $$;
 REVOKE ALL ON FUNCTION public.refresh_product_structure_stats(date) FROM PUBLIC, anon, authenticated;
 
 -- ============================================================
--- 5. refresh_market_analytics with the structure step (replaces 0034's body)
+-- 5. refresh_market_analytics with the structure step (replaces 0039's body)
 -- ============================================================
 
 CREATE OR REPLACE FUNCTION public.refresh_market_analytics(p_day date)
@@ -548,7 +548,7 @@ GRANT EXECUTE ON FUNCTION public.refresh_market_analytics(date) TO service_role,
 -- 6. Read paths
 -- ============================================================
 
--- Same definition as 0033. Re-created so s.* includes the new columns (a
+-- Same definition as 0038. Re-created so s.* includes the new columns (a
 -- view's column list is fixed when it is created); they are appended last.
 CREATE OR REPLACE VIEW public.product_stats_latest
 WITH (security_invoker = true)
@@ -710,7 +710,7 @@ GRANT EXECUTE ON FUNCTION public.apply_product_attributes(jsonb, jsonb, boolean)
 Check it (repo root):
 
 ```bash
-python3 verify_migration.py migrations/0036_product_attributes.sql > /tmp/wp28_0036.sql; echo "exit=$?"
+python3 verify_migration.py migrations/0041_product_attributes.sql > /tmp/wp28_0041.sql; echo "exit=$?"
 # expect exit=3 and on stderr:
 #   -- function refresh_product_structure_stats(p_day date): body <md5>, ..., security invoker, plpgsql, ..., config search_path=public,pg_temp
 #   -- function refresh_market_analytics(p_day date): body <md5>, ..., security definer, ...
@@ -722,10 +722,10 @@ python3 verify_migration.py migrations/0036_product_attributes.sql > /tmp/wp28_0
 #     and to service_role on apply_product_attributes)
 #   -- rls public.product_contents: enabled
 #   -- NOT VERIFIED (out of scope, check by hand): 2 x ALTER TABLE (other than RLS enablement), 1 x CREATE (table/type/etc), 2 x CREATE VIEW, 9 x DO block
-grep -c "^-- privilege" <(python3 verify_migration.py migrations/0036_product_attributes.sql 2>&1 >/dev/null)   # 54
+grep -c "^-- privilege" <(python3 verify_migration.py migrations/0041_product_attributes.sql 2>&1 >/dev/null)   # 54
 ```
 
-With the file copied verbatim the three body hashes are `af76b02b8c6b787089fb8128840aa68e` (`refresh_product_structure_stats`), `15d9ade57a450fd11bd1dfd52d362b91` (`refresh_market_analytics`) and `5a67186d788f8906e8db3eeed0ade5e6` (`apply_product_attributes`). Any edit changes them; what matters is that the generated query returns only OK rows after apply. After 0036 is applied, the 0033 and 0034 queries each report one `MISMATCH` (`refresh_market_analytics`, body): 0036 superseded them. That is the expected cross-file result.
+With the file copied verbatim the three body hashes are `af76b02b8c6b787089fb8128840aa68e` (`refresh_product_structure_stats`), `15d9ade57a450fd11bd1dfd52d362b91` (`refresh_market_analytics`) and `5a67186d788f8906e8db3eeed0ade5e6` (`apply_product_attributes`). Any edit changes them; what matters is that the generated query returns only OK rows after apply. After 0041 is applied, the 0038 and 0039 queries each report one `MISMATCH` (`refresh_market_analytics`, body): 0041 superseded them. That is the expected cross-file result.
 
 Replay locally (WP21 harness):
 
@@ -765,7 +765,7 @@ Load the owner-curated MSRP, release dates and pack contents (WP28).
 
 Reads data/product_attributes.csv and data/product_contents.csv, validates
 every row, and writes the reviewed rows through
-public.apply_product_attributes (migration 0036) in one transaction. The two
+public.apply_product_attributes (migration 0041) in one transaction. The two
 files are the whole truth: after --apply, a product without a reviewed row
 has no MSRP, no release date override and no contents.
 
@@ -812,8 +812,8 @@ MSRP_USD_MIN, MSRP_USD_MAX = Decimal("1.00"), Decimal("2000.00")
 MSRP_CAD_MIN, MSRP_CAD_MAX = Decimal("1.00"), Decimal("3000.00")
 PROMO_USD_MAX = Decimal("1000.00")
 QUANTITY_MIN, QUANTITY_MAX = 1, 100
-MSRP_SOURCE_MAX_LEN = 200  # products_msrp_source_len (0036)
-RELEASE_DATE_MIN = date(1996, 1, 1)  # products_release_date_sane (0036)
+MSRP_SOURCE_MAX_LEN = 200  # products_msrp_source_len (0041)
+RELEASE_DATE_MIN = date(1996, 1, 1)  # products_release_date_sane (0041)
 RELEASE_DATE_MAX_AHEAD_DAYS = 366
 PACK_TYPE_NAME = "booster_pack"
 
@@ -1384,7 +1384,7 @@ The era table holds defaults for the owner to check, not facts. Do not add rules
 5a. In `interface ProductDailyStats` (WP25), add after `liquidity_score: number | null;`:
 
 ```ts
-  /** WP28 (migration 0036): Market Price / US MSRP. */
+  /** WP28 (migration 0041): Market Price / US MSRP. */
   msrp_multiple: number | null;
   /** WP28: Market Price / booster packs in the product. */
   cost_per_pack_usd: number | null;
@@ -1403,7 +1403,7 @@ The five fields are required, so `tsc` flags any existing test or fixture that b
 5b. Append at the end of the file:
 
 ```ts
-// ---- WP28: product attributes (migration 0036) ----
+// ---- WP28: product attributes (migration 0041) ----
 
 /** One product_catalog_attributes row: curated MSRP, release date and pack count. */
 export interface ProductCatalogAttributes {
@@ -1434,7 +1434,7 @@ export interface ProductContentRow {
 - Append to `STALE_ROW_WITHHELD_COLUMNS`, after `"liquidity_score",`:
 
 ```ts
-  // WP28 (0036): anchored on the product's current price and its packs' prices.
+  // WP28 (0041): anchored on the product's current price and its packs' prices.
   "msrp_multiple",
   "cost_per_pack_usd",
   "nav_usd",
@@ -1455,11 +1455,11 @@ export interface ProductContentRow {
 
 ```ts
 /**
- * MSRP, pack contents and the catalog structure metrics (migration 0036,
+ * MSRP, pack contents and the catalog structure metrics (migration 0041,
  * WP28): status copy, formatting and the read helpers pages use.
  *
  * NAV_STATUSES mirrors the product_daily_stats_nav_status_valid CHECK in
- * 0036 and is drift-tested (productAttributesConstants.test.ts); change both
+ * 0041 and is drift-tested (productAttributesConstants.test.ts); change both
  * together and bump METHODOLOGY_VERSION. Isomorphic: no React, no Supabase.
  */
 import type { ProductCatalogAttributes, ProductContentRow } from "../types/market";
@@ -1608,7 +1608,7 @@ import {
 7c. Directly below WP25's `fetchFxDaily` function, add:
 
 ```ts
-/** Columns of product_catalog_attributes (migration 0036). Listed, not "*". */
+/** Columns of product_catalog_attributes (migration 0041). Listed, not "*". */
 const PRODUCT_ATTRIBUTES_SELECT = `product_id, msrp_usd, msrp_cad, msrp_source,
   release_date, release_date_source, pack_count`;
 
@@ -2381,7 +2381,7 @@ Both reads use plain `select`, `order` (one or two keys) and `range`, which WP22
 15b. `frontend/app/lib/metricDefinitions.ts`: append to the product-level group of `DEFINITIONS`, directly after WP25's `distinctPrices365d` entry:
 
 ```ts
-  // Sealed structure (WP28, migration 0036)
+  // Sealed structure (WP28, migration 0041)
   def({ key: "msrp", label: "MSRP", unitLabel: "USD", window: null, short: "Suggested US retail price at launch, recorded by hand with its source. Never estimated.", anchor: "msrp" }),
   def({ key: "msrpMultiple", label: "x MSRP", unitLabel: "multiple", window: "latest TCGplayer day", short: "Market Price divided by the US MSRP. Hidden when either is missing or the price is withheld.", anchor: "msrp" }),
   def({ key: "costPerPack", label: "Cost per pack", unitLabel: "USD per pack", window: "latest TCGplayer day", short: "Market Price divided by the booster packs the product contains. Extras stay in the price.", anchor: "cost-per-pack" }),
@@ -2474,14 +2474,14 @@ Check: `grep -cP '\x{2014}' frontend/app/methodology/MethodologyArticle.tsx fron
   today's `product_daily_stats` and revalidates the site.
 - `refresh_market_analytics` fills `msrp_multiple`, `cost_per_pack_usd`,
   `nav_usd`, `premium_to_packs_pct` and `nav_status` from them daily. Rules:
-  `migrations/0036_product_attributes.sql` and `/methodology#msrp`,
+  `migrations/0041_product_attributes.sql` and `/methodology#msrp`,
   `#cost-per-pack`, `#box-nav`.
 ```
 
 16b. `audits/HARDENING_FOLLOWUPS.md` section 7: add as the newest bullet of the migration run (directly above the newest existing "**Migration" bullet):
 
 ```markdown
-- **Migration 0036: pending apply** (WP28). `products.msrp_usd`, `msrp_cad`,
+- **Migration 0041: pending apply** (WP28). `products.msrp_usd`, `msrp_cad`,
   `msrp_source`, `release_date`; `product_contents`; five structure columns on
   `product_daily_stats`; `refresh_product_structure_stats(date)`;
   `refresh_market_analytics(date)` replaced (adds the structure step);
@@ -2496,7 +2496,7 @@ Write every file in the Tests section below. Then run the phase A checks from Ve
 
 ### Step 18. Phase B: generated types
 
-After the owner has applied 0036 (Owner action 1):
+After the owner has applied 0041 (Owner action 1):
 
 ```bash
 cd frontend
@@ -2513,7 +2513,7 @@ Do not edit the generated file. If `tsc` rejects a row assignment in `fetchProdu
 - **Do not compute x MSRP from `msrp_cad`,** and do not convert it at today's rate. Market Price is a US marketplace price; the multiple is `usd_price / msrp_usd`, the same in USD and CAD views.
 - **Do not price a set from a variant pack in SQL,** and do not let the calculator do it silently: the catalog NAV uses only the standard pack (`variant` NULL or blank); the calculator's existing fallback stays but its row now says "priced from {variant} pack".
 - **Do not value a withheld pack at $0,** and do not compute NAV when the product's own price is withheld. `nav_status` says why; the UI shows `--` or the reason.
-- **Do not re-run 0033 or 0034 after 0036 is applied.** Their `CREATE OR REPLACE` would put back a `refresh_market_analytics` without the structure step. Only re-run the newest file that defines it. The same rule binds any later package that replaces the function (none of WP29 to WP37 does today; WP29's 0037 only calls it): copy 0036's function body, keep `refresh_product_structure_stats(p_day)` after `refresh_product_daily_stats(p_day)`, and keep the `structure_rows` key.
+- **Do not re-run 0038 or 0039 after 0041 is applied.** Their `CREATE OR REPLACE` would put back a `refresh_market_analytics` without the structure step. Only re-run the newest file that defines it. The same rule binds any later package that replaces the function (none of WP29 to WP37 does today; WP29's 0042 only calls it): copy 0041's function body, keep `refresh_product_structure_stats(p_day)` after `refresh_product_daily_stats(p_day)`, and keep the `structure_rows` key.
 - **Do not drop and re-create `product_stats_latest`** in a later migration without `s.*` (or without the five columns): `getCachedProductStats` selects them by name.
 - **Do not skip step 5c.** The four structure numbers are price-anchored; WP25's read-time gate must withhold them like `usd_price` when the stats rows stop advancing.
 - **Do not show a multiple beside a withheld price.** `/prices` builds its map only from the products it shows priced (`pricedIds`, step 12a).
@@ -2865,11 +2865,11 @@ def test_template_appends_only_missing_products_and_gives_packs_no_contents(tmp_
 
 ### 3. `tests/test_wp28_product_attributes_db.py` (new, needs the replayed database)
 
-The SQL gating test. Skipped unless `POKEFIN_TEST_DATABASE_URL` is set; CI's "Database replay and Python tests" job sets it to `replay_once`. It covers: the fixture CSV loaded end to end (x MSRP, cost per pack, NAV and premium on a booster box), promo value in NAV, a stale pack (NULL NAV, `pack_price_withheld`, cost per pack kept), a stale box (every structure column NULL), a variant-only set (`no_standard_pack`), uncurated products, the global "no value without a fresh price" invariant, the release-date default, full-sync semantics and idempotency of `apply_product_attributes`, the empty-payload guard, rejected payloads writing nothing, and the role grants. 19 passed against the scratch database, twice in a row on the same database (it cleans up after itself); WP25's 22 cases still pass on a database with 0036 applied.
+The SQL gating test. Skipped unless `POKEFIN_TEST_DATABASE_URL` is set; CI's "Database replay and Python tests" job sets it to `replay_once`. It covers: the fixture CSV loaded end to end (x MSRP, cost per pack, NAV and premium on a booster box), promo value in NAV, a stale pack (NULL NAV, `pack_price_withheld`, cost per pack kept), a stale box (every structure column NULL), a variant-only set (`no_standard_pack`), uncurated products, the global "no value without a fresh price" invariant, the release-date default, full-sync semantics and idempotency of `apply_product_attributes`, the empty-payload guard, rejected payloads writing nothing, and the role grants. 19 passed against the scratch database, twice in a row on the same database (it cleans up after itself); WP25's 22 cases still pass on a database with 0041 applied.
 
 ```python
 """
-Database checks for migration 0036 (MSRP, pack contents, the structure
+Database checks for migration 0041 (MSRP, pack contents, the structure
 columns of product_daily_stats, apply_product_attributes), run against a
 database rebuilt by scripts/db/replay_migrations.sh.
 
@@ -3325,7 +3325,7 @@ import path from "node:path";
 import { NAV_STATUSES } from "../productAttributes";
 
 const MIGRATIONS = path.resolve(__dirname, "../../../../migrations");
-const sql0036 = fs.readFileSync(path.join(MIGRATIONS, "0036_product_attributes.sql"), "utf8");
+const sql0036 = fs.readFileSync(path.join(MIGRATIONS, "0041_product_attributes.sql"), "utf8");
 
 /** Text of the highest-numbered NNNN_*.sql file that defines `fn`. */
 function newestDefinition(fn: string): string {
@@ -3698,8 +3698,8 @@ Keep every existing case. Add, using the file's `buildBoosterPackData` helpers:
 Repo root:
 
 ```bash
-python3 verify_migration.py migrations/0036_product_attributes.sql > /dev/null; echo "exit=$?"   # exit=3
-grep -c "^-- privilege" <(python3 verify_migration.py migrations/0036_product_attributes.sql 2>&1 >/dev/null)   # 54
+python3 verify_migration.py migrations/0041_product_attributes.sql > /dev/null; echo "exit=$?"   # exit=3
+grep -c "^-- privilege" <(python3 verify_migration.py migrations/0041_product_attributes.sql 2>&1 >/dev/null)   # 54
 
 PGSERVER_URL=postgresql://postgres:postgres@localhost:55432/postgres scripts/db/replay_migrations.sh
 # "OK: <N> files replayed once (replay_once) and twice (replay_twice)"
@@ -3767,7 +3767,7 @@ Manual checks (`pnpm build:stub` with the perf fixture, then `node scripts/perf-
 
 ## Owner actions
 
-1. **Apply the migration** with Supabase MCP `apply_migration` (preferred) or the SQL editor: `0036_product_attributes.sql`, after 0033 and 0034 (0035 may come before or after it). Then run the `verify_migration.py` query for 0036: every row OK. The 0033 and 0034 queries now each report one `MISMATCH` for the `refresh_market_analytics` body (superseded by 0036, expected). Then run `SELECT public.refresh_market_analytics((now() AT TIME ZONE 'UTC')::date);` (the result includes `structure_rows`, about the active product count) and the three verification queries in the migration header (expect 0, 0, and `false, false`). Apply before the code deploys: the new stats columns are selected by name.
+1. **Apply the migration** with Supabase MCP `apply_migration` (preferred) or the SQL editor: `0041_product_attributes.sql`, after 0038 and 0039 (0040 may come before or after it). Then run the `verify_migration.py` query for 0041: every row OK. The 0038 and 0039 queries now each report one `MISMATCH` for the `refresh_market_analytics` body (superseded by 0041, expected). Then run `SELECT public.refresh_market_analytics((now() AT TIME ZONE 'UTC')::date);` (the result includes `structure_rows`, about the active product count) and the three verification queries in the migration header (expect 0, 0, and `false, false`). Apply before the code deploys: the new stats columns are selected by name.
 2. **Types for phase B.** Run `pnpm types:db` with your access token and push `frontend/app/types/database.ts` to the branch, or give the executor a token.
 3. **Curate (decision D7, about 3 to 5 hours).** From the repo root with the scraper env sourced (`set -a && source ~/.config/pokefin/env && set +a`):
    - `python scripts/make_attribute_template.py` (dry run: prints the counts and the first rows), then `python scripts/make_attribute_template.py --write`.
@@ -3776,12 +3776,12 @@ Manual checks (`pnpm build:stub` with the perf fixture, then `node scripts/perf-
 4. **Load.** With the service key available to `secrets_loader.load_supabase_credentials` and `REVALIDATE_URL`/`REVALIDATE_SECRET` set: `python scripts/load_product_attributes.py` (dry run: read every `UNKNOWN` line; fix or remove those rows), then `python scripts/load_product_attributes.py --apply`. Expect "Applied: {...}", "Market analytics refreshed for ...: {..., "structure_rows": ...}" and "Site caches revalidated."
 5. **Optional history.** `python scripts/backfill_daily_stats.py` re-runs 400 days (about 7 minutes) so the new columns have a past (MSRP and contents are static, so past days compute correctly). WP31's premium-over-time view uses it.
 6. **Check production**: `/prices` shows x MSRP on curated products; `/box-calculator?product=<a booster box id>` is fully pre-filled; and in the SQL editor `SELECT nav_status, count(*) FROM public.product_stats_latest GROUP BY 1;` shows `ok` for boxes whose packs are fresh.
-7. **Record it.** In `audits/HARDENING_FOLLOWUPS.md` section 7, change "**Migration 0036: pending apply**" to "**Migration 0036 applied** (YYYY-MM-DD, via Supabase MCP)" with the counts from step 4, and commit to `master` as `docs: record migration 0036 as applied`.
+7. **Record it.** In `audits/HARDENING_FOLLOWUPS.md` section 7, change "**Migration 0041: pending apply**" to "**Migration 0041 applied** (YYYY-MM-DD, via Supabase MCP)" with the counts from step 4, and commit to `master` as `docs: record migration 0041 as applied`.
 8. **Later, for each new product**: `make_attribute_template.py --write` appends only products the files do not list; review, commit, load.
 
 ## Acceptance criteria
 
-- [ ] `migrations/0036_product_attributes.sql` exists with the content of step 1; no other migration file changed; `verify_migration.py` exits 3 with 54 privilege lines; the replay harness passes once and twice.
+- [ ] `migrations/0041_product_attributes.sql` exists with the content of step 1; no other migration file changed; `verify_migration.py` exits 3 with 54 privilege lines; the replay harness passes once and twice.
 - [ ] `tests/test_wp28_product_attributes_db.py`: 19 passed against `replay_once`, twice in a row; skipped without the env var; WP25's DB module still passes.
 - [ ] With the fixture CSV loaded, the booster box's `product_daily_stats` row has `msrp_multiple` 198/143.64, `cost_per_pack_usd` 5.5, `nav_usd` 180, `premium_to_packs_pct` 10 and `nav_status` `ok`.
 - [ ] A stale pack gives `nav_usd` NULL with `nav_status = 'pack_price_withheld'` and keeps cost per pack; a stale box has every structure column NULL (`box_price_withheld`); a variant-only set gives `no_standard_pack`; no structure value exists where `is_price_fresh` is false.
@@ -3804,13 +3804,13 @@ Manual checks (`pnpm build:stub` with the perf fixture, then `node scripts/perf-
 
 - **Code**: revert the PR. `/prices` loses the caption, the calculator loses the picker; the loader and template disappear. The database objects stay and are harmless: nothing else reads them, and the refresh keeps filling the columns.
 - **Curated data**: the CSVs in git are the source of truth; re-running the loader restores the database from them at any time.
-- **Database** (after the code revert, and only after reverting the packages that read these objects: WP30, WP31, WP33, WP34 and WP35 read them softly, so their code must stop selecting the columns first). As a new numbered migration `NNNN_drop_product_attributes.sql` at the next free number, never by editing 0036:
+- **Database** (after the code revert, and only after reverting the packages that read these objects: WP30, WP31, WP33, WP34 and WP35 read them softly, so their code must stop selecting the columns first). As a new numbered migration `NNNN_drop_product_attributes.sql` at the first free number above 0047 (numbers up to 0047 are reserved; see `audits/remediation/00-PLAN.md`, "Migration registry"), never by editing 0041:
 
 ```sql
 -- 1. Put back the refresh without the structure step: paste section 3 of
---    migrations/0034_fx_daily.sql verbatim here (from
+--    migrations/0039_fx_daily.sql verbatim here (from
 --    "CREATE OR REPLACE FUNCTION public.refresh_market_analytics" through its
---    GRANT EXECUTE line). Do not re-run the whole 0034 file.
+--    GRANT EXECUTE line). Do not re-run the whole 0039 file.
 
 -- 2. Drop this package's objects.
 DROP FUNCTION IF EXISTS public.apply_product_attributes(jsonb, jsonb, boolean);
@@ -3819,7 +3819,7 @@ DROP VIEW IF EXISTS public.product_catalog_attributes;
 DROP TABLE IF EXISTS public.product_contents;
 
 -- 3. The view must be re-created to lose columns: drop it, drop the columns,
---    then paste section 5 of migrations/0033_product_daily_stats.sql verbatim
+--    then paste section 5 of migrations/0038_product_daily_stats.sql verbatim
 --    (the CREATE OR REPLACE VIEW public.product_stats_latest statement and its
 --    REVOKE and GRANT lines).
 DROP VIEW IF EXISTS public.product_stats_latest;
@@ -3846,10 +3846,10 @@ Branch: `remediation/wp28-msrp-and-pack-contents`.
 
 Commits (phase A, in this order; phase B adds the fourth):
 
-1. `feat(db): product attributes, pack contents and catalog NAV (WP28)`: `migrations/0036_product_attributes.sql`, `tests/test_wp28_product_attributes_db.py`, `tests/fixtures/wp28/*`.
+1. `feat(db): product attributes, pack contents and catalog NAV (WP28)`: `migrations/0041_product_attributes.sql`, `tests/test_wp28_product_attributes_db.py`, `tests/fixtures/wp28/*`.
 2. `feat(scripts): curated MSRP and contents loader and template (WP28)`: both scripts, `data/*.csv` (headers), `tests/test_wp28_product_attributes.py`, `README.md`, `audits/HARDENING_FOLLOWUPS.md`.
 3. `feat(ui): x MSRP on cards, calculator starts from a catalog product (WP28)`: everything under `frontend/`.
-4. `chore(types): regenerate database types for 0036 (WP28)`.
+4. `chore(types): regenerate database types for 0041 (WP28)`.
 
 Squash-merge message:
 
@@ -3859,7 +3859,7 @@ feat: MSRP, pack contents, cost per pack and catalog box NAV (WP28)
 x MSRP and cost per pack are the numbers sealed collectors price in, and
 the calculator made every visitor type a recipe even for a booster box.
 
-- 0036: products.msrp_usd, msrp_cad, msrp_source, release_date;
+- 0041: products.msrp_usd, msrp_cad, msrp_source, release_date;
   product_contents; product_daily_stats gains msrp_multiple,
   cost_per_pack_usd, nav_usd, premium_to_packs_pct and nav_status,
   written by a new step of refresh_market_analytics under the 0023 gate;

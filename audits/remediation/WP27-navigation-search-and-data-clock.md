@@ -3,7 +3,7 @@
 - **Goal**: from any page, a visitor finds any product in two keystrokes (`/` or Ctrl-K, then type), sees in the header when the newest price was recorded (amber when collection has stalled), moves between Market, Prices, Screener, Sets, Portfolio and Tools, picks CAD or USD once in the header for the whole site, and sees Pokéfin's own mark instead of a Poké Ball in the header, footer, sign-in pages, browser tab and home screen icon.
 - **Why now / value**: the nav is organised by tool ("Market View", "Set Analytics", "Seller Tools"), hides Portfolio from logged-out visitors and has no search, which is the most used control on every competitor (research/ui-audit.md "Navigation and information architecture"). The collector runs on the owner's laptop and can stop silently; nothing on the site says so (research/trust-seo-brand.md §10.2). The logo is a mark owned by the Pokémon rights holders on a site that promotes a store (trust-seo-brand.md §14.1). WP32 (home header search trigger), WP33 (Screener rename), WP34 (watch sign-in copy) and WP37 (Sets links) all build on the nav config, search trigger and login copy this package creates.
 - **Effort**: L, about 15 hours (nav config, header, menus and sheet 4 h; catalog route, search index, launcher and panel 4.5 h; data clock 1.5 h; mark, icon set and manifest 1.5 h; currency toggle migration 1.5 h; footer, login copy, page titles and smoke check 0.5 h; tests and verification 1.5 h).
-- **Depends on**: WP13 (`app/lib/redirects.ts` with `safeReturnToPath` and `loginPathWithNext`, `app/auth/login/LoginForm.tsx` with its `Suspense` readers, `app/lib/site.ts`, `app/icon.png` and `app/apple-icon.png` copies, `viewport.themeColor`), WP14 (`app/components/ui/Dialog.tsx`, the jsdom `<dialog>` polyfill, `html:has(dialog[open])` scroll lock), WP20 (`CurrencyProvider` and `useCurrency` in `app/context/CurrencyContext.tsx`, `app/lib/currency.ts`, `app/types/market.ts`, async root layout), WP22 (`perf-budgets.json`, `pnpm perf:budget`, `scripts/prod-smoke-lib.mjs`), WP23 (`SegmentedControl`, `Button`/`buttonClasses`, `Delta`, `AsOf`, `icons.tsx`, token utilities, `uiConventions.test.ts` with `BRAND_FILES` and the hex and brand-red ratchets), WP24 (server `Footer.tsx` with `FooterGate`, `app/lib/contactLink.ts`, `app/lib/jsonLd.ts`, `/methodology` with `#cadence`, `TRUST_FILES` rule). Through them: WP03 and WP04 (`Header.test.tsx`, `Header.auth.test.tsx`, `sessionStatus`), WP07 (`format.ts`), WP08 (`urlState.ts`, `locationSearch.ts`), WP11 (`cacheTags.ts`, `getCachedMarketProductSummaries`, React `cache` import in `serverMarketData.ts`), WP15 (`CardRinkPromo` as a server `<aside>`).
+- **Depends on**: WP38 (`isExchangeRateStale` in `app/lib/currency.ts`, used by `rateSentence`), WP13 (`app/lib/redirects.ts` with `safeReturnToPath` and `loginPathWithNext`, `app/auth/login/LoginForm.tsx` with its `Suspense` readers, `app/lib/site.ts`, `app/icon.png` and `app/apple-icon.png` copies, `viewport.themeColor`), WP14 (`app/components/ui/Dialog.tsx`, the jsdom `<dialog>` polyfill, `html:has(dialog[open])` scroll lock), WP20 (`CurrencyProvider` and `useCurrency` in `app/context/CurrencyContext.tsx`, `app/lib/currency.ts`, `app/types/market.ts`, async root layout), WP22 (`perf-budgets.json`, `pnpm perf:budget`, `scripts/prod-smoke-lib.mjs`), WP23 (`SegmentedControl`, `Button`/`buttonClasses`, `Delta`, `AsOf`, `icons.tsx`, token utilities, `uiConventions.test.ts` with `BRAND_FILES` and the hex and brand-red ratchets), WP24 (server `Footer.tsx` with `FooterGate`, `app/lib/contactLink.ts`, `app/lib/jsonLd.ts`, `/methodology` with `#cadence`, `TRUST_FILES` rule). Through them: WP03 and WP04 (`Header.test.tsx`, `Header.auth.test.tsx`, `sessionStatus`), WP07 (`format.ts`), WP08 (`urlState.ts`, `locationSearch.ts`), WP11 (`cacheTags.ts`, `getCachedMarketProductSummaries`, React `cache` import in `serverMarketData.ts`), WP15 (`CardRinkPromo` as a server `<aside>`).
 - **Unblocks**: WP32 (puts `SearchTrigger` and `openGlobalSearch()` in the home header), WP33 (changes the Screener `href` in `navConfig.ts` only), WP34 (Watchlist entry in the account menu and sheet; signed-out watch links use `watchLoginPath()` so sign-in shows the watch copy), WP35 (same login copy), WP37 (changes the Sets `href`, `setSearchHref()` and adds set links to the footer Browse column), and the deferred offline shell (the catalog payload is versioned for it).
 - **Placement**: after WP24 (footer rows and the `/methodology#cadence` anchor). It can run in parallel with WP25 and WP26. It must precede WP32. It resolves the "Seller Tools in primary nav" item WP15 lists under "Noticed, out of scope", so WP15 needs no change. No migrations.
 - **Suggested branch name**: `remediation/wp27-navigation-search-and-data-clock`
@@ -289,7 +289,7 @@ Read in full:
 - `app/components/Footer.tsx`, `app/components/FooterGate.tsx`, `app/components/CardRinkPromo.tsx` (WP15, WP24 versions).
 - `app/layout.tsx` (WP13 metadata and viewport, WP20 `CurrencyProvider`, WP22 `SpeedInsightsClient`, WP23 single font).
 - `app/components/ui/Dialog.tsx` and its test (WP14), `app/components/ui/SegmentedControl.tsx`, `Button.tsx`, `Delta.tsx`, `AsOf.tsx`, `icons.tsx`, `README.md` (WP23).
-- `app/context/CurrencyContext.tsx`, `app/lib/currency.ts` (WP20), `app/components/ProductPrices/hooks/useCurrencyConversion.ts`.
+- `app/context/CurrencyContext.tsx`, `app/lib/currency.ts` (WP20; WP38 step 13 added `isExchangeRateStale`, which step 18 imports: `grep -n "export function isExchangeRateStale" app/lib/currency.ts` prints 1 line), `app/components/ProductPrices/hooks/useCurrencyConversion.ts`.
 - `app/components/ProductPrices/index.tsx`, `app/components/ProductPrices/utils/urlState.ts` and its tests, `app/components/ProductPrices/utils/filtering.ts`, `app/components/ProductPrices/controls/ControlBar.tsx`, `CurrencySelector.tsx`, `app/lib/locationSearch.ts` (WP08).
 - `app/components/MarketView/MarketView.tsx` (the `ControlBar` call), `app/portfolio/page.tsx`, `app/components/BoxCalculator/BoxCalculator.tsx` (the `CurrencySelector` call), `app/components/dashboard/RecentlyReleased.tsx`.
 - `app/lib/serverMarketData.ts` (WP11's cached exports block, and WP25's additions if present), `app/lib/cacheTags.ts`, `app/lib/format.ts`, `app/lib/marketPulse.ts` (`isPriceFresh`), `app/lib/priceGuard.ts` (`hasCurrentPrice`), `app/lib/redirects.ts`, `app/lib/site.ts`, `app/lib/contactLink.ts`, `app/lib/jsonLd.ts`, `app/product/[id]/productMeta.ts` (`getProductDisplayName`), `app/components/ProductPrices/shared/ProductImage.tsx` (`toThumbnailUrl`).
@@ -2321,6 +2321,7 @@ export default function HeaderMenu({ id, label, buttonClassName, align = "start"
 
 import SegmentedControl, { type SegmentedOption } from "../ui/SegmentedControl";
 import { useCurrency } from "../../context/CurrencyContext";
+import { isExchangeRateStale } from "../../lib/currency";
 import { formatMonthDay, recordedAtDateKey } from "../../lib/format";
 import type { Currency } from "../../types/market";
 
@@ -2329,13 +2330,16 @@ const OPTIONS: readonly SegmentedOption<Currency>[] = [
   { value: "CAD", label: "CAD", ariaLabel: "Canadian dollars" },
 ];
 
-/** "1 USD = 1.3612 CAD, Bank of Canada rate of Sep 29". */
+/**
+ * "1 USD = 1.3612 CAD, Bank of Canada rate of Sep 29", plus " (stale)" when
+ * the rate is more than 4 business days old (WP38's isExchangeRateStale).
+ */
 export function rateSentence(rate: number, date: string | null, loading: boolean): string {
   if (loading) return "Loading the exchange rate…";
   const key = recordedAtDateKey(date);
-  return key
-    ? `1 USD = ${rate.toFixed(4)} CAD, Bank of Canada rate of ${formatMonthDay(key)}`
-    : `1 USD = ${rate.toFixed(4)} CAD (fallback rate)`;
+  if (!key) return `1 USD = ${rate.toFixed(4)} CAD (fallback rate)`;
+  const stale = isExchangeRateStale(date) ? " (stale)" : "";
+  return `1 USD = ${rate.toFixed(4)} CAD, Bank of Canada rate of ${formatMonthDay(key)}${stale}`;
 }
 
 /**
@@ -2382,6 +2386,8 @@ export interface MobileNavSheetProps {
   onClose: () => void;
   pathname: string;
   signedIn: boolean;
+  /** WP04 step 6: the first session check is still pending; the signed-out links render invisible. */
+  authPending: boolean;
   displayName: string;
   email: string | null;
   signInHref: string;
@@ -2415,6 +2421,7 @@ export default function MobileNavSheet({
   onClose,
   pathname,
   signedIn,
+  authPending,
   displayName,
   email,
   signInHref,
@@ -2461,7 +2468,10 @@ export default function MobileNavSheet({
             </ul>
           </div>
         ) : (
-          <div className="grid grid-cols-2 gap-3">
+          <div
+            className={`grid grid-cols-2 gap-3${authPending ? " invisible" : ""}`}
+            aria-hidden={authPending ? true : undefined}
+          >
             <Link href={signInHref} prefetch={false} onClick={onClose} className={buttonClasses({ variant: "secondary" })}>
               {ACCOUNT_NAV.signIn.label}
             </Link>
@@ -2528,9 +2538,12 @@ function MenuIcon() {
 }
 
 export default function Header({ dataStatus, dataStatusSheet }: HeaderProps) {
-  const { user, profile, sessionStatus, signOut } = useAuth();
-  // Signed-out UI while the session is unknown (WP04, review F124).
+  const { user, profile, loading, sessionStatus, signOut } = useAuth();
+  // WP04 step 6 (review F124): no skeleton. While the first session check is
+  // pending the signed-out links render invisible (and aria-hidden), so the
+  // slot keeps its width and a signed-in user never sees "Sign in" flash.
   const signedIn = sessionStatus === "authenticated" && user !== null;
+  const authPending = loading && !signedIn;
   const router = useRouter();
   const pathname = usePathname() ?? "/";
   const [menuOpen, setMenuOpen] = useState(false);
@@ -2658,14 +2671,17 @@ export default function Header({ dataStatus, dataStatusSheet }: HeaderProps) {
                 )}
               </HeaderMenu>
             ) : (
-              <>
+              <div
+                className={`flex items-center gap-2${authPending ? " invisible" : ""}`}
+                aria-hidden={authPending ? true : undefined}
+              >
                 <Link href={signInHref} prefetch={false} className={buttonClasses({ variant: "ghost", size: "sm" })}>
                   {ACCOUNT_NAV.signIn.label}
                 </Link>
                 <Link href={ACCOUNT_NAV.signUp.href} prefetch={false} className={buttonClasses({ size: "sm" })}>
                   {ACCOUNT_NAV.signUp.label}
                 </Link>
-              </>
+              </div>
             )}
           </div>
           <button
@@ -2686,6 +2702,7 @@ export default function Header({ dataStatus, dataStatusSheet }: HeaderProps) {
         onClose={() => setMenuOpen(false)}
         pathname={pathname}
         signedIn={signedIn}
+        authPending={authPending}
         displayName={displayName}
         email={user?.email ?? null}
         signInHref={signInHref}
@@ -3439,7 +3456,7 @@ Copy the `server-only`, `@supabase/supabase-js`, `next/cache` (`unstable_cache: 
 
 ### 16. `app/components/__tests__/Header.auth.test.tsx` (WP04, update)
 
-Change the expected labels "Sign In" to "Sign in" and "Sign Up" to "Create account". Keep all four cases (unknown and anonymous show the sign-in links and no `.animate-pulse`; authenticated shows the `/ash/` button and no "Sign in" link; unknown with a non-null user still shows "Sign in").
+Change the expected labels "Sign In" to "Sign in" and "Sign Up" to "Create account". Keep all six WP04 cases with their assertions: unknown with `loading: true` renders no `.animate-pulse`, no "Sign in" link by role, and the "Sign in" text inside an `aria-hidden="true"` ancestor with class `invisible` (WP04 step 6's placeholder, kept by step 20); unknown with `loading: false` and anonymous show the links with no `aria-hidden` or `invisible` ancestor; authenticated (with `loading` false or true) shows the `/ash/` button and no "Sign in" link; unknown with a non-null user still shows "Sign in".
 
 ### 17. `app/components/__tests__/Footer.test.tsx` (WP24 test 9, update)
 

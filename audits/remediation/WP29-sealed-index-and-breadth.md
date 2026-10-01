@@ -5,7 +5,7 @@
 - **Effort**: L, 14 to 16 hours (one migration validated twice on PostgreSQL 16 with a 23-case SQL fixture module, a backfill script, a scraper hook, two library modules, two cached reads, one server page with three components, two route handlers, methodology v-next, perf fixture and budgets, tests).
 - **Depends on**: WP21 (`pokefin_scraper` role, `scraper_db.py`, `scripts/db/replay_migrations.sh`, CI job "Database replay and Python tests"), WP22 (`frontend/perf-budgets.json`, `scripts/fixtures/perf.mjs`, `pnpm perf:budget`), WP23 (`Stat`, `Delta`, `Badge`, `DataList`, `EmptyState`, `Skeleton`, `PageHeader`, `ProvenanceLine`, `buttonClasses`, `WarnIcon`, chart tokens, `test-utils/axe.ts`), WP24 (`/methodology` with the `#index` placeholder, `app/content/methodology.ts`, `app/lib/metricDefinitions.ts`, `MetricLabel`, `app/lib/jsonLd.ts`), WP25 (`product_daily_stats`, `refresh_market_analytics(p_day)`, the 00:30 UTC pg_cron finalisation, `market_analytics.py`, `fetchAllRows` in `serverMarketData.ts`, methodology `#range-52w`). Through them: WP07 (`app/lib/format.ts`), WP11 (`cacheTags.ts`, `DAILY_BACKSTOP_SECONDS`, the scrape revalidation hook), WP13 (`app/sitemap.ts`, `app/lib/site.ts`), WP20 (`pnpm types:db`). Soft: WP26 (`app/lib/publicRoute.ts`, `publicMarketApi.ts`, `forbiddenChunks`, the public-route ESLint list) and WP27 (`navConfig.ts`); each step that touches them says what to do when they are absent.
 - **Unblocks**: WP31 (benchmark overlay via `/api/public/index/[code]`), WP32 (home header: `getCachedIndexSummary`, `currentSummaries`, breadth), WP36 (money-matched portfolio benchmark on the headline series), WP37 (set index charts: `set-<sets.id>` codes, `IndexChart`).
-- **Placement**: after WP25 (reads `product_daily_stats`; its nightly job follows WP25's 00:30 UTC finalisation and finalises the day itself if that job has not run). Parallel with WP28. Reserves migration **0037** and keeps it if it merges out of order. Must precede WP31, WP32, WP36 and WP37.
+- **Placement**: after WP25 (reads `product_daily_stats`; its nightly job follows WP25's 00:30 UTC finalisation and finalises the day itself if that job has not run). Parallel with WP28. Reserves migration **0042** and keeps it if it merges out of order. Must precede WP31, WP32, WP36 and WP37.
 - **Suggested branch name**: `remediation/wp29-sealed-index-and-breadth`
 - **Risk level**: medium. It adds a SECURITY DEFINER function the scraper and pg_cron call daily; the schema is additive (no existing object changes), writes happen only inside that function, published days are never rewritten, and a 23-case database test proves the arithmetic, the gates and reproducibility.
 
@@ -70,7 +70,7 @@ Notation: `s(p, t)` is product `p`'s `product_daily_stats` row for UTC day `t`. 
 | Publication | Only finished UTC days (`p_day < today`), so the site always shows D-1 | |
 | Catch-up | The nightly call fills at most 31 missing days; further behind, it writes nothing and returns `behind` (run the backfill). The backfill passes `p_start`, which may cross any gap, including a month that got no list and so wrote no level | A collection outage longer than 3 days shows as provisional days with flat levels: moves during the stop are not captured (documented). Re-running a published day returns `already_published` and writes nothing |
 
-Index family and codes (seeded by 0037 unless noted):
+Index family and codes (seeded by 0042 unless noted):
 
 | Code | Name | Kind | Filter |
 |---|---|---|---|
@@ -209,16 +209,16 @@ Copy rules: "as of the close of {date} (UTC)", "Market Price", "TCGplayer", "Equ
 
 Read:
 - `audits/remediation/01-PRODUCT-DIRECTION.md` §2, §3.4, §5 item 3, §6, §8 (migration registry); `research/data-opportunities.md` §2 (gates), §3.2, §3.7, §5; `research/trust-seo-brand.md` §4, §5.1, §9.
-- WP25's `migrations/0033_product_daily_stats.sql` and `0034_fx_daily.sql` (the columns this package reads, the `refresh_market_analytics` entry point and the pg_cron block this package copies), `market_analytics.py`, `scripts/backfill_daily_stats.py`, `tests/test_wp25_market_analytics_db.py` (fixture style), `tests/test_wp25_scripts.py`, `tests/test_main.py` (WP25's `TestRunJobsOnceMarketAnalytics` and the `_no_market_analytics_refresh` fixture).
+- WP25's `migrations/0038_product_daily_stats.sql` and `0039_fx_daily.sql` (the columns this package reads, the `refresh_market_analytics` entry point and the pg_cron block this package copies), `market_analytics.py`, `scripts/backfill_daily_stats.py`, `tests/test_wp25_market_analytics_db.py` (fixture style), `tests/test_wp25_scripts.py`, `tests/test_main.py` (WP25's `TestRunJobsOnceMarketAnalytics` and the `_no_market_analytics_refresh` fixture).
 - WP21's `scraper_db.py` (`_execute`, dict rows), `scripts/db/replay_migrations.sh`, `verify_migration.py` (repo root).
 - `frontend/app/lib/serverMarketData.ts` (WP11 cached exports, WP25's `fetchAllRows`, `getCachedProductStats` pattern), `frontend/app/lib/cacheTags.ts`, `frontend/app/lib/format.ts` (`splitDateKey`, `MONTHS_SHORT`, `formatPercent`), `frontend/app/lib/jsonLd.ts`, `frontend/app/lib/site.ts`, `frontend/app/content/methodology.ts`, `frontend/app/methodology/MethodologyArticle.tsx` and its test, `frontend/app/lib/metricDefinitions.ts` and its test, `frontend/app/components/ui/*` (WP23 props), `frontend/app/sitemap.ts` and `app/__tests__/sitemap.test.ts`, `frontend/perf-budgets.json`, `frontend/scripts/fixtures/perf.mjs`, `frontend/scripts/perf-fixture.test.mjs`. If present: `frontend/app/lib/publicRoute.ts`, `frontend/app/lib/publicMarketApi.ts`, `frontend/eslint.config.mjs` (`PUBLIC_ROUTE_CLIENT_FILES`), `frontend/app/components/nav/navConfig.ts` and `app/components/__tests__/Footer.test.tsx`.
 
 Confirm the starting state (repo root):
 
 ```bash
-# Migration number: 0037 is free (0036 may or may not exist: WP28 runs in parallel)
-ls migrations | grep -E '^0037_'                                            # no output
-ls migrations/0033_* migrations/0034_*                                      # WP25: 2 files
+# Migration number: 0042 is free (0041 may or may not exist: WP28 runs in parallel)
+ls migrations | grep -E '^0042_'                                            # no output
+ls migrations/0038_* migrations/0039_*                                      # WP25: 2 files
 
 # WP21
 ls migrations/0032_* migrations/0000_baseline.sql scripts/db/replay_migrations.sh scraper_db.py
@@ -261,15 +261,15 @@ If a hard-dependency check fails, stop and report which package is missing; this
 - `forbiddenChunks` or `PUBLIC_ROUTE_CLIENT_FILES` missing: skip steps 21c and 20; the page test's source guard (Tests, frontend item 6) is then the only zero-chart-JS gate, and the PR asks WP26 to add `/indices/sealed` to its rules.
 - `navConfig.ts` missing (WP27 not merged): skip steps 23b and 23c and list the footer link (step 23b's code) in the PR's "Noticed, out of scope" line for the next package that edits `navConfig.ts` (WP32 or WP37).
 
-Tooling: PostgreSQL 16 or 17 for the database tests (Docker `postgres:17` or `/usr/lib/postgresql/16/bin`), a Python venv with `requirements.txt` plus `pytest` and `psycopg[binary]` (WP21). The SQL in step 1 was applied twice in a row to a scratch database built from WP25's 0033 and 0034 on PostgreSQL 16.13, `verify_migration.py` reported 113 OK rows, and the 23 database tests in Tests item 1 passed twice in a row on the same database (re-validated by the review on a fresh PostgreSQL 16.13 cluster after the `already_published`, catch-up and sort-order changes; `verify_migration.py` hashes in step 2 are from that run).
+Tooling: PostgreSQL 16 or 17 for the database tests (Docker `postgres:17` or `/usr/lib/postgresql/16/bin`), a Python venv with `requirements.txt` plus `pytest` and `psycopg[binary]` (WP21). The SQL in step 1 was applied twice in a row to a scratch database built from WP25's 0038 and 0039 on PostgreSQL 16.13, `verify_migration.py` reported 113 OK rows, and the 23 database tests in Tests item 1 passed twice in a row on the same database (re-validated by the review on a fresh PostgreSQL 16.13 cluster after the `already_published`, catch-up and sort-order changes; `verify_migration.py` hashes in step 2 are from that run).
 
 Baseline (record the counts for the PR): from `frontend/`: `pnpm exec tsc --noEmit` (exit 0), `pnpm lint` (0 errors), `pnpm test --ci` (all pass), `pnpm run test:scripts`. From the repo root: `python -m pytest tests/ -q`.
 
-The work has two phases, like WP25. **Phase A** (every step except step 24) needs nothing from the owner; at its end open a draft PR titled `[waiting for DB types] WP29: ...` and hand the owner Owner actions 1 to 4. **Phase B** (step 24) regenerates `frontend/app/types/database.ts` once 0037 is in production. In phase A `tsc` fails only on the two new `.from(...)` reads (`market_index_summary`, `market_index_daily`) in `serverMarketData.ts`; that is the only allowed failure.
+The work has two phases, like WP25. **Phase A** (every step except step 24) needs nothing from the owner; at its end open a draft PR titled `[waiting for DB types] WP29: ...` and hand the owner Owner actions 1 to 4. **Phase B** (step 24) regenerates `frontend/app/types/database.ts` once 0042 is in production. In phase A `tsc` fails only on the two new `.from(...)` reads (`market_index_summary`, `market_index_daily`) in `serverMarketData.ts`; that is the only allowed failure.
 
 ## Implementation steps
 
-### Step 1. `migrations/0037_market_index.sql` (new)
+### Step 1. `migrations/0042_market_index.sql` (new)
 
 Create the file with exactly this content.
 
@@ -309,7 +309,7 @@ Create the file with exactly this content.
 --
 -- Writes: refresh_market_index(p_day), SECURITY DEFINER, EXECUTE for
 -- pokefin_scraper (0032) and service_role. It finalises the day's
--- product_daily_stats first when needed (refresh_market_analytics, 0033/0034),
+-- product_daily_stats first when needed (refresh_market_analytics, 0038/0039),
 -- so the order of the two nightly jobs cannot matter. pg_cron runs it at
 -- 00:45 UTC for the previous UTC day, after WP25's 00:30 finalisation; the
 -- scraper calls it after each run as a fallback (market_analytics.py).
@@ -1004,7 +1004,7 @@ END $$;
 ### Step 2. Check the migration
 
 ```bash
-python3 verify_migration.py migrations/0037_market_index.sql > /tmp/wp29_0037.sql; echo "exit=$?"
+python3 verify_migration.py migrations/0042_market_index.sql > /tmp/wp29_0042.sql; echo "exit=$?"
 # expect exit=3 and on stderr:
 #   8 "-- function" lines; with the file copied verbatim the bodies hash to
 #     market_index_type_text 4c3d27288d08fbe1d6b9b0b6450e4c23 (sql, immutable, invoker)
@@ -1029,7 +1029,7 @@ Replay locally with WP21's harness (it picks the file up by name; no edit needed
 PGSERVER_URL=postgresql://postgres:postgres@localhost:55432/postgres scripts/db/replay_migrations.sh
 # expect "OK: <N> files replayed once (replay_once) and twice (replay_twice)", N one more than before,
 # and the NOTICE "pg_cron is not enabled. ... pokefin-publish-market-index ..." three times.
-psql postgresql://postgres:postgres@localhost:55432/replay_twice -At -f /tmp/wp29_0037.sql | cut -d'|' -f4 | sort | uniq -c
+psql postgresql://postgres:postgres@localhost:55432/replay_twice -At -f /tmp/wp29_0042.sql | cut -d'|' -f4 | sort | uniq -c
 # expect: 113 OK (no MISSING or MISMATCH)
 ```
 
@@ -1040,7 +1040,7 @@ Add directly after WP25's `refresh_market_analytics` method in `class ScraperDB`
 ```python
     def refresh_market_index(self, day: date, start: bool = False) -> dict:
         """
-        public.refresh_market_index(day, start) (migration 0037). EXECUTE is
+        public.refresh_market_index(day, start) (migration 0042). EXECUTE is
         granted to pokefin_scraper; the function is SECURITY DEFINER, so the
         role needs no privilege on the index tables. Returns its summary:
         {"status", "day", ...}.
@@ -1082,7 +1082,7 @@ def utc_yesterday() -> date:
 
 def call_index_refresh(day: date, *, start: bool = False, pg_db=None, supabase=None) -> dict:
     """
-    Run public.refresh_market_index(day, start) once (migration 0037) and
+    Run public.refresh_market_index(day, start) once (migration 0042) and
     return its summary ({"status", "day", ...}). Raises on any failure.
     """
     if pg_db is not None:
@@ -1123,7 +1123,7 @@ def refresh_index_after_run(day: date | None = None, *, pg_db=None, supabase=Non
         if _is_missing_rpc(e, INDEX_RPC_NAME):
             logger.warning(
                 "Sealed Index refresh skipped: public.refresh_market_index does not exist yet "
-                "(apply migration 0037)."
+                "(apply migration 0042)."
             )
         else:
             logger.error(f"Sealed Index refresh failed for {day}: {type(e).__name__}: {e}")
@@ -1181,9 +1181,9 @@ Keep WP25's comment above the block. If WP21's `pg_db` global does not exist, pa
 """
 Build the Pokéfin Sealed Index family (market_index_daily) from the start of
 product_daily_stats history by calling public.refresh_market_index(day) once
-per day, oldest first (WP29, migration 0037).
+per day, oldest first (WP29, migration 0042).
 
-Run it once after applying 0037, after WP25's scripts/backfill_daily_stats.py
+Run it once after applying 0042, after WP25's scripts/backfill_daily_stats.py
 has filled product_daily_stats. Every call passes p_start = true, which lets
 the first day that has a constituent list start the chain (base 100) and lets
 a call cross a gap longer than 31 days (a month that got no constituent list
@@ -1337,7 +1337,7 @@ If WP07 named the helpers differently (`grep -n "^function splitDateKey\|^const 
 
 ```ts
 /**
- * The Pokéfin Sealed Index family (migration 0037): the TypeScript side (WP29).
+ * The Pokéfin Sealed Index family (migration 0042): the TypeScript side (WP29).
  *
  * INDEX_RULES, INDEX_EXCLUDED_TYPE_PATTERNS and INDEX_CHANGE_WINDOWS mirror
  * literals in freeze_market_index_month, refresh_market_index_day,
@@ -1383,7 +1383,7 @@ export const INDEX_RULES = {
 } as const;
 
 /**
- * The product-type indices seeded by 0037 (code, name and the pattern matched
+ * The product-type indices seeded by 0042 (code, name and the pattern matched
  * against the product type's name and label, lower case, "_" and "-" as spaces).
  */
 export const INDEX_TYPE_FAMILY = [
@@ -2031,7 +2031,7 @@ import {
 10b. Directly below WP25's `fetchFxDaily` (above the cached exports block), add:
 
 ```ts
-// ---- WP29: the Sealed Index family (migration 0037) ----
+// ---- WP29: the Sealed Index family (migration 0042) ----
 
 /** Columns of market_index_summary. Listed, not "*", so a later column does not grow the cache. */
 const INDEX_SUMMARY_SELECT = `code, name, kind, sort_order, base_day, day, level,
@@ -3408,7 +3408,7 @@ change `FOOTER_BROWSE` to `[PRICES, SCREENER, SETS, SEALED_INDEX, METHODOLOGY]`,
 
 ### Step 24. Phase B: generated types
 
-After the owner has applied 0037 (Owner action 1):
+After the owner has applied 0042 (Owner action 1):
 
 ```bash
 cd frontend
@@ -3437,14 +3437,14 @@ python scripts/backfill_market_index.py    # Sealed Index levels from the start 
   `pokefin-publish-market-index` runs it at 00:45 UTC and the scraper calls
   it after each run. Published days are never recomputed; to rebuild after a
   rule change run `SELECT public.reset_market_index();` then
-  `scripts/backfill_market_index.py`. Rules: `migrations/0037_market_index.sql`
+  `scripts/backfill_market_index.py`. Rules: `migrations/0042_market_index.sql`
   and `/methodology#index`.
 ```
 
 25c. `audits/HARDENING_FOLLOWUPS.md` section 7: add as the newest migration bullet:
 
 ```markdown
-- **Migration 0037: pending apply** (WP29). Sealed Index tables, the view
+- **Migration 0042: pending apply** (WP29). Sealed Index tables, the view
   `market_index_summary`, `refresh_market_index(date, boolean)` and
   `market_index_backfill_range()` (SECURITY DEFINER, EXECUTE for
   pokefin_scraper and service_role), `reset_market_index()` (service_role
@@ -3462,7 +3462,7 @@ python scripts/backfill_market_index.py    # Sealed Index levels from the start 
 - **Do not use floating point for levels.** `usd_price::numeric`, `avg` over numeric and `round(..., 6)` make a replay reproduce every digit; `double precision` would drift with row order.
 - **Do not publish today.** The function rejects `p_day >= today (UTC)`; the page, the CSV and the API only ever show D-1 or earlier.
 - **Do not call anything cap-weighted, market-cap or value-weighted**, and never "live", "real-time" or "all-time" (copy, comments, JSON-LD, CSV header lines). Equal weight is stated as such.
-- **Do not re-run an older migration that defines `refresh_market_analytics` to "fix" the index.** 0037 does not replace it; it only calls it.
+- **Do not re-run an older migration that defines `refresh_market_analytics` to "fix" the index.** 0042 does not replace it; it only calls it.
 - **Do not grant table privileges to `pokefin_scraper`.** It writes through `refresh_market_index` only; `reset_market_index` is `service_role` only.
 - **Do not put GRANT or REVOKE on several tables in one statement**: `verify_migration.py` refuses to parse it.
 - **Do not add `"use client"`, Recharts, `useEffect` or a client fetch under `app/indices/`.** The page test and (with WP26) the forbidden-chunk gate fail. Range and sort are links.
@@ -3480,11 +3480,11 @@ python scripts/backfill_market_index.py    # Sealed Index levels from the start 
 
 ### Database and Python
 
-1. `tests/test_wp29_market_index_db.py` (new; needs the replayed database; skipped without `POKEFIN_TEST_DATABASE_URL`; CI's "Database replay and Python tests" job runs it). One fixed history (2024-01-01 to 2025-02-28), one set per scenario, the live path run day by day, then assertions. It passed 23 of 23, twice in a row on the same database (it cleans up after itself; the gap test runs inside a rolled-back transaction), against 0033 and 0034 from WP25 and this 0037.
+1. `tests/test_wp29_market_index_db.py` (new; needs the replayed database; skipped without `POKEFIN_TEST_DATABASE_URL`; CI's "Database replay and Python tests" job runs it). One fixed history (2024-01-01 to 2025-02-28), one set per scenario, the live path run day by day, then assertions. It passed 23 of 23, twice in a row on the same database (it cleans up after itself; the gap test runs inside a rolled-back transaction), against 0038 and 0039 from WP25 and this 0042.
 
 ```python
 """
-Database checks for migration 0037 (the Pokéfin Sealed Index family), run
+Database checks for migration 0042 (the Pokéfin Sealed Index family), run
 against a database rebuilt by scripts/db/replay_migrations.sh.
 
 Skipped unless POKEFIN_TEST_DATABASE_URL points at that replayed database as a
@@ -4121,7 +4121,7 @@ class TestRefreshIndexAfterRun:
         supabase.rpc.return_value.execute.side_effect = Exception(
             "PGRST202 Could not find the function public.refresh_market_index(p_day, p_start)")
         assert market_analytics.refresh_index_after_run(date(2026, 9, 30), supabase=supabase) is None
-        assert "apply migration 0037" in caplog.text
+        assert "apply migration 0042" in caplog.text
 
     def test_other_errors_are_logged_not_raised(self, caplog):
         pg_db = MagicMock()
@@ -4262,9 +4262,9 @@ class TestRunJobsOnceMarketIndex:
         trigger.assert_called_once_with()
 ```
 
-4. WP21's `tests/test_db_roles_integration.py` and WP25's modules: no change; they must keep passing (0037 grants the scraper EXECUTE only).
+4. WP21's `tests/test_db_roles_integration.py` and WP25's modules: no change; they must keep passing (0042 grants the scraper EXECUTE only).
 
-5. Replay: WP21's `replay_twice` database applies 0037 twice (Verification step 2).
+5. Replay: WP21's `replay_twice` database applies 0042 twice (Verification step 2).
 
 ### Frontend (Jest)
 
@@ -4930,11 +4930,11 @@ Repo root:
 
 ```bash
 # 1. Migration shape
-python3 verify_migration.py migrations/0037_market_index.sql > /tmp/wp29_0037.sql; echo "exit=$?"   # exit=3, step 2's stderr
+python3 verify_migration.py migrations/0042_market_index.sql > /tmp/wp29_0042.sql; echo "exit=$?"   # exit=3, step 2's stderr
 
 # 2. Replay twice and check every object
 PGSERVER_URL=postgresql://postgres:postgres@localhost:55432/postgres scripts/db/replay_migrations.sh   # "OK: ..."
-psql postgresql://postgres:postgres@localhost:55432/replay_twice -At -f /tmp/wp29_0037.sql | cut -d'|' -f4 | sort | uniq -c   # 113 OK
+psql postgresql://postgres:postgres@localhost:55432/replay_twice -At -f /tmp/wp29_0042.sql | cut -d'|' -f4 | sort | uniq -c   # 113 OK
 
 # 3. Database tests (twice: the module cleans up after itself)
 export POKEFIN_TEST_DATABASE_URL=postgresql://postgres:postgres@localhost:55432/replay_once
@@ -4995,8 +4995,8 @@ Manual checks (`pnpm dev` against the perf stub, or the Vercel preview), at 390x
 
 ## Owner actions
 
-1. **Apply `migrations/0037_market_index.sql`** in the Supabase SQL editor (paste the file) or with `supabase db push`, after 0033 and 0034 (it does not need 0036). Expect a NOTICE about pg_cron when it is not enabled. Then run the verification query the executor attaches (`/tmp/wp29_0037.sql`): every row OK.
-2. **Schedule the nightly job** if pg_cron was not enabled when you applied 0037 (decision D8). After enabling pg_cron (Dashboard > Database > Extensions), run once:
+1. **Apply `migrations/0042_market_index.sql`** in the Supabase SQL editor (paste the file) or with `supabase db push`, after 0038 and 0039 (it does not need 0041). Expect a NOTICE about pg_cron when it is not enabled. Then run the verification query the executor attaches (`/tmp/wp29_0042.sql`): every row OK.
+2. **Schedule the nightly job** if pg_cron was not enabled when you applied 0042 (decision D8). After enabling pg_cron (Dashboard > Database > Extensions), run once:
    `SELECT cron.schedule('pokefin-publish-market-index', '45 0 * * *', $cmd$SELECT public.refresh_market_index((now() AT TIME ZONE 'UTC')::date - 1)$cmd$);`
    Check: `SELECT jobname, schedule, active FROM cron.job WHERE jobname LIKE 'pokefin-%';` lists WP25's `pokefin-finalise-market-analytics` (`30 0 * * *`) and this job (`45 0 * * *`). Without pg_cron the scraper publishes the index after each run instead.
 3. **Check the start of daily resolution**: `SELECT public.market_index_detect_daily_from();` should be the first Monday on or after the day live scraping began. To see the evidence: `SELECT recorded_at::date AS day, count(*) FILTER (WHERE recorded_at::time <> '12:00:00') AS scraped, count(*) AS total FROM product_price_history GROUP BY 1 ORDER BY 1;` around that date. If it is wrong, set it (a Monday) before the backfill: `INSERT INTO public.market_index_settings (id, daily_from, source) VALUES (true, 'YYYY-MM-DD', 'owner') ON CONFLICT (id) DO UPDATE SET daily_from = EXCLUDED.daily_from, source = 'owner', updated_at = now();`
@@ -5008,8 +5008,8 @@ Manual checks (`pnpm dev` against the perf stub, or the Vercel preview), at 390x
 
 ## Acceptance criteria
 
-- [ ] `migrations/0037_market_index.sql` exists, `verify_migration.py` exits 3 with no REFUSED line, and the verification query returns 113 OK rows on `replay_twice`.
-- [ ] WP21's replay harness passes with 0037 applied twice; `tests/test_wp29_market_index_db.py` passes 23 of 23, twice in a row on the same database.
+- [ ] `migrations/0042_market_index.sql` exists, `verify_migration.py` exits 3 with no REFUSED line, and the verification query returns 113 OK rows on `replay_twice`.
+- [ ] WP21's replay harness passes with 0042 applied twice; `tests/test_wp29_market_index_db.py` passes 23 of 23, twice in a row on the same database.
 - [ ] Levels are reproducible from a clean backfill: after `reset_market_index()`, the backfill script reproduces every row of `market_index_daily` (all columns but `computed_at`) and every `index_constituents` row exactly (DB test `test_levels_are_reproducible_from_a_clean_backfill`).
 - [ ] A stale constituent never contributes a return (DB test `test_a_stale_constituent_never_contributes`); returns are clipped at 50%; a 3-day gap is carried; a longer gap drops out and re-enters without a catch-up jump; a day under 80% coverage is provisional; points before `daily_from` are Mondays only with Monday-to-Monday returns.
 - [ ] Published days, the newest included, are never recomputed (`already_published`); the live path never starts a chain (`not_initialised`); a nightly call more than 31 days behind writes nothing (`behind`), and the backfill (`p_start`) crosses such a gap, including a month without a list (DB test `test_the_backfill_crosses_a_month_without_a_list`).
@@ -5027,7 +5027,7 @@ Manual checks (`pnpm dev` against the perf stub, or the Vercel preview), at 390x
 - **Code**: revert the PR (`git revert -m 1 <merge commit>`). The scraper stops calling the index; the page, the API route and the CSV disappear; `/methodology` returns to the previous version. The tables stay and are harmless.
 - **Stop the nightly job only**: `SELECT cron.unschedule('pokefin-publish-market-index');`
 - **Rebuild instead of rolling back** (wrong levels after a data fix): Owner action 6.
-- **Database** (after the code revert and after reverting any package that reads the index: WP31, WP32, WP36, WP37), as a new numbered migration `NNNN_drop_market_index.sql` at the next free number, never by editing 0037:
+- **Database** (after the code revert and after reverting any package that reads the index: WP31, WP32, WP36, WP37), as a new numbered migration `NNNN_drop_market_index.sql` at the first free number above 0047 (numbers up to 0047 are reserved; see `audits/remediation/00-PLAN.md`, "Migration registry"), never by editing 0042:
 
 ```sql
 DO $$ BEGIN
@@ -5051,18 +5051,18 @@ DROP TABLE IF EXISTS public.market_index_settings;
 DROP TABLE IF EXISTS public.index_definitions;
 ```
 
-  With the code reverted first, nothing calls these objects; with only the database dropped, the scraper logs "apply migration 0037" once per run and continues.
+  With the code reverted first, nothing calls these objects; with only the database dropped, the scraper logs "apply migration 0042" once per run and continues.
 
 ## Commit and PR
 
 Branch: `remediation/wp29-sealed-index-and-breadth`.
 
 Commits (each builds and passes its tests):
-1. `feat(db): Pokéfin Sealed Index family and breadth (0037, WP29)`: the migration, `scraper_db.py`, `market_analytics.py`, `main.py`, `scripts/backfill_market_index.py`, `tests/test_wp29_*.py`, `tests/test_main.py`, README and HARDENING_FOLLOWUPS.
+1. `feat(db): Pokéfin Sealed Index family and breadth (0042, WP29)`: the migration, `scraper_db.py`, `market_analytics.py`, `main.py`, `scripts/backfill_market_index.py`, `tests/test_wp29_*.py`, `tests/test_main.py`, README and HARDENING_FOLLOWUPS.
 2. `feat(web): /indices/sealed, index API and levels CSV (WP29)`: `format.ts`, `marketIndex.ts`, `indexChart.ts`, `serverMarketData.ts`, `jsonLd.ts`, the route handlers, `app/indices/sealed/*`, `publicMarketApi.ts`, ESLint list, sitemap, navConfig, their tests.
 3. `docs(methodology): publish the Sealed Index rules (WP29)`: `methodology.ts`, `MethodologyArticle.tsx`, `metricDefinitions.ts` and their tests.
 4. `perf: index fixture and budgets (WP29)`: `perf.mjs`, `perf-fixture.test.mjs`, `perf-budgets.json`.
-5. (phase B) `chore(types): regenerate database types for 0037 (WP29)`.
+5. (phase B) `chore(types): regenerate database types for 0042 (WP29)`.
 
 Commit 1 message body:
 

@@ -6,7 +6,7 @@
   - Residual created by the plan (WP06 owner action 5, open bullet in `audits/HARDENING_FOLLOWUPS.md`): WP06's migration 0026 added `box_recipes.currency`, but `export_my_data()` (0011, made VOLATILE by WP01's 0024) lists its columns and never exports it. Step 2 adds the key by patching the function in place (see "Before you start", decision 2, for why not a full redefinition).
   - F064 recommendation part 2 (residual after WP11). WP11 made every cached server read throw on a failed query so `unstable_cache` keeps the last good value, and deliberately kept the summaries fallback (WP11 Pitfalls). Still open: a read that SUCCEEDS with zero rows (an RLS or grant mistake, an emptied table) is stored as an empty catalog for up to a day and every ISR page regenerates empty. Step 6c treats an empty catalog as a failure at runtime and keeps accepting it during `next build`, so `pnpm build:stub` and a deploy during an outage still build.
   - N01 (medium; full, with both verifiers' corrections): the Collectr import matcher labels the wrong variant "exact" (the set-name check runs before the variant check, and every candidate shares the set), imports a blank cost as a $0 basis, silently drops every Collectr portfolio not named "Sealed Product", never validates the date, and the preview hides the matched variant. Steps 10 and 11. Latent until F001 is fixed (WP04/WP05 landed before this package, so it is live now).
-  - N02 (medium; full, magnitude as corrected by the verifiers): the Market Pulse 7-day and 30-day volume windows end on the partial current-day bucket, so flat demand reads as a falling trend (-2% to -5% on the 30-day trend) and "Units sold (7d)" runs 7 to 21% low. Step 3 (the RPC, a new migration after WP10's 0027) and step 9 (`marketPulse.ts`, which `/product/[id]` uses) move both together.
+  - N02 (medium; full, magnitude as corrected by the verifiers): the Market Pulse 7-day and 30-day volume windows end on `current_date` and so include the partial bucket of each product's last visit, so flat demand reads as a falling trend (-2% to -5% on the 30-day trend) and "Units sold (7d)" runs 7 to 21% low. Step 3 (the RPC, a new migration after WP10's 0027) and step 9 (`marketPulse.ts`, which `/product/[id]` uses) move both together.
   - N03 (residual UX item only; WP17 closed the rest): "Try again" in `app/error.tsx` and `app/global-error.tsx` calls `reset()` alone, which re-renders without refetching, so a failed server fetch cannot recover. Step 12.
   - N05 (low; residual): `main.py` scrapes the Bank of Canada HTML table, inserts the same rate every 4 hours, and nothing alerts when the rate goes stale. Step 16 switches to the Valet `FXUSDCAD` JSON API, stores one row per observation date and logs `exchange_rate_stale` past 4 business days; step 6d adds the same age check to the site's server read (a Sentry event, through WP17's logger); step 13 adds the exported `isExchangeRateStale` helper and a once-per-tab check in the browser read; step 14 states on the price chart that CAD uses today's rate. Covered elsewhere: dated FX for history, returns and cost basis (WP25 `fx_daily`, WP31 product chart, WP36 portfolio); the rate date beside the currency toggle (WP27 `rateSentence`, which should use the helper: see "Handoffs"). `ReturnMetrics` needs nothing: WP18 step 7 removed its currency inputs, so its returns are USD returns by construction.
   - N08 (low; full, with the verifiers' narrowing): `compare_prices.py` compares Shopify prices against unguarded, possibly months-old `products.usd_price`, includes inactive products and never prints the price date; `update_shopify_skus.py` stamps the parent SKU on every variant row and lets a Japanese listing take an English SKU; SKU-keyed loaders drop duplicate SKUs silently. Steps 15, 17 and 18. (WP16 covered only the token on the command line, F138.)
@@ -15,17 +15,19 @@
   - F095 recommendation (a CI contrast check): not covered by Track 2 either. WP23 adds axe-core to component tests but disables `color-contrast` (jsdom has no layout), and WP22's Lighthouse CI runs the performance category only. Not done here: a contrast check needs a real browser, which arrives with WP22's Lighthouse job. Owner actions, item 7, records the recommendation (add Lighthouse's accessibility category with a `color-contrast` assertion to WP22's `lighthouserc.json`).
   - The per-product anchor RPC of F146: declined. The fallback it would speed up runs only while `get_market_product_summaries` is failing, and that RPC's slow part is `get_market_product_metrics` (WP10 0028), which already computes the anchors with index probes. A second SQL copy of the return anchors would have to be kept in step with 0028 and WP25 for a path that runs during outages, and would fail for the same reason the summaries did. The fallback keeps its about 50 serial pages; after this package it no longer adds the freshness pages on top.
   - F064 failure path: WP11 owns it (throw inside caches, degrade outside). This package adds only the empty-success case.
-  - `export_my_data` and later migrations: WP34 (0038) and WP35 (0039) redefine the function in full from 0024's body, which lacks `currency`; WP36 (0040) patches it in place and keeps every key. See decision 2 and Owner actions, item 4.
+  - `export_my_data` and later migrations: WP34 (0044) and WP35 (0045) redefine the function in full; their specs now copy 0024's body plus `'currency', currency,` after `'promo_value', promo_value,`, so the key survives them. WP36 (0046) patches it in place and keeps every key. See decision 2, Tests 2 and Owner actions, item 4.
 - **Priority rationale**: N01 and N02 are medium and user-visible (wrong holdings recorded against the wrong product; a biased demand signal on three pages). The rest are cheap once the data-layer files are open, and the two migrations that F146 and N02 need would otherwise each cost a separate PR and owner apply.
 - **Effort**: L, 18 to 20 hours (three migrations with a DB test 3 h; latest-price reads and the empty-catalog rule 3 h; volume anchor in TypeScript and its test updates 2 h; import matcher, cost, portfolio picker and preview 4 h; error retry, FX helper and chart label 1.5 h; Python FX, compare and SKU scripts with tests 3 h; docs and verification 1.5 h).
 - **Depends on** (all merged, in plan order): WP01 (0024 `export_my_data`), WP05 (`priceFreshness.ts`, `fetchNewestPricedAtForProducts`, `portfolioRepo.ts`, the import keys and `importHoldings` rewrite, `maxPurchaseDateKey`), WP06 (0026 `box_recipes.currency`), WP07 (`formatMoney`), WP10 (0027 volume RPC, `tests/test_wp10_market_rpc_bounds.py`), WP11 (`DAILY_BACKSTOP_SECONDS`, `fetchSetAnalyticsFromRpc`, the `getCachedSetAnalytics` wrapper, `fetchLatestExchangeRate` that throws, newest-first fallback, `run_jobs_once()`), WP12 (`supabaseLoader.ts`), WP14 (`Dialog` in `ImportHoldingsModal.tsx`), WP15 (restyled error pages), WP16 (`compare_prices.py` token handling), WP17 (`matchProduct` exported, `PriceTooltip` at module scope, logger reaches Sentry), WP18 (`lib/csv.ts` parser in `import.ts`, `app/compare/shopifyCsv.ts`, `CompareDashboard.tsx`), WP20 (`app/lib/currency.ts`, typed clients, `pnpm types:db`), WP21 (`scraper_db.py`, `pg_db` in `main.py`, read-only key in `compare_prices.py`, replay harness and CI job "Database replay and Python tests").
 - **Placement**: end of Track 1, after WP21 and before WP22. It changes no file a Track 2 package creates.
-- **Migrations**: three new files, named here with the placeholder `NNNN`: `migrations/NNNN_get_latest_prices.sql`, `migrations/NNNN_export_includes_box_recipe_currency.sql`, `migrations/NNNN_volume_windows_complete_days.sql`. The plan's migration registry (`audits/remediation/00-PLAN.md`) assigns the three numbers. They must sort after every Track 2 reservation that touches the same functions: the export patch above 0039 (WP34 and WP35 redefine `export_my_data` in full), the volume file above 0027. In practice that means three consecutive numbers from 0043 upward, coordinated with WP21 phase B's "next free" files. Wherever this spec says `NNNN_<name>`, use the registry's number for that file, inside the SQL comments too.
-- **Handoffs to later specs** (the plan maintainer applies them; this package cannot edit those packages' code because it runs first):
-  - WP22 test 8 (`app/__tests__/errorBoundarySentry.test.tsx`) renders `app/error.tsx`, which calls `useRouter()` after this package: the test needs `jest.mock("next/navigation", () => ({ useRouter: () => ({ refresh: jest.fn() }) }))`, or `useRouter` throws "invariant expected app router to be mounted".
-  - WP25 `refresh_market_analytics`: its `sales` CTE sums `p_day - 29 .. p_day`, the same partial-day window N02 describes. To agree with the RPC after step 3, it should end each window on `LEAST(p_day - 1, newest_day)` while `newest_day >= p_day - 3` (else `p_day - 1`), exactly as step 3's `window_anchor` does with `current_date`.
-  - WP27 `rateSentence`: append " (stale)" when `isExchangeRateStale(date)` (step 13) is true.
-  - WP34 step 1 section 5 and WP35 step 1 section 9: add `'currency', currency,` after `'promo_value', promo_value,` in their full `export_my_data` bodies. Until they do, Owner actions, item 4 applies.
+- **Migrations**: three new files, `migrations/0035_get_latest_prices.sql`, `migrations/0036_export_includes_box_recipe_currency.sql`, `migrations/0037_volume_windows_complete_days.sql`. These are fixed reservations in the registry in `audits/remediation/00-PLAN.md` (section "Migration registry"): after WP21's 0031 and 0032 and its optional phase B files 0033 and 0034, before Track 2's 0038 to 0047, because this package runs at the end of Track 1. Never derive them from the highest file in `migrations/`. Ordering that matters: the volume file must sort after WP10's 0027 (it replaces that body), and the export patch must sort after WP06's 0026 (the column) and before WP34's 0044 and WP35's 0045, which redefine `export_my_data` in full and carry `'currency', currency,` in their bodies (see decision 2). If a file numbered 0035, 0036 or 0037 that is not this package's already exists, stop and ask the owner; do not take other numbers.
+- **Handoffs to later specs** (already applied to those specs by the plan maintainer; listed so a reviewer can check them, nothing to do here):
+  - WP22 test 8 (`app/__tests__/errorBoundarySentry.test.tsx`) mocks `next/navigation` (`useRouter: () => ({ refresh: jest.fn() })`), because `app/error.tsx` calls `useRouter()` after step 12; WP22 step 20 keeps the `retry` handler.
+  - WP25 `refresh_product_daily_stats` (migration 0038): its `sales_newest`/`sales` CTEs end each window on `LEAST(newest_day - 1, p_day - 1)` while `newest_day >= p_day - 3` (else `p_day - 1`), the same rule as step 3's `window_anchor`, with a DB test for the partial-bucket cases.
+  - WP24 methodology, section `volume`: "Each window ends on the last complete day: the day before the newest daily bucket, which is still filling, and never later than yesterday."
+  - WP27 `rateSentence` appends " (stale)" when `isExchangeRateStale(date)` (step 13) is true.
+  - WP31 step 18a `getProductForAdd` uses a plain query and `applyLatestPrices(products)` (step 8), not the deleted `getFreshProductsById()`/`applyFreshPricesToSearchResults`.
+  - WP34 step 1 section 5 and WP35 step 1 section 9 carry `'currency', currency,` after `'promo_value', promo_value,` in their full `export_my_data` bodies (WP34's body hash and diff hunks updated).
 - **Suggested branch name**: `remediation/wp38-residual-data-layer-followups`
 - **Risk level**: medium. It changes the volume RPC behind `/market`, `/prices` and `/product/[id]` (a deliberate output change: the windows move by one day), the price reads behind the fallback catalog and portfolio search, and the scraper's FX source. Each is bounded by a test that fails on the old code, and the three migrations are additive or `CREATE OR REPLACE` with an unchanged shape.
 
@@ -51,11 +53,13 @@ Confirm the starting state (repo root):
 ```bash
 git checkout master && git pull && git checkout -b remediation/wp38-residual-data-layer-followups
 
-# 1. Migration numbers: the registry in audits/remediation/00-PLAN.md names three numbers for WP38.
-grep -n "WP38" audits/remediation/00-PLAN.md          # read the three numbers
-ls migrations | sort | tail -12                        # none of them may exist yet
+# 1. Migration numbers: 0035, 0036, 0037 (metadata "Migrations"; fixed in the registry).
+grep -n "| WP38 |" audits/remediation/00-PLAN.md       # the registry rows name 0035, 0036 and 0037
+ls migrations | sort | tail -12                        # the three numbers must not exist yet; if one does, see "Migrations" above
 grep -ln "FUNCTION public.export_my_data" migrations/*.sql
-# expect 0011 and 0024, plus 0038/0039 only if WP34/WP35 merged early (fine either way: step 2 patches in place)
+# expect 0011 and 0024. 0044/0045 appear only if WP34/WP35 merged early; then check that each contains
+# 'currency', currency (grep -c "'currency', currency" on that file prints 1). If one does not, STOP and report it:
+# that file would drop the key in every replay, because it sorts after this package's 0036.
 grep -ln "FUNCTION public.get_market_product_volume_metrics" migrations/*.sql | sort | tail -1
 # expect migrations/0027_bounded_volume_metrics.sql (WP10). If a later file is listed, STOP: copy its body instead of 0027's in step 3 and say so in the PR.
 grep -rn "get_latest_prices" migrations/ frontend/app       # expect no output
@@ -93,7 +97,7 @@ If a Track 1 check prints nothing, stop and report which package has not landed;
 Decisions and assumptions:
 
 1. **`get_latest_prices` returns the gated price and the raw row.** The three paging reads returned "newest row inside the 14-day window" maps that `guardedPrice`/`resolvePrice` then judged against a separately read `products.usd_price`. To keep those callers' behaviour identical, the wrappers keep returning the same maps (`newestPricedAtInWindow`, step 5): the RPC returns the newest row whatever its age, and the wrapper drops rows older than the window, which is exactly what the paged `recorded_at >= windowStart` read produced. The search and import path (step 8) instead uses the RPC's own gated `usd_price`: it is 0023's verdict computed from one statement, the same rule `get_market_product_summaries` applies. Ids are passed for every portfolio call, so deactivated products keep their price (WP11's constraint: filter on `active` only when no ids are passed).
-2. **`export_my_data` is patched in place, not redefined.** The plan suggested a full `CREATE OR REPLACE` with 0024's body plus the column. That is wrong once Track 2 exists: the registry numbers this file after 0038 and 0039, so in a replayed database a full 0024-based body here would delete WP34's `watchlist` key and WP35's `price_alerts`/`alert_email` keys, and WP35's check would stop at "a file numbered 0040 or above replaces export_my_data". Step 2 uses WP36's proven pattern (`pg_get_functiondef` plus one anchored `replace()`), which keeps VOLATILE, SECURITY DEFINER, the search_path and the ACL, keeps every key, and never contains the text `FUNCTION public.export_my_data`.
+2. **`export_my_data` is patched in place, not redefined.** The plan suggested a full `CREATE OR REPLACE` with 0024's body plus the column. A patch is safer: it starts from the live definition, so it keeps VOLATILE, SECURITY DEFINER, the search_path, the ACL and any key another package already added (WP36's 0046 can be applied in production before this file if WP36 merged early), and it never contains the text `FUNCTION public.export_my_data`, so WP34's and WP35's "which files define export_my_data" checks are unaffected. Step 2 uses WP36's proven pattern (`pg_get_functiondef` plus one anchored `replace()`). This file (0036) sorts before WP34's 0044 and WP35's 0045, which redefine the function in full; their specs carry `'currency', currency,` in their bodies, and Tests 2 (`test_later_full_redefinitions_keep_the_currency_key`) fails if any later full redefinition drops it.
 3. **The volume windows end on the last complete day.** The review's fix anchors the current windows at `current_date - 1` and shifts the prior window by the same anchor. That alone still includes a partial bucket for every product not yet visited today: the scraper visits each product every 23 hours and stores the visit day's bucket while it is still filling (`main.py` `parse_daily_sales_buckets`), so a product's newest bucket is always partial, whatever its date. The anchor is therefore the day before the newest usable bucket, never later than `current_date - 1`: `LEAST(newest_day_bucket - 1, current_date - 1)`. It applies only while the newest bucket is inside the 3-day freshness tolerance; for a stale product the windows are withheld anyway and the anchor stays at yesterday, which keeps every read inside a 67-day bound. The freshness gate itself (`newest_day_bucket >= current_date - 3`) does not move. Measured on flat demand with a partial newest bucket: the yesterday-only anchor still gives a 7d figure of 64 instead of 70 for a product last visited 1 to 3 days ago; this anchor gives 70.
 4. **An empty catalog is a failure at runtime only.** During `next build` (`process.env.NEXT_PHASE === "phase-production-build"`, which Next sets before it starts the prerender workers) an empty read is returned as before, so `pnpm build:stub` (an empty stub by design) and a deploy during an outage still build. At runtime it throws inside the cached function, so `unstable_cache` stores nothing and the page that is regenerating fails, which makes ISR keep serving the last good page.
 5. **Two phases, like WP25.** `supabase.rpc("get_latest_prices", ...)` does not type-check until `app/types/database.ts` contains the function, and that file is generated from production (WP20). Phase A is steps 1 to 3 and 5 to 19 plus every test; at its end open a draft PR titled `[waiting for DB types] fix: residual data-layer follow-ups (WP38)` and hand the owner Owner actions 1 and 2. Phase B is step 4. Until then the only allowed `tsc` failures are the `get_latest_prices` calls in `serverMarketData.ts` and `clientMarketData.ts`; Jest runs without type-checking, so every test must already pass in phase A. Never hand-edit `database.ts` and never cast the client to get past it.
@@ -103,11 +107,11 @@ Decisions and assumptions:
 
 Steps 1 to 3 are SQL and need nothing else. Step 4 is phase B. Steps 5 to 15 are the frontend (paths relative to `frontend/`), steps 16 to 18 the Python scripts, step 19 the docs. Write each test from the Tests section with the step it covers.
 
-The three SQL files below were run on PostgreSQL 16 while this spec was written: each applied twice in a row without error, the DB test in Tests 1 passed against them (12 passed) and failed against the previous definitions (5 failed), and `verify_migration.py` printed the hashes given in Verification.
+The three SQL files below were run on PostgreSQL 16 while this spec was written: each applied twice in a row without error, the DB test in Tests 1 passed against them (14 passed) and failed against the previous definitions (6 failed), and `verify_migration.py` printed the hashes given in Verification. The reviewer re-ran all three on PostgreSQL 16 with RLS enabled on `products` and `product_price_history` and the 0001 read policies in place, calling `get_latest_prices` as `anon` and `authenticated`.
 
-### Step 1. `migrations/NNNN_get_latest_prices.sql` (new; F146, F143)
+### Step 1. `migrations/0035_get_latest_prices.sql` (new; F146, F143)
 
-Exact content (replace `NNNN` in the comments with the registry's numbers):
+Exact content:
 
 ```sql
 -- Migration: get_latest_prices(p_product_ids), the newest recorded price per
@@ -158,21 +162,76 @@ Exact content (replace `NNNN` in the comments with the registry's numbers):
 --
 -- Idempotent.
 --
--- Verification (after apply):
---   -- Same answer as the 0023 gate for every active product (expect 0 rows):
---   SELECT s.id
+-- Verification (after apply). Supabase databases run in UTC (SHOW timezone),
+-- so current_date below is the same UTC day the frontend's window used.
+--
+--   -- 1. Same answer as the paged reads this replaces, for EVERY product,
+--   --    active or not (expect 0 rows). old_window is the map
+--   --    fetchNewestPricedAt / fetchNewestPricedAtClient built by paging
+--   --    product_price_history from the start of the 14-day window and
+--   --    keeping each product's newest row; old_price is the price
+--   --    resolvePrice then published from that row and products.usd_price.
+--   WITH old_window AS (
+--     SELECT DISTINCT ON (h.product_id) h.product_id, h.recorded_at, h.usd_price
+--       FROM public.product_price_history h
+--      WHERE h.recorded_at >= current_date - 14
+--      ORDER BY h.product_id, h.recorded_at DESC, h.id
+--   ),
+--   new_rows AS (
+--     SELECT * FROM public.get_latest_prices(
+--       (SELECT array_agg(id) FROM public.products))
+--   )
+--   SELECT p.id,
+--          o.recorded_at AS old_recorded_at, n.price_recorded_at AS new_recorded_at,
+--          o.usd_price AS old_row_price, n.recorded_usd_price AS new_row_price,
+--          CASE WHEN o.product_id IS NOT NULL
+--                AND p.usd_price IS NOT DISTINCT FROM o.usd_price
+--               THEN p.usd_price END AS old_price,
+--          n.usd_price AS new_price
+--     FROM public.products p
+--     LEFT JOIN old_window o ON o.product_id = p.id
+--     LEFT JOIN new_rows n ON n.product_id = p.id
+--    WHERE o.recorded_at IS DISTINCT FROM
+--            (CASE WHEN n.price_recorded_at >= current_date - 14 THEN n.price_recorded_at END)
+--       OR o.usd_price IS DISTINCT FROM
+--            (CASE WHEN n.price_recorded_at >= current_date - 14 THEN n.recorded_usd_price END)
+--       OR (CASE WHEN o.product_id IS NOT NULL
+--                 AND p.usd_price IS NOT DISTINCT FROM o.usd_price
+--                THEN p.usd_price END) IS DISTINCT FROM n.usd_price;
+--
+--   -- 2. Same answer as 0023's get_market_product_summaries for every active
+--   --    product (expect 0 rows):
+--   SELECT coalesce(s.id, l.product_id) AS id
 --     FROM public.get_market_product_summaries() s
 --     FULL JOIN public.get_latest_prices(NULL) l ON l.product_id = s.id
---    WHERE l.product_id IS NOT NULL
---      AND (s.id IS NULL
---           OR s.usd_price IS DISTINCT FROM l.usd_price
---           OR s.price_recorded_at IS DISTINCT FROM l.price_recorded_at);
---   -- One index probe per product, no Sort over the history (expect
---   -- "Index Scan using idx_price_history_product_recorded" or an equivalent
---   -- production index on (product_id, recorded_at DESC), and well under 100 ms):
---   EXPLAIN ANALYZE SELECT * FROM public.get_latest_prices(NULL);
---   -- anon may call it (expect true):
---   SELECT has_function_privilege('anon', 'public.get_latest_prices(bigint[])', 'EXECUTE');
+--    WHERE (l.product_id IS NULL AND s.price_recorded_at IS NOT NULL)
+--       OR (l.product_id IS NOT NULL
+--           AND (s.id IS NULL
+--                OR s.usd_price IS DISTINCT FROM l.usd_price
+--                OR s.price_recorded_at IS DISTINCT FROM l.price_recorded_at));
+--
+--   -- 3. One index probe per product, no Sort over the history. EXPLAIN of
+--   --    the function call itself shows only "Function Scan" (a function with
+--   --    its own search_path setting is never inlined), so explain its query
+--   --    (expect a Nested Loop over "Index Scan using
+--   --    idx_price_history_product_recorded", or an equivalent production
+--   --    index on (product_id, recorded_at DESC), no Sort node, well under
+--   --    100 ms), then time the call:
+--   EXPLAIN ANALYZE
+--   SELECT p.id, lp.recorded_at, lp.usd_price
+--     FROM public.products p
+--     CROSS JOIN LATERAL (
+--       SELECT h.recorded_at, h.usd_price
+--         FROM public.product_price_history h
+--        WHERE h.product_id = p.id
+--        ORDER BY h.recorded_at DESC
+--        LIMIT 1) lp
+--    WHERE p.active = true;
+--   EXPLAIN ANALYZE SELECT * FROM public.get_latest_prices(NULL);  -- well under 100 ms
+--
+--   -- 4. anon may call it (expect true), PUBLIC may not (expect false):
+--   SELECT has_function_privilege('anon', 'public.get_latest_prices(bigint[])', 'EXECUTE'),
+--          has_function_privilege('public', 'public.get_latest_prices(bigint[])', 'EXECUTE');
 
 CREATE OR REPLACE FUNCTION public.get_latest_prices(p_product_ids bigint[] DEFAULT NULL)
 RETURNS TABLE (
@@ -223,9 +282,10 @@ Why each part is shaped this way:
 - **`CROSS JOIN LATERAL`**: a product with no history returns no row, which every caller already reads as "never priced".
 - **The gate is 0023's text.** `tests/test_wp38_migrations_static.py` (Tests 2) pins it, so a later change to one copy is noticed.
 - **`ORDER BY p.id`** makes the output deterministic for tests; it costs nothing at 306 rows.
-- **ACL**: `REVOKE ALL ... FROM PUBLIC` then explicit grants, as WP26 did for its read function. anon needs it: the browser search and `compare_prices.py` (publishable key since WP21) call it.
+- **ACL**: `REVOKE ALL ... FROM PUBLIC` then explicit grants, as WP26 did for its read function. anon needs it: every caller uses the anonymous role (the server reads in `serverMarketData.ts` use the publishable key through `createMarketDataSupabaseClient`, the browser search and import use the browser client, and `compare_prices.py` uses the publishable key since WP21). SECURITY INVOKER is enough because `products` and `product_price_history` are readable by anon and authenticated (0001 policies `products_read` and `product_price_history_read`, `USING (true)`); nothing here reads a user table.
+- **Not inlined, and that is fine.** The `search_path` setting stops Postgres from inlining the function into the caller's query, so `EXPLAIN` on the call shows only a Function Scan; the header's query 3 explains the body instead. Each call plans the body once and runs one probe per product.
 
-### Step 2. `migrations/NNNN_export_includes_box_recipe_currency.sql` (new; WP06 residual)
+### Step 2. `migrations/0036_export_includes_box_recipe_currency.sql` (new; WP06 residual)
 
 Exact content:
 
@@ -240,19 +300,20 @@ Exact content:
 --
 -- The function is patched in place from its live definition
 -- (pg_get_functiondef) with one replace() anchored on the line every full
--- definition since 0011 contains: 'promo_value', promo_value,. A full
--- redefinition here would be wrong: later migrations (WP34's 0038, WP35's
--- 0039, WP36's 0040) add their own keys to the same function, and a full
--- body copied from 0024 would drop them whenever this file is applied after
--- them. The patch keeps every other key, raises if the anchor is missing,
+-- definition since 0011 contains: 'promo_value', promo_value,. A patch
+-- rather than a full redefinition: later migrations (WP34's 0044, WP35's
+-- 0045, WP36's 0046) add their own keys to the same function, and in
+-- production a full body copied from 0024 would drop any of them already
+-- applied. The patch keeps every other key, raises if the anchor is missing,
 -- and does nothing when the key is already there. CREATE OR REPLACE through
 -- EXECUTE keeps the owner, the ACL (EXECUTE for authenticated and
 -- service_role only, 0024) and VOLATILE (pg_get_functiondef omits it because
 -- it is the default).
 --
--- A migration that replaces export_my_data with a full body AFTER this file
--- was applied in production (0038 and 0039 do) drops the key again: re-run
--- this file afterwards. It is idempotent.
+-- WP34's 0044 and WP35's 0045 replace export_my_data with a full body after
+-- this file; both bodies carry 'currency', currency. A full redefinition
+-- without it would drop the key again: re-run this file afterwards. It is
+-- idempotent.
 --
 -- This file deliberately never spells out the function's CREATE header, so
 -- the "which files define export_my_data" checks of WP34 and WP35 do not see
@@ -291,7 +352,7 @@ $patch$;
 
 Do not add `REVOKE`/`GRANT` lines or a `CREATE OR REPLACE FUNCTION public.export_my_data` statement to this file (decision 2). `verify_migration.py` cannot see inside a `DO` block and reports "Nothing here can be verified" (exit 2); the header's three queries are the check.
 
-### Step 3. `migrations/NNNN_volume_windows_complete_days.sql` (new; N02)
+### Step 3. `migrations/0037_volume_windows_complete_days.sql` (new; N02)
 
 Exact content. Everything from `CREATE OR REPLACE FUNCTION` to the end is 0027's text except the new `window_anchor` CTE (with its comment) and the `sales_agg` CTE that follows it:
 
@@ -334,7 +395,7 @@ Exact content. Everything from `CREATE OR REPLACE FUNCTION` to the end is 0027's
 -- is re-applied below. Idempotent.
 --
 -- Verification:
---   python verify_migration.py migrations/NNNN_volume_windows_complete_days.sql
+--   python verify_migration.py migrations/0037_volume_windows_complete_days.sql
 --   (run the printed SQL; expect one row, OK)
 --
 --   -- No product publishes a 7d figure larger than its 30d figure (expect 0):
@@ -570,7 +631,7 @@ Check it:
 ```bash
 diff <(sed -n '/^CREATE OR REPLACE FUNCTION/,$p' migrations/0027_bounded_volume_metrics.sql \
        | sed '/^sales_agg AS (/,/^  GROUP BY sh.product_id$/d') \
-     <(sed -n '/^CREATE OR REPLACE FUNCTION/,$p' migrations/NNNN_volume_windows_complete_days.sql \
+     <(sed -n '/^CREATE OR REPLACE FUNCTION/,$p' migrations/0037_volume_windows_complete_days.sql \
        | sed "/^-- Where each product's current windows end/,/^  GROUP BY sh.product_id$/d"); echo "exit=$?"
 # expect no diff output and exit=0: outside the replaced region (0027's sales_agg CTE, and here the
 # window_anchor comment and CTE plus the new sales_agg) the function is 0027's text line for line.
@@ -593,7 +654,7 @@ If you have no token and the owner has not pushed the file, finish every other s
 ```ts
 /**
  * Shapes and pure helpers for get_latest_prices (migration
- * NNNN_get_latest_prices.sql, WP38): the newest recorded price of each
+ * 0035_get_latest_prices.sql, WP38): the newest recorded price of each
  * product in one index-ordered read, with migration 0023's gate applied in
  * SQL. Isomorphic and dependency-free: serverMarketData.ts (server) and
  * clientMarketData.ts (browser) both import it. No Supabase client here.
@@ -681,7 +742,7 @@ If the file already imports from `./currency` (WP20 may have pointed `DEFAULT_EX
 ```ts
 /**
  * Every product's newest product_price_history row, from get_latest_prices
- * (migration NNNN_get_latest_prices.sql): one index probe per product instead
+ * (migration 0035_get_latest_prices.sql): one index probe per product instead
  * of paging the table through PostgREST 1000 rows at a time (review F146).
  * Ids go in chunks of LATEST_PRICES_CHUNK, so no response reaches PostgREST's
  * row cap. Ids are always passed, so a deactivated product keeps its row.
@@ -827,7 +888,7 @@ import {
 ```ts
 /**
  * Newest product_price_history row of each product, from get_latest_prices
- * (migration NNNN_get_latest_prices.sql): one request per 500 ids, or one
+ * (migration 0035_get_latest_prices.sql): one request per 500 ids, or one
  * request for the whole active catalog when no ids are given. It replaced
  * paging the history table 1000 rows at a time (review F146, F143).
  *
@@ -1002,7 +1063,7 @@ function newestUsableDayKey(sales: SalesHistoryEntry[]): string | null {
  * newest usable bucket, never later than yesterday, while that bucket is
  * inside DAILY_DATA_STALENESS_TOLERANCE_DAYS; otherwise (stale or no data)
  * on yesterday. The prior window moves with the same anchor. Mirror of
- * window_anchor in migrations/NNNN_volume_windows_complete_days.sql
+ * window_anchor in migrations/0037_volume_windows_complete_days.sql
  * (LEAST(newest_day_bucket - 1, current_date - 1)). Keep both sides in sync.
  */
 export function getVolumeWindowAnchorKey(
@@ -1267,7 +1328,7 @@ const VARIANT_FILLER_WORDS = new Set([
 
 /** Lower-case words with accents folded ("Pokémon" -> "pokemon"). */
 function words(value: string | null | undefined): string[] {
-  return normalizeTypeText((value ?? "").normalize("NFD").replace(/[̀-ͯ]/g, ""))
+  return normalizeTypeText((value ?? "").normalize("NFD").replace(/[\u0300-\u036f]/g, ""))
     .split(" ")
     .filter(Boolean);
 }
@@ -1843,7 +1904,7 @@ def fetch_pokefin_prices() -> dict:
     """
     Market prices from Pokéfin, keyed by SKU: active products only, and only a
     price the website itself would show (review N08). get_latest_prices
-    (migration NNNN_get_latest_prices.sql) applies migration 0023's gate: the
+    (migration 0035_get_latest_prices.sql) applies migration 0023's gate: the
     newest product_price_history row is at most 14 days old and agrees with
     products.usd_price. Otherwise market_price is None and the product is
     reported under "no market price" instead of being compared against a
@@ -2012,10 +2073,10 @@ def language_of(variant: str | None) -> str:
 
 ### Step 19. Documentation
 
-- `README.md` (repo root), in the data-flow list: item 6 "**Bank of Canada API** provides daily USD→CAD exchange rates." becomes "**Bank of Canada Valet API** (series `FXUSDCAD`) provides the daily USD→CAD rate; the scraper stores one row per Bank of Canada date and logs `exchange_rate_stale` when the newest is more than 4 business days old." In item 5, after "`get_market_product_volume_metrics()` RPC behind Market Pulse", add: "(its 7-day and 30-day windows end on the last complete day, never on today's partial bucket)". In "The ordering constraints that matter", add a bullet: "`NNNN_export_includes_box_recipe_currency.sql` patches `export_my_data()` in place. Re-run it after applying any migration that redefines that function in full (WP34's 0038, WP35's 0039); it is idempotent."
+- `README.md` (repo root), in the data-flow list: item 6 "**Bank of Canada API** provides daily USD→CAD exchange rates." becomes "**Bank of Canada Valet API** (series `FXUSDCAD`) provides the daily USD→CAD rate; the scraper stores one row per Bank of Canada date and logs `exchange_rate_stale` when the newest is more than 4 business days old." In item 5, after "`get_market_product_volume_metrics()` RPC behind Market Pulse", add: "(its 7-day and 30-day windows end on the last complete day, never on today's partial bucket)". In "The ordering constraints that matter", add a bullet: "`0036_export_includes_box_recipe_currency.sql` patches `export_my_data()` in place. Any later migration that redefines that function in full must keep `'currency', currency,` in its `box_recipes` object (WP34's 0044 and WP35's 0045 do; `tests/test_wp38_migrations_static.py` checks it); if one does not, re-run this file after it (idempotent)."
 - `audits/HARDENING_FOLLOWUPS.md` section 7:
-  - Replace WP06's bullet "**Open:** `export_my_data` (0011, redefined by WP01's 0024) does not export `box_recipes.currency`; add it the next time that function is redefined." with "**Closed (WP38):** `export_my_data` exports `box_recipes.currency` (`migrations/NNNN_export_includes_box_recipe_currency.sql`, patched in place). Re-run that file after any migration that redefines `export_my_data` in full (0038, 0039)." If the bullet is not there, add the "Closed" bullet anyway.
-  - Add, as the newest migration bullet: "**Migrations NNNN (`get_latest_prices`), NNNN (`export_my_data` currency) and NNNN (volume windows end on the last complete day)** (WP38): applied to production on <date>." Leave the date for the owner.
+  - Replace WP06's bullet "**Open:** `export_my_data` (0011, redefined by WP01's 0024) does not export `box_recipes.currency`; add it the next time that function is redefined." with "**Closed (WP38):** `export_my_data` exports `box_recipes.currency` (`migrations/0036_export_includes_box_recipe_currency.sql`, patched in place). A later full redefinition of `export_my_data` must keep that key (WP34's 0044 and WP35's 0045 do)." If the bullet is not there, add the "Closed" bullet anyway.
+  - Add, as the newest migration bullet: "**Migrations 0035 (`get_latest_prices`), 0036 (`export_my_data` currency) and 0037 (volume windows end on the last complete day)** (WP38): applied to production on <date>." Leave the date for the owner.
   - Add: "**Exchange rate** (WP38): the scraper reads the Bank of Canada Valet API and stores one row per observation date. `exchange_rate_stale` in the scraper log (ERROR) or in Sentry (`exchange_rate_stale`, `client_exchange_rate_stale`) means the newest rate is more than 4 business days old: check the scraper host and `https://www.bankofcanada.ca/valet/observations/FXUSDCAD/json?recent=5`."
 - `frontend/README.md` (WP20 wrote a data-flow section naming `exchange_rates`): if it describes the portfolio search's prices, say they come from `get_latest_prices`. Skip if it does not mention them.
 
@@ -2023,8 +2084,9 @@ def language_of(variant: str | None) -> str:
 
 - **Do not redefine `export_my_data` in full** (decision 2), and do not let the text `FUNCTION public.export_my_data` appear anywhere in step 2's file, comments included: WP34 and WP35 grep for it, and Tests 2 fails on it.
 - **Do not filter `get_latest_prices` on `active` when ids are passed.** Portfolio holdings of deactivated products would lose their price (WP11's F146 note). Tests 1 pins it.
-- **Do not move the freshness test of the volume windows.** Only the window end moves (to the anchor). The "newest usable bucket at least 3 days old" rule stays measured from `current_date` in SQL and from `referenceDate - offsetDays` in TypeScript; anchoring it at the window end would loosen it by a day.
-- **Do not compare the new volume RPC with 0027 and expect equality.** The 7-day and 30-day figures change by design (they stop including today's partial bucket). The DB test and Tests 8 prove the intended values instead.
+- **Do not move the freshness test of the volume windows.** Only the window end moves (to the anchor). The "newest usable bucket no older than 3 days" rule stays measured from `current_date` in SQL and from `referenceDate - offsetDays` in TypeScript; anchoring it at the window end would loosen it by a day.
+- **Do not compare the new volume RPC with 0027 and expect equality.** The 7-day and 30-day figures change by design (they stop including the partial bucket of the last visit). The DB test and Tests 8 prove the intended values instead.
+- **Do not end the windows on yesterday alone, or on the newest bucket.** The scraper visits each product every 23 hours and stores that day's bucket while it is still filling, so the newest bucket is partial whatever its date. The anchor is `LEAST(newest usable bucket - 1, yesterday)`; anything later puts a partial day back into the window for every product not yet visited today.
 - **Do not throw on an empty catalog during `next build`.** `pnpm build:stub` serves an empty catalog by design (WP00) and must keep building. Do not read `NEXT_PHASE` at module scope either: Next sets it after modules may have loaded. A `next start` against the empty stub renders error pages when a page regenerates; that is expected (use WP22's fixture to serve real data locally).
 - **Do not put the import helpers in `lib/import.ts`.** WP14's `PortfolioModals.a11y.test.tsx` mocks that module with a fixed export list; the modal must get `collectrPortfolioNames` and friends from `lib/importRows.ts`.
 - **Do not import a missing cost as 0, and do not reject a typed 0.** `parseCost("")` is NaN, `parseCost("0")` is 0.
@@ -2166,23 +2228,64 @@ def test_authenticated_may_call_it(db, set_id):
     assert latest(db, [pid], role="authenticated") == {pid: (0, 10, 10)}
 
 
+# Verification query 1 of the get_latest_prices migration header: the paged
+# 14-day window read the frontend used before this package, against the RPC.
+OLD_READ_EQUIVALENCE = """
+WITH old_window AS (
+  SELECT DISTINCT ON (h.product_id) h.product_id, h.recorded_at, h.usd_price
+    FROM public.product_price_history h
+   WHERE h.recorded_at >= current_date - 14
+   ORDER BY h.product_id, h.recorded_at DESC, h.id
+),
+new_rows AS (
+  SELECT * FROM public.get_latest_prices(
+    (SELECT array_agg(id) FROM public.products))
+)
+SELECT p.id
+  FROM public.products p
+  LEFT JOIN old_window o ON o.product_id = p.id
+  LEFT JOIN new_rows n ON n.product_id = p.id
+ WHERE o.recorded_at IS DISTINCT FROM
+         (CASE WHEN n.price_recorded_at >= current_date - 14 THEN n.price_recorded_at END)
+    OR o.usd_price IS DISTINCT FROM
+         (CASE WHEN n.price_recorded_at >= current_date - 14 THEN n.recorded_usd_price END)
+    OR (CASE WHEN o.product_id IS NOT NULL
+              AND p.usd_price IS NOT DISTINCT FROM o.usd_price
+             THEN p.usd_price END) IS DISTINCT FROM n.usd_price
+"""
+
+
+def test_matches_the_paged_window_read_it_replaces(db, set_id):
+    # One product per case the old read told apart: fresh and agreeing, fresh
+    # and disagreeing, exactly 14 days, 15 days, inactive, never priced, and
+    # a NULL products.usd_price beside a fresh row.
+    cases = [
+        (110, [(-30, 90), (-1, 110)], True),
+        (50, [(-2, 49)], True),
+        (20, [(-14, 20)], True),
+        (30, [(-15, 30)], True),
+        (80, [(-3, 80)], False),
+        (10, [], True),
+        (None, [(-1, 12)], True),
+    ]
+    for usd, rows, active in cases:
+        pid = product(db, set_id, usd, active)
+        for day_offset, usd_row in rows:
+            price(db, pid, day_offset, usd_row)
+    assert db.execute(OLD_READ_EQUIVALENCE).fetchall() == []
+
+
 # ------------------------------------------------------- volume window anchor
 
 
-def sales(db, product_id, first_offset, last_offset, qty, today_partial=None):
+def sales(db, product_id, first_offset, last_offset, qty):
+    """Day buckets of `qty` units from first_offset to last_offset (0 = today)."""
     db.execute(
         "INSERT INTO public.product_sales_history "
         "(product_id, bucket_date, granularity, quantity_sold, transaction_count) "
         "SELECT %s, current_date + d, 'day', %s::integer, 1 FROM generate_series(%s::integer, %s::integer) d",
         (product_id, qty, first_offset, last_offset),
     )
-    if today_partial is not None:
-        db.execute(
-            "INSERT INTO public.product_sales_history "
-            "(product_id, bucket_date, granularity, quantity_sold, transaction_count) "
-            "VALUES (%s, current_date, 'day', %s, 1)",
-            (product_id, today_partial),
-        )
 
 
 def volume(db, product_id):
@@ -2196,9 +2299,18 @@ def volume(db, product_id):
 @pytest.mark.parametrize("lag", [0, 1, 2, 3])
 def test_flat_demand_reads_flat_whatever_the_collection_lag(db, set_id, lag):
     pid = product(db, set_id, 10)
-    # 10 units every day up to `lag` days ago; with lag 0 today's partial
-    # bucket (4 so far) is present too, as the scraper stores it.
-    sales(db, pid, -75, -max(lag, 1), 10, today_partial=4 if lag == 0 else None)
+    # 10 units every day, last visited `lag` days ago. As the scraper stores
+    # it, the newest bucket is the partial day of that visit (4 units so far)
+    # and every older bucket was corrected to its full 10 by a later visit.
+    sales(db, pid, -75, -lag - 1, 10)
+    sales(db, pid, -lag, -lag, 4)
+    assert volume(db, pid) == (70, 300, 300)
+
+
+def test_a_bucket_dated_after_today_never_moves_the_end_past_yesterday(db, set_id):
+    pid = product(db, set_id, 10)
+    sales(db, pid, -75, -1, 10)
+    sales(db, pid, 0, 1, 4)  # a clock ahead of ours
     assert volume(db, pid) == (70, 300, 300)
 
 
@@ -2243,7 +2355,7 @@ def test_export_patch_kept_volatile_definer_and_acl(db):
     assert (anon, authenticated) == (False, True)
 ```
 
-Run against a database built by `scripts/db/replay_migrations.sh` (it applies the three new files in registry order): 12 passed. Against the previous definitions (0027 and 0024 instead of steps 3 and 2): the four flat-demand cases and the export case fail, which is the regression signal.
+Run against a database built by `scripts/db/replay_migrations.sh` (it applies the three new files in number order): 14 passed. Against the previous definitions (0027 and 0024 instead of steps 3 and 2): the four flat-demand cases, the future-bucket case and the export case fail, which is the regression signal. (Reviewer check on PostgreSQL 16: with this data 0027 returns a 7d figure of 64, 54, 44 and 34 for lags 0 to 3, and an anchor of "yesterday, or the newest bucket when older" returns 70 for lag 0 but 64 for lags 1 to 3, because the newest bucket it keeps is the partial one.)
 
 ### 2. `tests/test_wp38_migrations_static.py` (new; no database)
 
@@ -2337,20 +2449,27 @@ def test_latest_prices_acl_and_search_path():
 
 def test_export_currency_is_patched_in_place_not_redefined():
     _, sql = one_file("_export_includes_box_recipe_currency.sql")
-    # A full CREATE here would drop the keys 0038, 0039 and 0040 add whenever
-    # this file is applied after them, and WP34/WP35's "which files define
-    # export_my_data" checks would find a third definition.
+    # A full CREATE here would drop any key a migration applied earlier in
+    # production added (WP36's 0046 can merge first), and WP34/WP35's "which
+    # files define export_my_data" checks would find a third definition.
     assert "FUNCTION public.export_my_data" not in sql
     assert "pg_get_functiondef('public.export_my_data()'::regprocedure)" in sql
     assert "$k$'promo_value', promo_value,$k$" in sql
     assert "$k$'promo_value', promo_value, 'currency', currency,$k$" in sql
 
 
-def test_export_patch_sorts_after_the_full_redefinitions():
+def test_later_full_redefinitions_keep_the_currency_key():
     name, _ = one_file("_export_includes_box_recipe_currency.sql")
-    # 0038 (WP34) and 0039 (WP35) redefine export_my_data in full; the patch
-    # must replay after them or the replayed database loses the key.
-    assert name[:4] > "0039", f"{name} must be numbered above 0039"
+    order = apply_order()
+    head = re.compile(r"CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+public\.export_my_data\s*\(", re.I)
+    # 0044 (WP34) and 0045 (WP35) redefine export_my_data in full after this
+    # patch; each body must keep the key or every replayed database loses it.
+    for later in order[order.index(name) + 1:]:
+        sql = squash(LINE_COMMENT.sub("", (MIGRATIONS / later).read_text()))
+        if head.search(sql):
+            assert "'promo_value', promo_value, 'currency', currency," in sql, (
+                f"{later} redefines export_my_data without box_recipes 'currency', currency; "
+                "add it after 'promo_value', promo_value, (WP38)")
 
 
 # ------------------------------------------------------------ volume windows
@@ -2361,8 +2480,8 @@ def test_volume_windows_end_on_the_anchor_day():
     assert eff_name == name
     s = squash(stmt)
     assert ("case when df.newest_day_bucket >= current_date - 3 "
-            "and df.newest_day_bucket < current_date - 1 "
-            "then df.newest_day_bucket else current_date - 1 end as anchor_day") in s
+            "then least(df.newest_day_bucket - 1, current_date - 1) "
+            "else current_date - 1 end as anchor_day") in s
     for window in ("between wa.anchor_day - 6 and wa.anchor_day",
                    "between wa.anchor_day - 29 and wa.anchor_day",
                    "between wa.anchor_day - 59 and wa.anchor_day - 30",
@@ -2370,7 +2489,7 @@ def test_volume_windows_end_on_the_anchor_day():
         assert window in s, f"{name}: window {window!r} missing"
     assert ">= current_date - 6 " not in s and ">= current_date - 29 " not in s, (
         f"{name}: a window still ends at current_date (review N02)")
-    assert "where sh.bucket_date >= current_date - 66" in s
+    assert "where sh.bucket_date >= current_date - 67" in s
 
 
 def test_volume_freshness_gate_is_unchanged():
@@ -2957,7 +3076,7 @@ it("an empty set board is never cached at runtime, and accepted during the build
 
 ### 8. `frontend/app/lib/__tests__/marketPulse.test.ts` (update; N02)
 
-`REFERENCE_DATE` is 2026-07-06 local noon. With this package the trailing windows end on 2026-07-05 (yesterday) unless the newest usable bucket is 2026-07-03 or 2026-07-04. Change exactly these cases; every other case passes unchanged (verified by running the old and new functions on every case of this file):
+`REFERENCE_DATE` is 2026-07-06 local noon. With this package the trailing windows end on the day before the newest usable day bucket, never later than 2026-07-05 (yesterday); a product with no usable bucket since 2026-07-03 keeps 2026-07-05. Change exactly these cases; every other case passes unchanged (verified by running the old and new functions on every case of this file):
 
 - "sums day rows inside the trailing window": replace `sales` with
 
@@ -2979,25 +3098,50 @@ it("an empty set board is never cached at runtime, and accepted during the build
 
   and keep `toBe(9)`.
 - "applies offsetDays to shift the window into the past": the comment becomes `// Prior 30d window: 2026-05-07 .. 2026-06-05 (anchor 2026-07-05).` and the loop bounds become `new Date(2026, 4, 7)` and `new Date(2026, 5, 5)`. Keep `toBe(30)`.
-- "still reports a lifetime total for a product younger than the window": the three rows become `makeSale("2026-07-03", 2)`, `makeSale("2026-07-04", 3)`, `makeSale("2026-07-05", 4)`. Keep `toBe(9)`.
+- "ignores week rows and does not count a null quantity as data": replace `sales` with
+
+```ts
+    const sales = [
+      makeSale("2026-07-05", null),
+      makeSale("2026-07-04", 2),
+      // Today's partial bucket: it sets the anchor (2026-07-05) and is outside the window.
+      makeSale("2026-07-06", 1),
+      makeSale("2026-07-05", 50, "week"),
+    ];
+```
+
+  and keep `toBe(2)`.
+- "tolerates a bucket lagging today by up to two days": keep the four rows; replace the `expect` line with
+
+```ts
+    // 2026-07-04 is the partial bucket of the last visit, two days ago: still
+    // fresh, but the window ends the day before it (2026-07-03).
+    expect(getUnitsSoldWindow(sales, 7, 0, REFERENCE_DATE)).toBe(4);
+```
+
+- "still reports a lifetime total for a product younger than the window": the rows become `makeSale("2026-07-03", 2)`, `makeSale("2026-07-04", 3)`, `makeSale("2026-07-05", 4)` and, last, `// Today's partial bucket: outside the window, which ends yesterday.` followed by `makeSale("2026-07-06", 1)`. Keep `toBe(9)`.
 - In `describe("getPriorUnitsSold30d")`: the top comment becomes `// Prior-30d window for REFERENCE_DATE (2026-07-06, anchor 2026-07-05): 2026-05-07..2026-06-05.` and `// Weekly fallback window: bucket_date in 2026-05-03..2026-05-30.`; in `priorWindowDayRows` the doc becomes `/** Consecutive day rows ending 2026-06-05 (the prior-window end). */` and `new Date(2026, 5, 6 - back)` becomes `new Date(2026, 5, 5 - back)`. All its expectations stay.
 
 Then add `getVolumeTrendPercent` and `getVolumeWindowAnchorKey` to the import from `"../marketPulse"` (if `getVolumeTrendPercent` is not imported yet) and append:
 
 ```ts
 describe("volume windows end on the last complete day (review N02)", () => {
-  /** 10 units a day through `lag` days ago; with lag 0, today's partial bucket (4 so far). */
+  /**
+   * Flat demand of 10 units a day, last collected `lag` days ago. As in
+   * production, the newest bucket is the partial day of that last visit
+   * (4 units so far) and every older bucket was corrected to its full 10.
+   */
   function flatSales(lag: number): SalesHistoryEntry[] {
     const rows: SalesHistoryEntry[] = [];
     for (let back = 75; back >= lag; back -= 1) {
       const d = new Date(2026, 6, 6 - back);
       const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-      rows.push(makeSale(key, back === 0 ? 4 : 10));
+      rows.push(makeSale(key, back === lag ? 4 : 10));
     }
     return rows;
   }
 
-  it.each([0, 1, 2, 3])("flat demand with a %i-day lag gives a full 7d figure and a 0%% trend", (lag) => {
+  it.each([0, 1, 2, 3])("flat demand last collected %i day(s) ago gives a full 7d figure and a 0%% trend", (lag) => {
     const sales = flatSales(lag);
     const units30d = getUnitsSoldWindow(sales, 30, 0, REFERENCE_DATE);
     const prior = getPriorUnitsSold30d(sales, REFERENCE_DATE);
@@ -3011,18 +3155,20 @@ describe("volume windows end on the last complete day (review N02)", () => {
     expect(getUnitsSoldWindow(flatSales(4), 7, 0, REFERENCE_DATE)).toBeNull();
   });
 
-  it("anchors on yesterday, or on a newest bucket 2 or 3 days old", () => {
+  it("anchors on the day before the newest bucket, never later than yesterday", () => {
     expect(getVolumeWindowAnchorKey(flatSales(0), REFERENCE_DATE)).toBe("2026-07-05");
-    expect(getVolumeWindowAnchorKey(flatSales(1), REFERENCE_DATE)).toBe("2026-07-05");
-    expect(getVolumeWindowAnchorKey(flatSales(2), REFERENCE_DATE)).toBe("2026-07-04");
-    expect(getVolumeWindowAnchorKey(flatSales(3), REFERENCE_DATE)).toBe("2026-07-03");
+    expect(getVolumeWindowAnchorKey(flatSales(1), REFERENCE_DATE)).toBe("2026-07-04");
+    expect(getVolumeWindowAnchorKey(flatSales(2), REFERENCE_DATE)).toBe("2026-07-03");
+    expect(getVolumeWindowAnchorKey(flatSales(3), REFERENCE_DATE)).toBe("2026-07-02");
     expect(getVolumeWindowAnchorKey(flatSales(5), REFERENCE_DATE)).toBe("2026-07-05"); // stale
     expect(getVolumeWindowAnchorKey([], REFERENCE_DATE)).toBe("2026-07-05");
+    // A bucket dated after today (a clock ahead of ours) never moves the end past yesterday.
+    expect(getVolumeWindowAnchorKey([makeSale("2026-07-08", 4)], REFERENCE_DATE)).toBe("2026-07-05");
   });
 });
 ```
 
-Before this package the flat-demand cases fail (lag 1: 7d 60, trend -3.3%).
+Before this package the flat-demand cases fail (7d 64, 54, 44 and 34 for lags 0 to 3). An anchor of "yesterday, or the newest bucket when older" also fails them for lags 1 to 3 (7d 64): it keeps the partial bucket of the last visit inside the window.
 
 ### 9. `frontend/app/lib/__tests__/import.test.ts` (update; N01)
 
@@ -3374,17 +3520,17 @@ python -m pyflakes main.py compare_prices.py update_shopify_skus.py scraper_db.p
 grep -rn "bs4\|BeautifulSoup\|table_daily_1" --include=*.py .        # no output
 grep -n "supabase\.table(" main.py                                  # every hit inside an else: under "if pg_db is not None" (WP21 rule)
 
-python3 verify_migration.py migrations/NNNN_get_latest_prices.sql > /tmp/wp38_latest.sql; echo "exit=$?"
+python3 verify_migration.py migrations/0035_get_latest_prices.sql > /tmp/wp38_latest.sql; echo "exit=$?"
 # expect exit=0 and on stderr:
 # -- function get_latest_prices(p_product_ids bigint[]): body 9f9f8dc164380380fd1ef7998cdc5958, non-strict, parallel u, security invoker, sql, volatility s, config search_path=public
 # -- privilege EXECUTE on public.get_latest_prices(bigint[]) for public: revoked
 # -- privilege EXECUTE on public.get_latest_prices(bigint[]) for anon: granted
 # -- privilege EXECUTE on public.get_latest_prices(bigint[]) for authenticated: granted
 # -- privilege EXECUTE on public.get_latest_prices(bigint[]) for service_role: granted
-python3 verify_migration.py migrations/NNNN_volume_windows_complete_days.sql > /tmp/wp38_volume.sql; echo "exit=$?"
+python3 verify_migration.py migrations/0037_volume_windows_complete_days.sql > /tmp/wp38_volume.sql; echo "exit=$?"
 # expect exit=0 and:
 # -- function get_market_product_volume_metrics(): body af73805508b3afe8f24f788b151a07e0, non-strict, parallel u, security invoker, sql, volatility s, config search_path=public
-python3 verify_migration.py migrations/NNNN_export_includes_box_recipe_currency.sql > /dev/null; echo "exit=$?"
+python3 verify_migration.py migrations/0036_export_includes_box_recipe_currency.sql > /dev/null; echo "exit=$?"
 # expect exit=2 ("Nothing here can be verified": the patch is a DO block; the header queries are its check)
 ```
 
@@ -3395,16 +3541,16 @@ Database (if PostgreSQL 16 is available locally; CI runs the same in "Database r
 ```bash
 scripts/db/replay_migrations.sh                                   # "OK: N files replayed once (replay_once) and twice (replay_twice)"
 POKEFIN_TEST_DATABASE_URL=postgresql://postgres:postgres@localhost:5432/replay_once \
-  python -m pytest tests/test_wp38_db.py -v                        # 12 passed
+  python -m pytest tests/test_wp38_db.py -v                        # 14 passed
 ```
 
 Paste every command's output into the PR body.
 
 ## Owner actions
 
-1. **Apply the three migrations to production before merge**, in registry order (Supabase SQL editor with everything selected, or MCP `apply_migration`): `NNNN_get_latest_prices.sql`, `NNNN_export_includes_box_recipe_currency.sql`, `NNNN_volume_windows_complete_days.sql`. All three are safe while the old frontend runs: the first adds a function, the second adds a key to the export, the third changes the volume windows by one day (intended). Then:
-   - Run each file's header verification queries: `get_latest_prices` agrees with `get_market_product_summaries` (0 rows) and its `EXPLAIN ANALYZE` is well under 100 ms; the export check returns `true`, `v | t`, `false`; no product has `units_sold_7d > units_sold_30d` (0).
-   - Prove the applied objects are the files' (the repo's rule since 2026-08-13): `python3 verify_migration.py migrations/NNNN_get_latest_prices.sql` and `... NNNN_volume_windows_complete_days.sql`, paste each printed statement into the SQL editor with nothing selected, Run: every row `OK`.
+1. **Apply the three migrations to production before merge**, in number order (Supabase SQL editor with everything selected, or MCP `apply_migration`): `0035_get_latest_prices.sql`, `0036_export_includes_box_recipe_currency.sql`, `0037_volume_windows_complete_days.sql`. All three are safe while the old frontend runs: the first adds a function, the second adds a key to the export, the third changes the volume windows by one day (intended). Then:
+   - Run each file's header verification queries: for `get_latest_prices`, query 1 (the old paged read against the RPC, every product) and query 2 (against `get_market_product_summaries`) each return 0 rows, query 3's plan is a Nested Loop over an index scan with no Sort and both timings are well under 100 ms, query 4 returns `true | false`; the export check returns `true`, `v | t`, `false`; no product has `units_sold_7d > units_sold_30d` (0). Paste the outputs into the PR.
+   - Prove the applied objects are the files' (the repo's rule since 2026-08-13): `python3 verify_migration.py migrations/0035_get_latest_prices.sql` and `... 0037_volume_windows_complete_days.sql`, paste each printed statement into the SQL editor with nothing selected, Run: every row `OK`.
    - Record the dates in `audits/HARDENING_FOLLOWUPS.md` (step 19 bullet) and refresh `schema.sql` as WP21 describes.
 2. **Database types (phase B)**: run `pnpm types:db` with your `SUPABASE_ACCESS_TOKEN` and push `frontend/app/types/database.ts` to the branch, or give the executor a token. WP20's "Database types" workflow fails on master until production and the file agree.
 3. **After deploy**:
@@ -3412,21 +3558,21 @@ Paste every command's output into the PR body.
    - After the next scraper run, the scraper log shows either "Exchange rate stored." or "Exchange rate for <date> is already stored; nothing to write.", and no `exchange_rate_stale`. Pull the new `main.py` and `scraper_db.py` on the scraper machine and `pip install -r requirements.txt` (beautifulsoup4 is no longer needed).
    - `SELECT recorded_at::date AS day, count(*) FROM public.exchange_rates WHERE recorded_at >= current_date - 7 GROUP BY 1 ORDER BY 1;` shows at most one new row per Bank of Canada date from the deploy on (older days keep their duplicates; WP25's `fx_daily` already handles them).
    - Re-import a Collectr export that has a Pokemon Center or other variant product: the preview shows the variant on the matched line, rows without a cost say "Needs cost" and cannot be ticked, and a portfolio picker appears when the file holds more than one Collectr portfolio.
-4. **`export_my_data` after WP34 and WP35**: WP34's 0038 and WP35's 0039 replace the function in full from a body without `currency`. Unless the plan maintainer applied the handoff (their bodies gain `'currency', currency,`), re-run `migrations/NNNN_export_includes_box_recipe_currency.sql` in production right after applying 0038, and again after 0039 (it is idempotent), then check `SELECT position('''currency'', currency' IN pg_get_functiondef('public.export_my_data()'::regprocedure)) > 0;` returns `true`. A replayed database is always right, because this file sorts after both.
+4. **`export_my_data` after WP34 and WP35**: WP34's 0044 and WP35's 0045 replace the function in full, and their specs carry `'currency', currency,` in the body, so the key survives. After applying each of them in production, check `SELECT position('''currency'', currency' IN pg_get_functiondef('public.export_my_data()'::regprocedure)) > 0;` returns `true`. If it returns `false` (an older copy of that spec was executed), re-run `migrations/0036_export_includes_box_recipe_currency.sql` (it is idempotent) and fix that migration's body in a follow-up, or every replayed database loses the key.
 5. **Seller tools**: the next `compare_prices.py` report lists stale products under "no market price" with their last price date, and the export CSV has a "Price Date" column. If `update_shopify_skus.py --apply` was ever used before this package, the shop may hold variants that share their parent's SKU; the script no longer creates them but does not repair them. Fix those in Shopify (give each variant its own SKU), or `/compare` and `compare_prices.py` keep warning about duplicate SKUs.
 6. **F045 item 4** (decision): WP30 replaces `ProductCard`'s props. Decide whether WP30 should take a single memoised `cardSettings` prop (the verifier's lower-risk option); until then F045 stays partially open in the tracker.
 7. **F095 contrast check** (decision): no package adds one. Recommended: WP22 adds Lighthouse's accessibility category to `lighthouserc.json` with `"color-contrast": "error"` for its four URLs. Record the decision in the tracker.
-8. **Plan maintenance** (before WP22, WP25, WP27, WP34 and WP35 run): apply the four "Handoffs to later specs" listed at the top of this spec to those specs.
+8. **Plan maintenance**: none left. The six "Handoffs to later specs" listed at the top of this spec are already in WP22, WP24, WP25, WP27, WP31, WP34 and WP35.
 
 ## Acceptance criteria
 
-- [ ] Three migrations exist under the registry's numbers, each idempotent; `verify_migration.py` prints the hashes above; `tests/test_wp38_migrations_static.py` and WP10's `tests/test_wp10_market_rpc_bounds.py` pass; the replay builds and `tests/test_wp38_db.py` passes (12).
-- [ ] `get_latest_prices` returns 0023's verdict (gate text pinned), filters `active` only without ids, is SECURITY INVOKER, and anon may call it.
+- [ ] Three migrations exist as `migrations/0035_get_latest_prices.sql`, `0036_export_includes_box_recipe_currency.sql` and `0037_volume_windows_complete_days.sql` (registry numbers), each idempotent; `verify_migration.py` prints the hashes above; `tests/test_wp38_migrations_static.py` and WP10's `tests/test_wp10_market_rpc_bounds.py` pass; the replay builds and `tests/test_wp38_db.py` passes (14).
+- [ ] `get_latest_prices` returns 0023's verdict (gate text pinned), filters `active` only without ids, is SECURITY INVOKER, and anon may call it; header query 1 (old paged read against the RPC) returns 0 rows in the DB test and in production.
 - [ ] `fetchNewestPricedAt` (server) and `fetchNewestPricedAtClient` no longer page `product_price_history`; `fetchNewestPricedAtForProducts` is unchanged and still fails closed.
 - [ ] Portfolio search, set search and the import catalog are priced by one `get_latest_prices` call per 500 results; `portfolio.ts` no longer calls `get_market_product_summaries`.
 - [ ] `export_my_data()` exports `box_recipes.currency`; VOLATILE, SECURITY DEFINER and the ACL are unchanged; the migration never contains `FUNCTION public.export_my_data`.
 - [ ] An empty catalog or set board throws at runtime and is accepted during `next build`; `pnpm build:stub` exits 0.
-- [ ] Flat demand reads flat: 7d 70 / 30d 300 / prior 300 / trend 0% for a 0 to 3 day collection lag, in SQL (DB test) and in `marketPulse.ts` (Tests 8); the 3-day freshness gate is unchanged.
+- [ ] Flat demand reads flat: 7d 70 / 30d 300 / prior 300 / trend 0% for a product last visited 0 to 3 days ago whose newest bucket is partial, in SQL (DB test) and in `marketPulse.ts` (Tests 8); the windows end on `LEAST(newest usable bucket - 1, yesterday)`; the 3-day freshness gate is unchanged.
 - [ ] The Collectr matcher decides on variant before set name, returns "low" when candidates remain, never matches a variantless row to a variant product when a standard one exists; a blank cost is never imported as 0 (a typed 0 still is); every Collectr portfolio is kept and the preview offers a picker; invalid dates are rejected; the preview shows the matched variant.
 - [ ] "Try again" calls `router.refresh()` and `reset()` in one transition in both error boundaries.
 - [ ] The scraper reads the Valet API, stores one row per observation date, logs `exchange_rate_stale` past 4 business days and never raises; the site logs `exchange_rate_stale` once per cache fill; `isExchangeRateStale` is exported from `app/lib/currency.ts`; the CAD chart tooltip says "CAD at today's rate"; beautifulsoup4 is gone from `requirements.txt`.
@@ -3436,7 +3582,7 @@ Paste every command's output into the PR body.
 ## Rollback
 
 - Code: revert the PR. Every frontend change is self-contained; the reverted code pages history again and works whether or not the migrations stay.
-- `get_latest_prices`: additive and unused after a revert. Leave it, or `DROP FUNCTION IF EXISTS public.get_latest_prices(bigint[]);` and add that statement as a migration (next free number) so the replay matches, then `pnpm types:db`.
+- `get_latest_prices`: additive and unused after a revert. Leave it, or `DROP FUNCTION IF EXISTS public.get_latest_prices(bigint[]);` and add that statement as a migration numbered at the first free number above 0047 (numbers up to 0047 are reserved; see `audits/remediation/00-PLAN.md`, "Migration registry") so the replay matches, then `pnpm types:db`.
 - Volume windows: re-run `migrations/0027_bounded_volume_metrics.sql` in production (it is `CREATE OR REPLACE` with the same shape) and add a migration that does the same, so the replay matches.
 - Export key: harmless to keep. To remove it, re-run `migrations/0024_export_my_data_volatile.sql` (it drops any key added after it, WP34's and WP35's included; re-run their files afterwards).
 - Scraper: revert `main.py`, `scraper_db.py` and `requirements.txt` together (the old parser needs beautifulsoup4).
@@ -3455,4 +3601,4 @@ Branch `remediation/wp38-residual-data-layer-followups`. Suggested commits:
 
 PR title: `fix: residual data-layer follow-ups (WP38: F146, F143, F064, N01, N02, N03, N05, N08)`
 
-PR body: link this spec; the finding list with "full" or "residual" as in the metadata; what was not done and why (F045 item 4 left to WP30, F095 contrast check recommended for WP22, the F146 anchor RPC declined); the two plan corrections (export patched in place instead of redefined; the empty catalog accepted during the build); the deliberate output change (volume windows move by one day, with the measured before and after for flat demand); the migration numbers used; Owner actions verbatim, with item 1 in bold as "apply before merge"; the four handoffs for WP22, WP25, WP27 and WP34/WP35; the Verification output.
+PR body: link this spec; the finding list with "full" or "residual" as in the metadata; what was not done and why (F045 item 4 left to WP30, F095 contrast check recommended for WP22, the F146 anchor RPC declined); the two plan corrections (export patched in place instead of redefined; the empty catalog accepted during the build); the deliberate output change (volume windows move by one day, with the measured before and after for flat demand); the migration numbers used; Owner actions verbatim, with item 1 in bold as "apply before merge"; the six handoffs for WP22, WP24, WP25, WP27, WP31 and WP34/WP35; the Verification output.

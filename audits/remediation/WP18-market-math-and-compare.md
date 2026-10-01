@@ -110,7 +110,7 @@ No `"use client"`, no `"server-only"`: imported by `serverMarketData.ts` (server
  * both compute the same thing (population std-dev, drawdown only against a
  * positive running peak). Keep them in step.
  */
-import { parseRecordedAt } from "./format";
+import { parseRecordedAt, recordedAtDateKey } from "./format";
 import { utcMidnightMs } from "./marketPulse";
 
 export const DAY_MS = 24 * 60 * 60 * 1000;
@@ -260,10 +260,11 @@ export function percentChange(from: number, to: number): number | null {
 }
 
 /**
- * N-day return: newest reading vs the newest reading at least `days` before
- * `referenceDate`. Null when the newest reading is itself older than the
- * window (no current point to measure to), when no reading is old enough, or
- * when the past price is not positive. History must be oldest first.
+ * N-day return: newest reading vs the newest reading whose UTC date is on or
+ * before (the UTC date of `referenceDate`) minus `days`. Null when the newest
+ * reading is itself on or before that day (no current point to measure to),
+ * when no reading is old enough, or when the past price is not positive.
+ * History must be oldest first.
  */
 export function getReturnPercent(
   history: readonly HistoryRow[] | undefined,
@@ -273,14 +274,23 @@ export function getReturnPercent(
   if (!history || history.length < 2) return null;
 
   const latestEntry = history[history.length - 1];
-  const targetMs = referenceDate.getTime() - days * DAY_MS;
 
-  // The newest reading must fall inside the window, or there is no "now" to
-  // measure to, and the loop below would return a flat 0% against itself.
-  if (parseRecordedAt(latestEntry.recorded_at).getTime() <= targetMs) return null;
+  // Same anchor as the get_market_product_summaries RPC this stands in for:
+  // UTC calendar days, `day <= current_date - N` (WP07, review F122). Not
+  // `now - N x 24h`: before the day's scrape an instant comparison rejected
+  // the anchor-day row the RPC uses and fell back to an older one.
+  const targetKey = new Date(utcMidnightMs(referenceDate) - days * DAY_MS)
+    .toISOString()
+    .slice(0, 10);
+
+  // The newest reading must fall after the target day, or there is no "now"
+  // to measure to, and the loop below would return a flat 0% against itself.
+  const latestKey = recordedAtDateKey(latestEntry.recorded_at);
+  if (latestKey === null || latestKey <= targetKey) return null;
 
   for (let i = history.length - 1; i >= 0; i -= 1) {
-    if (parseRecordedAt(history[i].recorded_at).getTime() <= targetMs) {
+    const key = recordedAtDateKey(history[i].recorded_at);
+    if (key !== null && key <= targetKey) {
       return percentChange(history[i].usd_price, latestEntry.usd_price);
     }
   }
@@ -2326,7 +2336,7 @@ All paths relative to `frontend/`. Default environment is jsdom; none of these n
 
 ### 1. `app/lib/__tests__/marketMath.test.ts` (moved from `app/components/MarketView/__tests__/returns.test.ts`, rewritten)
 
-Keeps the three original `getReturnPercent` cases and WP07's three F122 cases with the new signatures, and adds CAGR, drawdown, volatility units, daily points, date helpers and the exported windows and factors (Track 2: pinned to their values and to the SQL windows). It must pass under `TZ=UTC`, `TZ=America/Vancouver` and `TZ=Asia/Tokyo`.
+Keeps the original `getReturnPercent` cases and all five of WP07's F122 cases (including "anchors on the UTC calendar day like the RPC" and the east-of-UTC regression, which pin WP07's date-key anchor) with the new signatures, and adds CAGR, drawdown, volatility units, daily points, date helpers and the exported windows and factors (Track 2: pinned to their values and to the SQL windows). It must pass under `TZ=UTC`, `TZ=America/Vancouver` and `TZ=Asia/Tokyo`.
 
 ```ts
 import { readFileSync } from "fs";
@@ -2429,6 +2439,36 @@ describe("offset-less recorded_at is UTC (F122)", () => {
     expect(
       getReturnPercent(history, 7, new Date("2026-02-10T02:00:00Z"))
     ).toBeCloseTo(20, 10);
+  });
+
+  it("anchors on the UTC calendar day like the RPC, not on now minus 7x24h", () => {
+    // 02:00 UTC, before the day's 04:00 UTC scrape. The RPC's anchor is the
+    // newest row with day <= 2026-02-03, i.e. the 02-03 04:00 row: (132-110)/110.
+    // An instant comparison (now - 7 days = 02-03T02:00Z) rejected that row and
+    // used the 02-02 row instead (32%), disagreeing with the server.
+    const history = makeHistory([
+      { recordedAt: "2026-02-02T04:00:00", usdPrice: 100 },
+      { recordedAt: "2026-02-03T04:00:00", usdPrice: 110 },
+      { recordedAt: "2026-02-10T01:00:00", usdPrice: 132 },
+    ]);
+    expect(
+      getReturnPercent(history, 7, new Date("2026-02-10T02:00:00Z"))
+    ).toBeCloseTo(20, 10);
+  });
+
+  it("finds no 7D anchor the RPC does not have (east-of-UTC regression)", () => {
+    // Seven daily rows at 04:00 UTC, 2026-09-24 .. 2026-09-30, evaluated at
+    // 2026-09-30T20:00Z. Target day 2026-09-23: no row on or before it, so the
+    // RPC and this function both give null.
+    const history = makeHistory(
+      ["24", "25", "26", "27", "28", "29", "30"].map((d, i) => ({
+        recordedAt: `2026-09-${d}T04:00:00`,
+        usdPrice: 100 + i,
+      }))
+    );
+    expect(
+      getReturnPercent(history, 7, new Date("2026-09-30T20:00:00Z"))
+    ).toBeNull();
   });
 
   it("CAGR is the same for Z and offset-less spellings", () => {

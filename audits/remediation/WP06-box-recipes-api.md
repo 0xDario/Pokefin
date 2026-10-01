@@ -65,7 +65,7 @@ grep -n "RETURNS SETOF public.box_recipes" ../migrations/0005_box_recipes_share_
 # numbers its files 0027-0029 assuming it).
 ls ../migrations | grep '^002[4-9]'
 # expect: 0024_export_my_data_volatile.sql and 0025_portfolio_fk_indexes.sql
-# (WP01), and no 0026_ file. Everywhere below, NNNN means 0026. 0026 is a
+# (WP01), and no 0026_ file. This spec writes 0026 everywhere. 0026 is a
 # fixed reservation (WP10 0027-0029, WP16 0030, WP21 0031-0032): use it even
 # if WP10's or WP16's files are already present. Only if a 0026_ file that is
 # not this package's already exists: stop and ask the owner for the number
@@ -101,7 +101,7 @@ Assumptions to check, and what to do if they are wrong:
 
 Order: step 1 (migration file) can be written first or last, but the owner must apply it before this code is deployed (see Owner actions). Steps 2 to 6 create new modules; steps 7 to 10 edit existing files and depend on them; step 11 (ESLint) goes last so lint does not fail mid-way.
 
-### Step 1. `migrations/NNNN_box_recipes_sharing_and_currency.sql` (new)
+### Step 1. `migrations/0026_box_recipes_sharing_and_currency.sql` (new)
 
 Decisions baked into this file, each checked against the code:
 
@@ -278,7 +278,7 @@ REVOKE ALL    ON FUNCTION public.get_shared_recipe(text) FROM public;
 GRANT EXECUTE ON FUNCTION public.get_shared_recipe(text) TO anon, authenticated, service_role;
 ```
 
-The SQL never names its own file. If NNNN is not 0026, update the two comment references to `0026` in steps 2 and 6.
+The SQL never names its own file. If the owner assigned another number (Before you start, check 7), update the two comment references to `0026` in steps 2 and 6.
 
 ### Step 2. `frontend/app/lib/boxRecipes.ts` (new): shapes and validation shared by routes and hook
 
@@ -2557,7 +2557,7 @@ From the repo root:
 
 ```bash
 # verify_migration.py reads the new file (it prints SQL to stdout and a summary to stderr).
-python3 verify_migration.py migrations/NNNN_box_recipes_sharing_and_currency.sql > /tmp/wp06_verify.sql; echo "exit=$?"
+python3 verify_migration.py migrations/0026_box_recipes_sharing_and_currency.sql > /tmp/wp06_verify.sql; echo "exit=$?"
 # expect: exit=3, and stderr lists 2 functions, 7 privileges, and
 # "NOT VERIFIED ...: 2 x ALTER TABLE (other than RLS enablement), 1 x CREATE TRIGGER,
 #  3 x DO block, 2 x DROP object, 2 x data statement". No "refused" line.
@@ -2586,7 +2586,7 @@ CREATE TABLE public.portfolio_lots (id bigint PRIMARY KEY, holding_id bigint);
 INSERT INTO auth.users VALUES ('11111111-1111-1111-1111-111111111111');
 ```
 
-Seed legacy rows (after the four migrations, before NNNN): one private row with `share_code = 'abc'`, one public row with a valid 32-hex code, one public row with `share_code = NULL`, one public row with `share_code = '1'`. Apply NNNN twice (expect success both times, one NOTICE each). Expected results, all observed while writing this spec:
+Seed legacy rows (after the four migrations, before 0026): one private row with `share_code = 'abc'`, one public row with a valid 32-hex code, one public row with `share_code = NULL`, one public row with `share_code = '1'`. Apply 0026 twice (expect success both times, one NOTICE each). Expected results, all observed while writing this spec:
 
 - Private row: `share_code` NULL. Valid public row: code unchanged. The two bad public rows: fresh 32-hex codes, stable across the second run. All rows `currency = 'CAD'`; the column default is `'USD'`.
 - As `authenticated` with `request.jwt.claim.sub` set: an INSERT sending `share_code = '1', is_public = true` gets a fresh 32-hex code; an INSERT with no `is_public` gets `share_code` NULL even when one was sent; `UPDATE ... SET share_code = '1'` on a public row keeps the old code; `UPDATE ... SET name = ...` keeps it; `is_public = false` clears it; `is_public = true` again mints a new one; `SET currency = 'EUR'` fails with `box_recipes_currency_valid`; `SELECT public.box_recipes_share_code_guard()` fails with permission denied.
@@ -2629,10 +2629,10 @@ Seed legacy rows (after the four migrations, before NNNN): one private row with 
    ```
 
    Expected: `is_public` boolean, `name` text, `packs` jsonb, `promo_value` double precision, `retail_price` double precision, `share_code` text, and no `currency` row yet. If any type differs, stop and tell the author: the `RETURNS TABLE` column types in step 1 must be changed to match before applying. (The migration runs as one transaction through `apply_migration` or a whole-file SQL editor run, so a failure leaves the old function in place.)
-2. **Apply `migrations/NNNN_box_recipes_sharing_and_currency.sql`** to production via Supabase MCP `apply_migration` (preferred) or the SQL editor with the whole file selected. Do this **before** the Vercel deployment of this PR goes live.
-3. **Verify:** run `python3 verify_migration.py migrations/NNNN_box_recipes_sharing_and_currency.sql`, execute the printed query: all 9 rows `OK`. Then run the three queries in the migration header: 3 constraint rows, 1 trigger row with `tgenabled = 'O'`, and `currency` default `'USD'::text`, not nullable. `verify_migration.py` on `0005` now reports a body `MISMATCH` for `get_shared_recipe`; that is correct, because NNNN redefines it.
+2. **Apply `migrations/0026_box_recipes_sharing_and_currency.sql`** to production via Supabase MCP `apply_migration` (preferred) or the SQL editor with the whole file selected. Do this **before** the Vercel deployment of this PR goes live.
+3. **Verify:** run `python3 verify_migration.py migrations/0026_box_recipes_sharing_and_currency.sql`, execute the printed query: all 9 rows `OK`. Then run the three queries in the migration header: 3 constraint rows, 1 trigger row with `tgenabled = 'O'`, and `currency` default `'USD'::text`, not nullable. `verify_migration.py` on `0005` now reports a body `MISMATCH` for `get_shared_recipe`; that is correct, because 0026 redefines it.
 4. **Run the Supabase security advisor** (Dashboard, Advisors, Security, or MCP `get_advisors` type `security`). Expect no new finding for `box_recipes_share_code_guard` (its `search_path` is pinned) or `get_shared_recipe`.
-5. **Record it** in `audits/HARDENING_FOLLOWUPS.md` section 7 as a bullet in the existing style, placed newest-first in the run of migration bullets: directly above WP01's "**Migrations 0024 and 0025" bullet (or, if that is absent, directly above "**Migration 0022 applied**"), and below any WP10 "**Migrations 0027, 0028 and 0029" bullet if WP10 merged first. WP16's docs step finds it by the text "**Migration 0026". Text: "**Migration NNNN applied** (date, via Supabase MCP). Server-owned box recipe share codes (trigger + format/visibility CHECKs), `box_recipes.currency`, and `get_shared_recipe` without owner id. `public_bad_code` before apply: N." Add a second bullet: "**Open:** `export_my_data` (0011, redefined by WP01's 0024) does not export `box_recipes.currency`; add it the next time that function is redefined."
+5. **Record it** in `audits/HARDENING_FOLLOWUPS.md` section 7 as a bullet in the existing style, placed newest-first in the run of migration bullets: directly above WP01's "**Migrations 0024 and 0025" bullet (or, if that is absent, directly above "**Migration 0022 applied**"), and below any WP10 "**Migrations 0027, 0028 and 0029" bullet if WP10 merged first. WP16's docs step finds it by the text "**Migration 0026". Text: "**Migration 0026 applied** (date, via Supabase MCP). Server-owned box recipe share codes (trigger + format/visibility CHECKs), `box_recipes.currency`, and `get_shared_recipe` without owner id. `public_bad_code` before apply: N." Add a second bullet: "**Open:** `export_my_data` (0011, redefined by WP01's 0024) does not export `box_recipes.currency`; add it the next time that function is redefined."
 6. **After deploy**, run manual checks 1 to 9 from "Manual checks" under Verification on production with a test account.
 
 ## Acceptance criteria
@@ -2707,10 +2707,10 @@ no longer returns the owner's user id. Recipes store their currency
 feedback waits for the clipboard (F116), and the set sort no longer
 uses a NaN comparator (F117).
 
-Migration NNNN_box_recipes_sharing_and_currency.sql must be applied
+Migration 0026_box_recipes_sharing_and_currency.sql must be applied
 before this deploys.
 ```
 
 PR title: `WP06: box recipes via route handlers, working share links, recipe currency`
 
-PR body summary: link this spec; list F001 (part 3), F055, F059, F116, F117, F131, F149; call out in bold that migration NNNN must be applied before deploy, and paste the Owner actions; note the plan corrections (legacy currency backfilled as CAD with USD default; RPC trimmed to five columns; trigger instead of column grants); state whether steps 3a, 3b and 4 were needed or reused from WP04/WP05; paste the Verification outputs; list follow-ups: `export_my_data` does not include `currency` (WP01 area; recorded in `HARDENING_FOLLOWUPS.md` by Owner action 5), `schema.sql` lacks `is_public`, `currency`, the constraints and the trigger (WP21, F135), WP21's per-user row caps (F133) should cover `box_recipes`, and for WP07: `formatInCurrency` in `BoxCalculator.tsx` (step 9b) is a money formatter that WP07 step 6g should route through `formatMoney(value, currency)` together with `fmtPrice`. State the migration number you used (0026 unless check 7 found it taken).
+PR body summary: link this spec; list F001 (part 3), F055, F059, F116, F117, F131, F149; call out in bold that migration 0026 must be applied before deploy, and paste the Owner actions; note the plan corrections (legacy currency backfilled as CAD with USD default; RPC trimmed to five columns; trigger instead of column grants); state whether steps 3a, 3b and 4 were needed or reused from WP04/WP05; paste the Verification outputs; list follow-ups: `export_my_data` does not include `currency` (WP01 area; recorded in `HARDENING_FOLLOWUPS.md` by Owner action 5), `schema.sql` lacks `is_public`, `currency`, the constraints and the trigger (WP21, F135), WP21's per-user row caps (F133) should cover `box_recipes`, and for WP07: `formatInCurrency` in `BoxCalculator.tsx` (step 9b) is a money formatter that WP07 step 6g should route through `formatMoney(value, currency)` together with `fmtPrice`. State the migration number you used (0026 unless check 7 found it taken).

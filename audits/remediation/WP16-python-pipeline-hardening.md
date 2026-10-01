@@ -80,7 +80,7 @@ grep -n "shopify-token\|token_arg" compare_prices.py          # expect 4 hits
 # F141: dead code.
 grep -n "import uuid\|price_monitor\|def check_shopify_prices" main.py   # expect 3 hits
 grep -rn "check_shopify_prices" --include=*.py --include=*.sh --include=*.md . | grep -v audits/   # expect only main.py:1450
-# Next free migration number.
+# Migrations present (0030 is reserved for this package; see assumption 1).
 ls migrations | sort | tail -4
 # WP11 state.
 grep -n "run_jobs_once\|revalidate_hook\|return updated_count" main.py; ls revalidate_hook.py

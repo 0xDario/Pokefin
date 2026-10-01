@@ -3,9 +3,9 @@
 - **Goal**: a signed-in collector opens `/portfolio` and sees, in one screen, whether their collection beat the sealed market ("Same money in the Pokéfin Sealed Index"), what they would actually net after selling fees (editable, default 15%), how long each holding would take to sell (a days-to-exit band), how value splits by set, product type and era with a flag when one product or set dominates, and their cost basis and P/L in the currency they paid, with a Canadian buyer's CAD P/L split into market move and currency move at Bank of Canada rates of the right days. A user with no holdings gets an import-first start: Import from Collectr, Add a product, or Explore a sample portfolio that is never saved.
 - **Why now / value**: signature feature 6 of `01-PRODUCT-DIRECTION.md` §5 and the "Return" step of §4.2 ("am I beating the market, and what would I actually net on exit?"). Every input already exists after WP25 (`fx_daily`, `product_stats_latest`) and WP29 (the headline index series), so this package is mostly arithmetic and presentation. It also removes the last chart that converts CAD history at today's rate (WP25 left that bullet in `/methodology#limits` for WP31 and WP36), and it fixes a correctness gap: a Canadian who paid C$129.99 is stored today as if they paid US$129.99.
 - **Effort**: L, 14 to 16 hours (migration and its two Python test modules 2.5 h, analytics builder, chart model and their tests 3 h, input, repo, two routes and the browser client with tests 2 h, modals and import currency 1.5 h, summary, chart, allocation, holdings table and phone list with tests 4 h, empty state and sample portfolio 1 h, methodology, budgets, docs, verification and PR 1.5 h).
-- **Depends on**: WP05 (`app/lib/server/portfolioRepo.ts` with `HOLDING_SELECT`, `loadGuardedProducts`, `guardHoldings`, `getOrCreatePortfolio`, `findPortfolioId`; `app/lib/portfolioInput.ts` with `parseNewHolding`, `parseHoldingUpdate`, `describeWriteError`, `Parsed`; `app/lib/portfolioApi.ts` with `PortfolioApiError`, `readErrorMessage`, `JSON_HEADERS`, `NETWORK_ERROR`; `app/lib/routeAuth.ts`; `rejectIfNotAppRequest`; the four portfolio routes; `usePortfolioData`), WP10 (`GET /api/portfolio/history`, `get_portfolio_history`, migration 0029), WP14 (`app/components/ui/Dialog.tsx` and the modal markup), WP20 (`app/types/portfolio.ts`, `useCurrency()`, `pnpm types:db`, generated `app/types/database.ts`), WP21 (migrations 0031 and 0032, `scripts/db/replay_migrations.sh`, `tests/test_migration_volatility.py`, the CI "database" job, the DB test fixture pattern), WP23 (`Stat`, `Delta`, `Badge`, `SegmentedControl`, `DataList`, `Skeleton`, `Button`, `AsOf`, `icons.tsx`, tokens, dense `SortableTable`, `test-utils/axe.ts`, the `uiConventions` ratchet), WP25 (`fx_daily` in migration 0034, `app/lib/fx.ts`, `app/lib/marketStats.ts`, `getCachedFxDaily`, `getCachedProductStats`, `/methodology` v1.1 and its `#limits` bullet), WP29 (migration 0037, `getCachedIndexSeries`, `HEADLINE_INDEX_CODE`, `HEADLINE_INDEX_NAME`). Through them: WP07 (`app/lib/format.ts`), WP11 (`app/components/IntentLink.tsx`), WP15 (`ConfirmDialog`, the dashboard delete flow), WP17 (blocking lint, `PortfolioTooltip` at module scope, `chartTooltips.test.tsx`), WP18 (`app/lib/sorting.ts`, `SortableTable`), WP22 (`perf-budgets.json`, `pnpm perf:budget`), WP24 (`metricDefinitions.ts`, `MetricLabel`, `app/content/methodology.ts`, `MethodologyArticle.tsx`). Soft, with a default in Before you start: WP31 (`?add=` pre-fill in `AddHoldingModal` and the dashboard), WP34 (`PortfolioTabs` on `app/portfolio/page.tsx`, migration 0038), WP35 (migration 0039).
+- **Depends on**: WP05 (`app/lib/server/portfolioRepo.ts` with `HOLDING_SELECT`, `loadGuardedProducts`, `guardHoldings`, `getOrCreatePortfolio`, `findPortfolioId`; `app/lib/portfolioInput.ts` with `parseNewHolding`, `parseHoldingUpdate`, `describeWriteError`, `Parsed`; `app/lib/portfolioApi.ts` with `PortfolioApiError`, `readErrorMessage`, `JSON_HEADERS`, `NETWORK_ERROR`; `app/lib/routeAuth.ts`; `rejectIfNotAppRequest`; the four portfolio routes; `usePortfolioData`), WP10 (`GET /api/portfolio/history`, `get_portfolio_history`, migration 0029), WP14 (`app/components/ui/Dialog.tsx` and the modal markup), WP20 (`app/types/portfolio.ts`, `useCurrency()`, `pnpm types:db`, generated `app/types/database.ts`), WP21 (migrations 0031 and 0032, `scripts/db/replay_migrations.sh`, `tests/test_migration_volatility.py`, the CI "database" job, the DB test fixture pattern), WP23 (`Stat`, `Delta`, `Badge`, `SegmentedControl`, `DataList`, `Skeleton`, `Button`, `AsOf`, `icons.tsx`, tokens, dense `SortableTable`, `test-utils/axe.ts`, the `uiConventions` ratchet), WP25 (`fx_daily` in migration 0039, `app/lib/fx.ts`, `app/lib/marketStats.ts`, `getCachedFxDaily`, `getCachedProductStats`, `/methodology` v1.1 and its `#limits` bullet), WP29 (migration 0042, `getCachedIndexSeries`, `HEADLINE_INDEX_CODE`, `HEADLINE_INDEX_NAME`). Through them: WP07 (`app/lib/format.ts`), WP11 (`app/components/IntentLink.tsx`), WP15 (`ConfirmDialog`, the dashboard delete flow), WP17 (blocking lint, `PortfolioTooltip` at module scope, `chartTooltips.test.tsx`), WP18 (`app/lib/sorting.ts`, `SortableTable`), WP22 (`perf-budgets.json`, `pnpm perf:budget`), WP24 (`metricDefinitions.ts`, `MetricLabel`, `app/content/methodology.ts`, `MethodologyArticle.tsx`). Soft, with a default in Before you start: WP31 (`?add=` pre-fill in `AddHoldingModal` and the dashboard), WP34 (`PortfolioTabs` on `app/portfolio/page.tsx`, migration 0044), WP35 (migration 0045).
 - **Unblocks**: nothing in Track 2 depends on it. A later "realised P/L" package builds on its lot model (it needs a sale model first, deferred in `01-PRODUCT-DIRECTION.md` §10).
-- **Placement**: Track 2, after WP29 (index series) and WP25 (`fx_daily`, stats). Reserves migration **0040** and keeps it even if it merges before WP34 (0038) or WP35 (0039). It can run in parallel with WP31 to WP35; step 1 explains how 0040 stays correct in either merge order.
+- **Placement**: Track 2, after WP29 (index series) and WP25 (`fx_daily`, stats). Reserves migration **0046** and keeps it even if it merges before WP34 (0044) or WP35 (0045). It can run in parallel with WP31 to WP35; step 1 explains how 0046 stays correct in either merge order.
 - **Suggested branch name**: `remediation/wp36-portfolio-analytics`
 - **Risk level**: medium. It adds a trigger to two user tables and patches `export_my_data()` in place; both were replayed twice on PostgreSQL 16, the trigger fails closed (no rate, no row), every existing row keeps its USD value, and a 14-case database test proves the conversion, the exact round trip and the export.
 
@@ -22,7 +22,7 @@ Today `/portfolio` shows value, cost and gain in USD, converts to CAD at today's
 3. **Days to exit** per holding = quantity ÷ (units sold 30D ÷ 30), shown as a band: Under 1 week, 1 to 4 weeks, Over 1 month, Unknown.
 4. **Cost basis in CAD** uses the purchase-date rate from `fx_daily`. CAD P/L is split into market move and currency move (`research/data-opportunities.md` §3.14).
 5. **Realised P/L is out of scope** (no sale model yet). Nothing in this package records a sale.
-6. **Migration 0040**, named `migrations/0040_portfolio_lot_currency.sql`. `purchase_price_usd` stays the canonical column; for a CAD lot it is computed in the database from the native price ÷ the purchase-date rate.
+6. **Migration 0046**, named `migrations/0046_portfolio_lot_currency.sql`. `purchase_price_usd` stays the canonical column; for a CAD lot it is computed in the database from the native price ÷ the purchase-date rate.
 
 Decisions made in this spec, with the reason:
 
@@ -71,7 +71,7 @@ All amounts are totals for a row (quantity included) unless named per unit. USD 
  POST/PATCH /api/portfolio/holdings*, /import (WP05)    +--> GET /api/portfolio/history (WP10)  value line, USD
    | parseNewHolding / parseHoldingUpdate (WP36)        +--> GET /api/portfolio/analytics (NEW)
    v                                                    |      loadPortfolioAnalyticsInput (fee + guarded holdings)
- portfolio_holdings  --BEFORE trigger (0040)-->         |      getCachedProductStats  (WP25, cached)
+ portfolio_holdings  --BEFORE trigger (0046)-->         |      getCachedProductStats  (WP25, cached)
    CAD: purchase_price_usd := native / fx_daily(date)   |      getCachedFxDaily       (WP25, cached)
    USD: purchase_price_native := purchase_price_usd     |      getCachedIndexSeries("sealed") (WP29, cached)
    no rate: PF001 -> HTTP 400                           |      buildPortfolioAnalytics (pure) -> JSON, no-store
@@ -267,7 +267,7 @@ The edit dialog has the same "Paid in" control, starting at the lot's currency a
 Read these fully first (paths from `frontend/` unless they start with `migrations/`, `tests/` or `scripts/`):
 
 - Specs: `audits/remediation/01-PRODUCT-DIRECTION.md` (§3, §4.2, §5 item 6, §6), WP05 (steps 3, 4, 6 to 9, 11, 12, 15 to 17; Tests 1, 2, 6, 8), WP10 (steps 4 to 9), WP14 (steps 3, 5, 6, 7), WP15 (step 9 and the dashboard test), WP17 (step 8b, Tests 11), WP20 (steps 2 and 3.11), WP21 (steps 2, 11b, 14 and the DB test fixture pattern), WP23 (Design and the component sheet), WP24 (steps 4 to 6, 10), WP25 (Design, steps 2, 9 to 12, 14), WP29 (Rules and formulas, steps 8 and 10), WP34 (step 1, export_my_data section, and Tests 1 and 2 for the fixture style).
-- Code: `app/components/Portfolio/PortfolioDashboard.tsx`, `cards/AddHoldingModal.tsx`, `cards/EditHoldingModal.tsx`, `cards/ImportHoldingsModal.tsx`, `cards/HoldingsTable.tsx`, `cards/HoldingCard.tsx`, `shared/PortfolioSummaryCard.tsx`, `shared/PortfolioChart.tsx`, `shared/AllocationChart.tsx`, `hooks/usePortfolioData.ts`, `app/components/charts/PortfolioChartImpl.tsx`, `AllocationChartImpl.tsx`, `ChartBundle.tsx`, `app/portfolio/page.tsx`, `app/types/portfolio.ts`, `app/lib/portfolioInput.ts`, `app/lib/portfolioApi.ts`, `app/lib/server/portfolioRepo.ts`, `app/lib/import.ts`, `app/lib/portfolio.ts`, `app/lib/fx.ts`, `app/lib/marketStats.ts`, `app/lib/marketIndex.ts`, `app/lib/serverMarketData.ts` (`getCachedProductStats`, `getCachedFxDaily`, `getCachedIndexSeries`), `app/api/portfolio/route.ts` and its siblings, `app/content/methodology.ts`, `app/methodology/MethodologyArticle.tsx`, `app/lib/metricDefinitions.ts`, `app/components/ui/*`, `app/components/SortableTable/SortableTable.tsx`, `app/components/IntentLink.tsx`, `app/__tests__/uiConventions.test.ts` and its baseline, `perf-budgets.json`. Repo root: `migrations/0011_export_my_data.sql`, `migrations/0024_export_my_data_volatile.sql`, `migrations/0029_portfolio_history_rpc.sql`, `migrations/0031_user_table_write_limits.sql`, `migrations/0034_fx_daily.sql`, `migrations/0037_market_index.sql`, `tests/test_migration_volatility.py`, `verify_migration.py` (docstring), `README.md` (Database section), `audits/HARDENING_FOLLOWUPS.md` section 7.
+- Code: `app/components/Portfolio/PortfolioDashboard.tsx`, `cards/AddHoldingModal.tsx`, `cards/EditHoldingModal.tsx`, `cards/ImportHoldingsModal.tsx`, `cards/HoldingsTable.tsx`, `cards/HoldingCard.tsx`, `shared/PortfolioSummaryCard.tsx`, `shared/PortfolioChart.tsx`, `shared/AllocationChart.tsx`, `hooks/usePortfolioData.ts`, `app/components/charts/PortfolioChartImpl.tsx`, `AllocationChartImpl.tsx`, `ChartBundle.tsx`, `app/portfolio/page.tsx`, `app/types/portfolio.ts`, `app/lib/portfolioInput.ts`, `app/lib/portfolioApi.ts`, `app/lib/server/portfolioRepo.ts`, `app/lib/import.ts`, `app/lib/portfolio.ts`, `app/lib/fx.ts`, `app/lib/marketStats.ts`, `app/lib/marketIndex.ts`, `app/lib/serverMarketData.ts` (`getCachedProductStats`, `getCachedFxDaily`, `getCachedIndexSeries`), `app/api/portfolio/route.ts` and its siblings, `app/content/methodology.ts`, `app/methodology/MethodologyArticle.tsx`, `app/lib/metricDefinitions.ts`, `app/components/ui/*`, `app/components/SortableTable/SortableTable.tsx`, `app/components/IntentLink.tsx`, `app/__tests__/uiConventions.test.ts` and its baseline, `perf-budgets.json`. Repo root: `migrations/0011_export_my_data.sql`, `migrations/0024_export_my_data_volatile.sql`, `migrations/0029_portfolio_history_rpc.sql`, `migrations/0031_user_table_write_limits.sql`, `migrations/0039_fx_daily.sql`, `migrations/0042_market_index.sql`, `tests/test_migration_volatility.py`, `verify_migration.py` (docstring), `README.md` (Database section), `audits/HARDENING_FOLLOWUPS.md` section 7.
 - Every call site you will change or delete:
 
 ```bash
@@ -282,14 +282,14 @@ Confirm the starting state (repo root). Each line must print what its comment sa
 ```bash
 git checkout master && git pull && git checkout -b remediation/wp36-portfolio-analytics
 
-# Migration registry: 0040 is free; WP21, WP25 and WP29 are in.
-ls migrations | grep -E '^0040_'                                                   # no output
-ls migrations/0031_*.sql migrations/0032_*.sql migrations/0034_fx_daily.sql migrations/0037_*.sql \
+# Migration registry: 0046 is free; WP21, WP25 and WP29 are in.
+ls migrations | grep -E '^0046_'                                                   # no output
+ls migrations/0031_*.sql migrations/0032_*.sql migrations/0039_fx_daily.sql migrations/0042_*.sql \
    scripts/db/replay_migrations.sh tests/test_migration_volatility.py                # all six exist
-grep -n "CREATE TABLE IF NOT EXISTS public.fx_daily" migrations/0034_fx_daily.sql    # 1 line
-grep -n "GRANT SELECT ON TABLE public.fx_daily TO anon, authenticated" migrations/0034_fx_daily.sql   # 1 line
+grep -n "CREATE TABLE IF NOT EXISTS public.fx_daily" migrations/0039_fx_daily.sql    # 1 line
+grep -n "GRANT SELECT ON TABLE public.fx_daily TO anon, authenticated" migrations/0039_fx_daily.sql   # 1 line
 # Which files define export_my_data in full. Record the list for the PR. Expect 0011 and 0024,
-# plus 0038 (WP34) and 0039 (WP35) if they merged. Step 1d is the same whatever this prints.
+# plus 0044 (WP34) and 0045 (WP35) if they merged. Step 1d is the same whatever this prints.
 grep -ln "FUNCTION public.export_my_data" migrations/*.sql
 # The anchors step 1d patches must exist in the newest full definition. Expect 3 lines from that file.
 F=$(grep -ln "FUNCTION public.export_my_data" migrations/*.sql | sort | tail -1)
@@ -352,7 +352,7 @@ grep -rln "convertDailySeries\|toCadAtDatedRates\|usdToCadOn" "app/product/[id]"
 ```
 
 Tooling:
-- Local Postgres for the replay and the database tests (WP21): Docker `postgres:17`, or the PostgreSQL 16 binaries at `/usr/lib/postgresql/16/bin`. Every SQL statement in step 1 was applied twice to PostgreSQL 16.13 while this spec was written, on a scaffold with 0024's `export_my_data`, WP21's row-cap trigger and WP25's `fx_daily`; the 14 cases of `tests/test_wp36_portfolio_currency_db.py` passed there (the carry case was added in review and re-run there), and step 1d was also checked after 0038's body (`watchlist` kept) and in the order 0040, 0038, 0040 (keys restored).
+- Local Postgres for the replay and the database tests (WP21): Docker `postgres:17`, or the PostgreSQL 16 binaries at `/usr/lib/postgresql/16/bin`. Every SQL statement in step 1 was applied twice to PostgreSQL 16.13 while this spec was written, on a scaffold with 0024's `export_my_data`, WP21's row-cap trigger and WP25's `fx_daily`; the 14 cases of `tests/test_wp36_portfolio_currency_db.py` passed there (the carry case was added in review and re-run there), and step 1d was also checked after 0044's body (`watchlist` kept) and in the order 0046, 0044, 0046 (keys restored).
 - The analytics builder, chart model, input parsing and sample portfolio were compiled with the repo's TypeScript (`--strict`) against the WP05, WP20, WP23, WP25 and WP29 code those specs give, and their arithmetic was checked numerically; the expected numbers in Tests come from that run. The React components were type-checked against Recharts 3 and the WP18, WP23 and WP24 components.
 - A Python venv with `requirements.txt` plus `pytest` (WP21 added `psycopg[binary]`).
 
@@ -360,13 +360,13 @@ Baseline (from `frontend/`): `pnpm exec tsc --noEmit` (exit 0), `pnpm lint` (0 e
 
 Line numbers in this spec are hints. Find every edit point by the quoted code or the named function.
 
-Two phases, like WP25 and WP34. **Phase A** (steps 1 to 23): open a draft PR titled `[waiting for DB types] WP36: Portfolio analytics` and hand the owner Owner actions 1 and 2. Until phase B, `tsc` may report errors only where a query names the new columns (`HOLDING_SELECT`, `.select("id, exit_fee_pct")`, `.update({ exit_fee_pct })`, `.select("exit_fee_pct")` in `portfolioRepo.ts`, and the insert of `purchase_currency`/`purchase_price_native` rows); that is expected and the only allowed failure. **Phase B** (step 24): regenerate `app/types/database.ts` once 0040 is in production, then finish the PR.
+Two phases, like WP25 and WP34. **Phase A** (steps 1 to 23): open a draft PR titled `[waiting for DB types] WP36: Portfolio analytics` and hand the owner Owner actions 1 and 2. Until phase B, `tsc` may report errors only where a query names the new columns (`HOLDING_SELECT`, `.select("id, exit_fee_pct")`, `.update({ exit_fee_pct })`, `.select("exit_fee_pct")` in `portfolioRepo.ts`, and the insert of `purchase_currency`/`purchase_price_native` rows); that is expected and the only allowed failure. **Phase B** (step 24): regenerate `app/types/database.ts` once 0046 is in production, then finish the PR.
 
 ## Implementation steps
 
 Order: step 1 (migration) and its tests first, then the pure modules (steps 2 to 7), the server (8 and 9), the browser client and write flows (10 to 13), the UI (14 to 21), methodology and docs (22, 23). Write each step's tests (see Tests) alongside it. Phase B is step 24.
 
-### Step 1. `migrations/0040_portfolio_lot_currency.sql` (new, repo root)
+### Step 1. `migrations/0046_portfolio_lot_currency.sql` (new, repo root)
 
 Create the file with exactly this content:
 
@@ -382,7 +382,7 @@ Create the file with exactly this content:
 --    purchase_price_usd stays the canonical column: every value, P/L,
 --    get_portfolio_history (0029) and the app read it. For a CAD row it is
 --    computed HERE, from purchase_price_native / the Bank of Canada rate of
---    purchase_date (fx_daily, 0034), by trigger *_purchase_currency_trg:
+--    purchase_date (fx_daily, 0039), by trigger *_purchase_currency_trg:
 --      USD row  purchase_price_native := purchase_price_usd (the USD price
 --               wins; a native value sent for a USD row is ignored).
 --      CAD row  purchase_price_native is required. The rate is the fx_daily
@@ -407,10 +407,10 @@ Create the file with exactly this content:
 --    purchase_price_native on every holding and lot, exit_fee_pct on every
 --    portfolio. The function is patched in place from its live definition
 --    (pg_get_functiondef), so every key a later migration added
---    (watchlist, 0038; price alerts, 0039) is kept whatever order the
+--    (watchlist, 0044; price alerts, 0045) is kept whatever order the
 --    migrations reach production in. The block raises if the expected
 --    anchors are missing, and does nothing when the keys are already there.
---    A migration numbered below 0040 that replaces export_my_data AFTER this
+--    A migration numbered below 0046 that replaces export_my_data AFTER this
 --    file was applied in production drops the keys again: re-run this file
 --    afterwards (it is idempotent). Any later migration that replaces
 --    export_my_data must keep the three keys.
@@ -539,7 +539,7 @@ BEGIN
 
   -- 14 = FX_CARRY_MAX_DAYS (frontend/app/lib/fx.ts). The carry is counted
   -- from the Bank of Canada date behind the row (source_date), exactly as
-  -- refresh_fx_daily (0034) and rateOn() count it, never from a row that is
+  -- refresh_fx_daily (0039) and rateOn() count it, never from a row that is
   -- itself carried: a date in a gap or after the series ends gets no rate.
   IF v_rate IS NULL OR NEW.purchase_date - v_source_date > 14 THEN
     RAISE EXCEPTION 'no Bank of Canada rate for %', NEW.purchase_date
@@ -593,7 +593,7 @@ BEGIN
   -- Each anchor must have matched exactly once.
   IF (length(v_new) - length(replace(v_new, '''purchase_currency''', ''))) / length('''purchase_currency''') <> 2
      OR (length(v_new) - length(replace(v_new, '''exit_fee_pct''', ''))) / length('''exit_fee_pct''') <> 1 THEN
-    RAISE EXCEPTION '0040: export_my_data() does not contain the expected holdings, lots and portfolios objects; patch it by hand (WP36)';
+    RAISE EXCEPTION '0046: export_my_data() does not contain the expected holdings, lots and portfolios objects; patch it by hand (WP36)';
   END IF;
 
   EXECUTE v_new;
@@ -606,13 +606,13 @@ Why each part is shaped this way:
 - **1a. Columns.** `purchase_price_native` is `numeric` with no scale, so a price arrives from JSON as `129.99` and comes back as `129.99` (exact round trip). `purchase_currency` is `NOT NULL DEFAULT 'USD'`, so every existing row and every pre-WP36 insert is a USD row. All constraints are in `DO` blocks that ignore `duplicate_object`, so the file is re-runnable (`replay_twice`).
 - **1b. Backfill before the triggers.** On the first run it copies `purchase_price_usd` into `purchase_price_native` for every row; on a re-run it matches nothing. `double precision` to `numeric` keeps 15 significant digits (`33.333333333333336` becomes `33.3333333333333`); for a USD row `purchase_price_usd` stays the figure the app reads, so nothing changes for the user.
 - **1c. Trigger.** `apply_purchase_currency()` is SECURITY INVOKER and reads `fx_daily` as the writing user (`authenticated` has SELECT through WP25's `fx_daily_read` policy). It fires on every insert and update of either table, so the add route, the edit route, the bulk import and a direct PostgREST call all store the same value. `PF001` is a custom SQLSTATE; supabase-js exposes it as `error.code`, which step 7 maps to HTTP 400. The 14-day carry is measured from the row's `source_date` (the Bank of Canada date), not from the row's `day`: a date inside a gap of more than 14 days, or more than 14 days after the newest Bank of Canada date, finds a carried row whose own `day` may be recent, and comparing against `day` would accept a rate up to 28 days old. `rateOn()` in `fx.ts` and `refresh_fx_daily` both count from the Bank of Canada date, so the database, the analytics and the chart agree on which days have a rate (Tests 1 `test_carry_counts_from_the_boc_date`). EXECUTE is revoked from every API role, as WP21 did for `enforce_owner_row_cap()`; triggers still fire. Alphabetical trigger order puts `portfolio_holdings_purchase_currency_trg` before WP21's `portfolio_holdings_row_cap_trg`; they do not interact.
-- **1d. `export_my_data()` patched in place.** The function is redefined from its live definition (`pg_get_functiondef`) with three `replace()` calls, each anchored on a line every full definition since 0011 contains (`'notes', h.notes,`, `'notes', l.notes,`, `'name', p.name,`). A full `CREATE OR REPLACE FUNCTION public.export_my_data()` in this file would be wrong in two ways: if 0038 (WP34) or 0039 (WP35) is already applied, it would drop their keys; and WP34's "which files define export_my_data" check would find a third definition with no body to copy. The patch keeps every key, raises if an anchor is missing, and does nothing when the keys are already there. `CREATE OR REPLACE` through `EXECUTE` keeps the owner, the ACL (EXECUTE for `authenticated` and `service_role` only) and VOLATILE (pg_get_functiondef omits it because it is the default). The file deliberately never contains the text `FUNCTION public.export_my_data`: `tests/test_wp36_portfolio_currency_static.py` enforces it.
-- **1e. Merge order.** If WP34 or WP35 merges after this package, their own instructions copy the newest full definition of `export_my_data` (0024's or 0038's body), which lacks the new keys. In a replayed database 0038 and 0039 run before 0040, so the replay is always right. In production the owner applies them after 0040, so Owner action 5 re-runs 0040 after any such migration (it is idempotent and only re-adds the keys). The static test also fails any future migration numbered above 0040 that redefines the function without the keys.
+- **1d. `export_my_data()` patched in place.** The function is redefined from its live definition (`pg_get_functiondef`) with three `replace()` calls, each anchored on a line every full definition since 0011 contains (`'notes', h.notes,`, `'notes', l.notes,`, `'name', p.name,`). A full `CREATE OR REPLACE FUNCTION public.export_my_data()` in this file would be wrong in two ways: if 0044 (WP34) or 0045 (WP35) is already applied, it would drop their keys; and WP34's "which files define export_my_data" check would find a third definition with no body to copy. The patch keeps every key, raises if an anchor is missing, and does nothing when the keys are already there. `CREATE OR REPLACE` through `EXECUTE` keeps the owner, the ACL (EXECUTE for `authenticated` and `service_role` only) and VOLATILE (pg_get_functiondef omits it because it is the default). The file deliberately never contains the text `FUNCTION public.export_my_data`: `tests/test_wp36_portfolio_currency_static.py` enforces it.
+- **1e. Merge order.** If WP34 or WP35 merges after this package, their own instructions copy the newest full definition of `export_my_data` (0024's or 0044's body), which lacks the new keys. In a replayed database 0044 and 0045 run before 0046, so the replay is always right. In production the owner applies them after 0046, so Owner action 5 re-runs 0046 after any such migration (it is idempotent and only re-adds the keys). The static test also fails any future migration numbered above 0046 that redefines the function without the keys.
 
 1f. Check the file. `verify_migration.py` sees one function, three revokes, and leaves the rest to the header queries:
 
 ```bash
-python3 verify_migration.py migrations/0040_portfolio_lot_currency.sql > /tmp/wp36_0040.sql; echo "exit=$?"
+python3 verify_migration.py migrations/0046_portfolio_lot_currency.sql > /tmp/wp36_0046.sql; echo "exit=$?"
 # expect exit=3 and on stderr exactly:
 #   -- function apply_purchase_currency(): body <md5>, non-strict, parallel u, security invoker, plpgsql, volatility v, config search_path=public,pg_temp
 #   -- privilege EXECUTE on public.apply_purchase_currency() for public: revoked
@@ -621,7 +621,7 @@ python3 verify_migration.py migrations/0040_portfolio_lot_currency.sql > /tmp/wp
 #   -- NOT VERIFIED (out of scope, check by hand): 3 x ALTER TABLE (other than RLS enablement), 2 x CREATE TRIGGER, 8 x DO block, 2 x DROP object, 2 x data statement
 #   -- run the statement below; every row must say OK
 # With the file copied verbatim the body hash is f05a29233e0b66bb02a8b96bfa08f123.
-grep -c "FUNCTION public.export_my_data" migrations/0040_portfolio_lot_currency.sql   # 0
+grep -c "FUNCTION public.export_my_data" migrations/0046_portfolio_lot_currency.sql   # 0
 ```
 
 1g. Replay (WP21): `PGSERVER_URL=postgresql://postgres:postgres@localhost:55432/postgres scripts/db/replay_migrations.sh` (use your local server's URL); the last line is `OK: <N> files replayed once (replay_once) and twice (replay_twice)` with N one more than on master.
@@ -631,21 +631,21 @@ grep -c "FUNCTION public.export_my_data" migrations/0040_portfolio_lot_currency.
 2a. In `interface Portfolio`, after `name: string;`, add:
 
 ```ts
-  /** Selling cost the exit value assumes, percent (migration 0040). Absent in pre-0040 fixtures. */
+  /** Selling cost the exit value assumes, percent (migration 0046). Absent in pre-0046 fixtures. */
   exit_fee_pct?: number;
 ```
 
 2b. Directly below `interface Portfolio`, add:
 
 ```ts
-/** The currency a lot was paid in (migration 0040). */
+/** The currency a lot was paid in (migration 0046). */
 export type PurchaseCurrency = "USD" | "CAD";
 ```
 
 2c. In `interface Holding`, after `notes: string | null;`, add:
 
 ```ts
-  /** Migration 0040. Absent (read it as "USD") in fixtures written before it. */
+  /** Migration 0046. Absent (read it as "USD") in fixtures written before it. */
   purchase_currency?: PurchaseCurrency;
   /** Per-unit price as entered, in purchase_currency. For a USD row it mirrors purchase_price_usd. */
   purchase_price_native?: number | null;
@@ -663,7 +663,7 @@ export interface NewHoldingInput {
   quantity: number;
   /**
    * USD row: the price. CAD row: a placeholder (the native price) because the
-   * column is NOT NULL; migration 0040's trigger replaces it with the native
+   * column is NOT NULL; migration 0046's trigger replaces it with the native
    * price / the Bank of Canada rate of purchase_date.
    */
   purchase_price_usd: number;
@@ -698,7 +698,7 @@ If WP05's `NewHoldingInput` comment differs from the one above, keep WP05's comm
 // and the sample portfolio renders. Built by lib/portfolioAnalytics.ts.
 // Amounts are totals for the row (quantity included) unless the name says
 // "unit". USD amounts are the canonical figures; CAD amounts use the Bank of
-// Canada rate of the day they describe (fx_daily, migration 0034).
+// Canada rate of the day they describe (fx_daily, migration 0039).
 import type { FxDailySeries } from "../lib/fx";
 import type { ExitBand } from "../lib/portfolioExit";
 import type { PurchaseCurrency } from "./portfolio";
@@ -881,7 +881,7 @@ Tiny and import-free: client components import it without pulling the builder.
  * pulling in the analytics builder (lib/portfolioAnalytics.ts).
  *
  * EXIT_FEE_DEFAULT_PCT, EXIT_FEE_MIN_PCT and EXIT_FEE_MAX_PCT mirror
- * portfolios.exit_fee_pct in migrations/0040_portfolio_lot_currency.sql
+ * portfolios.exit_fee_pct in migrations/0046_portfolio_lot_currency.sql
  * (tests/test_wp36_portfolio_currency_static.py checks them). /methodology
  * prints every constant here; a change bumps METHODOLOGY_VERSION.
  */
@@ -1571,7 +1571,7 @@ with
 and in the returned `value`, replace the line `purchase_price_usd: price,` with:
 
 ```ts
-      // USD: the price. CAD: a placeholder that the 0040 trigger replaces
+      // USD: the price. CAD: a placeholder that the 0046 trigger replaces
       // with price / the Bank of Canada rate of purchase_date (or rejects
       // with PF001); the column is NOT NULL, so something must be sent.
       purchase_price_usd: price,
@@ -1600,11 +1600,11 @@ with
     if (!isValidPrice(native)) return fail(PRICE_MESSAGE);
     out.purchase_currency = currency;
     out.purchase_price_native = native;
-    // USD: the price. CAD: placeholder, replaced by the 0040 trigger (which
+    // USD: the price. CAD: placeholder, replaced by the 0046 trigger (which
     // keeps the stored USD value when neither the price nor the date changed).
     out.purchase_price_usd = native;
   } else if ("purchase_price_usd" in raw) {
-    // A client from before WP36: a USD price. Say so, or the 0040 trigger
+    // A client from before WP36: a USD price. Say so, or the 0046 trigger
     // would keep a CAD row's stored conversion and drop the edit.
     const p = raw.purchase_price_usd;
     if (!isValidPrice(p)) return fail(PRICE_MESSAGE);
@@ -1937,7 +1937,7 @@ add one sentence to its doc comment: "`costCurrency` is the currency of the file
 11b. `app/components/Portfolio/cards/ImportHoldingsModal.tsx`:
 - Imports: `import SegmentedControl from "../../ui/SegmentedControl";`, `import { formatMoney } from "../../../lib/format";` (if not imported already) and add `PurchaseCurrency` to the `../../../types/portfolio` type import.
 - State, below the existing `useState` lines: `const [costCurrency, setCostCurrency] = useState<PurchaseCurrency>("USD");`. Reset it to `"USD"` wherever the modal resets its wizard state (`handleClose`).
-- Directly after the `{/* Summary */}` grid in the `step === "preview"` block (before `{/* Select All / Deselect All */}`), insert:
+- Directly after the `{/* Summary */}` grid in the `step === "preview"` block (before `{/* Select All / Deselect All */}`, and before WP38's Collectr portfolio picker if step 11h of WP38 put one there), insert:
 
 ```tsx
                 {/* WP36: the currency of the Average Cost Paid column */}
@@ -1959,7 +1959,7 @@ add one sentence to its doc comment: "`costCurrency` is the currency of the file
 ```
 
 - In `handleImport`, `importHoldings(toImport)` becomes `importHoldings(toImport, costCurrency)`.
-- The preview row text `Qty: {result.csvRow.quantity} @ ...{averageCostPaid}... each` (find it with `grep -n "averageCostPaid" app/components/Portfolio/cards/ImportHoldingsModal.tsx`): format the cost with `formatMoney(result.csvRow.averageCostPaid, costCurrency)`, keeping the rest of the text.
+- The preview row text `Qty: {result.csvRow.quantity} @ ...{averageCostPaid}... each` (find it with `grep -n "averageCostPaid" app/components/Portfolio/cards/ImportHoldingsModal.tsx`): format the cost with `formatMoney(result.csvRow.averageCostPaid, costCurrency)`, keeping the rest of the text. WP38 wrapped that line in a `hasImportableCost(result.csvRow) ? ... : ...` branch; change only the `formatMoney` call in the first branch and leave the "Needs cost" branch as it is.
 
 ### Step 12. `app/components/Portfolio/cards/AddHoldingModal.tsx`: "Paid in"
 
@@ -2123,7 +2123,7 @@ Apply to the file as WP05 and WP14 left it (the modal is mounted per edit with a
     };
     // Send the price only when it or its currency changed: an untouched price
     // (even one stored with more than 2 decimals) keeps its stored value, and
-    // an untouched CAD lot keeps its stored USD conversion (migration 0040).
+    // an untouched CAD lot keeps its stored USD conversion (migration 0046).
     if (paidIn !== initialCurrency || purchasePrice.trim() !== initialPriceText) {
       updates.purchase_currency = paidIn;
       updates.purchase_price_native = price;
@@ -4508,18 +4508,18 @@ If the diff adds an entry or raises a count, a new file uses hex or brand red: f
   native / the Bank of Canada rate of `purchase_date` from `fx_daily`; a date
   without a rate is refused with SQLSTATE PF001. `portfolios.exit_fee_pct`
   (default 15, 0 to 50) is the selling-fee assumption behind "exit value".
-- `migrations/0040_portfolio_lot_currency.sql` patches `export_my_data()` in
-  place. Re-run 0040 after applying any migration numbered below it that
-  replaces `export_my_data()` (0038, 0039), and keep the keys
+- `migrations/0046_portfolio_lot_currency.sql` patches `export_my_data()` in
+  place. Re-run 0046 after applying any migration numbered below it that
+  replaces `export_my_data()` (0044, 0045), and keep the keys
   `purchase_currency`, `purchase_price_native` and `exit_fee_pct` in any
   future replacement.
 ```
 
-23d. `audits/HARDENING_FOLLOWUPS.md` section 7: add, as the newest bullet of the newest-first run of migration bullets (leave the date for the owner): "**Migration 0040 applied** (date, via Supabase MCP). Purchase currency and native price on holdings and lots with a conversion trigger at the purchase-date Bank of Canada rate (SQLSTATE PF001 when no rate), `portfolios.exit_fee_pct`, and `export_my_data()` patched in place with the three keys. **Open:** re-run 0040 after 0038 or 0039 is applied if either lands after it." Do not write "applied" with a date yourself; the owner fills it in.
+23d. `audits/HARDENING_FOLLOWUPS.md` section 7: add, as the newest bullet of the newest-first run of migration bullets (leave the date for the owner): "**Migration 0046 applied** (date, via Supabase MCP). Purchase currency and native price on holdings and lots with a conversion trigger at the purchase-date Bank of Canada rate (SQLSTATE PF001 when no rate), `portfolios.exit_fee_pct`, and `export_my_data()` patched in place with the three keys. **Open:** re-run 0046 after 0044 or 0045 is applied if either lands after it." Do not write "applied" with a date yourself; the owner fills it in.
 
 ### Step 24. Phase B: generated types
 
-After the owner has applied 0040 (Owner action 1):
+After the owner has applied 0046 (Owner action 1):
 
 ```bash
 cd frontend
@@ -4532,7 +4532,7 @@ Do not edit the generated file. `purchase_price_native` is `number | null` in th
 
 ## Pitfalls: do not do this
 
-- **Do not redefine `export_my_data()` in full in 0040**, and do not write the text `FUNCTION public.export_my_data` anywhere in the file. A full body would drop WP34's and WP35's keys and would confuse their "which file defines it" check (step 1d, 1e).
+- **Do not redefine `export_my_data()` in full in 0046**, and do not write the text `FUNCTION public.export_my_data` anywhere in the file. A full body would drop WP34's and WP35's keys and would confuse their "which file defines it" check (step 1d, 1e).
 - **Do not compute `purchase_price_usd` for a CAD lot in the browser or from `useCurrency().exchangeRate`.** The database converts at the purchase-date rate; the route sends the native price as a placeholder. Today's rate is only a pre-fill in the add form.
 - **Do not convert CAD history or cost at today's rate** anywhere on `/portfolio`. CAD figures come from the analytics payload (`fx_daily` of each day); with no rate, show the USD figure with its code, never a guessed CAD figure.
 - **Do not count a withheld price as zero, and do not substitute `products.usd_price`** for a holding WP05's guard nulled. Value, P/L, exit value, allocation and the benchmark skip it; the counts say so.
@@ -4558,7 +4558,7 @@ Every numeric expectation below was computed by running the step 5, 6 and 20b co
 
 ```python
 """
-Database checks for migration 0040 (purchase currency, exit fee, WP36), run
+Database checks for migration 0046 (purchase currency, exit fee, WP36), run
 against a database rebuilt by scripts/db/replay_migrations.sh.
 
 Skipped unless POKEFIN_TEST_DATABASE_URL points at that replayed database as a
@@ -4584,7 +4584,7 @@ from psycopg import errors  # noqa: E402
 
 TAG = "wp36-" + uuid.uuid4().hex[:8]
 
-# Bank of Canada rates for a week in 2019, as fx_daily (0034) stores them:
+# Bank of Canada rates for a week in 2019, as fx_daily (0039) stores them:
 # Friday's rate carried over the weekend. The June pair is a carried row
 # whose own day (Jun 13) is recent but whose Bank of Canada date (Jun 3) is
 # 10 days older: the carry cap counts from Jun 3.
@@ -4885,7 +4885,7 @@ If a fixture INSERT fails with `NotNullViolation` or `CheckViolation` because `p
 
 ```python
 """
-Static checks for migration 0040 (WP36). No database needed.
+Static checks for migration 0046 (WP36). No database needed.
 
   python -m pytest tests/test_wp36_portfolio_currency_static.py -v
 """
@@ -4896,7 +4896,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 MIGRATIONS = Path(os.environ.get("POKEFIN_MIGRATIONS_DIR", ROOT / "migrations"))
-MIGRATION = MIGRATIONS / "0040_portfolio_lot_currency.sql"
+MIGRATION = MIGRATIONS / "0046_portfolio_lot_currency.sql"
 EXIT_TS = ROOT / "frontend" / "app" / "lib" / "portfolioExit.ts"
 FX_TS = ROOT / "frontend" / "app" / "lib" / "fx.ts"
 
@@ -4926,8 +4926,8 @@ def test_migration_is_rerunnable():
 
 def test_export_is_patched_in_place_not_redefined():
     sql = _sql()
-    # A full CREATE of export_my_data here would drop the keys 0038 and 0039
-    # add whenever 0040 is applied after them, and would hide this file from
+    # A full CREATE of export_my_data here would drop the keys 0044 and 0045
+    # add whenever 0046 is applied after them, and would hide this file from
     # their "which file defines export_my_data" check.
     assert "FUNCTION public.export_my_data" not in sql
     assert "pg_get_functiondef('public.export_my_data()'::regprocedure)" in sql
@@ -4939,9 +4939,9 @@ def test_export_is_patched_in_place_not_redefined():
 def test_later_redefinitions_keep_the_new_keys():
     fns = _volatility_module().effective_functions()
     name, _, body = fns["public.export_my_data"]
-    if name[:4].isdigit() and name[:4] > "0040":
+    if name[:4].isdigit() and name[:4] > "0046":
         for key in ("purchase_currency", "purchase_price_native", "exit_fee_pct"):
-            assert key in body, f"{name} replaces export_my_data and drops '{key}' (WP36, 0040)"
+            assert key in body, f"{name} replaces export_my_data and drops '{key}' (WP36, 0046)"
 
 
 def test_exit_fee_bounds_match_the_frontend():
@@ -4960,7 +4960,7 @@ def test_fx_carry_matches_fx_ts():
     assert re.search(rf"export const FX_CARRY_MAX_DAYS = {carry};", FX_TS.read_text())
 ```
 
-Regression signal (checked while writing): adding a file `migrations/0045_x.sql` that redefines `export_my_data` without the keys fails `test_later_redefinitions_keep_the_new_keys`; with only the real files all 5 pass, and `tests/test_migration_volatility.py` still passes (the new trigger function is VOLATILE and writes nothing).
+Regression signal (checked while writing): adding a file `migrations/0050_x.sql` that redefines `export_my_data` without the keys fails `test_later_redefinitions_keep_the_new_keys`; with only the real files all 5 pass, and `tests/test_migration_volatility.py` still passes (the new trigger function is VOLATILE and writes nothing).
 
 ### 3. `frontend/app/lib/__tests__/portfolioAnalytics.test.ts` (new, node)
 
@@ -5286,14 +5286,14 @@ Build analytics for the components with `buildPortfolioAnalytics` and the Tests 
 
 ### Existing tests that must keep passing unchanged
 
-WP05's route, repo, hook and `portfolioApi` tests (except the files named above), WP10's history tests, WP24's `metricDefinitions` test (every `MetricLabel metric=` key resolves), WP23's `uiConventions` test (after 23a), WP34's watchlist tests and `tests/test_wp34_watchlist_static.py` (0040 does not redefine `export_my_data`), WP25's and WP29's tests, `tests/test_migration_volatility.py`.
+WP05's route, repo, hook and `portfolioApi` tests (except the files named above), WP10's history tests, WP24's `metricDefinitions` test (every `MetricLabel metric=` key resolves), WP23's `uiConventions` test (after 23a), WP34's watchlist tests and `tests/test_wp34_watchlist_static.py` (0046 does not redefine `export_my_data`), WP25's and WP29's tests, `tests/test_migration_volatility.py`.
 
 ## Verification
 
 Block 1, database (repo root):
 
 ```bash
-python3 verify_migration.py migrations/0040_portfolio_lot_currency.sql > /tmp/wp36_0040.sql; echo "exit=$?"   # exit=3, stderr as in step 1f
+python3 verify_migration.py migrations/0046_portfolio_lot_currency.sql > /tmp/wp36_0046.sql; echo "exit=$?"   # exit=3, stderr as in step 1f
 PGSERVER_URL=postgresql://postgres:postgres@localhost:55432/postgres scripts/db/replay_migrations.sh       # last line "OK: ... replay_twice"
 POKEFIN_TEST_DATABASE_URL=postgresql://postgres:postgres@localhost:55432/replay_once \
   python -m pytest tests/test_wp36_portfolio_currency_db.py tests/test_wp36_portfolio_currency_static.py \
@@ -5356,18 +5356,18 @@ Block 5, manual (`pnpm dev` against the stub for layout, then the preview deploy
 
 ## Owner actions
 
-1. **Apply migration 0040** in production with Supabase MCP `apply_migration` (preferred) or the SQL editor (select nothing before Run): `migrations/0040_portfolio_lot_currency.sql`, after 0034 (WP25) is applied. Then run the query `python3 verify_migration.py migrations/0040_portfolio_lot_currency.sql` prints (every row OK) and the four verification queries in the file header (5 rows; 0; 2 rows; true). The 0024 (and 0038, 0039) verification queries now report a `MISMATCH` on the `export_my_data` body; that is expected. Apply before the phase B code deploys: the routes select the new columns by name.
+1. **Apply migration 0046** in production with Supabase MCP `apply_migration` (preferred) or the SQL editor (select nothing before Run): `migrations/0046_portfolio_lot_currency.sql`, after 0039 (WP25) is applied. Then run the query `python3 verify_migration.py migrations/0046_portfolio_lot_currency.sql` prints (every row OK) and the four verification queries in the file header (5 rows; 0; 2 rows; true). The 0024 (and 0044, 0045) verification queries now report a `MISMATCH` on the `export_my_data` body; that is expected. Apply before the phase B code deploys: the routes select the new columns by name.
 2. **Tell the executor** it is applied, so phase B regenerates `app/types/database.ts` (`pnpm types:db` needs the columns in production).
 3. **Backfill older Bank of Canada rates** (10 minutes, once), so CAD cost basis works for purchases before 2020: `python scripts/backfill_fx_valet.py --start 2017-01-03` (WP25's script; the Valet series starts on 2017-01-03), then in the SQL editor `SELECT public.refresh_market_analytics((now() AT TIME ZONE 'UTC')::date);` (its FX step rebuilds `fx_daily` from the first rate). Check: `SELECT min(day) FROM public.fx_daily;` returns 2017-01-03. Without this, CAD purchases dated before the first rate are refused, and USD purchases before it have no CAD cost.
 4. After merge, refresh `schema.sql` by WP21's procedure (the drift check reports the new columns until then).
-5. **If WP34 (0038) or WP35 (0039) is applied in production after 0040**, run `migrations/0040_portfolio_lot_currency.sql` again right after it (idempotent; it only re-adds the three export keys), then check: `SELECT position('purchase_currency' IN pg_get_functiondef('public.export_my_data()'::regprocedure)) > 0;` returns true.
+5. **If WP34 (0044) or WP35 (0045) is applied in production after 0046**, run `migrations/0046_portfolio_lot_currency.sql` again right after it (idempotent; it only re-adds the three export keys), then check: `SELECT position('purchase_currency' IN pg_get_functiondef('public.export_my_data()'::regprocedure)) > 0;` returns true.
 6. After deploy, do Verification block 5 steps 3, 4 and 9 with your own account (10 minutes). No new environment variable, secret, paid service or Vercel setting is needed.
 
 ## Acceptance criteria
 
-- [ ] `migrations/0040_portfolio_lot_currency.sql` exists with step 1's content; no other migration changed; `verify_migration.py` exits 3 with the stderr of step 1f; the replay harness passes once and twice.
+- [ ] `migrations/0046_portfolio_lot_currency.sql` exists with step 1's content; no other migration changed; `verify_migration.py` exits 3 with the stderr of step 1f; the replay harness passes once and twice.
 - [ ] `tests/test_wp36_portfolio_currency_db.py` passes against `replay_once` (14 cases): CAD converts at the purchase-date rate (including a carried weekend rate), the 14-day carry counts from the Bank of Canada date and not from a carried row's day, an unchanged CAD edit keeps its USD value exactly, a date change reconverts, no rate raises PF001, CAD without a native price and an unknown currency are refused, the USD price wins for a USD lot, a CAD lot switches to USD, a legacy insert defaults to USD, the fee defaults to 15 and is capped at 50, the export carries the new keys and stays VOLATILE, SECURITY DEFINER and closed to anon, and the trigger function is not callable.
-- [ ] `tests/test_wp36_portfolio_currency_static.py` passes: 0040 is re-runnable, patches `export_my_data` in place without redefining it, and its fee bounds and FX carry match `portfolioExit.ts` and `fx.ts`.
+- [ ] `tests/test_wp36_portfolio_currency_static.py` passes: 0046 is re-runnable, patches `export_my_data` in place without redefining it, and its fee bounds and FX carry match `portfolioExit.ts` and `fx.ts`.
 - [ ] A lot entered in CAD round-trips exactly: add C$129.99, read it back as 129.99 CAD, edit something else, read it back unchanged (Tests 1 case 2, Tests 12 edit case, Verification block 5 step 3).
 - [ ] A withheld price never feeds value or P/L: its row shows `--` with the reason and clock; it is excluded from market value, P/L, contribution, exit value, allocation and the benchmark comparison, and the coverage counts say so (Tests 3 "never values a withheld price", Tests 12).
 - [ ] `GET /api/portfolio/analytics` answers per-lot P/L in USD and CAD (and native), the benchmark value and comparison, exit value, allocation by set, type and era, concentration flags over 40%, and days-to-exit bands; it is `no-store`, gated like WP05's GET, and never creates a portfolio.
@@ -5385,12 +5385,12 @@ Block 5, manual (`pnpm dev` against the stub for layout, then the preview deploy
 
 ## Rollback
 
-Code: revert the frontend commits (2 to 6 of Commit and PR). The dashboard returns to WP05/WP15's version; CAD lots keep their converted `purchase_price_usd`, which is all the old code reads, so values stay right. Keep commit 1 while 0040 is applied: the columns are inert without the new code, except that the trigger still converts CAD rows, which only the new code writes.
+Code: revert the frontend commits (2 to 6 of Commit and PR). The dashboard returns to WP05/WP15's version; CAD lots keep their converted `purchase_price_usd`, which is all the old code reads, so values stay right. Keep commit 1 while 0046 is applied: the columns are inert without the new code, except that the trigger still converts CAD rows, which only the new code writes.
 
-Database, only if the columns must go (after the code revert): add a new migration at the next free number, `NNNN_revert_portfolio_lot_currency.sql`, with exactly this content, and apply it. It was run twice on the scratch database (after 0040) and left `export_my_data()` working with the original keys; 0040 re-applied cleanly afterwards.
+Database, only if the columns must go (after the code revert): add a new migration at the first free number above 0047 (numbers up to 0047 are reserved; see `audits/remediation/00-PLAN.md`, "Migration registry"), `NNNN_revert_portfolio_lot_currency.sql`, with exactly this content, and apply it. It was run twice on the scratch database (after 0046) and left `export_my_data()` working with the original keys; 0046 re-applied cleanly afterwards.
 
 ```sql
--- Revert of 0040 (WP36 rollback). Run only after the WP36 code is reverted.
+-- Revert of 0046 (WP36 rollback). Run only after the WP36 code is reverted.
 DROP TRIGGER IF EXISTS portfolio_holdings_purchase_currency_trg ON public.portfolio_holdings;
 DROP TRIGGER IF EXISTS portfolio_lots_purchase_currency_trg ON public.portfolio_lots;
 DROP FUNCTION IF EXISTS public.apply_purchase_currency();
@@ -5404,7 +5404,7 @@ BEGIN
   v_new := replace(v_new, $k$, 'purchase_currency', l.purchase_currency, 'purchase_price_native', l.purchase_price_native$k$, '');
   v_new := replace(v_new, $k$, 'exit_fee_pct', p.exit_fee_pct$k$, '');
   IF position('purchase_currency' IN v_new) > 0 OR position('exit_fee_pct' IN v_new) > 0 THEN
-    RAISE EXCEPTION 'export_my_data() still mentions the 0040 columns; remove them by hand first';
+    RAISE EXCEPTION 'export_my_data() still mentions the 0046 columns; remove them by hand first';
   END IF;
   IF v_new <> v_def THEN
     EXECUTE v_new;
@@ -5431,19 +5431,19 @@ ALTER TABLE public.portfolios
   DROP COLUMN IF EXISTS exit_fee_pct;
 ```
 
-Never edit or delete `0040_portfolio_lot_currency.sql` after it has been applied.
+Never edit or delete `0046_portfolio_lot_currency.sql` after it has been applied.
 
 ## Commit and PR
 
 Commits (in this order):
 
-1. `feat(db): purchase currency, native price and exit fee on the portfolio (WP36)`: `migrations/0040_portfolio_lot_currency.sql`, `tests/test_wp36_portfolio_currency_db.py`, `tests/test_wp36_portfolio_currency_static.py`, `README.md`, `audits/HARDENING_FOLLOWUPS.md`.
+1. `feat(db): purchase currency, native price and exit fee on the portfolio (WP36)`: `migrations/0046_portfolio_lot_currency.sql`, `tests/test_wp36_portfolio_currency_db.py`, `tests/test_wp36_portfolio_currency_static.py`, `README.md`, `audits/HARDENING_FOLLOWUPS.md`.
 2. `feat(portfolio): analytics builder, chart model and exit rules (WP36)`: `app/types/portfolio.ts`, `app/types/portfolioAnalytics.ts`, `app/lib/portfolioExit.ts`, `app/lib/portfolioAnalytics.ts`, `app/lib/portfolioChart.ts`, their tests.
 3. `feat(portfolio): currency in holding writes, analytics and fee routes (WP36)`: `app/lib/portfolioInput.ts`, `app/lib/server/portfolioRepo.ts`, `app/api/portfolio/route.ts`, `app/api/portfolio/analytics/route.ts`, `app/lib/portfolioApi.ts`, `app/lib/import.ts`, their tests.
 4. `feat(portfolio): summary, index overlay, allocation, holdings table and Paid in (WP36)`: everything under `app/components/Portfolio/` except `demo/` and `PortfolioEmptyState.tsx`, `app/components/charts/*`, their tests, the deleted files.
 5. `feat(portfolio): import-first empty state and sample portfolio (WP36)`: `PortfolioEmptyState.tsx`, `demo/*`, their tests.
 6. `docs(methodology): portfolio figures (WP36)`: `app/lib/metricDefinitions.ts`, `app/content/methodology.ts`, `app/methodology/MethodologyArticle.tsx`, their tests, `app/__tests__/uiConventions.baseline.json`, `perf-budgets.json` (only if step 23b applied).
-7. Phase B: `chore(types): regenerate database types for 0040 (WP36)`: `app/types/database.ts`.
+7. Phase B: `chore(types): regenerate database types for 0046 (WP36)`: `app/types/database.ts`.
 
 End every commit message with the attribution lines the session's system reminder specifies.
 
@@ -5451,11 +5451,11 @@ PR title: `WP36: Portfolio analytics: vs the index, net of exit costs, in the cu
 
 PR body:
 - What changed and why (the Why section, two sentences), with screenshots at 390 px and 1440 px: the summary in CAD, the chart with the index line, allocation with a flag, the holdings table with a withheld row, the add dialog with "Paid in", the empty state, the sample portfolio.
-- **Migration 0040 must be applied by the owner before the phase B deploy** (Owner action 1), with the `verify_migration.py` result pasted once done; the Valet backfill (Owner action 3); and, if WP34 or WP35 merges later, the re-run (Owner action 5). State which files defined `export_my_data` when you started (Before you start).
+- **Migration 0046 must be applied by the owner before the phase B deploy** (Owner action 1), with the `verify_migration.py` result pasted once done; the Valet backfill (Owner action 3); and, if WP34 or WP35 merges later, the re-run (Owner action 5). State which files defined `export_my_data` when you started (Before you start).
 - The decisions in Design (money-matched benchmark, coverage rules, conversion in the database, bars not a pie, "ALL" removed).
 - Route contract (GET analytics, PATCH portfolio, the currency fields on holding writes, the PF001 400).
 - Verification outputs: `verify_migration.py` stderr, the replay harness's last line, pytest summaries with and without `POKEFIN_TEST_DATABASE_URL`, `tsc` (phase A errors listed, phase B clean), lint, Jest counts before and after, the `perf:budget` rows for `/portfolio` and the largest lazy chunk on master and on the branch, the guard greps of block 3.
-- Soft dependencies: whether WP31 (`?add=`), WP34 (tabs, 0038) and WP35 (0039) were present, and what step 22d did with the `#limits` bullet.
+- Soft dependencies: whether WP31 (`?add=`), WP34 (tabs, 0044) and WP35 (0045) were present, and what step 22d did with the `#limits` bullet.
 - Known limits and follow-ups: realised P/L needs a sale model (deferred); the benchmark is money-matched, not time-weighted; days to exit assumes the whole market's pace (an estimate of depth); CAD purchases dated before the first Bank of Canada rate are refused until Owner action 3; `portfolio_lots` still has no reader or writer; holdings stored before WP36 are all USD, so a Canadian who imported CAD costs earlier must switch each such lot to CAD in the edit dialog (a bulk "these were in CAD" action is a follow-up); WP32's home strip uses the header's latest rate for CAD while `/portfolio` uses `fx_daily` (same Bank of Canada rate on most days).
 - Owner actions 1 to 6 as a checklist.
 

@@ -41,11 +41,13 @@ sed -n '10p;84,85p' migrations/0011_export_my_data.sql
 grep -ln "export_my_data" migrations/*.sql
 # expect: only migrations/0011_export_my_data.sql
 
-# 3. Highest migration number. The new files take the next two numbers.
+# 3. Highest migration number. 0024 and 0025 are fixed reservations for this package
+#    (registry in audits/remediation/00-PLAN.md); never derive them from the highest file.
 ls migrations | grep -E '^[0-9]{4}_' | sort | tail -1
 # expect: 0023_price_freshness_guard.sql
-# If 0024 or 0025 already exist (another work package merged first), use the next
-# two free numbers and substitute them everywhere this spec says 0024 / 0025.
+# If a 0024_ or 0025_ file that is not this package's already exists, stop and ask the
+# owner which numbers to use (do not take "the next free" ones: later numbers are reserved),
+# then substitute them everywhere this spec says 0024 / 0025.
 
 # 4. No index on portfolio_lots(holding_id) anywhere, and the portfolio_id one was dropped.
 grep -n "holding_id" migrations/*.sql | grep -i index      # expect: no output

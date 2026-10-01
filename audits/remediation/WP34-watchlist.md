@@ -3,9 +3,9 @@
 - **Goal**: a signed-in collector watches any product with one tap from its product page (or a Screener row), sees every watched product in one list with price and as-of stamp, 1D, 7D and 30D change, distance from the 52-week high, x MSRP and days of supply, and sees the biggest 7-day movers among their watched products on the home page. A signed-out visitor who taps Watch signs in and finds the product already watched.
 - **Why now / value**: a watchlist is the largest competitive gap and the retention loop of the whole product (01-PRODUCT-DIRECTION.md §5 item 2, §4.2 steps 5 and 6). WP31 left a `watch` slot in the product page actions and WP32 left the `children` slot of the "Your Pokéfin" home island; WP35's daily alert digest needs this table and this page to exist.
 - **Effort**: L, 12 to 14 hours (migration and its two Python test modules 2.5 h, model, repo, route and browser client with tests 3 h, shared membership store and `WatchButton` with tests 2 h, sign-in round trip 1 h, watchlist page, tabs and home movers with tests 3 h, lint lists, budgets, privacy copy, verification and PR 1.5 h). The plan table says M, 10 to 12 h; the shared store (one request for 300 Screener rows) and the sign-in round trip account for the difference.
-- **Depends on**: WP04 (`useAuth()` with `sessionStatus`, `refreshSession`, `SessionUnavailable`), WP05 (`app/lib/routeAuth.ts` `requireRouteUser` and `jsonNoStore`, `rejectIfNotAppRequest` in `app/lib/csrf.ts`, the route and test patterns, `ANON_CLIENT_FORBIDDEN_FILES` and the user-table `no-restricted-syntax` block in `eslint.config.mjs`), WP13 (`app/lib/redirects.ts` `safeReturnToPath` and `loginPathWithNext`, `app/auth/login/LoginForm.tsx` with its Suspense readers and test, `app/portfolio/layout.tsx`, `productMeta.ts` `getProductDisplayName` and `getProductLabel`, `NO_INDEX`), WP20 (`useCurrency`, `app/types/market.ts`, `pnpm types:db`, generated `app/types/database.ts`), WP21 (`enforce_owner_row_cap()` in migration 0031, `pokefin_scraper` in 0032, `scripts/db/replay_migrations.sh`, CI job "Database replay and Python tests", the DB test fixture pattern), WP23 (`Delta`, `DataList`, `AsOf`, `EmptyState`, `Skeleton`, `Button`/`buttonClasses`, `PageHeader`, `ProvenanceLine`, dense `SortableTable`, tokens, `test-utils/axe.ts`, the conventions ratchet), WP25 (`getCachedProductStats`, `statsFor`, `ProductDailyStats`, `ProductStatsSnapshot`), WP31 (`ProductActions` `watch` prop, product page), WP32 (`YourPokefin` `children` slot, `Price`, `homeStyles.ts`, the home shell source test). Through them: WP07 (`format.ts`), WP11 (`getCachedMarketProductSummaries`), WP18 (`lib/sorting.ts`, `SortableTable`), WP22 (`perf-budgets.json`, `pnpm perf:budget`), WP24 (`metricHref`, `PROVENANCE_SENTENCE` in `app/content/disclosures.ts`, `/privacy`), WP26 (`PUBLIC_ROUTE_CLIENT_FILES`, `scripts/check-public-cache.mjs`), WP27 (`navConfig.ts` `ACCOUNT_NAV` and `productHref`, `loginCopy.ts`, `SearchTrigger`, `MobileNavSheet.tsx`, `Header.tsx`), WP31 (`priceChange` metric key), WP25 (`range52w` metric key). Soft, with a default in Before you start: WP28 (`msrp_multiple`, `formatMsrpMultiple`, the `msrpMultiple` metric key), WP33 (Screener table and phone rows) and WP36 (migration 0040 patches `export_my_data()` in place; production apply order matters, Owner action 1).
+- **Depends on**: WP38 (migration 0036 put `box_recipes.currency` into `export_my_data`; step 1 section 5 keeps that key), WP04 (`useAuth()` with `sessionStatus`, `refreshSession`, `SessionUnavailable`), WP05 (`app/lib/routeAuth.ts` `requireRouteUser` and `jsonNoStore`, `rejectIfNotAppRequest` in `app/lib/csrf.ts`, the route and test patterns, `ANON_CLIENT_FORBIDDEN_FILES` and the user-table `no-restricted-syntax` block in `eslint.config.mjs`), WP13 (`app/lib/redirects.ts` `safeReturnToPath` and `loginPathWithNext`, `app/auth/login/LoginForm.tsx` with its Suspense readers and test, `app/portfolio/layout.tsx`, `productMeta.ts` `getProductDisplayName` and `getProductLabel`, `NO_INDEX`), WP20 (`useCurrency`, `app/types/market.ts`, `pnpm types:db`, generated `app/types/database.ts`), WP21 (`enforce_owner_row_cap()` in migration 0031, `pokefin_scraper` in 0032, `scripts/db/replay_migrations.sh`, CI job "Database replay and Python tests", the DB test fixture pattern), WP23 (`Delta`, `DataList`, `AsOf`, `EmptyState`, `Skeleton`, `Button`/`buttonClasses`, `PageHeader`, `ProvenanceLine`, dense `SortableTable`, tokens, `test-utils/axe.ts`, the conventions ratchet), WP25 (`getCachedProductStats`, `statsFor`, `ProductDailyStats`, `ProductStatsSnapshot`), WP31 (`ProductActions` `watch` prop, product page), WP32 (`YourPokefin` `children` slot, `Price`, `homeStyles.ts`, the home shell source test). Through them: WP07 (`format.ts`), WP11 (`getCachedMarketProductSummaries`), WP18 (`lib/sorting.ts`, `SortableTable`), WP22 (`perf-budgets.json`, `pnpm perf:budget`), WP24 (`metricHref`, `PROVENANCE_SENTENCE` in `app/content/disclosures.ts`, `/privacy`), WP26 (`PUBLIC_ROUTE_CLIENT_FILES`, `scripts/check-public-cache.mjs`), WP27 (`navConfig.ts` `ACCOUNT_NAV` and `productHref`, `loginCopy.ts`, `SearchTrigger`, `MobileNavSheet.tsx`, `Header.tsx`), WP31 (`priceChange` metric key), WP25 (`range52w` metric key). Soft, with a default in Before you start: WP28 (`msrp_multiple`, `formatMsrpMultiple`, the `msrpMultiple` metric key), WP33 (Screener table and phone rows) and WP36 (migration 0046 patches `export_my_data()` in place; production apply order matters, Owner action 1).
 - **Unblocks**: WP35 (alert rules attach to watched products; `service_role` reads `watchlist_items` through `watchlist_items_product_id_idx`; the alert management UI lives on `/portfolio/watchlist`). WP33, if it merges after this package, adds the row action with `<WatchButton productId={id} productName={name} variant="icon" />` (step 17 says how).
-- **Placement**: Track 2, data lane, after WP31 (action slot) and WP32 (home strip slot). Reserves migration **0038** and keeps it if it merges out of order. Must precede WP35. It can run in parallel with WP36 (0040) and WP37 (0041).
+- **Placement**: Track 2, data lane, after WP31 (action slot) and WP32 (home strip slot). Reserves migration **0044** and keeps it if it merges out of order. Must precede WP35. It can run in parallel with WP36 (0046) and WP37 (0047).
 - **Suggested branch name**: `remediation/wp34-watchlist`
 - **Risk level**: medium. It adds a user table, a cookie-backed route and a client island on the ISR product page, and it replaces `export_my_data()`; the table is additive with owner-only RLS proven by a SQL test, the function keeps 0024's body, volatility and grants plus one key, and the island never touches the server render.
 
@@ -195,19 +195,22 @@ Confirm the starting state (repo root). Each line must print what its comment sa
 ```bash
 git checkout master && git pull && git checkout -b remediation/wp34-watchlist
 
-# Migration registry: 0038 is free, WP21's cap function exists, export_my_data is defined only by 0011 and 0024
-ls migrations | grep -E '^0038_'                                              # no output
+# Migration registry: 0044 is free, WP21's cap function exists, export_my_data is defined only by 0011 and 0024
+ls migrations | grep -E '^0044_'                                              # no output
 grep -n "FUNCTION public.enforce_owner_row_cap()" migrations/0031_*.sql      # 1 line
 ls migrations/0032_*.sql scripts/db/replay_migrations.sh tests/test_db_roles_integration.py tests/test_migration_volatility.py
 grep -ln "FUNCTION public.export_my_data" migrations/*.sql
 # expect exactly migrations/0011_export_my_data.sql and migrations/0024_export_my_data_volatile.sql.
-# If a third file numbered below 0038 is listed, copy THAT file's body into step 1 section 5 instead
-# of 0024's, keep every key it adds, and say so in the PR. (WP36's 0040 never appears here: it patches
-# the function in place through pg_get_functiondef and never contains that text. WP35's 0039 is
-# written after this package and copies 0038.)
-ls migrations/0040_*.sql 2>/dev/null
-# WP36 landed first if this prints a file. Keep 0038 as written (the replay applies 0038 before 0040,
-# so the chain stays correct), and copy Owner action 1's "if 0040 is already applied" line into the PR.
+# WP38's 0036 (export includes box_recipes.currency) patches the function in place and never contains
+# that text; check it landed: ls migrations/0036_export_includes_box_recipe_currency.sql (1 file).
+# Its key is why step 1 section 5 carries 'currency', currency.
+# If a third file numbered below 0044 is listed, copy THAT file's body into step 1 section 5 instead
+# of 0024's, keep every key it adds, and say so in the PR. (WP36's 0046 never appears here: it patches
+# the function in place through pg_get_functiondef and never contains that text. WP35's 0045 is
+# written after this package and copies 0044.)
+ls migrations/0046_*.sql 2>/dev/null
+# WP36 landed first if this prints a file. Keep 0044 as written (the replay applies 0044 before 0046,
+# so the chain stays correct), and copy Owner action 1's "if 0046 is already applied" line into the PR.
 
 cd frontend
 # WP04
@@ -271,18 +274,18 @@ Tooling:
 
 Baseline (from `frontend/`): `pnpm exec tsc --noEmit` (exit 0), `pnpm lint` (0 errors), `pnpm test --ci` (all pass), `pnpm run test:scripts` (all pass). From the repo root: `python -m pytest tests/ -q`. Record the counts for the PR.
 
-Two phases, like WP25. **Phase A** (steps 1 to 19 except 16b): open a draft PR titled `[waiting for DB types] WP34: Watchlist` and hand the owner Owner actions 1 and 2. `tsc` reports errors only for the four `.from("watchlist_items")` calls in `app/lib/server/watchlistRepo.ts` until phase B; that is expected and the only allowed failure. **Phase B** (step 16b): regenerate `app/types/database.ts` once 0038 is in production, then finish the PR.
+Two phases, like WP25. **Phase A** (steps 1 to 19 except 16b): open a draft PR titled `[waiting for DB types] WP34: Watchlist` and hand the owner Owner actions 1 and 2. `tsc` reports errors only for the four `.from("watchlist_items")` calls in `app/lib/server/watchlistRepo.ts` until phase B; that is expected and the only allowed failure. **Phase B** (step 16b): regenerate `app/types/database.ts` once 0044 is in production, then finish the PR.
 
 ## Implementation steps
 
-### Step 1. `migrations/0038_watchlist.sql` (new, repo root)
+### Step 1. `migrations/0044_watchlist.sql` (new, repo root)
 
 Create the file with exactly this content. It is idempotent (`replay_twice`), and section 5 is 0024's function body with one key added.
 
 1a to 1e in one file:
 
 ```sql
--- Migration 0038: watchlist (WP34).
+-- Migration 0044: watchlist (WP34).
 --
 -- One watchlist per user: a row per (user, product), newest first by
 -- created_at. Reads and writes go only through the cookie-backed route
@@ -310,7 +313,9 @@ Create the file with exactly this content. It is idempotent (`replay_twice`), an
 --    cap a duplicate insert also raises 23514; the route re-checks existence
 --    before answering "full".
 -- 5. export_my_data() gains a "watchlist" array. The body is 0024's (the 0011
---    body without STABLE) plus that one key: still VOLATILE (it inserts the
+--    body without STABLE) plus box_recipes 'currency' (WP38's 0036 patched
+--    that key into the live function; a full body must keep it) and the
+--    watchlist key: still VOLATILE (it inserts the
 --    data_exported audit row), SECURITY DEFINER, search_path pinned, EXECUTE
 --    for authenticated and service_role only.
 --
@@ -379,7 +384,7 @@ CREATE TRIGGER watchlist_items_row_cap_trg
   EXECUTE FUNCTION public.enforce_owner_row_cap('user_id', '200');
 
 -- ============================================================
--- 5. export_my_data(): 0024's body plus "watchlist"
+-- 5. export_my_data(): 0024's body plus 'currency' (WP38) and "watchlist"
 -- ============================================================
 
 CREATE OR REPLACE FUNCTION public.export_my_data()
@@ -448,6 +453,7 @@ BEGIN
         'name', name,
         'retail_price', retail_price,
         'promo_value', promo_value,
+        'currency', currency,
         'packs', packs,
         'share_code', share_code,
         'is_public', is_public,
@@ -477,13 +483,15 @@ GRANT  EXECUTE ON FUNCTION public.export_my_data() TO authenticated;
 GRANT  EXECUTE ON FUNCTION public.export_my_data() TO service_role;
 ```
 
-1f. Confirm the function body is 0024's plus the watchlist key and nothing else:
+1f. Confirm the function body is 0024's plus WP38's `currency` key and the watchlist key, and nothing else:
 
 ```bash
 diff <(sed -n '/^CREATE OR REPLACE FUNCTION public.export_my_data()/,/^\$\$;/p' migrations/0024_export_my_data_volatile.sql) \
-     <(sed -n '/^CREATE OR REPLACE FUNCTION public.export_my_data()/,/^\$\$;/p' migrations/0038_watchlist.sql)
-# expect exactly one hunk, "73a74,80", adding 7 lines: "    ), '[]'::jsonb)," and the 6 lines of the
-# 'watchlist' key. Any changed or deleted line means a line was mistyped: fix it.
+     <(sed -n '/^CREATE OR REPLACE FUNCTION public.export_my_data()/,/^\$\$;/p' migrations/0044_watchlist.sql)
+# expect exactly two hunks: "66a67" adding "        'currency', currency," (WP38's key, which its
+# migration 0036 patched into the live function and which a full body must keep), and "73a75,81"
+# adding 7 lines: "    ), '[]'::jsonb)," and the 6 lines of the 'watchlist' key. Any changed or
+# deleted line means a line was mistyped: fix it.
 ```
 
 If Before you start listed a third file defining `export_my_data`, repeat the diff against that file and keep every key it adds.
@@ -491,7 +499,7 @@ If Before you start listed a third file defining `export_my_data`, repeat the di
 1g. Check the file with the verifier (repo root):
 
 ```bash
-python3 verify_migration.py migrations/0038_watchlist.sql > /tmp/wp34_0038.sql; echo "exit=$?"
+python3 verify_migration.py migrations/0044_watchlist.sql > /tmp/wp34_0044.sql; echo "exit=$?"
 # expect exit=3 and on stderr:
 #   -- function export_my_data(): body <md5>, non-strict, parallel u, security definer, plpgsql, volatility v, config search_path=public,auth
 #   -- index watchlist_items_product_id_idx on watchlist_items: using btree product_id
@@ -500,10 +508,10 @@ python3 verify_migration.py migrations/0038_watchlist.sql > /tmp/wp34_0038.sql; 
 #     export_my_data revoked for public and anon, granted to authenticated and service_role)
 #   -- rls public.watchlist_items: enabled
 #   -- NOT VERIFIED (out of scope, check by hand): 1 x CREATE (table/type/etc), 3 x CREATE POLICY, 1 x CREATE TRIGGER, 1 x DROP object, 3 x DROP/ALTER POLICY
-grep -c "^-- privilege" <(python3 verify_migration.py migrations/0038_watchlist.sql 2>&1 >/dev/null)   # 32
+grep -c "^-- privilege" <(python3 verify_migration.py migrations/0044_watchlist.sql 2>&1 >/dev/null)   # 32
 ```
 
-With the file copied verbatim the body hash is `cc90689a0e505c6169b21ca99c874f3b`. The generated query returned 35 OK rows on the scratch database. After 0038 is applied, the 0024 (and 0011) verification queries report a `MISMATCH` for the `export_my_data` body: 0038 superseded it. That is the expected cross-file result.
+With the file copied verbatim the body hash is `c0c0f458ee42eb1caf5a9e828677e10b`. The generated query returned 35 OK rows on the scratch database. After 0044 is applied, the 0024 (and 0011) verification queries report a `MISMATCH` for the `export_my_data` body: 0044 superseded it. That is the expected cross-file result.
 
 1h. Replay (WP21 harness):
 
@@ -520,10 +528,10 @@ Isomorphic and dependency-light: no React, no Supabase, no `server-only`, no `cl
 import { compareSortValues, type SortDirection, type SortValue } from "./sorting";
 
 /**
- * Watchlist (WP34): the contract between migration 0038, the route handler
+ * Watchlist (WP34): the contract between migration 0044, the route handler
  * app/api/watchlist/route.ts, the browser client and the UI.
  *
- * WATCHLIST_MAX_ITEMS must equal the cap in 0038's trigger
+ * WATCHLIST_MAX_ITEMS must equal the cap in 0044's trigger
  * (enforce_owner_row_cap('user_id', '200')); tests/test_wp34_watchlist_static.py
  * checks it.
  */
@@ -2601,7 +2609,7 @@ and in `rum.targets` add `"/portfolio/watchlist": { "lcpMs": 2500, "inpMs": 200,
 
 16e. `app/account/page.tsx`: in the "Your data" sentence (`grep -n "box recipes" app/account/page.tsx`), add "watchlist" to the list of exported records ("profile, portfolios, holdings, lots, box recipes and watchlist"). Change nothing else on the page.
 
-16f. `README.md` (repo root), Database section: where the per-user tables are listed (`grep -n "box_recipes" README.md`), add `watchlist_items` (owner-only RLS, 200 per user, migration 0038). If the section has no such list, add one sentence: "`watchlist_items` (0038, WP34) holds one row per watched product per user; it is read and written only through `app/api/watchlist/route.ts`."
+16f. `README.md` (repo root), Database section: where the per-user tables are listed (`grep -n "box_recipes" README.md`), add `watchlist_items` (owner-only RLS, 200 per user, migration 0044). If the section has no such list, add one sentence: "`watchlist_items` (0044, WP34) holds one row per watched product per user; it is read and written only through `app/api/watchlist/route.ts`."
 
 ### Step 17. Screener rows (only if WP33 has landed)
 
@@ -2691,7 +2699,7 @@ Run Verification blocks 1 to 4, push, open the draft PR `[waiting for DB types] 
 - **Do not grant UPDATE, add a `FOR ALL` policy, or drop the explicit `user_id` filters.** Rows are insert and delete only; the filters keep reads on the primary key.
 - **Do not add `ON CONFLICT` / `upsert` to the insert.** The cap trigger fires before the conflict check, so an upsert at the cap raises 23514 anyway; the repo's 23505 and 23514 handling is the design.
 - **Do not answer "full" on every 23514.** Re-check existence first (the duplicate-at-cap case), or a user at 200 who re-taps Watch on a watched product sees "full".
-- **Do not edit 0024 or 0011, and do not build 0038's function from memory.** Copy 0024's body (step 1f diff). A later migration that replaces `export_my_data` must keep the `watchlist` key; the static test fails otherwise. Do not fold WP36's `purchase_currency` keys into 0038 even if 0040 is in the tree: 0040 re-patches the function after 0038 in the replay, and in production the owner re-runs 0040 after 0038 (Owner action 1).
+- **Do not edit 0024 or 0011, and do not build 0044's function from memory.** Copy 0024's body plus the `'currency', currency,` line (step 1f diff). Do not drop that line: 0044 sorts after WP38's 0036, so without it every replayed database and production lose the key (WP38's `tests/test_wp38_migrations_static.py` fails). A later migration that replaces `export_my_data` must keep the `watchlist` key; the static test fails otherwise. Do not fold WP36's `purchase_currency` keys into 0044 even if 0046 is in the tree: 0046 re-patches the function after 0044 in the replay, and in production the owner re-runs 0046 after 0044 (Owner action 1).
 - **Do not compute changes from `get_market_product_summaries` returns.** Those anchors are unbounded (WP25 note); use `product_daily_stats` and only when it matches the shown price.
 - **Do not show a stale product's supply, changes or 52-week distance.** A withheld price means `--` in every number column; the name, the clock and the remove button remain.
 - **Do not call a high over less than a year "52-week".** `offHigh52wPct` is null below 364 tracked days.
@@ -2709,11 +2717,11 @@ Route and repo tests start with `/** @jest-environment node */`. Mock `routeSupa
 
 ### 1. `tests/test_wp34_watchlist_db.py` (new, needs the replayed database)
 
-Every case below was run as SQL against 0038 on PostgreSQL 16.13 while this spec was written, with the results asserted here.
+Every case below was run as SQL against 0044 on PostgreSQL 16.13 while this spec was written, with the results asserted here.
 
 ```python
 """
-Database checks for migration 0038 (watchlist_items, WP34), run against a
+Database checks for migration 0044 (watchlist_items, WP34), run against a
 database rebuilt by scripts/db/replay_migrations.sh.
 
 Skipped unless POKEFIN_TEST_DATABASE_URL points at that replayed database as a
@@ -3009,7 +3017,7 @@ If a fixture INSERT fails with `NotNullViolation` or `CheckViolation` because `p
 
 ```python
 """
-Static checks for migration 0038 (WP34). No database needed.
+Static checks for migration 0044 (WP34). No database needed.
 
   python -m pytest tests/test_wp34_watchlist_static.py -v
 """
@@ -3018,7 +3026,7 @@ import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-MIGRATION = ROOT / "migrations" / "0038_watchlist.sql"
+MIGRATION = ROOT / "migrations" / "0044_watchlist.sql"
 WATCHLIST_TS = ROOT / "frontend" / "app" / "lib" / "watchlist.ts"
 
 
@@ -3252,8 +3260,8 @@ describe("watch island keeps public pages static (WP34)", () => {
 Block 1, database (repo root):
 
 ```bash
-python3 verify_migration.py migrations/0038_watchlist.sql > /tmp/wp34_0038.sql; echo "exit=$?"     # exit=3, stderr as in step 1g
-grep -c "^-- privilege" <(python3 verify_migration.py migrations/0038_watchlist.sql 2>&1 >/dev/null)   # 32
+python3 verify_migration.py migrations/0044_watchlist.sql > /tmp/wp34_0044.sql; echo "exit=$?"     # exit=3, stderr as in step 1g
+grep -c "^-- privilege" <(python3 verify_migration.py migrations/0044_watchlist.sql 2>&1 >/dev/null)   # 32
 PGSERVER_URL=postgresql://postgres:postgres@localhost:55432/postgres scripts/db/replay_migrations.sh   # last line "OK: ... replay_twice"
 POKEFIN_TEST_DATABASE_URL=postgresql://postgres:postgres@localhost:55432/replay_once \
   python -m pytest tests/test_wp34_watchlist_db.py tests/test_wp34_watchlist_static.py \
@@ -3322,15 +3330,15 @@ Block 5, manual, after phase B, with `pnpm dev` and real credentials (localhost 
 
 ## Owner actions
 
-1. **Apply migration 0038** in production with Supabase MCP `apply_migration` (preferred) or the SQL editor (select nothing before Run): `migrations/0038_watchlist.sql`, after 0031 (WP21) is applied. Then run the query `python3 verify_migration.py migrations/0038_watchlist.sql` prints: every row OK (35 rows). The 0024 query now reports one MISMATCH on the `export_my_data` body; that is expected (0038 superseded it). Run the header's verification queries (expect `true`, `false, false, true`, `watchlist_items_row_cap_trg`). Apply before the phase B code deploys: the route selects the new table by name.
-   **If WP36's 0040 is already applied in production** (check: `SELECT position('purchase_currency' IN pg_get_functiondef('public.export_my_data()'::regprocedure)) > 0;` returns true before you apply 0038), 0038's `CREATE OR REPLACE` removes 0040's three export keys. Right after applying 0038, run `migrations/0040_portfolio_lot_currency.sql` again (idempotent; it only re-adds those keys, WP36 Owner action 5), then check that the same query returns true and that `SELECT position('watchlist_items' IN pg_get_functiondef('public.export_my_data()'::regprocedure)) > 0;` also returns true. In that case the `verify_migration.py` row for the `export_my_data` body reports MISMATCH (0040 patched it after 0038); every other row must be OK.
+1. **Apply migration 0044** in production with Supabase MCP `apply_migration` (preferred) or the SQL editor (select nothing before Run): `migrations/0044_watchlist.sql`, after 0031 (WP21) is applied. Then run the query `python3 verify_migration.py migrations/0044_watchlist.sql` prints: every row OK (35 rows). The 0024 query now reports one MISMATCH on the `export_my_data` body; that is expected (0044 superseded it). Run the header's verification queries (expect `true`, `false, false, true`, `watchlist_items_row_cap_trg`). Apply before the phase B code deploys: the route selects the new table by name.
+   **If WP36's 0046 is already applied in production** (check: `SELECT position('purchase_currency' IN pg_get_functiondef('public.export_my_data()'::regprocedure)) > 0;` returns true before you apply 0044), 0044's `CREATE OR REPLACE` removes 0046's three export keys. Right after applying 0044, run `migrations/0046_portfolio_lot_currency.sql` again (idempotent; it only re-adds those keys, WP36 Owner action 5), then check that the same query returns true and that `SELECT position('watchlist_items' IN pg_get_functiondef('public.export_my_data()'::regprocedure)) > 0;` also returns true. In that case the `verify_migration.py` row for the `export_my_data` body reports MISMATCH (0046 patched it after 0044); every other row must be OK.
 2. **Tell the executor** it is applied, so phase B regenerates `app/types/database.ts` (`pnpm types:db` needs the table in production).
 3. After merge, refresh `schema.sql` by WP21's procedure (the drift check reports the new table until then).
 4. After deploy, do Verification block 5 steps 1, 3 and 7 with your own account (5 minutes). No new environment variable, secret, paid service or Vercel setting is needed.
 
 ## Acceptance criteria
 
-- [ ] `migrations/0038_watchlist.sql` exists with step 1's content; no other migration changed; `verify_migration.py` exits 3 with 32 privilege lines; the replay harness passes once and twice.
+- [ ] `migrations/0044_watchlist.sql` exists with step 1's content; no other migration changed; `verify_migration.py` exits 3 with 32 privilege lines; the replay harness passes once and twice.
 - [ ] `tests/test_wp34_watchlist_db.py` passes against `replay_once`: owner reads and deletes own rows, another user sees and deletes nothing and cannot insert for the owner, UPDATE is denied, anon and `pokefin_scraper` are denied, policies use `(SELECT auth.uid())`, the 201st row and a single 201-row insert and a duplicate at the cap raise 23514, export includes `watchlist`, account deletion removes the rows.
 - [ ] `tests/test_wp34_watchlist_static.py` passes: the SQL cap equals `WATCHLIST_MAX_ITEMS` (200) and the effective `export_my_data` includes the watchlist and is VOLATILE.
 - [ ] `GET /api/watchlist` answers the list, `?view=movers` at most 5 movers, `?ids=` the watched subset; `POST` answers 201/200/404/409/400; `DELETE` answers removed/absent; every route answer is `no-store`; writes need the CSRF header and Origin; anonymous calls get 401, auth outages 503.
@@ -3346,7 +3354,7 @@ Block 5, manual, after phase B, with `pnpm dev` and real credentials (localhost 
 - [ ] `pnpm exec tsc --noEmit` (phase B), `pnpm lint`, `pnpm test --ci`, `pnpm run test:scripts`, `pnpm build:stub`, `pnpm perf:budget` all pass; `perf-budgets.json` has `/portfolio/watchlist` and no raised limit.
 - [ ] Screener rows carry the icon Watch button in a trailing column and beside each phone row link (if WP33 has landed; `DataListRow` without `action` renders byte-identical markup), or the PR states the contract for WP33 as a follow-up.
 - [ ] No em dash, "live", "real-time", "all-time" or "TCGPlayer" in any new or changed file; no raw palette class, hex, `transition-colors`, `transition-all` or `outline-none` in new files.
-- [ ] If WP36's 0040 was applied in production before 0038, the owner re-ran 0040 after 0038 and both export checks in Owner action 1 return true.
+- [ ] If WP36's 0046 was applied in production before 0044, the owner re-ran 0046 after 0044 and both export checks in Owner action 1 return true.
 
 ## Rollback
 
@@ -3355,28 +3363,29 @@ Code: revert the frontend commits (2 to 6 of Commit and PR). The Watch buttons, 
 Database, only if the table itself must go (for example before WP35 merges and the owner wants no dormant user data): run, in this order, in the SQL editor:
 
 ```sql
--- 0. If WP35's 0039 is applied, roll WP35 back first (its export_my_data body and
+-- 0. If WP35's 0045 is applied, roll WP35 back first (its export_my_data body and
 --    alert tables reference watchlist_items); follow WP35's Rollback.
 -- 1. Restore 0024's export_my_data (it no longer references watchlist_items).
---    Paste migrations/0024_export_my_data_volatile.sql in full and run it (idempotent).
---    If migrations/0040_portfolio_lot_currency.sql exists and is applied, run it again
---    right after, so the export keeps WP36's purchase_currency keys.
+--    Paste migrations/0024_export_my_data_volatile.sql in full and run it (idempotent),
+--    then run migrations/0036_export_includes_box_recipe_currency.sql (WP38; idempotent)
+--    so the export keeps box_recipes.currency. If migrations/0046_portfolio_lot_currency.sql
+--    exists and is applied, run it again right after, so the export keeps WP36's keys.
 -- 2. Drop the table (drops its policies, trigger and index with it).
 DROP TABLE IF EXISTS public.watchlist_items;
 ```
 
-Then add a new migration that does the same two things, numbered after the highest existing file, so the replay matches production. Never delete `0038_watchlist.sql` after it has been applied.
+Then add a new migration that does the same things, numbered at the first free number above 0047 (numbers up to 0047 are reserved; see `audits/remediation/00-PLAN.md`, "Migration registry"), so the replay matches production. Never delete `0044_watchlist.sql` after it has been applied.
 
 ## Commit and PR
 
 Commits (in this order):
 
-1. `feat(db): watchlist_items with owner-only RLS, 200 cap and export (WP34)`: `migrations/0038_watchlist.sql`, `tests/test_wp34_watchlist_db.py`, `tests/test_wp34_watchlist_static.py`.
+1. `feat(db): watchlist_items with owner-only RLS, 200 cap and export (WP34)`: `migrations/0044_watchlist.sql`, `tests/test_wp34_watchlist_db.py`, `tests/test_wp34_watchlist_static.py`.
 2. `feat(watchlist): route handler, model, repo and browser client (WP34)`: `app/lib/watchlist.ts`, `app/lib/server/watchlistModel.ts`, `app/lib/server/watchlistRepo.ts`, `app/api/watchlist/route.ts`, `app/lib/watchlistApi.ts`, their tests.
 3. `feat(watchlist): Watch button, shared store and sign-in round trip (WP34)`: `app/lib/watchlistStore.ts`, `app/components/watchlist/WatchButton.tsx`, `app/lib/loginCopy.ts`, `app/auth/login/LoginForm.tsx`, `app/product/[id]/page.tsx`, the Screener files and `app/components/ui/DataList.tsx` with its test (step 17, if WP33 landed), their tests, `watchRoundTrip.test.tsx`, `watchIsland.source.test.ts`.
 4. `feat(portfolio): watchlist page, tabs and home movers (WP34)`: `app/portfolio/watchlist/*`, `app/components/watchlist/{WatchlistTable,WatchlistPhoneList,RemoveButton,watchlistFormat}.*`, `app/components/Portfolio/PortfolioTabs.tsx`, `app/portfolio/page.tsx`, `app/components/home/WatchlistMovers.tsx`, `app/page.tsx`, `navConfig.ts`, `Header.tsx`, `MobileNavSheet.tsx`, their tests.
 5. `chore(watchlist): lint lists, budgets, privacy and export copy, docs (WP34)`: `eslint.config.mjs`, `perf-budgets.json`, `app/privacy/page.tsx`, `app/account/page.tsx`, `README.md`, `app/__tests__/uiConventions.baseline.json` (only if a count went down).
-6. Phase B: `chore(types): regenerate database types for 0038 (WP34)`: `app/types/database.ts`.
+6. Phase B: `chore(types): regenerate database types for 0044 (WP34)`: `app/types/database.ts`.
 
 End every commit message with the attribution lines the session's system reminder specifies.
 
@@ -3384,7 +3393,7 @@ PR title: `WP34: Watchlist`
 
 PR body:
 - What changed and why (the Why section, two sentences), with screenshots at 390 px and 1440 px: product page Watch (unpressed, pressed, and the error line from a forced failure), `/portfolio/watchlist` (loaded, empty, a stale row), the home island signed in, the sign-in page with the watch subtitle.
-- **Migration 0038 must be applied by the owner before the phase B deploy** (Owner action 1), with the `verify_migration.py` result pasted once done.
+- **Migration 0044 must be applied by the owner before the phase B deploy** (Owner action 1), with the `verify_migration.py` result pasted once done.
 - Route contract (GET list, `?view=movers`, `?ids=`, POST, DELETE and their status codes).
 - Verification outputs: `verify_migration.py` stderr, the replay harness's last line, pytest summaries with and without `POKEFIN_TEST_DATABASE_URL`, `tsc` (phase A errors listed, phase B clean), lint, Jest counts before and after, the `perf:budget` rows for `/`, `/product/900001`, `/portfolio` and `/portfolio/watchlist` on master and on the branch, the cache check output, the INP screenshot.
 - Soft dependencies: whether WP28 was present (x MSRP column and link) and whether WP33 was present (step 17 applied, or the one-line contract for WP33).

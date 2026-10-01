@@ -3,9 +3,9 @@
 - **Goal**: a signed-in collector sets "tell me when this drops to C$250 or below", "tell me when it moves 10% or more in a week", "tell me when someone lists it 5% under Market Price" or "tell me when units on the market fall 20% in a month", from the product page or from a watchlist row, and gets one email the next morning listing every alert that fired, each with the product, the price, the TCGplayer day it describes and a link. Alerts are checked once a day against fresh prices only, never on a withheld price, and every email has a one-click unsubscribe that works without signing in.
 - **Why now / value**: alerts are the largest competitive gap and, with the watchlist, the retention loop of the product: every serious competitor has them and Pokéfin has none (`01-PRODUCT-DIRECTION.md` §5 item 2, §4.2 step 6; `research/competitive-landscape.md` §4 item 1). WP34 shipped the watchlist page that hosts alert management and WP25 the precomputed, freshness-gated `product_daily_stats` and dated `fx_daily` that make a daily check one indexed read.
 - **Effort**: L, 15 to 16 hours (migration, Vault stand-in and the two Python test modules 4 h; cron job, Brevo client, email renderer and their tests 4 h; alerts route, repo, browser client and unsubscribe route and page with tests 3 h; dialog, button, panel and watchlist wiring with tests 3.5 h; methodology, privacy, lint lists, budgets, verification and PR 1.5 h).
-- **Depends on**: WP34 (`watchlist_items` and migration 0038's `export_my_data`, `app/lib/watchlist.ts` `parseProductIdString`, `parseProductIdValue`, `watchProductLoginPath`, `WATCHLIST_PAGE_PATH`; `app/lib/server/watchlistRepo.ts` `addWatch`; `app/lib/server/watchlistModel.ts` `statsMatchPrice`; `app/lib/watchlistStore.ts` `noteWatched`; `WatchlistView.tsx`, `WatchlistTable.tsx`, `WatchlistPhoneList.tsx`, `RemoveButton.tsx`; `tests/test_wp34_watchlist_db.py` fixture style), WP31 (`ProductActions.tsx` and the product page composition), WP28 soft (`getCachedProductAttributes`, `ProductCatalogAttributes.msrp_usd` and `msrp_cad`: the MSRP suggestion only), WP25 (`product_daily_stats` 0033, `fx_daily` 0034 and the 00:30 UTC D-1 finalisation, `getCachedProductStats`, `getCachedFxDaily`, `usdToCadOn`, `statsFor`), WP24 (`app/content/disclosures.ts` `FOOTER_DISCLAIMER` and `TCGPLAYER_TRADEMARK_NOTICE`, `app/content/contact.ts` `CONTACT_EMAILS`, `app/content/methodology.ts`, `MethodologyArticle.tsx`, the `/privacy` page that already names Brevo), WP21 (`enforce_owner_row_cap()` 0031, `pokefin_scraper` 0032, `scripts/db/ci_bootstrap.sql`, `scripts/db/replay_migrations.sh`, CI job "Database replay and Python tests"), WP13 (`app/lib/site.ts` `absoluteUrl`, `NO_INDEX`; `productMeta.ts` `productPath`, `getProductDisplayName`). Through them: WP04 (`useAuth()` `sessionStatus`), WP05 (`requireRouteUser`, `jsonNoStore`, `NO_STORE`, `rejectIfNotAppRequest`, the user-table ESLint selector, `ANON_CLIENT_FORBIDDEN_FILES`), WP07 and WP23 (`format.ts` `formatMoney`, `formatPercent`, `formatDateOnly`, `formatMonthDay`), WP11 (`getCachedMarketProductSummaries`, `MIN_SECRET_LENGTH` pattern of `/api/revalidate`), WP14 (`Dialog`), WP17 (`logger.ts` reaching Sentry), WP20 (`useCurrency`, `supabaseEnv.ts`, `pnpm types:db`, generated `app/types/database.ts`), WP22 (`perf-budgets.json`, `pnpm perf:budget`), WP23 (`Button`/`buttonClasses`, `SegmentedControl`, `Skeleton`, `EmptyState`, `ProvenanceLine`, `PageHeader`, tokens, `uiConventions.baseline.json`, `test-utils/axe.ts`), WP26 (`PUBLIC_ROUTE_CLIENT_FILES`), WP27 (`navConfig.ts` `productHref`).
+- **Depends on**: WP34 (`watchlist_items` and migration 0044's `export_my_data`, `app/lib/watchlist.ts` `parseProductIdString`, `parseProductIdValue`, `watchProductLoginPath`, `WATCHLIST_PAGE_PATH`; `app/lib/server/watchlistRepo.ts` `addWatch`; `app/lib/server/watchlistModel.ts` `statsMatchPrice`; `app/lib/watchlistStore.ts` `noteWatched`; `WatchlistView.tsx`, `WatchlistTable.tsx`, `WatchlistPhoneList.tsx`, `RemoveButton.tsx`; `tests/test_wp34_watchlist_db.py` fixture style), WP31 (`ProductActions.tsx` and the product page composition), WP28 soft (`getCachedProductAttributes`, `ProductCatalogAttributes.msrp_usd` and `msrp_cad`: the MSRP suggestion only), WP25 (`product_daily_stats` 0038, `fx_daily` 0039 and the 00:30 UTC D-1 finalisation, `getCachedProductStats`, `getCachedFxDaily`, `usdToCadOn`, `statsFor`), WP24 (`app/content/disclosures.ts` `FOOTER_DISCLAIMER` and `TCGPLAYER_TRADEMARK_NOTICE`, `app/content/contact.ts` `CONTACT_EMAILS`, `app/content/methodology.ts`, `MethodologyArticle.tsx`, the `/privacy` page that already names Brevo), WP21 (`enforce_owner_row_cap()` 0031, `pokefin_scraper` 0032, `scripts/db/ci_bootstrap.sql`, `scripts/db/replay_migrations.sh`, CI job "Database replay and Python tests"), WP13 (`app/lib/site.ts` `absoluteUrl`, `NO_INDEX`; `productMeta.ts` `productPath`, `getProductDisplayName`). Through them: WP04 (`useAuth()` `sessionStatus`), WP05 (`requireRouteUser`, `jsonNoStore`, `NO_STORE`, `rejectIfNotAppRequest`, the user-table ESLint selector, `ANON_CLIENT_FORBIDDEN_FILES`), WP07 and WP23 (`format.ts` `formatMoney`, `formatPercent`, `formatDateOnly`, `formatMonthDay`), WP11 (`getCachedMarketProductSummaries`, `MIN_SECRET_LENGTH` pattern of `/api/revalidate`), WP14 (`Dialog`), WP17 (`logger.ts` reaching Sentry), WP20 (`useCurrency`, `supabaseEnv.ts`, `pnpm types:db`, generated `app/types/database.ts`), WP22 (`perf-budgets.json`, `pnpm perf:budget`), WP23 (`Button`/`buttonClasses`, `SegmentedControl`, `Skeleton`, `EmptyState`, `ProvenanceLine`, `PageHeader`, tokens, `uiConventions.baseline.json`, `test-utils/axe.ts`), WP26 (`PUBLIC_ROUTE_CLIENT_FILES`), WP27 (`navConfig.ts` `productHref`).
 - **Unblocks**: nothing in Track 2 depends on it. It completes §4.2 step 6 ("Return") of the product direction. A later weekly web edition or CASL newsletter (deferred, `01-PRODUCT-DIRECTION.md` §10) reuses `app/lib/email/brevo.ts`, `emailTheme.ts`, the Vault token pattern and the unsubscribe page.
-- **Placement**: Track 2, data lane, after WP34 (the watchlist page hosts alert management; the alert route reuses WP34's repo). Reserves migration **0039** and keeps it if it merges out of order. WP28 is a soft dependency (MSRP suggestion only). It can run in parallel with WP36 (0040) and WP37 (0041).
+- **Placement**: Track 2, data lane, after WP34 (the watchlist page hosts alert management; the alert route reuses WP34's repo). Reserves migration **0045** and keeps it if it merges out of order. WP28 is a soft dependency (MSRP suggestion only). It can run in parallel with WP36 (0046) and WP37 (0047).
 - **Suggested branch name**: `remediation/wp35-daily-price-alerts`
 - **Risk level**: medium-high. It is the first feature that sends email and the first anon-executable SECURITY DEFINER functions that read auth emails; the risk is contained by a Vault token checked in constant time before any work, claim-then-send idempotency proven by a database test, a CASL-complete footer gated on the owner's mailing address, and a cron route that refuses to run without both secrets.
 
@@ -19,7 +19,7 @@ A collector who wants to buy a box when it dips under a price, or sell when it r
 
 1. **Evaluation day.** The cron runs daily at 11:05 UTC (07:05 EDT, 04:05 PDT) and evaluates `p_day` = yesterday in UTC, whose `product_daily_stats` rows WP25's pg_cron job finalised at 00:30 UTC. Digests land in the Canadian morning. On Vercel's Hobby plan a daily cron fires somewhere in the 11:00 to 11:59 UTC hour; that is acceptable.
 2. **Fresh prices only.** A rule is evaluated only against a `product_daily_stats` row of `p_day` with `is_price_fresh` true, a non-null `usd_price`, and `price_day >= p_day - 3` (a price "fresh" under migration 0023's 14-day rule but four or more days old never triggers an email). Without such a row the rule is neither fired nor re-armed that day.
-3. **Kinds, values and thresholds** (one table, mirrored by `app/lib/alerts.ts` and migration 0039, drift-tested):
+3. **Kinds, values and thresholds** (one table, mirrored by `app/lib/alerts.ts` and migration 0045, drift-tested):
 
 | Kind | Dialog label | Value on `p_day` | Fires when (armed) | Re-arms when (disarmed) | Threshold range | Currency |
 |---|---|---|---|---|---|---|
@@ -29,7 +29,7 @@ A collector who wants to buy a box when it dips under a price, or sell when it r
 | `ask_below_market` | A listing is below Market Price (before shipping) | `ask_premium_pct` (WP25), 1 decimal | value <= -T | value >= -T + 2 | 1 to 90 | USD only |
 | `supply_drop_30d` | Units on the market drop over 30 days | `qty_change_30d_pct` (WP25), 1 decimal | value <= -T | value >= -T + 2 | 5 to 95 | USD only |
 
-   Hysteresis: 2% of the level for price rules, 2 percentage points for the others. A value exactly on the level fires. A CAD rule on a day without an `fx_daily` row for the price's day is skipped for that day (the 0034 principle: no CAD value rather than a guessed one). The rate is that of the price's day, the same rate the product page uses for that price, which is the evaluation day itself in the normal daily cadence.
+   Hysteresis: 2% of the level for price rules, 2 percentage points for the others. A value exactly on the level fires. A CAD rule on a day without an `fx_daily` row for the price's day is skipped for that day (the 0039 principle: no CAD value rather than a guessed one). The rate is that of the price's day, the same rate the product page uses for that price, which is the evaluation day itself in the normal daily cadence.
 4. **New rules start armed.** If the condition is already true at creation, the rule fires in the next digest; the dialog says so before saving.
 5. **One digest per user per day**, listing every rule that fired. Users without a confirmed email (`auth.users.email_confirmed_at` null) or with the digest turned off get nothing, but their rules keep being evaluated and re-armed.
 6. **Idempotency by claim.** `get_due_alert_digests` claims each firing rule in `alert_deliveries (alert_id, day)` before the email is sent; `record_alert_digest_sent` marks it sent and disarms the rule; `release_alert_digest` drops the claim when Brevo refuses the email. A second run the same day, or a duplicated cron event, sends nothing. A claim left unsent for 30 minutes (crashed run) can be claimed again by a manual re-run; a fresher unsent claim belongs to a run still sending, so it is skipped and takes none of the run's `p_max_users` slots. Evaluation never goes backwards: a rule already evaluated for a later day ignores an earlier one.
@@ -160,7 +160,7 @@ Subject: one alert "Price alert: Evolving Skies Booster Box"; several "3 price a
 | Dialog | `available` false | "Price alerts are not available yet."; Save disabled |
 | Dialog | price withheld or never priced | current line "No current Market Price: the last price is older than 14 days." (or "This product has not been priced yet."); price suggestions hidden; saving allowed, help adds "This alert waits until a current price exists." |
 | Dialog | product no longer tracked | "This product is no longer tracked, so its alerts are not checked."; Save disabled |
-| Dialog | price current but older than 3 days | help adds "The latest price is more than 3 days old, so this alert waits for a newer one."; the "already true" line never shows (0039 would not fire on that price) |
+| Dialog | price current but older than 3 days | help adds "The latest price is more than 3 days old, so this alert waits for a newer one."; the "already true" line never shows (0045 would not fire on that price) |
 | Dialog | condition already true | help adds "Already true at the latest price: it will be in your next digest." (only when the price is at most 3 days old) |
 | Dialog | 50 rules | `ALERTS_FULL_MESSAGE`; Save disabled |
 | Dialog | digest off | help adds "Alert emails are off. Turn them back on from your watchlist." |
@@ -215,7 +215,7 @@ WP14 `Dialog`; WP23 `Button`/`buttonClasses`, `SegmentedControl`, `Skeleton`, `E
 Read:
 - `audits/remediation/01-PRODUCT-DIRECTION.md` (all; binding), `research/data-opportunities.md` §3.11 and §3.14, `research/trust-seo-brand.md` §10.1, §12.2 and §12.3, `research/competitive-landscape.md` §4 item 1.
 - Specs: WP34 (Design, steps 1 to 6, 8, 9, 12, 13, 16, Tests 1 and 2), WP25 (Metric definitions, steps 2, 8 to 10, 13, 14), WP21 (steps 2, 11, 14), WP31 (Actions row, steps 11 and 16), WP28 (step 5 types, step 6, `getCachedProductAttributes`), WP24 (steps 2, 3, the `/privacy` page step, methodology structure), WP14 (`Dialog` props), WP23 (Components table, step 24), WP11 (the `/api/revalidate` route for the secret pattern), WP22 (route budgets).
-- Code (paths from `frontend/` unless they start with `migrations/`, `tests/` or `scripts/db/`): `app/lib/watchlist.ts`, `app/lib/watchlistApi.ts`, `app/lib/watchlistStore.ts`, `app/lib/server/watchlistRepo.ts`, `app/lib/server/watchlistModel.ts`, `app/api/watchlist/route.ts`, `app/portfolio/watchlist/WatchlistView.tsx`, `app/components/watchlist/WatchlistTable.tsx`, `app/components/watchlist/WatchlistPhoneList.tsx`, `app/components/watchlist/RemoveButton.tsx`, `app/components/watchlist/WatchButton.tsx`, `app/product/[id]/ProductActions.tsx`, `app/product/[id]/page.tsx`, `app/product/[id]/productMeta.ts`, `app/lib/routeAuth.ts`, `app/lib/csrf.ts`, `app/lib/routeSupabase.ts`, `app/lib/supabaseEnv.ts`, `app/lib/logger.ts`, `app/lib/site.ts`, `app/lib/format.ts`, `app/lib/fx.ts`, `app/lib/marketStats.ts`, `app/lib/serverMarketData.ts`, `app/lib/productAttributes.ts` (WP28), `app/api/revalidate/route.ts`, `app/content/disclosures.ts`, `app/content/contact.ts`, `app/content/methodology.ts`, `app/methodology/MethodologyArticle.tsx`, `app/privacy/page.tsx`, `app/account/page.tsx`, `app/components/ui/Dialog.tsx`, `app/components/ui/SegmentedControl.tsx`, `app/components/ui/Button.tsx`, `app/components/ui/icons.tsx`, `app/context/AuthContext.tsx`, `app/context/CurrencyContext.tsx`, `app/globals.css`, `eslint.config.mjs`, `perf-budgets.json`, `.env.example`, `app/__tests__/uiConventions.test.ts` and `uiConventions.baseline.json`. Repo root: `migrations/0038_watchlist.sql`, `migrations/0033_product_daily_stats.sql`, `migrations/0034_fx_daily.sql`, `migrations/0031_user_table_write_limits.sql`, `migrations/0009_db_resource_guards.sql`, `scripts/db/ci_bootstrap.sql`, `tests/test_wp34_watchlist_db.py`, `tests/test_wp34_watchlist_static.py`, `tests/test_migration_volatility.py`, `README.md` (Database section).
+- Code (paths from `frontend/` unless they start with `migrations/`, `tests/` or `scripts/db/`): `app/lib/watchlist.ts`, `app/lib/watchlistApi.ts`, `app/lib/watchlistStore.ts`, `app/lib/server/watchlistRepo.ts`, `app/lib/server/watchlistModel.ts`, `app/api/watchlist/route.ts`, `app/portfolio/watchlist/WatchlistView.tsx`, `app/components/watchlist/WatchlistTable.tsx`, `app/components/watchlist/WatchlistPhoneList.tsx`, `app/components/watchlist/RemoveButton.tsx`, `app/components/watchlist/WatchButton.tsx`, `app/product/[id]/ProductActions.tsx`, `app/product/[id]/page.tsx`, `app/product/[id]/productMeta.ts`, `app/lib/routeAuth.ts`, `app/lib/csrf.ts`, `app/lib/routeSupabase.ts`, `app/lib/supabaseEnv.ts`, `app/lib/logger.ts`, `app/lib/site.ts`, `app/lib/format.ts`, `app/lib/fx.ts`, `app/lib/marketStats.ts`, `app/lib/serverMarketData.ts`, `app/lib/productAttributes.ts` (WP28), `app/api/revalidate/route.ts`, `app/content/disclosures.ts`, `app/content/contact.ts`, `app/content/methodology.ts`, `app/methodology/MethodologyArticle.tsx`, `app/privacy/page.tsx`, `app/account/page.tsx`, `app/components/ui/Dialog.tsx`, `app/components/ui/SegmentedControl.tsx`, `app/components/ui/Button.tsx`, `app/components/ui/icons.tsx`, `app/context/AuthContext.tsx`, `app/context/CurrencyContext.tsx`, `app/globals.css`, `eslint.config.mjs`, `perf-budgets.json`, `.env.example`, `app/__tests__/uiConventions.test.ts` and `uiConventions.baseline.json`. Repo root: `migrations/0044_watchlist.sql`, `migrations/0038_product_daily_stats.sql`, `migrations/0039_fx_daily.sql`, `migrations/0031_user_table_write_limits.sql`, `migrations/0009_db_resource_guards.sql`, `scripts/db/ci_bootstrap.sql`, `tests/test_wp34_watchlist_db.py`, `tests/test_wp34_watchlist_static.py`, `tests/test_migration_volatility.py`, `README.md` (Database section).
 - Every call site you will change: `grep -rn "<ProductActions\|watch={<WatchButton\|<WatchlistTable\|<WatchlistPhoneList\|WatchlistViewProps\|<RemoveButton" frontend/app --include=*.tsx --include=*.ts`.
 
 Confirm the starting state (repo root). Each line must print what its comment says; otherwise stop and report the missing package:
@@ -223,21 +223,22 @@ Confirm the starting state (repo root). Each line must print what its comment sa
 ```bash
 git checkout master && git pull && git checkout -b remediation/wp35-daily-price-alerts
 
-# Migration registry: 0039 is free, 0038 (WP34) exists, nothing after 0038 replaces export_my_data
-ls migrations | grep -E '^0039_'                                              # no output
-ls migrations/0038_watchlist.sql migrations/0031_*.sql migrations/0033_*.sql migrations/0034_*.sql
+# Migration registry: 0045 is free, 0044 (WP34) exists, nothing after 0044 replaces export_my_data
+ls migrations | grep -E '^0045_'                                              # no output
+ls migrations/0044_watchlist.sql migrations/0031_*.sql migrations/0038_*.sql migrations/0039_*.sql
 grep -ln "FUNCTION public.export_my_data" migrations/*.sql
-# expect exactly 0011_export_my_data.sql, 0024_export_my_data_volatile.sql and 0038_watchlist.sql.
-# If a file numbered 0040 or above is listed (WP36 merged first and replaced export_my_data), STOP and
-# report it: the replay applies files in number order, so 0039's version would be overwritten in CI
+# expect exactly 0011_export_my_data.sql, 0024_export_my_data_volatile.sql and 0044_watchlist.sql.
+grep -c "'currency', currency," migrations/0044_watchlist.sql                  # 1 (WP38's key, kept by WP34)
+# If a file numbered 0046 or above is listed (WP36 merged first and replaced export_my_data), STOP and
+# report it: the replay applies files in number order, so 0045's version would be overwritten in CI
 # while production keeps whichever was applied last. The owner decides how to reconcile.
-ls migrations/0040_*.sql 2>/dev/null
-# WP36's 0040 patches export_my_data in place (it never contains the text above, so the grep
-# cannot see it). If it is listed, WP36 merged first: the replay is still right (0039 runs before
-# 0040), but in production 0039's full definition drops WP36's keys, so Owner action 1 re-runs
-# 0040 after 0039. Record "WP36 merged first: yes/no" for the PR.
-grep -n "is_price_fresh\|qty_change_30d_pct\|ask_premium_pct\|ret_7d " migrations/0033_*.sql | head -4   # 4 lines
-grep -n "CREATE TABLE IF NOT EXISTS public.fx_daily" migrations/0034_*.sql                                # 1 line
+ls migrations/0046_*.sql 2>/dev/null
+# WP36's 0046 patches export_my_data in place (it never contains the text above, so the grep
+# cannot see it). If it is listed, WP36 merged first: the replay is still right (0045 runs before
+# 0046), but in production 0045's full definition drops WP36's keys, so Owner action 1 re-runs
+# 0046 after 0045. Record "WP36 merged first: yes/no" for the PR.
+grep -n "is_price_fresh\|qty_change_30d_pct\|ask_premium_pct\|ret_7d " migrations/0038_*.sql | head -4   # 4 lines
+grep -n "CREATE TABLE IF NOT EXISTS public.fx_daily" migrations/0039_*.sql                                # 1 line
 grep -n "FUNCTION public.enforce_owner_row_cap()" migrations/0031_*.sql                                  # 1 line
 ls scripts/db/ci_bootstrap.sql scripts/db/replay_migrations.sh tests/test_wp34_watchlist_db.py tests/test_migration_volatility.py
 grep -n "vault" scripts/db/ci_bootstrap.sql                                   # no output (this package adds the stand-in)
@@ -286,27 +287,27 @@ Two defaults when a soft check fails:
 - `globals.css` defines a token as an alias (`var(...)`) instead of a hex value: in step 9 use the hex the alias resolves to and make the theme test resolve one level of `var()` (step 23, test 5 says how).
 
 Tooling:
-- Local Postgres for the database tests and the replay (WP21): Docker `postgres:17`, or the PostgreSQL 16 binaries at `/usr/lib/postgresql/16/bin`. Every statement of step 1 was applied twice in a row to PostgreSQL 16.13 on a Supabase-shaped scaffold (WP21's `ci_bootstrap.sql`, the Vault stand-in of step 3, and the tables 0039 reads), `verify_migration.py`'s generated query returned 135 OK rows, and the 30 cases of Tests 1 passed twice in a row against it (re-checked after the review edits: the `listings_day` output and the claimable-rule filter in `due`).
+- Local Postgres for the database tests and the replay (WP21): Docker `postgres:17`, or the PostgreSQL 16 binaries at `/usr/lib/postgresql/16/bin`. Every statement of step 1 was applied twice in a row to PostgreSQL 16.13 on a Supabase-shaped scaffold (WP21's `ci_bootstrap.sql`, the Vault stand-in of step 3, and the tables 0045 reads), `verify_migration.py`'s generated query returned 135 OK rows, and the 30 cases of Tests 1 passed twice in a row against it (re-checked after the review edits: the `listings_day` output and the claimable-rule filter in `due`).
 - A Python venv with `requirements.txt` plus `pytest` (WP21 added `psycopg[binary]`).
 
 Baseline (from `frontend/`): `pnpm exec tsc --noEmit` (exit 0), `pnpm lint` (0 errors), `pnpm test --ci` (all pass), `pnpm run test:scripts` (all pass). From the repo root: `python -m pytest tests/ -q`. Record the counts for the PR.
 
-Two phases, like WP25 and WP34. **Phase A** (steps 1 to 27 except 26): open a draft PR titled `[waiting for DB types] WP35: Daily price alerts` and hand the owner Owner actions 1 to 6. `tsc` reports errors only for the `.from("price_alerts")`, `.from("alert_email_prefs")` and `.rpc(...)` calls of the new tables and functions until phase B; that is the only allowed failure. **Phase B** (step 26): regenerate `app/types/database.ts` once 0039 is in production, then finish the PR. The PR also stays in draft until owner decision D4 (the mailing address) is answered: with `MAILING_ADDRESS` still `null` the feature is invisible and sends nothing, which is safe to merge only if the owner says so in the PR thread.
+Two phases, like WP25 and WP34. **Phase A** (steps 1 to 27 except 26): open a draft PR titled `[waiting for DB types] WP35: Daily price alerts` and hand the owner Owner actions 1 to 6. `tsc` reports errors only for the `.from("price_alerts")`, `.from("alert_email_prefs")` and `.rpc(...)` calls of the new tables and functions until phase B; that is the only allowed failure. **Phase B** (step 26): regenerate `app/types/database.ts` once 0045 is in production, then finish the PR. The PR also stays in draft until owner decision D4 (the mailing address) is answered: with `MAILING_ADDRESS` still `null` the feature is invisible and sends nothing, which is safe to merge only if the owner says so in the PR thread.
 
 ## Implementation steps
 
-### Step 1. `migrations/0039_price_alerts.sql` (new, repo root)
+### Step 1. `migrations/0045_price_alerts.sql` (new, repo root)
 
-Create the file with exactly this content. Section 9 is 0038's `export_my_data` body with two keys added after `watchlist`.
+Create the file with exactly this content. Section 9 is 0044's `export_my_data` body (0024's plus WP38's box_recipes `'currency', currency,` line and WP34's `watchlist` key) with two keys added after `watchlist`. Keep the `currency` line: dropping it would remove WP38's key from every database this file is applied to.
 
 ```sql
--- Migration 0039: daily price alerts by email digest (WP35).
+-- Migration 0045: daily price alerts by email digest (WP35).
 --
 -- A signed-in user sets rules such as "tell me when this drops below
 -- C$250" or "moves 10% or more in a week". Once a day, a Vercel Cron route
 -- (frontend/app/api/cron/alerts/route.ts) evaluates every active rule
 -- against the finalised previous UTC day of product_daily_stats (WP25,
--- 0033) and sends each user one digest email through Brevo.
+-- 0038) and sends each user one digest email through Brevo.
 --
 -- 1. public.price_alerts: one rule per row, at most 50 per user (WP21's
 --    enforce_owner_row_cap, 0031). armed = false after the rule fired; it is
@@ -344,11 +345,11 @@ Create the file with exactly this content. Section 9 is 0038's `export_my_data` 
 -- 6. unsubscribe_alerts(p_token uuid): anon-executable and idempotent. The
 --    token is the authorisation; it turns the digest off, it does not delete
 --    rules.
--- 7. export_my_data(): 0038's body plus "price_alerts" (with sent
+-- 7. export_my_data(): 0044's body plus "price_alerts" (with sent
 --    deliveries) and "alert_email" (without the token).
 --
--- Idempotent: safe to run twice (WP21 replay_twice). Needs 0031, 0033,
--- 0034, 0038, and the Supabase Vault (vault.decrypted_secrets) at run time,
+-- Idempotent: safe to run twice (WP21 replay_twice). Needs 0031, 0038,
+-- 0039, 0044, and the Supabase Vault (vault.decrypted_secrets) at run time,
 -- not at creation time (plpgsql bodies resolve tables when called).
 --
 -- Verification (after apply):
@@ -952,7 +953,7 @@ REVOKE ALL ON FUNCTION public.unsubscribe_alerts(uuid) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION public.unsubscribe_alerts(uuid) TO anon, authenticated, service_role;
 
 -- ============================================================
--- 9. export_my_data(): 0038's body plus "price_alerts" and "alert_email"
+-- 9. export_my_data(): 0044's body plus "price_alerts" and "alert_email"
 -- ============================================================
 
 CREATE OR REPLACE FUNCTION public.export_my_data()
@@ -1021,6 +1022,7 @@ BEGIN
         'name', name,
         'retail_price', retail_price,
         'promo_value', promo_value,
+        'currency', currency,
         'packs', packs,
         'share_code', share_code,
         'is_public', is_public,
@@ -1084,12 +1086,12 @@ GRANT  EXECUTE ON FUNCTION public.export_my_data() TO authenticated;
 GRANT  EXECUTE ON FUNCTION public.export_my_data() TO service_role;
 ```
 
-1a. Confirm the export function is 0038's plus the two keys and nothing else:
+1a. Confirm the export function is 0044's plus the two keys and nothing else:
 
 ```bash
-diff <(sed -n '/^CREATE OR REPLACE FUNCTION public.export_my_data()/,/^\$\$;/p' migrations/0038_watchlist.sql) \
-     <(sed -n '/^CREATE OR REPLACE FUNCTION public.export_my_data()/,/^\$\$;/p' migrations/0039_price_alerts.sql)
-# expect exactly one hunk, "81c81,115": the line "    ), '[]'::jsonb)" that closes the watchlist key
+diff <(sed -n '/^CREATE OR REPLACE FUNCTION public.export_my_data()/,/^\$\$;/p' migrations/0044_watchlist.sql) \
+     <(sed -n '/^CREATE OR REPLACE FUNCTION public.export_my_data()/,/^\$\$;/p' migrations/0045_price_alerts.sql)
+# expect exactly one hunk, "82c82,116": the line "    ), '[]'::jsonb)" that closes the watchlist key
 # becomes "    ), '[]'::jsonb)," followed by the 'price_alerts' and 'alert_email' keys (35 lines in
 # total on the right side, 1 on the left). Any other changed or deleted line means a line was mistyped.
 ```
@@ -1097,7 +1099,7 @@ diff <(sed -n '/^CREATE OR REPLACE FUNCTION public.export_my_data()/,/^\$\$;/p' 
 1b. Check the file with the verifier (repo root):
 
 ```bash
-python3 verify_migration.py migrations/0039_price_alerts.sql > /tmp/wp35_0039.sql; echo "exit=$?"
+python3 verify_migration.py migrations/0045_price_alerts.sql > /tmp/wp35_0045.sql; echo "exit=$?"
 # expect exit=1 and exactly four REFUSED lines, all column-level grants, which verify_migration.py does
 # not model (the same situation as WP21's 0031 and 0032):
 #   ! REFUSED unsupported privilege 'INSERT (USER_ID' ...
@@ -1105,10 +1107,10 @@ python3 verify_migration.py migrations/0039_price_alerts.sql > /tmp/wp35_0039.sq
 #   ! REFUSED unsupported privilege 'SELECT (USER_ID' ...
 #   ! REFUSED unsupported privilege 'UPDATE (DIGEST_ENABLED)' ...
 # plus 10 "-- function" lines, 1 "-- index", 3 "-- rls ... enabled" and 121 "-- privilege" lines.
-grep -c "^-- privilege" <(python3 verify_migration.py migrations/0039_price_alerts.sql 2>&1 >/dev/null)   # 121
+grep -c "^-- privilege" <(python3 verify_migration.py migrations/0045_price_alerts.sql 2>&1 >/dev/null)   # 121
 ```
 
-Any other REFUSED line means a statement was changed: fix it. The generated query (`/tmp/wp35_0039.sql`) returned 135 OK rows on the scratch database; attach it to the PR for Owner action 1. Column privileges are checked by Tests 1 instead (`TestAccess`).
+Any other REFUSED line means a statement was changed: fix it. The generated query (`/tmp/wp35_0045.sql`) returned 135 OK rows on the scratch database; attach it to the PR for Owner action 1. Column privileges are checked by Tests 1 instead (`TestAccess`).
 
 1c. Replay (WP21 harness, after step 3 added the Vault stand-in):
 
@@ -1133,9 +1135,9 @@ import { formatDateOnly, formatMoney, formatMonthDay, formatPercent } from "./fo
 import { parseProductIdValue } from "./watchlist";
 
 /**
- * Daily price alerts (WP35): the contract between migration 0039, the routes
+ * Daily price alerts (WP35): the contract between migration 0045, the routes
  * app/api/alerts/route.ts and app/api/cron/alerts/route.ts, the email and the
- * UI. Constants that mirror 0039 are drift-tested by
+ * UI. Constants that mirror 0045 are drift-tested by
  * tests/test_wp35_price_alerts_static.py: change both together and bump
  * METHODOLOGY_VERSION (they are documented on /methodology#alerts).
  */
@@ -1150,13 +1152,13 @@ export const ALERT_KINDS = [
 export type AlertKind = (typeof ALERT_KINDS)[number];
 export type AlertCurrency = "USD" | "CAD";
 
-/** Equals the cap in 0039's trigger (enforce_owner_row_cap('user_id', '50')). */
+/** Equals the cap in 0045's trigger (enforce_owner_row_cap('user_id', '50')). */
 export const ALERTS_MAX_PER_USER = 50;
-/** Price rules re-arm 2% past the level (0039: T x 1.02 and T x 0.98). */
+/** Price rules re-arm 2% past the level (0045: T x 1.02 and T x 0.98). */
 export const ALERT_REARM_PRICE_FACTOR = 0.02;
-/** Percent rules re-arm 2 percentage points past the level (0039: T - 2, -T + 2). */
+/** Percent rules re-arm 2 percentage points past the level (0045: T - 2, -T + 2). */
 export const ALERT_REARM_POINTS = 2;
-/** A price more than this many days older than the checked day never fires (0039: p_day - 3). */
+/** A price more than this many days older than the checked day never fires (0045: p_day - 3). */
 export const ALERT_MAX_PRICE_AGE_DAYS = 3;
 /** Digests per cron run (Brevo free tier: 300 emails a day, shared with other mail). */
 export const ALERT_DIGESTS_PER_RUN = 200;
@@ -1182,7 +1184,7 @@ export interface AlertKindMeta {
   /** Radio label in the dialog. */
   label: string;
   unit: AlertUnit;
-  /** Inclusive range; equals price_alerts_threshold_range in 0039. */
+  /** Inclusive range; equals price_alerts_threshold_range in 0045. */
   min: number;
   max: number;
   /** Input label; money labels get "(C$)" or "(US$)" appended. */
@@ -1330,7 +1332,7 @@ export function describeValue(kind: AlertKind, value: number, currency: AlertCur
   }
 }
 
-/** When a fired rule can fire again (0039's hysteresis band). */
+/** When a fired rule can fire again (0045's hysteresis band). */
 export function rearmText(rule: AlertRule): string {
   const t = rule.threshold;
   const band = t - ALERT_REARM_POINTS;
@@ -1380,7 +1382,7 @@ export interface AlertEntry extends AlertRule {
 }
 
 export interface AlertPrefs {
-  /** false until the first rule creates the row (0039 trigger). */
+  /** false until the first rule creates the row (0045 trigger). */
   exists: boolean;
   digestEnabled: boolean;
   unsubscribedAt: string | null;
@@ -1397,7 +1399,7 @@ export interface AlertContext {
   priceDay: string | null;
   /**
    * The price is at most ALERT_MAX_PRICE_AGE_DAYS old today (UTC), so the
-   * next daily check can use it (0039: price_day >= p_day - 3). A price
+   * next daily check can use it (0045: price_day >= p_day - 3). A price
    * that is current by 0023's 14-day rule but older than this never fires.
    */
   priceRecent: boolean;
@@ -1506,7 +1508,7 @@ export function currentValueText(kind: AlertKind, currency: AlertCurrency, ctx: 
   }
 }
 
-/** Whether the rule would fire on today's values (same comparisons as 0039). */
+/** Whether the rule would fire on today's values (same comparisons as 0045). */
 export function ruleIsTrueNow(rule: AlertRule, ctx: AlertContext | null): boolean {
   if (!ctx || ctx.priceStatus !== "priced" || !ctx.priceRecent) return false;
   const t = rule.threshold;
@@ -1670,7 +1672,7 @@ type RouteSupabase = Awaited<ReturnType<typeof createRouteSupabaseClient>>;
 const ALERT_SELECT =
   "id, product_id, kind, threshold, currency, active, armed, last_fired_day, last_fired_value, last_evaluated_day, created_at, " +
   "products ( active, variant, sets ( name ), product_types ( name, label ) )";
-/** Column list, not "*": authenticated may not read unsubscribe_token (0039 column grant). */
+/** Column list, not "*": authenticated may not read unsubscribe_token (0045 column grant). */
 const PREFS_SELECT = "digest_enabled, unsubscribed_at";
 /** Above the cap: concurrent inserts can pass it (0031's documented race). */
 const ALERTS_LIST_LIMIT = 100;
@@ -1804,7 +1806,7 @@ export async function createAlert(supabase: RouteSupabase, userId: string, input
   return { status: "error" };
 }
 
-/** Pause or resume (0039's trigger re-arms on resume). */
+/** Pause or resume (0045's trigger re-arms on resume). */
 export async function setAlertActive(
   supabase: RouteSupabase,
   userId: string,
@@ -2326,7 +2328,7 @@ import "server-only";
 
 import { isAlertKind, type AlertCurrency, type AlertKind } from "../alerts";
 
-/** One fired rule as 0039's get_due_alert_digests returns it. */
+/** One fired rule as 0045's get_due_alert_digests returns it. */
 export interface DueAlert {
   alert_id: number;
   product_id: number;
@@ -4169,13 +4171,13 @@ If `Sub` is named differently in the tree (WP25 uses `Sub`), use that component.
 - "What we collect", after WP34's Watchlist item: `<li><strong>Price alerts</strong>: the levels you set, when each alert last fired, and whether you get alert emails.</li>`
 - "How we use it": after "answer your messages," insert "send the daily price alert email you asked for, ". In WP24's JSX the phrase wraps after "answer" (`grep -n "your messages," app/privacy/page.tsx` finds the second line); insert at the start of the text that follows "your messages," on that line, keeping one space on each side.
 - "Service providers", replace the Brevo item with `<li><strong>Brevo</strong>: email delivery, including the daily price alert digest (your email address and the alerts that fired).</li>`. If WP24 shipped a placeholder in this line, this replaces it; tell the owner in the PR (Owner action 8).
-- "How long we keep it": in the deletion sentence WP34 edited ("removes your profile, portfolios, holdings, lots, box recipes and watchlist in one step"; `grep -n "watchlist in one step\|and watchlist" app/privacy/page.tsx`, the phrase may wrap), change "box recipes and watchlist" to "box recipes, watchlist and price alerts". Deleting the account removes them: `delete_my_account()` deletes the `auth.users` row and 0039's foreign keys cascade (Tests 1 `test_account_deletion_removes_everything`).
+- "How long we keep it": in the deletion sentence WP34 edited ("removes your profile, portfolios, holdings, lots, box recipes and watchlist in one step"; `grep -n "watchlist in one step\|and watchlist" app/privacy/page.tsx`, the phrase may wrap), change "box recipes and watchlist" to "box recipes, watchlist and price alerts". Deleting the account removes them: `delete_my_account()` deletes the `auth.users` row and 0045's foreign keys cascade (Tests 1 `test_account_deletion_removes_everything`).
 - Add one sentence at the end of "Your rights", as a new `<li>`: `<li><strong>Alert emails</strong>: every alert email has a link that turns them off in one step, without signing in.</li>`
 - Set the page's last-updated constant (`grep -n "LAST_UPDATED" app/privacy/page.tsx`) to the merge day.
 
 24b. `frontend/app/account/page.tsx`: in the "Your data" sentence add "price alerts" to the exported records ("profile, portfolios, holdings, lots, box recipes, watchlist and price alerts"). Nothing else.
 
-24c. `README.md` (repo root), Database section, next to WP34's `watchlist_items` line: "`price_alerts`, `alert_email_prefs` and `alert_deliveries` (0039, WP35): alert rules (50 per user, owner-only RLS), email preferences with the unsubscribe token, and one delivery row per alert and day. Written by users through `app/api/alerts/route.ts` and evaluated daily by `app/api/cron/alerts/route.ts` (Vercel Cron, 11:05 UTC) through SECURITY DEFINER functions that check the Vault secret `pokefin_cron_token`."
+24c. `README.md` (repo root), Database section, next to WP34's `watchlist_items` line: "`price_alerts`, `alert_email_prefs` and `alert_deliveries` (0045, WP35): alert rules (50 per user, owner-only RLS), email preferences with the unsubscribe token, and one delivery row per alert and day. Written by users through `app/api/alerts/route.ts` and evaluated daily by `app/api/cron/alerts/route.ts` (Vercel Cron, 11:05 UTC) through SECURITY DEFINER functions that check the Vault secret `pokefin_cron_token`."
 
 24d. `frontend/.env.example`, append:
 
@@ -4214,7 +4216,7 @@ Run the perf build and `pnpm perf:budget --write-limits` (Verification block 3).
 
 ### Step 26. Phase B: generated types
 
-After Owner action 1 (0039 applied in production): from `frontend/`, `pnpm types:db`, then `grep -c "price_alerts\|get_due_alert_digests\|unsubscribe_alerts" app/types/database.ts` (expect 3 or more) and `pnpm exec tsc --noEmit` (exit 0). Commit the regenerated file alone. Do not hand-edit `database.ts` in phase A and do not cast a client to `any`.
+After Owner action 1 (0045 applied in production): from `frontend/`, `pnpm types:db`, then `grep -c "price_alerts\|get_due_alert_digests\|unsubscribe_alerts" app/types/database.ts` (expect 3 or more) and `pnpm exec tsc --noEmit` (exit 0). Commit the regenerated file alone. Do not hand-edit `database.ts` in phase A and do not cast a client to `any`.
 
 ### Step 27. Tests and end of phase A
 
@@ -4238,7 +4240,7 @@ Write every file in the Tests section alongside the step it covers. Then run Ver
 - **Do not grant UPDATE on rule columns** (`kind`, `threshold`, `currency`, `armed`, `last_*`). A changed level is a new rule; pausing is the only edit.
 - **Do not import `lib/alerts.ts`, `alertsApi.ts`, `format.ts` or `redirects.ts` into `AlertButton.tsx`,** and do not read the session, cookies or `searchParams` on the product page. The dialog is a lazy chunk.
 - **Do not choose the phone or desktop layout with `matchMedia` in state** (WP18 F073). The rule list is one DOM that CSS reflows.
-- **Do not edit 0038, 0034 or any earlier migration, `verify_migration.py` or `schema.sql`,** and do not apply the migration to production yourself.
+- **Do not edit 0044, 0039 or any earlier migration, `verify_migration.py` or `schema.sql`,** and do not apply the migration to production yourself.
 - **Do not send email from the laptop scraper** or add a Python sender: it would need the user tables and emails, the opposite of WP21's least-privilege role.
 - **Do not write the mailing address anywhere but `app/content/disclosures.ts`,** and do not send an email without it (CASL).
 
@@ -4248,11 +4250,11 @@ Route, repo and job tests start with `/** @jest-environment node */`; mock `serv
 
 ### 1. `tests/test_wp35_price_alerts_db.py` (new, needs the replayed database)
 
-All 30 cases passed, twice in a row on the same database, against 0039 on PostgreSQL 16.13 with WP21's bootstrap and the Vault stand-in while this spec was written.
+All 30 cases passed, twice in a row on the same database, against 0045 on PostgreSQL 16.13 with WP21's bootstrap and the Vault stand-in while this spec was written.
 
 ```python
 """
-Database checks for migration 0039 (price alerts, WP35), run against a
+Database checks for migration 0045 (price alerts, WP35), run against a
 database rebuilt by scripts/db/replay_migrations.sh (with the Vault stand-in
 from scripts/db/ci_bootstrap.sql).
 
@@ -4829,7 +4831,7 @@ class TestExportAndCascade:
         assert rules[0]["deliveries"][0]["day"] == d(today, 1).isoformat()
         assert doc["alert_email"]["digest_enabled"] is True
         assert "unsubscribe_token" not in doc["alert_email"]
-        assert "watchlist" in doc  # 0038's key kept
+        assert "watchlist" in doc  # 0044's key kept
 
     def test_account_deletion_removes_everything(self, admin, catalog, today):
         uid = new_user(admin)
@@ -4849,7 +4851,7 @@ If a fixture INSERT fails with `NotNullViolation` or `CheckViolation` because `p
 
 ```python
 """
-Static checks for migration 0039 and its TypeScript mirror (WP35). No database.
+Static checks for migration 0045 and its TypeScript mirror (WP35). No database.
 
   python -m pytest tests/test_wp35_price_alerts_static.py -v
 """
@@ -4861,7 +4863,7 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
-MIGRATION = ROOT / "migrations" / "0039_price_alerts.sql"
+MIGRATION = ROOT / "migrations" / "0045_price_alerts.sql"
 ALERTS_TS = ROOT / "frontend" / "app" / "lib" / "alerts.ts"
 BOOTSTRAP = ROOT / "scripts" / "db" / "ci_bootstrap.sql"
 VERCEL_JSON = ROOT / "frontend" / "vercel.json"
@@ -5319,7 +5321,7 @@ Block 1, static:
 pnpm exec tsc --noEmit            # phase A: errors only for the new tables and RPCs in alertsRepo.ts and the two
                                   # routes (not in database.ts yet); phase B: exit 0
 pnpm lint                         # 0 errors
-grep -rnP '\x{2014}' app/lib/alerts.ts app/lib/email app/components/alerts app/alerts app/api/alerts app/api/cron ../migrations/0039_price_alerts.sql   # no output
+grep -rnP '\x{2014}' app/lib/alerts.ts app/lib/email app/components/alerts app/alerts app/api/alerts app/api/cron ../migrations/0045_price_alerts.sql   # no output
 grep -rniE "\binstant\b|real-time|\blive\b|TCGPlayer" app/lib/alerts.ts app/lib/email app/components/alerts app/alerts   # no output
 cat vercel.json                   # the cron block of step 15
 ```
@@ -5367,7 +5369,7 @@ Then, on production, with a test account that has a confirmed email: create a "P
 
 ## Owner actions
 
-1. **Apply migration 0039** after 0038 is in production: Supabase MCP `apply_migration` (preferred) or the SQL editor with `migrations/0039_price_alerts.sql`. Then run the verification query the PR attaches (`/tmp/wp35_0039.sql`): 135 rows, all OK. If `migrations/0040_portfolio_lot_currency.sql` (WP36) is already applied in production, re-apply 0040 right after 0039 (WP36 Owner action 5: it is idempotent and only re-adds its keys), then check `SELECT position('purchase_currency' IN pg_get_functiondef('public.export_my_data()'::regprocedure)) > 0, position('price_alerts' IN pg_get_functiondef('public.export_my_data()'::regprocedure)) > 0;` prints `t | t`. Record it in `audits/HARDENING_FOLLOWUPS.md` section 7 ("Migration 0039 applied (YYYY-MM-DD)"), refresh `schema.sql` from production as README "Database" describes (WP21: `pg_dump --schema-only --schema=public ... | python3 scripts/db/normalize_dump.py -`) so CI's informational drift step stops reporting the three tables, and commit both to master as `docs: record migration 0039 as applied`.
+1. **Apply migration 0045** after 0044 is in production: Supabase MCP `apply_migration` (preferred) or the SQL editor with `migrations/0045_price_alerts.sql`. Then run the verification query the PR attaches (`/tmp/wp35_0045.sql`): 135 rows, all OK. If `migrations/0046_portfolio_lot_currency.sql` (WP36) is already applied in production, re-apply 0046 right after 0045 (WP36 Owner action 5: it is idempotent and only re-adds its keys), then check `SELECT position('purchase_currency' IN pg_get_functiondef('public.export_my_data()'::regprocedure)) > 0, position('price_alerts' IN pg_get_functiondef('public.export_my_data()'::regprocedure)) > 0;` prints `t | t`. Record it in `audits/HARDENING_FOLLOWUPS.md` section 7 ("Migration 0045 applied (YYYY-MM-DD)"), refresh `schema.sql` from production as README "Database" describes (WP21: `pg_dump --schema-only --schema=public ... | python3 scripts/db/normalize_dump.py -`) so CI's informational drift step stops reporting the three tables, and commit both to master as `docs: record migration 0045 as applied`.
 2. **Create the Vault secret and the matching Vercel variable.** Generate a value with `openssl rand -hex 32`. In the SQL editor: `SELECT vault.create_secret('<value>', 'pokefin_cron_token', 'WP35 price alert cron');`. In Vercel, Settings, Environment Variables, Production only, Sensitive: `POKEFIN_CRON_TOKEN=<the same value>`. To rotate later: `SELECT vault.update_secret((SELECT id FROM vault.secrets WHERE name = 'pokefin_cron_token'), '<new value>');`, then update the Vercel variable and redeploy.
 3. **Create `CRON_SECRET`** in Vercel (Production only, Sensitive) with a different `openssl rand -hex 32` value. Vercel sends it to the cron route automatically.
 4. **Brevo** (free plan): create the account; in Senders, Domains and Dedicated IPs, add and authenticate `pokefin.ca` with the DNS records Brevo shows (a `brevo-code` TXT and the DKIM records); add `include:spf.brevo.com` to the existing SPF TXT record (keep a single SPF record); add `_dmarc.pokefin.ca TXT "v=DMARC1; p=none; rua=mailto:privacy@pokefin.ca"` and move it to `p=quarantine` after two clean weeks of reports; add the sender `alerts@pokefin.ca` ("Pokéfin alerts") and make `alerts@` forward to `hello@` like the other addresses (WP24). Create an API key (SMTP and API, API keys) and set `BREVO_API_KEY` in Vercel (Production only, Sensitive). If Supabase Auth also sends through Brevo SMTP, the 300 a day are shared; the alert run caps itself at 200.
@@ -5379,7 +5381,7 @@ Then, on production, with a test account that has a confirmed email: create a "P
 
 ## Acceptance criteria
 
-- [ ] `migrations/0039_price_alerts.sql` applies twice in a row (`replay_twice`), `verify_migration.py` prints exactly the four column-grant REFUSED lines, and its query returns 135 OK rows after apply.
+- [ ] `migrations/0045_price_alerts.sql` applies twice in a row (`replay_twice`), `verify_migration.py` prints exactly the four column-grant REFUSED lines, and its query returns 135 OK rows after apply.
 - [ ] `tests/test_wp35_price_alerts_db.py` passes (30 cases), including: a crossing fires once and a re-run the same day returns nothing; a claim another run is still sending takes no `p_max_users` slot; the listing kinds carry `listings_day`; a withheld price (`is_price_fresh` false) never fires and is not even evaluated; a price more than 3 days old never fires; hysteresis re-arms only at 2% past the level; a CAD level uses the rate of the price's day and is skipped without it; a stale claim is retried and a released claim is re-claimed; an older day is never evaluated after a newer one; a wrong, short or missing token and a missing Vault secret raise 42501; `unsubscribe_alerts` is idempotent and token-only; RLS owner-only, column grants, the 50 cap, the CHECKs, the export keys without the token, and account deletion cascade.
 - [ ] `tests/test_wp35_price_alerts_static.py` passes: the cap, kinds, ranges, hysteresis and age constants match `alerts.ts`; the cron functions check the token first; the effective `export_my_data` keeps `watchlist`, `price_alerts` and `alert_email`; the Vault stand-in is in `ci_bootstrap.sql`; `vercel.json` schedules `/api/cron/alerts` at `5 11 * * *`.
 - [ ] The cron route test proves: 503 without a long `CRON_SECRET`, 401 without the exact bearer, 200 `disabled` with no read while `MAILING_ADDRESS` is unset, 503 without the Brevo key or the cron token; a fixture day with one crossing sends exactly one Brevo email with the List-Unsubscribe headers and records it; re-running the same day sends none; a refused send releases the claim; a 429 is retried once; no response contains an email address.
@@ -5397,8 +5399,8 @@ Then, on production, with a test account that has a confirmed email: create a "P
 
 - **Stop sending at once, no deploy:** Vercel, Settings, Cron Jobs, disable `/api/cron/alerts`; or delete `CRON_SECRET` (the route answers 503). Both are reversible.
 - **Hide the feature:** set `MAILING_ADDRESS` back to `null` and deploy: the button, the column and the section disappear, `POST /api/alerts` answers 503 and the cron answers `{"status":"disabled"}` and sends nothing. Rules stay stored.
-- **Code:** revert the frontend commits (2 to 5 of Commit and PR). Keep commit 1 (the migration, the bootstrap stand-in and the Python tests): production has applied 0039, and removing the file would make the replay and `schema.sql` drift. The tables are inert without the routes.
-- **Database, only if the owner wants the data gone** (for example before any real user set an alert): in the SQL editor, in this order, then re-run section 5 of `migrations/0038_watchlist.sql` (its `CREATE OR REPLACE FUNCTION public.export_my_data()` and the three grant lines) to restore the export without the alert keys:
+- **Code:** revert the frontend commits (2 to 5 of Commit and PR). Keep commit 1 (the migration, the bootstrap stand-in and the Python tests): production has applied 0045, and removing the file would make the replay and `schema.sql` drift. The tables are inert without the routes.
+- **Database, only if the owner wants the data gone** (for example before any real user set an alert): in the SQL editor, in this order, then re-run section 5 of `migrations/0044_watchlist.sql` (its `CREATE OR REPLACE FUNCTION public.export_my_data()` and the three grant lines) to restore the export without the alert keys:
 
 ```sql
 DROP FUNCTION IF EXISTS public.get_due_alert_digests(date, text, integer);
@@ -5416,19 +5418,19 @@ DROP FUNCTION IF EXISTS public.alert_email_prefs_before_update();
 DELETE FROM vault.secrets WHERE name = 'pokefin_cron_token';
 ```
 
-  In that case also delete `migrations/0039_price_alerts.sql` and the two Python test modules in the same revert PR so the replay matches production, and note it in `audits/HARDENING_FOLLOWUPS.md`.
+  In that case also delete `migrations/0045_price_alerts.sql` and the two Python test modules in the same revert PR so the replay matches production, and note it in `audits/HARDENING_FOLLOWUPS.md`.
 - Remove `POKEFIN_CRON_TOKEN`, `CRON_SECRET` and `BREVO_API_KEY` from Vercel if the feature is abandoned; the Brevo domain records can stay (the weekly report will use them).
 
 ## Commit and PR
 
 Branch `remediation/wp35-daily-price-alerts`. Commits, in order:
 
-1. `feat(db): price alerts, email preferences and deliveries with Vault-gated cron functions (WP35)`: `migrations/0039_price_alerts.sql`, `scripts/db/ci_bootstrap.sql`, `tests/test_wp35_price_alerts_db.py`, `tests/test_wp35_price_alerts_static.py`.
+1. `feat(db): price alerts, email preferences and deliveries with Vault-gated cron functions (WP35)`: `migrations/0045_price_alerts.sql`, `scripts/db/ci_bootstrap.sql`, `tests/test_wp35_price_alerts_db.py`, `tests/test_wp35_price_alerts_static.py`.
 2. `feat(alerts): rules model, alerts route, repo and browser client (WP35)`: `app/lib/alerts.ts`, `app/lib/alertsApi.ts`, `app/lib/server/alertsRepo.ts`, `app/lib/server/alertsConfig.ts`, `app/lib/server/anonRpcSupabase.ts`, `app/api/alerts/route.ts`, `app/content/disclosures.ts`, Tests 3 and 9.
 3. `feat(alerts): daily digest cron, Brevo client, email and unsubscribe (WP35)`: `app/lib/server/dueDigests.ts`, `app/lib/server/cronAuth.ts`, `app/lib/server/alertDigestJob.ts`, `app/lib/email/emailTheme.ts`, `app/lib/email/alertDigest.ts`, `app/lib/email/brevo.ts`, `app/api/cron/alerts/route.ts`, `vercel.json`, `app/lib/alertUnsubscribe.ts`, `app/api/alerts/unsubscribe/route.ts`, `app/alerts/unsubscribe/page.tsx`, Tests 4 to 8, 10, 11, the snapshot.
 4. `feat(alerts): Alert me dialog, product page action and watchlist alerts section (WP35)`: `app/components/alerts/*`, `app/product/[id]/ProductActions.tsx`, `app/product/[id]/page.tsx`, `app/components/watchlist/WatchlistTable.tsx`, `app/components/watchlist/WatchlistPhoneList.tsx`, `app/portfolio/watchlist/WatchlistView.tsx`, Tests 12 to 15.
 5. `docs(alerts): methodology, privacy, account, README, env example, lint lists, budgets (WP35)`: `app/content/methodology.ts`, `app/methodology/MethodologyArticle.tsx`, `app/privacy/page.tsx`, `app/account/page.tsx`, `README.md`, `.env.example`, `eslint.config.mjs`, `perf-budgets.json`, `app/__tests__/uiConventions.baseline.json`.
-6. Phase B: `chore(types): regenerate database types for migration 0039 (WP35)`: `app/types/database.ts` only.
+6. Phase B: `chore(types): regenerate database types for migration 0045 (WP35)`: `app/types/database.ts` only.
 
 Every commit message ends with the attribution lines the session's system reminder gives.
 
