@@ -29,7 +29,7 @@ Decisions made in this spec, with the reason:
 7. **The lot is the holding row.** The app has never written `portfolio_lots` (WP05 "Before you start" command 3); each `portfolio_holdings` row is one purchase (quantity, price, date). "Per-lot" figures are therefore per holding row. `portfolio_lots` gets the same columns and trigger so the two tables never diverge, but nothing reads it.
 8. **Conversion lives in a database trigger**, not only in the route: the import route, the add route, the edit route and any direct PostgREST write by the user all store the same USD value, and a missing rate fails the write (SQLSTATE `PF001`, HTTP 400) instead of storing a guess.
 9. **Days to exit uses every unit of the product you hold** (all lots of that product), shown on each of its rows: two lots of one box sell to the same buyers.
-10. **The benchmark comparison covers lots with a current price and an index level on the purchase date.** Lots bought before the index's first day, and lots whose price is withheld, are left out of both sides and counted in a coverage line. The chart's index line includes every lot with an index level (the value line from WP10 also includes a withheld lot on the days it was priced).
+10. **The benchmark comparison covers lots with a current price and an index level on the purchase date.** Lots bought before the index's first day, and lots whose price is withheld, are left out of both sides and counted in a coverage line. **The chart's two lines must always cover the same purchases**, because a reader compares their gap: WP10's value line holds every lot from its purchase date, so the index line is drawn only when every holding has an index level on its purchase date (otherwise `benchmarkSeries` is null, `benchmark.seriesExcludedLots` says how many lots block it, and the chart says why), and it is not drawn on a partial day (WP10 `priced_products < held_products`), where the value line has dropped a withheld product that the index line would still hold. The summary still compares the covered lots.
 11. **CAD figures come from the analytics payload** (`fx_daily`, the rate of each day) and never from `useCurrency().exchangeRate`, except the add modal's pre-filled price, which is only a starting value the user edits.
 12. **Allocation is labelled bars, not a pie.** The Recharts pie (`AllocationChartImpl`) is deleted: one fewer chart in the lazy chunk, and a ranked list reads better than ten colours.
 13. **The "ALL" range button is removed** from the portfolio chart: history is requested for at most 365 days, so "ALL" repeated "1Y" (cadence honesty, `01-PRODUCT-DIRECTION.md` principle 3). The `PortfolioTimeframe` type keeps "ALL" so WP05's hook does not change.
@@ -57,7 +57,7 @@ All amounts are totals for a row (quantity included) unless named per unit. USD 
 | Index level on a day `L(d)` | Level of the newest published point on or before `d`, at most 7 days older | Weekly history (Mondays) before daily collection is covered by the 7-day rule; `null` otherwise |
 | Same money in the index (lot) | `costUsd × L(last index day) ÷ L(purchase_date)` | Only with a current price and `L(purchase_date)`. Purchase after the last index day: ratio 1 |
 | vs Sealed Index | `value − benchmark` (money) and `returnPct − benchmarkReturnPct` (points) over covered lots | Withheld when the index's last day is more than 7 days before today ("index_stale") or the read failed ("index_unavailable"); "no_covered_lots" when nothing qualifies. CAD: `cost` = CAD cost, value and benchmark × FX1; `null` when a covered lot has no CAD cost (USD shown with its code) |
-| Index line (chart) | For each day `d` from today − 365 to the index's last day: `Σ costUsd × L(d) ÷ L(purchase_date)` over lots with `purchase_date ≤ d` and an index level on the purchase date | `null` before the first such lot and after the last index day. CAD: × `rateOn(fx, d)` |
+| Index line (chart) | For each day `d` from today − 365 to the index's last day: `Σ costUsd × L(d) ÷ L(purchase_date)` over lots with `purchase_date ≤ d` | Computed only when every holding has an index level on its purchase date; otherwise the whole series is null (`seriesExcludedLots` > 0). `null` before the first lot, after the last index day, and on a partial day of the value line. CAD: × `rateOn(fx, d)` |
 | Value line (chart) | WP10 `get_portfolio_history`, USD; CAD: × `rateOn(fx, d)` per day | A CAD day without a rate is a gap. No `fx_daily` at all: USD with a note |
 | Allocation | Priced value grouped by set (`sets.id`), product type (`product_types.id`) or era (`sets.generations.id`), share = group ÷ priced value | Top 6 shown, the rest folded into "Other (n)" |
 | Concentration flag | A product, or a set, above 40% of the priced value | Only with at least 2 priced products (product flag) or 2 sets (set flag); a set flag is skipped when the set is one product that is already flagged |
@@ -82,7 +82,7 @@ The analytics request repeats after every add, edit, delete, import or refresh (
 
 ### API contract
 
-`GET /api/portfolio/analytics`: same gates as WP05's `GET /api/portfolio` (403 without `x-pokefin-request: 1`, 401 signed out, 503 auth outage, 500 on a failed read), `Cache-Control: no-store`, never creates a portfolio. 200 body is `PortfolioAnalytics` (step 3): `version: 1`, `today`, `exitFeePct`, `statsDay`, `fxNow`, `fxSourceDate`, `totals`, `benchmark`, `benchmarkSeries` (`{ start, usd[] }`, 366 entries, or null), `allocation`, `concentration`, `lots[]` (one per holding row, keyed by `holdingId`), `fx` (the `fx_daily` series from today − 400 days, for the chart). About 9 kB plus 0.8 kB per holding before compression (measured: 12.5 kB for the 6-holding sample; the 366-point benchmark series and the 400-day FX slice are most of the fixed part), roughly a quarter of that over the wire with Vercel's gzip or brotli. It is a private `no-store` response fetched once per holdings change, never on first paint, so it does not touch the `/portfolio` JS budget.
+`GET /api/portfolio/analytics`: same gates as WP05's `GET /api/portfolio` (403 without `x-pokefin-request: 1`, 401 signed out, 503 auth outage, 500 on a failed read), `Cache-Control: no-store`, never creates a portfolio. 200 body is `PortfolioAnalytics` (step 3): `version: 1`, `today`, `exitFeePct`, `statsDay`, `fxNow`, `fxSourceDate`, `totals`, `benchmark`, `benchmarkSeries` (`{ start, usd[] }`, 366 entries, or null when the index is unusable or any holding has no index level on its purchase date; `benchmark.seriesExcludedLots` counts those holdings), `allocation`, `concentration`, `lots[]` (one per holding row, keyed by `holdingId`), `fx` (the `fx_daily` series from today − 400 days, for the chart). About 9 kB plus 0.8 kB per holding before compression (measured: 12.5 kB for the 6-holding sample; the 366-point benchmark series and the 400-day FX slice are most of the fixed part), roughly a quarter of that over the wire with Vercel's gzip or brotli. It is a private `no-store` response fetched once per holdings change, never on first paint, so it does not touch the `/portfolio` JS budget.
 
 `PATCH /api/portfolio`: body `{ "exit_fee_pct": number }` (0 to 50, rounded to 1 decimal), CSRF-gated like WP05's writes, at most 1 KB. 200 `{ "exit_fee_pct": 12.5 }`; 400 `{ error }` for an invalid value; 401/503 as above; 500 on a failed write. Creates the portfolio if missing (same as `GET /api/portfolio`).
 
@@ -117,8 +117,8 @@ Track holdings, returns, and allocation across your sealed collection.
 |          └──────────────────────────────────────────────                 | | ...                                |
 |           Oct 1         Jan 1          Apr 1          Jul 1              | | Concentrated Evolving Skies        |
 | Last point Sep 30, 2026. The index is published for the previous day;   | | Booster Box is 52% of your priced  |
-| its line ends Sep 29, 2026. Compares 5 of 6 priced holdings; 1 bought   | | value.                             |
-| before the index starts on Jan 6, 2025.                                  | |                                    |
+| its line ends Sep 29, 2026.                                              | | value.                             |
+|                                                                          | |                                    |
 +--------------------------------------------------------------------------+ +------------------------------------+
 +-----------------------------------------------------------------------------------------------------------------+
 | Holdings (6)                                                                                                     |
@@ -205,6 +205,8 @@ Sample portfolio (after "Explore a sample portfolio"): a note bar, then the full
 
 In both wireframes `[E][D]` are the edit and delete icon buttons, `(clock)` is WP23's `AsOf` stale-price clock, and `#...#` marks the selected segment or the primary button.
 
+When a holding has no index level on its purchase date (bought before the index starts), the chart keeps the "Compare with the Sealed Index" checkbox in place but disabled (so the header does not shift), draws only the value line, and its footnote reads: "No index line: 1 holding was bought on a day the Sealed Index has no level (it starts on Jan 6, 2025), so the two lines would not cover the same purchases. The summary compares the holdings that can be." The summary's "vs Sealed Index" figure is unaffected and keeps its "Compares 5 of 6 priced holdings; 1 bought before the index starts on Jan 6, 2025." line.
+
 Add holding dialog (WP14 `Dialog`; "Paid in" is new, between the product and the quantity and price row):
 
 ```
@@ -230,16 +232,16 @@ The edit dialog has the same "Paid in" control, starting at the lot's currency a
 
 - **Loading** (first load, WP05 `loading`): two flat `Skeleton` bars and a visually hidden "Loading your portfolio…" status. No spinner.
 - **Analytics loading** (holdings shown, analytics pending): summary values are flat skeleton bars; holdings rows show quantity, bought and paid at once and a skeleton in the price, value, P/L, contribution and days-to-exit cells; allocation shows three skeleton bars. The chart renders its value line as soon as history arrives; the index line appears when analytics arrives.
-- **Analytics error**: a warn note at the top of the summary ("We could not load your portfolio figures. Your holdings below are up to date.") with "Try again"; analytics cells show `--`; the rest works. A 401 says "Your session has expired. Please sign in again."
+- **Analytics error**: a warn note at the top of the summary ("We could not load your portfolio figures. Your holdings below are up to date.") with "Try again"; summary values and the holdings' analytics cells show `--` (never a skeleton that never resolves: the holdings views take `analyticsLoading` and show a skeleton only while it is true); allocation says "Allocation is not available right now."; the rest works. A 401 says "Your session has expired. Please sign in again."
 - **Empty**: the empty state above (replaces WP05's one-line "No holdings yet").
 - **Stale price** (withheld, 14 days or more): the row's price, value, P/L and contribution show `--` with a visually hidden "Price withheld. Last priced {date}." and the WP23 `AsOf` clock; the holding is excluded from value, P/L, exit value, allocation and the benchmark; the summary says "{n} of {m} holdings priced". A price 2 to 13 days old shows the clock with its value (desktop: the table-variant clock with its tooltip; phones: an inline "Last priced {date}" line, because a tooltip never shows on touch).
-- **Index unavailable / stale / nothing to compare**: "vs Sealed Index" shows `--` with one sentence (see Copy); the chart hides the toggle when there is no series.
+- **Index unavailable / stale / nothing to compare**: "vs Sealed Index" shows `--` with one sentence (see Copy); the chart keeps the toggle disabled when there is no series, and says why when a holding blocks the line ("No index line: ...").
 - **No FX**: a USD lot with no rate for its purchase date has no CAD cost; CAD totals say "Covers {n} of {m} priced holdings." With no `fx_daily` at all, CAD amounts fall back to USD with the code ("$1,234.00 USD") and the chart says it is in US dollars.
 - **Fee field**: "Saving…", "Saved", or "Not saved. This view uses it until you reload."; an invalid value says "Enter 0 to 50." and is not applied.
 
 ### Copy (all new user-facing strings)
 
-"Market value", "Day change", "Unrealized P/L", "Exit value", "vs Sealed Index", "Currency move", "Contribution", "Days to exit", "Selling fees", "Net of cost:", "{n} of {m} holdings priced", "{n} of {m} repriced", "Covers {n} of {m} priced holdings.", "Your return {+x%}, the same money in the index {+y%}", "Index as of {date}", "Compares {n} of {m} priced holdings; {k} bought before the index starts on {date}.", "The Pokéfin Sealed Index is not available right now.", "The Sealed Index has not been published since {date}.", "None of your priced holdings was bought on or after {date}, when the index starts.", "Same money in the Pokéfin Sealed Index", "Compare with the Sealed Index", "Your holdings", "Last point {date}. The index is published for the previous day; its line ends {date}.", "Bank of Canada rates are unavailable right now, so this chart is in US dollars.", "Allocation", "Set", "Type", "Era", "Other ({n})", "Concentrated", "{product} is {x%} of your priced value.", "{set} products are {x%} of your priced value.", "{n} holdings have no current price and are left out.", "Under 1 week", "1 to 4 weeks", "Over 1 month", "Unknown", "About {n} days of recent TCGplayer sales for the {q} you hold.", "No TCGplayer sales in the last 30 days.", "No recent TCGplayer sales data for this product.", "Paid in", "Price paid per unit ({USD|CAD})", "Kept exactly as you enter it. Pokéfin converts it to US dollars at the Bank of Canada rate of the purchase date to compare it with US Market Prices.", "Costs in this file are in", "Collectr exports costs in the currency your Collectr app shows. Pick CAD if you see C$ there.", "Start with what you own", "Import from Collectr", "Add a product", "Explore a sample portfolio", "The sample uses made-up purchases and generated prices. Nothing is saved.", "Sample portfolio.", "Close the sample", "There is no Bank of Canada rate for that purchase date. Enter the price in USD, or pick another date.", "Selling fees must be between 0% and 50%", "{+x} pts". No em dash, no "live", "real-time", "all-time", "TCGPlayer". Spelling follows the site's existing copy ("Unrealized", as today's summary card writes it). A difference of two returns (vs Sealed Index, contribution) always prints as points through `formatPoints` ("+5.9 pts"), never with `Delta`, which would print it as a percent change ("▲ 5.9%").
+"Market value", "Day change", "Unrealized P/L", "Exit value", "vs Sealed Index", "Currency move", "Contribution", "Days to exit", "Selling fees", "Net of cost:", "{n} of {m} holdings priced", "{n} of {m} repriced", "Covers {n} of {m} priced holdings.", "Your return {+x%}, the same money in the index {+y%}", "Index as of {date}", "Compares {n} of {m} priced holdings; {k} bought before the index starts on {date}.", "The Pokéfin Sealed Index is not available right now.", "The Sealed Index has not been published since {date}.", "None of your priced holdings was bought on or after {date}, when the index starts.", "Same money in the Pokéfin Sealed Index", "Compare with the Sealed Index", "Your holdings", "Last point {date}. The index is published for the previous day; its line ends {date}.", "No index line: {n} {holding was|holdings were} bought on a day the Sealed Index has no level (it starts on {date}), so the two lines would not cover the same purchases. The summary compares the holdings that can be.", "The index line is not drawn on those days.", "Bank of Canada rates are unavailable right now, so this chart is in US dollars.", "Allocation", "Set", "Type", "Era", "Other ({n})", "Allocation is not available right now.", "No holding has a current price, so there is nothing to allocate yet.", "Concentrated", "{product} is {x%} of your priced value.", "{set} products are {x%} of your priced value.", "{n} holdings have no current price and are left out.", "Under 1 week", "1 to 4 weeks", "Over 1 month", "Unknown", "About {n} days of recent TCGplayer sales for the {q} you hold.", "No TCGplayer sales in the last 30 days.", "No recent TCGplayer sales data for this product.", "Paid in", "Price paid per unit ({USD|CAD})", "Kept exactly as you enter it. Pokéfin converts it to US dollars at the Bank of Canada rate of the purchase date to compare it with US Market Prices.", "Costs in this file are in", "Collectr exports costs in the currency your Collectr app shows. Pick CAD if you see C$ there.", "Start with what you own", "Import from Collectr", "Add a product", "Explore a sample portfolio", "The sample uses made-up purchases and generated prices. Nothing is saved.", "Sample portfolio.", "Close the sample", "There is no Bank of Canada rate for that purchase date. Enter the price in USD, or pick another date.", "Selling fees must be between 0% and 50%", "{+x} pts". No em dash, no "live", "real-time", "all-time", "TCGPlayer". Spelling follows the site's existing copy ("Unrealized", as today's summary card writes it). A difference of two returns (vs Sealed Index, contribution) always prints as points through `formatPoints` ("+5.9 pts"), never with `Delta`, which would print it as a percent change ("▲ 5.9%").
 
 ### Accessibility
 
@@ -257,6 +259,8 @@ The edit dialog has the same "Paid in" control, starting at the lot's currency a
 - Recharts stays lazy and loads only when there is history to plot. The sample portfolio (`demo/*`, about 3 kB gz) and the analytics builder load only after "Explore a sample portfolio".
 - The analytics route does two indexed user-table reads (portfolio by `user_id`, holdings by `portfolio_id`); stats, FX and index series are `unstable_cache` hits under WP11's `market-products` tag. The builder is O(holdings × 366): under 10 ms for 1,000 holdings.
 - The trigger adds one primary-key probe of `fx_daily` per CAD write.
+- Request order: the analytics request starts when `GET /api/portfolio` has returned the holdings (it needs the portfolio id and re-runs per holdings change), so summary figures arrive one round trip after the holdings list. Nothing above the fold waits on it except the five summary values, which hold their final height as skeletons (CLS), and the page header and holdings render first (LCP). Verification block 5 step 10 records LCP and CLS for the PR; if LCP regresses past the 2.5 s target, report it rather than moving analytics into `GET /api/portfolio` (that would delay the holdings list for every user).
+- Both holdings views are in the DOM (CSS picks one, WP23 pattern). At WP21's 1,000-holding cap that is about 2,000 rows: acceptable for INP because the desktop rows are memoised (WP18's `SortableTableRowImpl`), a sort only re-orders them, and the phone rows are plain list items; do not add virtualisation in this package.
 
 ## Before you start
 
@@ -323,7 +327,9 @@ grep -n '"/portfolio": {' perf-budgets.json                                     
 ls app/components/ui/Stat.tsx app/components/ui/Delta.tsx app/components/ui/Badge.tsx app/components/ui/SegmentedControl.tsx \
    app/components/ui/DataList.tsx app/components/ui/Skeleton.tsx app/components/ui/Button.tsx app/components/ui/AsOf.tsx \
    app/components/ui/icons.tsx test-utils/axe.ts app/__tests__/uiConventions.baseline.json
-grep -n "export function formatSignedPercent\|export function formatPercent\|export function formatMoney\|export function formatMonthDay\|export function formatDateOnly" app/lib/format.ts   # 5 lines
+grep -n "export const STALE_AFTER_DAYS\|export function daysBetween" app/components/ui/AsOf.tsx   # 2 lines
+grep -n "export function DataList(" app/components/ui/DataList.tsx                   # 1 line (named export, not default)
+grep -n "export function formatSignedPercent\|export function formatPercent\|export function formatMoney\|export function formatMonthDay\|export function formatDateOnly\|export function changeDirection" app/lib/format.ts   # 6 lines
 # WP24
 grep -n "export function metricHref\|export type MetricKey" app/lib/metricDefinitions.ts   # 2 lines
 ls app/components/ui/MetricLabel.tsx app/methodology/MethodologyArticle.tsx
@@ -798,12 +804,23 @@ export interface BenchmarkComparison {
   coveredLots: number;
   pricedLots: number;
   beforeIndexLots: number;
+  /**
+   * Holdings with no index level on their purchase date while the index is
+   * usable. Above 0, benchmarkSeries is null: the chart's value line holds
+   * every lot, so an index line without these lots would not cover the same
+   * purchases. 0 when the index is unavailable or stale.
+   */
+  seriesExcludedLots: number;
   usd: BenchmarkFigures | null;
   /** null when a compared lot has no CAD cost basis or there is no rate for today. */
   cad: BenchmarkFigures | null;
 }
 
-/** usd[i] is the same-money index value on start + i days (USD); null where it cannot be computed. */
+/**
+ * usd[i] is the same-money index value on start + i days (USD); null where it
+ * cannot be computed. Present only when every holding has an index level on
+ * its purchase date (BenchmarkComparison.seriesExcludedLots is 0).
+ */
 export interface BenchmarkSeries {
   start: string;
   usd: (number | null)[];
@@ -1284,6 +1301,7 @@ export function buildPortfolioAnalytics(input: PortfolioAnalyticsInput): Portfol
     coveredLots: covered.length,
     pricedLots: priced,
     beforeIndexLots: lots.filter((l) => l.benchmarkStatus === "before_index").length,
+    seriesExcludedLots: 0,
     usd: null,
     cad: null,
   };
@@ -1309,15 +1327,19 @@ export function buildPortfolioAnalytics(input: PortfolioAnalyticsInput): Portfol
     };
   }
 
-  // Same-money series for the chart: every lot with an index level on its
-  // purchase date, whatever its price today (the value line has the same lots).
+  // Same-money series for the chart. WP10's value line holds every lot from
+  // its purchase date, whatever its price today, so the index line must hold
+  // the same lots: it is built only when EVERY holding has an index level on
+  // its purchase date. Otherwise the gap between the two lines would include
+  // lots the index line never bought, and would mean nothing.
   let benchmarkSeries: BenchmarkSeries | null = null;
   if (indexUsable && lookup !== null) {
     const seriesLots = holdings
       .map((h, i) => ({ start: dayNumber(h.purchase_date), cost: lots[i].costUsd }))
       .map((l) => ({ ...l, level: l.start === null ? null : lookup.levelOn(l.start) }))
       .filter((l): l is { start: number; cost: number; level: number } => l.start !== null && l.level !== null);
-    if (seriesLots.length > 0) {
+    benchmark.seriesExcludedLots = holdings.length - seriesLots.length;
+    if (seriesLots.length > 0 && benchmark.seriesExcludedLots === 0) {
       const start = todayNum - BENCHMARK_SERIES_DAYS;
       const usd: (number | null)[] = [];
       for (let d = start; d <= todayNum; d++) {
@@ -1435,7 +1457,8 @@ export function buildPortfolioAnalytics(input: PortfolioAnalyticsInput): Portfol
  * get_portfolio_history (WP10) and the same-money Sealed Index line from the
  * analytics payload, both in the display currency. CAD uses the Bank of
  * Canada rate of each day (fx_daily), never today's rate; a CAD day without a
- * rate is a gap. Pure: the chart implementation and its tests import it.
+ * rate is a gap. The index line has no point on a partial day (WP36 Design,
+ * decision 10). Pure: the chart implementation and its tests import it.
  */
 import type { Currency } from "../types/market";
 import type { PortfolioHistoryPoint } from "../types/portfolio";
@@ -1496,7 +1519,9 @@ export function buildPortfolioChartModel(
       point.held_products !== undefined &&
       point.priced_products < point.held_products;
     if (isPartial) partialDays += 1;
-    const bench = convert(dateKey, benchUsd);
+    // A partial day's value leaves out a product the index line still holds:
+    // no index point that day, so the two lines always cover the same lots.
+    const bench = isPartial ? null : convert(dateKey, benchUsd);
     if (bench !== null) hasBenchmark = true;
     return {
       dateKey,
@@ -2112,7 +2137,7 @@ Leave the validation above it (the price is still validated when unchanged) and 
 ### Step 14. `app/components/Portfolio/portfolioDisplay.ts` (new): display helpers and the holdings row model
 
 ```ts
-import { formatDateOnly, formatMoney, formatSignedPercent } from "../../lib/format";
+import { changeDirection, formatDateOnly, formatMoney, formatSignedPercent } from "../../lib/format";
 import { EXIT_BAND_LABELS, EXIT_BAND_ORDER } from "../../lib/portfolioExit";
 import { STALE_AFTER_DAYS, daysBetween } from "../ui/AsOf";
 import type { Currency } from "../../types/market";
@@ -2224,6 +2249,27 @@ export function benchmarkCoverageText(b: BenchmarkComparison): string | null {
   return `Compares ${b.coveredLots} of ${b.pricedLots} priced holdings${before}.`;
 }
 
+/**
+ * Why the chart draws no index line while the index itself is usable, or
+ * null (WP36 decision 10: both lines must cover the same purchases).
+ */
+export function benchmarkSeriesNote(b: BenchmarkComparison): string | null {
+  const n = b.seriesExcludedLots;
+  if (n <= 0) return null;
+  const start = b.firstIndexDay ? ` (it starts on ${formatDateOnly(b.firstIndexDay)})` : "";
+  return (
+    `No index line: ${n} ${n === 1 ? "holding was" : "holdings were"} bought on a day the Sealed Index has no level${start}, ` +
+    "so the two lines would not cover the same purchases. The summary compares the holdings that can be."
+  );
+}
+
+/** Text colour for a difference in points: gain/loss tone on the change only, ink-soft when flat or missing. */
+export function pointsTone(value: number | null | undefined): string {
+  if (typeof value !== "number" || !Number.isFinite(value)) return "text-ink-soft";
+  const direction = changeDirection(value);
+  return direction === "up" ? "text-gain-text" : direction === "down" ? "text-loss-text" : "text-ink-soft";
+}
+
 // ---- Holdings rows and sorting ----
 
 export interface HoldingRow {
@@ -2309,7 +2355,8 @@ function analyticsErrorText(err: unknown): string {
   if (err instanceof PortfolioApiError && err.status === 401) {
     return "Your session has expired. Please sign in again.";
   }
-  return "We could not load your portfolio figures.";
+  // The holdings list comes from GET /api/portfolio, which did load.
+  return "We could not load your portfolio figures. Your holdings below are up to date.";
 }
 
 /**
@@ -2464,7 +2511,15 @@ import { exitValueAfterFees } from "../../../lib/portfolioExit";
 import type { Currency } from "../../../types/market";
 import type { PortfolioAnalytics } from "../../../types/portfolioAnalytics";
 import ExitFeeField, { type FeeStatus } from "./ExitFeeField";
-import { CARD, benchmarkCoverageText, benchmarkUnavailableText, formatPoints, money, toCad } from "../portfolioDisplay";
+import {
+  CARD,
+  benchmarkCoverageText,
+  benchmarkUnavailableText,
+  formatPoints,
+  money,
+  pointsTone,
+  toCad,
+} from "../portfolioDisplay";
 
 export interface PortfolioSummaryProps {
   analytics: PortfolioAnalytics | null;
@@ -2531,7 +2586,7 @@ export default function PortfolioSummary({
       {errorText && (
         <div role="alert" className="mb-4 flex flex-wrap items-center gap-3 rounded-control bg-warn-fill px-3 py-2 text-small text-warn-text">
           <WarnIcon className="size-4 shrink-0" />
-          <span className="min-w-0 flex-1">{errorText} Your holdings below are up to date.</span>
+          <span className="min-w-0 flex-1">{errorText}</span>
           {onRetry && (
             <Button variant="secondary" size="sm" onClick={onRetry}>
               Try again
@@ -2596,8 +2651,11 @@ export default function PortfolioSummary({
           delta={
             benchFigures ? (
               // Percentage points, not a percent change: Delta would print "5.9%".
-              // The sign carries the direction (text, never colour alone).
-              <span className="text-small font-medium tabular-nums text-ink-soft">{formatPoints(benchFigures.deltaPts)}</span>
+              // The sign in the text carries the direction; the gain/loss tone
+              // only repeats it (never colour alone).
+              <span className={`text-small font-medium tabular-nums ${pointsTone(benchFigures.deltaPts)}`}>
+                {formatPoints(benchFigures.deltaPts)}
+              </span>
             ) : undefined
           }
           sub={
@@ -2733,9 +2791,10 @@ export default function AllocationPanel({
                 </span>
               </div>
               <div className="mt-1 h-1.5 w-full rounded-control bg-chart-grid" aria-hidden="true">
+                {/* Colour from the token utility; only the width is inline (data-driven). */}
                 <div
-                  className="h-1.5 rounded-control"
-                  style={{ width: `${Math.min(100, Math.max(0, g.sharePct))}%`, background: "var(--pf-chart-line)" }}
+                  className="h-1.5 rounded-control bg-chart-line"
+                  style={{ width: `${Math.min(100, Math.max(0, g.sharePct))}%` }}
                 />
               </div>
             </li>
@@ -2844,6 +2903,12 @@ export interface HoldingsViewProps {
   fxNow: number | null;
   /** analytics.today, so AsOf ages prices against the same day as the server. */
   today: string | null;
+  /**
+   * True while GET /api/portfolio/analytics runs. A row without analytics
+   * shows a skeleton only then; after a failed request it shows "--", so a
+   * cell never waits on a skeleton that cannot resolve.
+   */
+  analyticsLoading: boolean;
   sort: HoldingSort;
   onSortChange: (next: HoldingSort) => void;
   /** Sample portfolio: no links, no edit or delete. */
@@ -2856,12 +2921,19 @@ type Column = SortableColumn<HoldingRow, HoldingSortKey>;
 
 const NUM = "px-3 text-right tabular-nums whitespace-nowrap";
 const CELL_SKELETON = <Skeleton className="ml-auto h-3 w-12" />;
+const CELL_MISSING = (
+  <>
+    <span aria-hidden="true">--</span>
+    <span className="sr-only">Not available</span>
+  </>
+);
 
 export default function HoldingsDesktopTable({
   rows,
   currency,
   fxNow,
   today,
+  analyticsLoading,
   sort,
   onSortChange,
   readOnly = false,
@@ -2869,6 +2941,9 @@ export default function HoldingsDesktopTable({
   onDelete,
 }: HoldingsViewProps) {
   const columns = useMemo<Column[]>(() => {
+    // Analytics cells of a row without its lot: a skeleton while the request
+    // runs, "--" after it failed.
+    const pending = analyticsLoading ? CELL_SKELETON : CELL_MISSING;
     const list: Column[] = [
       {
         id: "product",
@@ -2920,7 +2995,7 @@ export default function HoldingsDesktopTable({
         widthClassName: "w-32",
         cellClassName: NUM,
         cell: (row) => {
-          if (!row.lot) return CELL_SKELETON;
+          if (!row.lot) return pending;
           if (row.lot.priceUsd === null) {
             return (
               <span className="inline-flex items-center justify-end gap-1 text-ink-soft">
@@ -2946,7 +3021,7 @@ export default function HoldingsDesktopTable({
         align: "right",
         widthClassName: "w-28",
         cellClassName: `${NUM} font-semibold text-ink`,
-        cell: (row) => (row.lot ? money(currency, row.lot.valueUsd, row.lot.valueCad) : CELL_SKELETON),
+        cell: (row) => (row.lot ? money(currency, row.lot.valueUsd, row.lot.valueCad) : pending),
       },
       {
         id: "pl",
@@ -2957,7 +3032,7 @@ export default function HoldingsDesktopTable({
         cellClassName: NUM,
         cell: (row) => {
           const lot = row.lot;
-          if (!lot) return CELL_SKELETON;
+          if (!lot) return pending;
           const cad = currency === "CAD" && lot.plCad !== null;
           const pl = money(currency, lot.plUsd, lot.plCad, { signed: true });
           return (
@@ -2985,7 +3060,7 @@ export default function HoldingsDesktopTable({
         cell: (row) =>
           row.lot
             ? formatPoints(currency === "CAD" && row.lot.contributionPctCad !== null ? row.lot.contributionPctCad : row.lot.contributionPctUsd)
-            : CELL_SKELETON,
+            : pending,
       },
       {
         id: "exit",
@@ -3002,7 +3077,7 @@ export default function HoldingsDesktopTable({
               <span className="sr-only">. {exitBandDetail(row.lot)}</span>
             </>
           ) : (
-            CELL_SKELETON
+            pending
           ),
       },
     ];
@@ -3017,7 +3092,7 @@ export default function HoldingsDesktopTable({
       });
     }
     return list;
-  }, [currency, fxNow, today, readOnly, onEdit, onDelete]);
+  }, [currency, fxNow, today, analyticsLoading, readOnly, onEdit, onDelete]);
 
   const sortValue = useMemo(
     () => (row: HoldingRow, key: HoldingSortKey) => holdingSortValue(row, key, currency),
@@ -3076,6 +3151,7 @@ export default function HoldingsPhoneList({
   rows,
   currency,
   today,
+  analyticsLoading,
   sort,
   onSortChange,
   readOnly = false,
@@ -3118,8 +3194,13 @@ export default function HoldingsPhoneList({
                   missingReason={withheldReason(lot)}
                 />
               </>
-            ) : (
+            ) : analyticsLoading ? (
               <Skeleton className="h-3 w-20" />
+            ) : (
+              <span className="text-body text-ink-soft">
+                <span aria-hidden="true">--</span>
+                <span className="sr-only">Not available</span>
+              </span>
             )}
           </span>
         </span>
@@ -3209,6 +3290,7 @@ import { CARD, DEFAULT_HOLDING_SORT, buildHoldingRows, type HoldingSort } from "
 export default function HoldingsTable({
   holdings,
   analytics,
+  analyticsLoading,
   currency,
   readOnly = false,
   onEdit,
@@ -3216,6 +3298,8 @@ export default function HoldingsTable({
 }: {
   holdings: readonly HoldingWithProduct[];
   analytics: PortfolioAnalytics | null;
+  /** usePortfolioAnalytics().loading: skeletons while true, "--" for a row without analytics after it. */
+  analyticsLoading: boolean;
   currency: Currency;
   readOnly?: boolean;
   onEdit?: (holding: HoldingWithProduct) => void;
@@ -3228,6 +3312,7 @@ export default function HoldingsTable({
     currency,
     fxNow: analytics?.fxNow ?? null,
     today: analytics?.today ?? null,
+    analyticsLoading,
     sort,
     onSortChange: setSort,
     readOnly,
@@ -3420,6 +3505,7 @@ export default function PortfolioChartImpl({
         <p className="mt-2 text-caption text-ink-soft">
           {model.partialDays} {model.partialDays === 1 ? "day is" : "days are"} valued from only part of the portfolio.
           Hover for the coverage. Movement across those points reflects what could be priced, not a change in holdings.
+          {showBenchmark && model.hasBenchmark && " The index line is not drawn on those days."}
         </p>
       )}
       {model.cadUnavailable && (
@@ -3483,7 +3569,7 @@ export interface PortfolioChartProps {
   onShowBenchmarkChange: (show: boolean) => void;
   /** analytics.benchmark.indexDay: the last index day, shown under the chart. */
   indexDay: string | null;
-  /** Why some lots are not in the index line, or null. */
+  /** benchmarkSeriesNote(analytics.benchmark): why there is no index line, or null. Shown whatever the toggle says. */
   benchmarkNote: string | null;
   loading?: boolean;
   height?: number;
@@ -3555,36 +3641,38 @@ export default function PortfolioChart({
 
       <div className="mb-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-small text-ink-soft">
         <span className="inline-flex items-center gap-2">
-          <span aria-hidden="true" className="inline-block h-0.5 w-5" style={{ background: "var(--pf-chart-line)" }} />
+          <span aria-hidden="true" className="inline-block h-0.5 w-5 bg-chart-line" />
           Your holdings
         </span>
         {canCompare && showBenchmark && (
           <span className="inline-flex items-center gap-2">
-            <span aria-hidden="true" className="inline-block w-5 border-t-2 border-dashed" style={{ borderColor: "var(--pf-chart-bench)" }} />
+            <span aria-hidden="true" className="inline-block w-5 border-t-2 border-dashed border-chart-bench" />
             Same money in the Pokéfin Sealed Index
           </span>
         )}
-        {canCompare && (
-          <label htmlFor={toggleId} className="ml-auto inline-flex items-center gap-2 pointer-coarse:min-h-11">
-            <input
-              id={toggleId}
-              type="checkbox"
-              checked={showBenchmark}
-              onChange={(event) => onShowBenchmarkChange(event.target.checked)}
-              className="size-4 accent-action"
-            />
-            Compare with the Sealed Index
-          </label>
-        )}
+        {/* Always rendered, disabled without a series, so the header never
+            shifts when the analytics arrive (CLS budget 0.05). */}
+        {/* No opacity on the label: it stays ink-soft text at full contrast (WP14). */}
+        <label htmlFor={toggleId} className="ml-auto inline-flex items-center gap-2 pointer-coarse:min-h-11">
+          <input
+            id={toggleId}
+            type="checkbox"
+            checked={canCompare && showBenchmark}
+            disabled={!canCompare}
+            onChange={(event) => onShowBenchmarkChange(event.target.checked)}
+            className="size-4 accent-action"
+          />
+          Compare with the Sealed Index
+        </label>
       </div>
 
       {body}
 
-      {data.length > 0 && (
+      {(data.length > 0 || benchmarkNote) && (
         <p className="mt-2 text-caption text-ink-soft">
           {last && <>Last point {formatDateOnly(last)}. </>}
           {canCompare && showBenchmark && indexDay && <>The index is published for the previous day; its line ends {formatDateOnly(indexDay)}. </>}
-          {canCompare && showBenchmark && benchmarkNote}
+          {benchmarkNote}
         </p>
       )}
     </section>
@@ -3592,7 +3680,7 @@ export default function PortfolioChart({
 }
 ```
 
-The header is part of the wrapper now, so a range with nothing to plot still shows the range control (the old impl had to duplicate its header for that). WP05's `loading` behaviour is kept: skeleton on a first load, the previous chart dimmed on a reload.
+The header is part of the wrapper now, so a range with nothing to plot still shows the range control (the old impl had to duplicate its header for that). WP05's `loading` behaviour is kept: skeleton on a first load, the previous chart dimmed on a reload. The checkbox is disabled (not hidden) until a series exists, and stays disabled when `benchmarkNote` explains why there is none.
 
 ### Step 20. Empty state and the sample portfolio (new)
 
@@ -3894,7 +3982,7 @@ import AllocationPanel from "../shared/AllocationPanel";
 import PortfolioChart from "../shared/PortfolioChart";
 import PortfolioSummary from "../shared/PortfolioSummary";
 import HoldingsTable from "../cards/HoldingsTable";
-import { benchmarkCoverageText } from "../portfolioDisplay";
+import { benchmarkSeriesNote } from "../portfolioDisplay";
 import { SAMPLE_AS_OF, buildSamplePortfolio } from "./samplePortfolio";
 
 const RANGE_DAYS: Record<PortfolioTimeframe, number> = { "7D": 7, "1M": 30, "3M": 90, "6M": 180, "1Y": 365, ALL: 365 };
@@ -3958,7 +4046,7 @@ export default function PortfolioSampleView({
             showBenchmark={showBenchmark}
             onShowBenchmarkChange={setShowBenchmark}
             indexDay={a.benchmark.indexDay}
-            benchmarkNote={benchmarkCoverageText(a.benchmark)}
+            benchmarkNote={benchmarkSeriesNote(a.benchmark)}
           />
         </div>
         <AllocationPanel
@@ -3969,7 +4057,7 @@ export default function PortfolioSampleView({
           loading={false}
         />
       </div>
-      <HoldingsTable holdings={sample.holdings} analytics={a} currency={currency} readOnly />
+      <HoldingsTable holdings={sample.holdings} analytics={a} analyticsLoading={false} currency={currency} readOnly />
     </div>
   );
 }
@@ -4005,7 +4093,7 @@ import AddHoldingModal from "./cards/AddHoldingModal";
 import EditHoldingModal from "./cards/EditHoldingModal";
 import ImportHoldingsModal from "./cards/ImportHoldingsModal";
 import PortfolioEmptyState from "./PortfolioEmptyState";
-import { benchmarkCoverageText, holdingName } from "./portfolioDisplay";
+import { benchmarkSeriesNote, holdingName } from "./portfolioDisplay";
 import { EMPTY_FX_SERIES } from "../../lib/fx";
 import type { HoldingWithProduct } from "../../types/portfolio";
 
@@ -4166,7 +4254,7 @@ export default function PortfolioDashboard() {
                 showBenchmark={showBenchmark}
                 onShowBenchmarkChange={setShowBenchmark}
                 indexDay={analytics?.benchmark.indexDay ?? null}
-                benchmarkNote={analytics ? benchmarkCoverageText(analytics.benchmark) : null}
+                benchmarkNote={analytics ? benchmarkSeriesNote(analytics.benchmark) : null}
                 loading={historyLoading}
               />
             </div>
@@ -4182,6 +4270,7 @@ export default function PortfolioDashboard() {
           <HoldingsTable
             holdings={holdings}
             analytics={analytics}
+            analyticsLoading={analyticsState.loading}
             currency={currency}
             onEdit={setEditingHolding}
             onDelete={handleDelete}
@@ -4354,6 +4443,11 @@ import { INDEX_LEVEL_MAX_GAP_DAYS, INDEX_STALE_AFTER_DAYS } from "../lib/portfol
                 This is a money-matched comparison: it answers &quot;did my purchases beat buying the index on the
                 same days?&quot;. It is not a time-weighted return.
               </p>
+              <p>
+                On the portfolio chart, both lines always cover the same purchases: the index line is drawn only when
+                every holding has an index level on its purchase date, and not on days valued from only part of the
+                portfolio. Otherwise the gap between the lines would include purchases one of them leaves out.
+              </p>
             </Sub>
             <Sub id="exit-value">
               <p>
@@ -4386,7 +4480,7 @@ If `Section` and `Sub` take their titles from `METHODOLOGY_SECTIONS`/`METHODOLOG
 - Otherwise replace the bullet's text with `Product charts still convert CAD history at the latest rate until they move to the daily rates described under Canadian dollars.` and the comment with `{/* WP31 removes this bullet */}`.
 - If neither the bullet nor the comment exists, change nothing here.
 
-22e. Update WP24's methodology test (`app/methodology/__tests__/MethodologyArticle.test.tsx`): the `#changes` row-count assertion becomes the previous count plus one, and add: `#portfolio` exists, and `#portfolio-benchmark` contains "money-matched" and "not a time-weighted return"; `#exit-value` contains `${EXIT_FEE_DEFAULT_PCT}%`; `#days-to-exit` contains `${CONCENTRATION_THRESHOLD_PCT}%`. Check: `grep -cP '\x{2014}' app/methodology/MethodologyArticle.tsx` prints 0.
+22e. Update WP24's methodology test (`app/methodology/__tests__/MethodologyArticle.test.tsx`): the `#changes` row-count assertion becomes the previous count plus one, and add: `#portfolio` exists, and `#portfolio-benchmark` contains "money-matched", "not a time-weighted return" and "always cover the same purchases"; `#exit-value` contains `${EXIT_FEE_DEFAULT_PCT}%`; `#days-to-exit` contains `${CONCENTRATION_THRESHOLD_PCT}%`. Check: `grep -cP '\x{2014}' app/methodology/MethodologyArticle.tsx` prints 0.
 
 ### Step 23. Conventions baseline, budgets, docs
 
@@ -4449,7 +4543,7 @@ Do not edit the generated file. `purchase_price_native` is `number | null` in th
 - **Do not send the price in the edit dialog when it is unchanged.** That is what keeps a CAD lot (and a 4-decimal Collectr price) exact.
 - **Do not fetch analytics for an empty portfolio** or in the sample view; the sample makes no request at all.
 - **Do not put a link and a button in one element.** Phone rows: the product link is the text block; edit and delete are sibling buttons.
-- **Do not add a pie, a donut or a second colour palette** for allocation; bars use `--pf-chart-line` on the `bg-chart-grid` track.
+- **Do not add a pie, a donut or a second colour palette** for allocation; bars are `bg-chart-line` on the `bg-chart-grid` track (token utilities; only the bar width is an inline style).
 - **Do not remove the `PortfolioTimeframe` "ALL" member**: WP05's hook maps it; only the button goes.
 - **Do not touch `app/portfolio/page.tsx`**: WP34 may be editing it in parallel.
 - **Do not record a sale or realised P/L.** Out of scope (deferred).
@@ -5023,8 +5117,18 @@ describe("buildPortfolioAnalytics", () => {
     expect(a.benchmark.cad!.value).toBeCloseTo(420 * 1.38);
   });
 
+  it("draws no index line when a holding has no index level on its purchase date", () => {
+    // Lot 14 predates the index: the value line holds it, an index line could not.
+    expect(a.benchmarkSeries).toBeNull();
+    expect(a.benchmark.seriesExcludedLots).toBe(1);
+    // The summary comparison is unaffected.
+    expect(a.benchmark.status).toBe("ok");
+  });
+
   it("builds the same-money series from each purchase date, ending on the index's last day", () => {
-    const s = a.benchmarkSeries!;
+    const covered = buildPortfolioAnalytics({ today: "2026-09-30", exitFeePct: 15, holdings: holdings.slice(0, 3), stats, fx, index });
+    expect(covered.benchmark.seriesExcludedLots).toBe(0);
+    const s = covered.benchmarkSeries!;
     const at = (day: string) => s.usd[(Date.parse(day) - Date.parse(s.start)) / DAY];
     expect(s.usd).toHaveLength(366);
     expect(at("2026-01-04")).toBeNull();
@@ -5058,7 +5162,12 @@ describe("buildPortfolioAnalytics", () => {
 
   it("withholds the benchmark when the index is stale or missing", () => {
     const stale = buildPortfolioAnalytics({ today: "2026-10-20", exitFeePct: 15, holdings, stats, fx, index });
-    expect([stale.benchmark.status, stale.benchmark.reason, stale.benchmarkSeries]).toEqual(["unavailable", "index_stale", null]);
+    expect([stale.benchmark.status, stale.benchmark.reason, stale.benchmarkSeries, stale.benchmark.seriesExcludedLots]).toEqual([
+      "unavailable",
+      "index_stale",
+      null,
+      0,
+    ]);
     const missing = buildPortfolioAnalytics({ today: "2026-09-30", exitFeePct: 15, holdings, stats, fx, index: { ...index, points: null } });
     expect(missing.benchmark.reason).toBe("index_unavailable");
     expect(missing.lots.every((l) => l.benchmarkStatus === "index_unavailable")).toBe(true);
@@ -5098,8 +5207,9 @@ describe("buildPortfolioAnalytics", () => {
 
 ### 5. `frontend/app/lib/__tests__/portfolioChart.test.ts` (new, node)
 
-Build `fx` and the benchmark series exactly as in Tests 3 (reuse the same constants; copy them, do not import from another test file). With `hist = [{ date: "2026-03-01", value: 300, priced_products: 2, held_products: 2 }, { date: "2026-03-02", value: 420, priced_products: 2, held_products: 3 }, { date: "2026-09-30", value: 570, priced_products: 3, held_products: 3 }]`:
-- `buildPortfolioChartModel(hist, a.benchmarkSeries, fx, "CAD")`: row values `300 × 1.4` and `420 × 1.35` (dated rates, not today's 1.38); row 2's benchmark is `(200 × L(Mar 2) / L(Jan 5) + 100 + 80 × L(Mar 2) / L(Feb 1)) × 1.35`; row 3's benchmark is null (after the index's last day); `partialDays` 1; `currency` "CAD"; `hasBenchmark` true.
+Build `fx`, `points`, `index`, `stats` and the holdings exactly as in Tests 3 (copy them, do not import from another test file), and the series from the covered holdings only: `const series = buildPortfolioAnalytics({ today: "2026-09-30", exitFeePct: 15, holdings: holdings.slice(0, 3), stats, fx, index }).benchmarkSeries!` (the full fixture's series is null because of lot 14). With `hist = [{ date: "2026-03-01", value: 300, priced_products: 2, held_products: 2 }, { date: "2026-03-02", value: 420, priced_products: 2, held_products: 3 }, { date: "2026-09-30", value: 570, priced_products: 3, held_products: 3 }]`:
+- `buildPortfolioChartModel(hist, series, fx, "CAD")`: row values `300 × 1.4` and `420 × 1.35` (dated rates, not today's 1.38); row 1's benchmark is `(200 × L(Mar 1) / L(Jan 5) + 80 × L(Mar 1) / L(Feb 1)) × 1.4`; row 2's benchmark is null (a partial day: 2 of 3 products priced); row 3's benchmark is null (after the index's last day); `partialDays` 1; `currency` "CAD"; `hasBenchmark` true.
+- The same `hist` with row 2 changed to `priced_products: 3`: row 2's benchmark is `(200 × L(Mar 2) / L(Jan 5) + 100 + 80 × L(Mar 2) / L(Feb 1)) × 1.35` and `partialDays` 0.
 - With `EMPTY_FX_SERIES` and "CAD": `currency` "USD", `cadUnavailable` true, values unconverted (300).
 - With "USD": values unconverted and `benchmark` in USD.
 - With `benchmark` null: every row's `benchmark` is null and `hasBenchmark` false.
@@ -5141,7 +5251,7 @@ Mock the Supabase client the way WP05's `portfolioRepo.test.ts` does, and mock `
 - Deterministic: `JSON.stringify(buildSamplePortfolio(15))` equals `JSON.stringify(s)`.
 - `s.history` has 366 points from "2025-09-30" to "2026-09-30"; the first non-null value is at index 45 (the first purchase, Nov 14, 2025).
 - `s.analytics.totals.valueUsd` ≈ 3116.42 (`toBeCloseTo(3116.42, 2)`), `totals.valueCad` ≈ 4342.73, `fxNow` 1.3935, `totals.usd.cost` ≈ 2459.22, `totals.usd.plPct` ≈ 26.7 (1 decimal), `totals.cad.pl` ≈ 982.55, `totals.cad.market` ≈ 900.09, `totals.cad.fx` ≈ 82.46.
-- `benchmark.status` "ok", `coveredLots` 6, `usd.returnPct` ≈ 26.7, `usd.benchmarkReturnPct` ≈ 20.9, `usd.deltaPts` ≈ 5.9.
+- `benchmark.status` "ok", `coveredLots` 6, `seriesExcludedLots` 0 and `benchmarkSeries` not null (every sample lot is bought after the sample index starts, so the chart shows the index line), `usd.returnPct` ≈ 26.7, `usd.benchmarkReturnPct` ≈ 20.9, `usd.deltaPts` ≈ 5.9.
 - `concentration` is one product flag, "Evolving Skies Booster Box", share ≈ 52.4.
 - The bands are, in holding order, `["1_4w", "under_1w", "under_1w", "over_1m", "under_1w", "under_1w"]`.
 - Every holding has a negative `product_id` and `portfolio_id` -1.
@@ -5161,12 +5271,13 @@ Delete the `AllocationTooltip` import and cases (step 17c). Replace the `Portfol
 
 Build analytics for the components with `buildPortfolioAnalytics` and the Tests 3 fixtures: copy them into `frontend/test-utils/portfolioAnalyticsFixture.ts` (outside `app/` and outside any `__tests__` folder, so Jest does not run it as a suite and Next never bundles it), exporting `fx`, `points`, `index`, `stats`, `holdings` and `analytics` (the Tests 3 call), and import it as `@/test-utils/portfolioAnalyticsFixture`. Or use `buildSamplePortfolio(15)`. Any suite that renders the holdings views with links (`HoldingsTable`, the dashboard) mocks `next/navigation` with `useRouter: () => ({ prefetch: jest.fn(), push: jest.fn() })`, because WP11's `IntentLink` calls `useRouter()` and jsdom has no app router; keep the real `IntentLink` so the link assertions test real anchors.
 
-- `PortfolioSummary.test.tsx`: in USD shows "$570.00" market value, "3 of 4 holdings priced", the P/L with a `Delta`, "Selling fees" with value 15, "Index as of Sep 29, 2026", the vs Sealed Index difference as the text "+16.4 pts" (and no element with `data-direction` inside that figure: it is points, not a `Delta` percent) and "Compares 2 of 3 priced holdings; 1 bought before the index starts on Dec 1, 2025."; in CAD shows the CAD market value and "Market" and "Currency move" lines; `loading` with `analytics={null}` renders a skeleton in each of the five values (plus the sub-line skeletons under four of them) and no figure, and the fee field is already there; `errorText` renders the alert and "Try again" calls `onRetry`; a stale-index analytics (today "2026-10-20") shows "The Sealed Index has not been published since Sep 29, 2026."; typing 12.5 in the fee field and pressing Enter calls `onExitFeeCommit(12.5)` once and the exit value updates; typing 60 and blurring shows "Enter 0 to 50." and does not call it.
-- `HoldingsTable.test.tsx` (replace WP05/WP15/WP17's file): the desktop table has the ten column headers (Product, Bought, Qty, Paid (each), Price, Value, P/L, Contribution, Days to exit, Actions); the withheld row's price cell has the visually hidden "Price withheld. Last priced Sep 1, 2026." and a `time` with `dateTime="2026-09-01"`; lot 11's row shows "+$100.00", "1.5"-day band "Under 1 week" with the detail text "About 2 days of recent TCGplayer sales for the 3 you hold." in its `title`, and its contribution in points; with `analytics={null}` analytics cells are skeletons and quantity, bought and paid show; clicking the "Days to exit" header sorts fastest first with the unknown band last; the phone list's sort select has the six options and its order button flips the label; in the phone list (`within(getByRole("list", { name: "Your holdings" }))`) the withheld row shows the inline "Last priced Sep 1" text and the rows priced on Sep 29 (today Sep 30) show no "as of" or "Last priced" text; "Edit {name}" and "Delete {name}" call `onEdit(holding)` and `onDelete(id)` (use `getAllByRole(...)[0]`: both views are in the DOM in jsdom); `readOnly` renders no links and no Edit or Delete buttons; a CAD lot viewed in USD shows "in CAD:" under its P/L.
+- `PortfolioSummary.test.tsx`: in USD shows "$570.00" market value, "3 of 4 holdings priced", the P/L with a `Delta`, "Selling fees" with value 15, "Index as of Sep 29, 2026", the vs Sealed Index difference as the text "+16.4 pts" with the class `text-gain-text` (and no element with `data-direction` inside that figure: it is points, not a `Delta` percent) and "Compares 2 of 3 priced holdings; 1 bought before the index starts on Dec 1, 2025."; in CAD shows the CAD market value and "Market" and "Currency move" lines; `loading` with `analytics={null}` renders a skeleton in each of the five values (plus the sub-line skeletons under four of them) and no figure, and the fee field is already there; `errorText` renders the alert and "Try again" calls `onRetry`; a stale-index analytics (today "2026-10-20") shows "The Sealed Index has not been published since Sep 29, 2026."; typing 12.5 in the fee field and pressing Enter calls `onExitFeeCommit(12.5)` once and the exit value updates; typing 60 and blurring shows "Enter 0 to 50." and does not call it.
+- `HoldingsTable.test.tsx` (replace WP05/WP15/WP17's file): the desktop table has the ten column headers (Product, Bought, Qty, Paid (each), Price, Value, P/L, Contribution, Days to exit, Actions); the withheld row's price cell has the visually hidden "Price withheld. Last priced Sep 1, 2026." and a `time` with `dateTime="2026-09-01"`; lot 11's row shows "+$100.00", "1.5"-day band "Under 1 week" with the detail text "About 2 days of recent TCGplayer sales for the 3 you hold." in its `title`, and its contribution in points; with `analytics={null}` and `analyticsLoading` true the analytics cells are skeletons and quantity, bought and paid show; with `analytics={null}` and `analyticsLoading` false (a failed request) they show `--` with the visually hidden "Not available" and no skeleton remains (`container.querySelectorAll('[aria-hidden="true"].bg-line')` is empty); clicking the "Days to exit" header sorts fastest first with the unknown band last; the phone list's sort select has the six options and its order button flips the label; in the phone list (`within(getByRole("list", { name: "Your holdings" }))`) the withheld row shows the inline "Last priced Sep 1" text and the rows priced on Sep 29 (today Sep 30) show no "as of" or "Last priced" text; "Edit {name}" and "Delete {name}" call `onEdit(holding)` and `onDelete(id)` (use `getAllByRole(...)[0]`: both views are in the DOM in jsdom); `readOnly` renders no links and no Edit or Delete buttons; a CAD lot viewed in USD shows "in CAD:" under its P/L.
 - `AllocationPanel.test.tsx`: "Set" selected by default lists set groups with share text; choosing "Era" (click the radio) lists eras; nine groups fold into six plus "Other (3)"; the flag text "Set 1 Booster Box is 79% of your priced value." appears with the "Concentrated" badge (the Tests 3 fixture); "1 holding has no current price and is left out."; `allocation={null}` with `loading` shows skeletons, without it shows "Allocation is not available right now.".
+- `PortfolioChart.test.tsx` (new): `jest.mock("next/dynamic", () => () => function ChartStub() { return <div data-testid="chart-impl" />; })`. With a two-point `data`, `benchmark` null and `benchmarkNote` "No index line: 1 holding was bought ...": the checkbox "Compare with the Sealed Index" is present and disabled, no legend entry "Same money in the Pokéfin Sealed Index", and the note text is shown. With a series and `showBenchmark` true: the checkbox is enabled and checked, the legend entry shows, the footnote has "its line ends Sep 29, 2026" for `indexDay` "2026-09-29", and unticking calls `onShowBenchmarkChange(false)`. The range radiogroup has the five options 7D to 1Y and no "ALL"; `timeframe="ALL"` renders 1Y as checked. With `data` empty and `loading` false: "No historical data available yet" and the header controls are still there.
 - `PortfolioEmptyState.test.tsx`: the heading "Start with what you own"; the three buttons call `onImport`, `onAdd`, `onSample`; "Import from Collectr" is the primary button (it has the `bg-action` class).
 - `PortfolioSampleView.test.tsx`: mock `../shared/PortfolioChart` to a stub; `global.fetch = jest.fn()`; renders the note starting "Sample portfolio." and "Sep 29, 2026"; the holdings show "Evolving Skies Booster Box" with no link and no "Edit" button; `fetch` was never called; "Close the sample" calls `onExit`; "Import from Collectr" calls `onImport`.
-- `usePortfolioAnalytics.test.tsx` (`renderHook`): no fetch while `portfolioId` is null or holdings are empty; one fetch for a holdings array; a new array aborts the first request (its signal is aborted) and fetches again; while the second request runs, `analytics` is still the first result and `loading` is true; a rejection gives `errorText` "We could not load your portfolio figures." and `retry()` fetches again; a 401 `PortfolioApiError` gives the session text.
+- `usePortfolioAnalytics.test.tsx` (`renderHook`): no fetch while `portfolioId` is null or holdings are empty; one fetch for a holdings array; a new array aborts the first request (its signal is aborted) and fetches again; while the second request runs, `analytics` is still the first result and `loading` is true; a rejection gives `errorText` "We could not load your portfolio figures. Your holdings below are up to date." and `retry()` fetches again; a 401 `PortfolioApiError` gives the session text.
 - `AddHoldingModal.test.tsx` (update WP05/WP31's file; mock `../../../context/CurrencyContext` `useCurrency` to `{ currency: "CAD", exchangeRate: 1.4, ... }`): "Paid in" starts at CAD; selecting a product priced $100 pre-fills "140.00" and the label reads "Price paid per unit (CAD)"; switching to USD re-fills "100.00"; after typing "95" switching back to CAD keeps "95"; submitting sends `purchase_currency: "CAD"`, `purchase_price_native: 140`, `purchase_price_usd: 140`; a second submit with the same values reuses the idempotency key, and switching currency mints a new one. If WP31 landed: WP31's `initialProductId` case (product at `usd_price: 59.99`) now expects "83.99" in the price field (59.99 × 1.4, step 12g) with "Paid in" on CAD; rewrite that one expectation, nothing else in WP31's cases.
 - `PortfolioModals.a11y.test.tsx` (WP14's file; update): the add and edit dialogs' price label is now "Price paid per unit (CAD)" or "(USD)". Replace each `getByLabelText("Purchase Price (USD)")` with `getByLabelText(/^Price paid per unit/)`. The file does not mock `CurrencyContext`, so `useCurrency()` returns WP20's fallback (`DEFAULT_CURRENCY` "CAD", `DEFAULT_EXCHANGE_RATE`): in the add pre-fill case the expected value becomes `Number((100 * DEFAULT_EXCHANGE_RATE).toFixed(2))` (import `DEFAULT_EXCHANGE_RATE` from `app/lib/currency.ts`); the edit fixture has no `purchase_currency`, so it stays USD and "12.50". Every other assertion and the axe check stay as they are.
 - `EditHoldingModal.test.tsx` (new or update): a CAD holding with `purchase_price_native: 129.99` shows CAD checked and "129.99"; saving after changing only the quantity sends `{ quantity, purchase_date, notes }` with no `purchase_currency` and no `purchase_price_native`; changing the price to 130 sends `purchase_currency: "CAD", purchase_price_native: 130`; switching to USD sends `purchase_currency: "USD"`; a USD holding stored at `33.333333` shows "33.33" and an untouched save sends no price.
@@ -5231,7 +5342,7 @@ Record `/portfolio` JS (gz) on master and on the branch; expect roughly +6 to +8
 
 Block 5, manual (`pnpm dev` against the stub for layout, then the preview deploy with a real account for data):
 
-1. 1440 px, signed in with holdings: the summary shows five figures with "?" links that open the right `/methodology#...` anchors; the chart shows the solid value line and the dashed index line with the legend; unticking "Compare with the Sealed Index" hides it; the range control has no "ALL".
+1. 1440 px, signed in with holdings: the summary shows five figures with "?" links that open the right `/methodology#...` anchors; the chart shows the solid value line and the dashed index line with the legend; unticking "Compare with the Sealed Index" hides it; the range control has no "ALL". Then add a holding dated before the index's first day (`SELECT min(day) FROM public.market_index_daily WHERE index_code = 'sealed';`): the index line disappears, the checkbox is disabled, the footnote starts "No index line: 1 holding was bought", and the summary's vs Sealed Index figure still shows with its "Compares ..." line. Delete that holding again.
 2. Header toggle to CAD: market value, P/L, exit value and the benchmark switch to C$; the P/L shows "Market ... · Currency move ..."; the chart's CAD values on an old day differ from USD × today's rate (dated rates). Toggle back to USD.
 3. Add a holding: "Paid in" starts at CAD; pick a product, the price pre-fills in CAD; enter C$129.99 dated last Sunday; save. Network: `POST /api/portfolio/holdings` sends `purchase_currency: "CAD", purchase_price_native: 129.99`; the response holding has `purchase_price_usd` = 129.99 ÷ that Sunday's carried Friday rate. Edit it, change only the quantity, save: the PATCH body has no price; reopen: still C$129.99, CAD.
 4. Set selling fees to 12.5, press Enter: "Saved"; reload: 12.5 persists; the exit value equals market value × 0.875.
@@ -5240,7 +5351,7 @@ Block 5, manual (`pnpm dev` against the stub for layout, then the preview deploy
 7. 390 x 844 (DevTools device mode, touch): no horizontal scroll; the summary is two columns with the index figure full width; the range control fills the width; holdings are two-line rows with Edit and Delete 44 px buttons; the sort select does not zoom on focus; the fee input is 44 px tall.
 8. Keyboard only: Tab through the summary links, the fee field (Enter commits), the range radios (arrows), the checkbox, Group by radios, the table headers (Enter sorts, `aria-sort` changes), Edit and Delete; focus rings are visible.
 9. Account page, "Export my data": every holding has `purchase_currency` and `purchase_price_native`; the portfolio has `exit_fee_pct`; the `watchlist` key is still there if WP34 merged.
-10. Layout stability, 1440 x 900, CPU 4x slowdown, a portfolio of 6 or more holdings: DevTools Performance, record a reload. The layout shifts after the analytics response (Experience track) sum to under 0.05, the `/portfolio` CLS budget (WP22). If they do not, the summary's sub-line skeletons no longer match the loaded sub-lines: fix the skeleton, not the budget. Record the number in the PR.
+10. Layout stability, 1440 x 900, CPU 4x slowdown, a portfolio of 6 or more holdings: DevTools Performance, record a reload. The layout shifts after the analytics response (Experience track) sum to under 0.05, the `/portfolio` CLS budget (WP22). If they do not, the summary's sub-line skeletons no longer match the loaded sub-lines: fix the skeleton, not the budget. Record the number in the PR, with the LCP of the same reload (target 2.5 s, `01-PRODUCT-DIRECTION.md` budgets) and its element.
 11. Add a CAD holding dated before the first Bank of Canada rate in `fx_daily` (`SELECT min(day) FROM public.fx_daily;`, for example 2016-06-01 after Owner action 3): the dialog shows "There is no Bank of Canada rate for that purchase date. Enter the price in USD, or pick another date." and nothing is saved.
 
 ## Owner actions
@@ -5263,7 +5374,8 @@ Block 5, manual (`pnpm dev` against the stub for layout, then the preview deploy
 - [ ] `PATCH /api/portfolio` stores `exit_fee_pct` in [0, 50] with CSRF and size gates; the summary's fee field applies at once and persists across reloads.
 - [ ] The benchmark is money-matched (Tests 3 "invests each lot's cost ... on its own purchase date") and labelled "Same money in the Pokéfin Sealed Index"; it is withheld with a reason when the index is stale or missing.
 - [ ] CAD cost uses the purchase-date rate from `fx_daily`, CAD P/L = market move + currency move exactly, and the portfolio chart converts CAD by date; `/methodology#limits` no longer says portfolio charts use the latest rate.
-- [ ] The summary shows value, day change, unrealized P/L, exit value after the editable fee, and vs Sealed Index in percentage points ("+5.9 pts", never a `Delta` percent); the chart overlays the index line; the holdings table has P/L contribution, days to exit and the `AsOf` glyph on desktop and the two-line list on phones; allocation by set, type and era with flags.
+- [ ] The summary shows value, day change, unrealized P/L, exit value after the editable fee, and vs Sealed Index in percentage points ("+5.9 pts", never a `Delta` percent); the chart overlays the index line only when both lines cover the same purchases (no series when a holding has no index level on its purchase date, no index point on a partial day; Tests 3 and 5), with the toggle disabled and the reason shown otherwise; the holdings table has P/L contribution, days to exit and the `AsOf` glyph on desktop and the two-line list on phones; allocation by set, type and era with flags.
+- [ ] A failed analytics request leaves no skeleton on screen: summary values and holdings analytics cells show `--`, the alert offers "Try again" (Tests 12).
 - [ ] The add and edit dialogs have "Paid in"; the Collectr import preview has "Costs in this file are in".
 - [ ] An empty portfolio shows Import from Collectr (primary), Add a product, and Explore a sample portfolio; the sample makes no request, saves nothing and is read-only.
 - [ ] `/methodology` has `#portfolio` with its five sub-anchors, the version is bumped with a change-log row, and every new `MetricLabel` key is defined.
@@ -5344,7 +5456,7 @@ PR body:
 - Route contract (GET analytics, PATCH portfolio, the currency fields on holding writes, the PF001 400).
 - Verification outputs: `verify_migration.py` stderr, the replay harness's last line, pytest summaries with and without `POKEFIN_TEST_DATABASE_URL`, `tsc` (phase A errors listed, phase B clean), lint, Jest counts before and after, the `perf:budget` rows for `/portfolio` and the largest lazy chunk on master and on the branch, the guard greps of block 3.
 - Soft dependencies: whether WP31 (`?add=`), WP34 (tabs, 0038) and WP35 (0039) were present, and what step 22d did with the `#limits` bullet.
-- Known limits and follow-ups: realised P/L needs a sale model (deferred); the benchmark is money-matched, not time-weighted; days to exit assumes the whole market's pace (an estimate of depth); CAD purchases dated before the first Bank of Canada rate are refused until Owner action 3; `portfolio_lots` still has no reader or writer; WP32's home strip uses the header's latest rate for CAD while `/portfolio` uses `fx_daily` (same Bank of Canada rate on most days).
+- Known limits and follow-ups: realised P/L needs a sale model (deferred); the benchmark is money-matched, not time-weighted; days to exit assumes the whole market's pace (an estimate of depth); CAD purchases dated before the first Bank of Canada rate are refused until Owner action 3; `portfolio_lots` still has no reader or writer; holdings stored before WP36 are all USD, so a Canadian who imported CAD costs earlier must switch each such lot to CAD in the edit dialog (a bulk "these were in CAD" action is a follow-up); WP32's home strip uses the header's latest rate for CAD while `/portfolio` uses `fx_daily` (same Bank of Canada rate on most days).
 - Owner actions 1 to 6 as a checklist.
 
 End the PR description with the attribution lines the session's system reminder specifies.

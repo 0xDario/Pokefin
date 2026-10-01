@@ -3,7 +3,7 @@
 - **Goal**: a collector opens `/sets/<set-name>` and sees, for that set, every tracked sealed product with its dated Market Price, 30D and 1Y change, units sold and a baked 1Y sparkline, the set's index chart (or a median line when the set has no index), set-level units sold and listings, a plain-language summary built from the numbers, and links to the previous and next set. `/sets` compares every set on one server-rendered, sortable table with three column presets (Performance, Risk, Liquidity) and a risk/return chart. A product or set link pasted into Discord, X, iMessage or Reddit previews a card that states the TCGplayer day it describes, and a stale product's card says "No current price".
 - **Why now / value**: set pages are signature feature 9 (`01-PRODUCT-DIRECTION.md` §5) and the main search entry point the site lacks: people search set names, and today `/stats` is a 1,680 px wide table with no set pages, no links from rows and an "Invest Score" label (`research/ui-audit.md` top-10 item 6; `research/trust-seo-brand.md` §11.1 to §11.4). Every input now exists: WP29's set indices, WP25's daily stats, WP26's baked sparklines, WP24's labels and JSON-LD helpers, WP31's quote model for the share card. It closes Track 2.
 - **Effort**: L, about 16 hours (migration and DB tests 2 h, set data layer 2.5 h, `/sets` 3 h, set page 3 h, product page, nav, footer, sitemap and redirects 1.5 h, share cards 2 h, perf and smoke wiring 1 h, tests and verification 1 h). Plus about 30 minutes of owner time.
-- **Depends on**: WP13 (`app/lib/site.ts`, `sitemap.ts`, the `redirects()` block in `next.config.ts`, `productMeta.ts` with `buildProductMetadata`, `getProductLabel`, `productPath`, `parseProductId`, `NotFoundPanel`), WP21 (`scripts/db/replay_migrations.sh`, `verify_migration.py`, CI job "Database replay and Python tests", `pokefin_scraper`), WP22 (`perf-budgets.json`, `scripts/fixtures/perf.mjs`, `perf-fixture.test.mjs`, `pnpm perf:budget`, `prod-smoke-lib.mjs`, `prod-smoke.mjs`, `prod-confirm.mjs`), WP23 (`PageHeader`, `ProvenanceLine`, `AsOf`, `Stat`, `Delta`, `Badge`, `DataList`/`DataListRow`, `EmptyState`, `Skeleton`, `buttonClasses`, tokens, `format.ts` percent helpers, the conventions ratchet), WP24 (`MetricLabel`, `DecisionNote`, `PROVENANCE_SENTENCE`, `metricDefinitions.ts`, `setAnalytics.ts` with `formatCompositePercentile`, `jsonLd.ts` with `serializeJsonLd` and `buildBreadcrumbJsonLd`, `methodology.ts`, `MethodologyArticle.tsx`, the `/stats` label work this package moves), WP26 (`getCachedSparklines`, `sparklineFor`, `pickSparklines`, `decodeSparkline`, `MiniSparkline`, `forbiddenChunks`, `PUBLIC_ROUTE_CLIENT_FILES`), WP29 (`getCachedIndexSummary`, `getCachedIndexSeries`, `currentSummaries`, `sliceIndexRange`, `addDaysToKey`, `utcTodayKey`, `INDEX_RULES`, `IndexChart`, `niceStep`, the `set-<sets.id>` index codes and their perf fixture), WP31 (`buildQuote`, `todayUtcKey` in `productModel.ts`, the new product page composition, `SiblingList.tsx`). Through them: WP07 (`format.ts`), WP11 (`cacheTags.ts`, `DAILY_BACKSTOP_SECONDS`, ISR with empty `generateStaticParams`), WP20 (`pnpm types:db`, `app/types/market.ts`, async root layout), WP25 (`getCachedProductStats`, `fetchAllRows`, `product_daily_stats`, `vol_weekly_52w`). Soft, each with a default in Before you start: WP27 (`navConfig.ts`, `FOOTER_BROWSE`, `setSearchHref`, `PokefinMark`), WP30 (`IntentLink`, created by WP31 when missing), WP32 (`app/components/Price.tsx`), WP33 (`REDIRECT_CHECKS` and `judgeRedirect` in `prod-smoke-lib.mjs`).
+- **Depends on**: WP13 (`app/lib/site.ts`, `sitemap.ts`, the `redirects()` block in `next.config.ts`, `productMeta.ts` with `buildProductMetadata`, `getProductLabel`, `productPath`, `parseProductId`, `NotFoundPanel`), WP21 (`scripts/db/replay_migrations.sh`, `verify_migration.py`, CI job "Database replay and Python tests", `pokefin_scraper`), WP22 (`perf-budgets.json`, `scripts/fixtures/perf.mjs`, `perf-fixture.test.mjs`, `pnpm perf:budget`, `prod-smoke-lib.mjs`, `prod-smoke.mjs`, `prod-confirm.mjs`), WP23 (`PageHeader`, `ProvenanceLine`, `AsOf`, `Stat`, `Delta`, `Badge`, `DataList`/`DataListRow`, `EmptyState`, `Skeleton`, `buttonClasses`, tokens, `format.ts` percent helpers, the conventions ratchet), WP24 (`MetricLabel`, `DecisionNote`, `PROVENANCE_SENTENCE`, `metricDefinitions.ts`, `setAnalytics.ts` with `formatCompositePercentile`, `jsonLd.ts` with `serializeJsonLd` and `buildBreadcrumbJsonLd`, `methodology.ts`, `MethodologyArticle.tsx`, the `/stats` label work this package moves), WP26 (`getCachedSparklines`, `sparklineFor`, `pickSparklines`, `decodeSparkline`, `MiniSparkline`, `forbiddenChunks`, `PUBLIC_ROUTE_CLIENT_FILES`), WP29 (`getCachedIndexSummary`, `getCachedIndexSeries`, `currentSummaries`, `sliceIndexRange`, `addDaysToKey`, `utcTodayKey`, `INDEX_RULES`, `IndexChart`, `niceStep`, the `set-<sets.id>` index codes and their perf fixture), WP31 (`buildQuote`, `todayUtcKey` in `productModel.ts`, the new product page composition, `SiblingList.tsx`). Through them: WP07 (`format.ts`), WP11 (`cacheTags.ts`, `DAILY_BACKSTOP_SECONDS`, ISR with empty `generateStaticParams`), WP20 (`pnpm types:db`, `app/types/market.ts`, async root layout), WP25 (`getCachedProductStats`, `fetchAllRows`, `product_daily_stats`, `vol_weekly_52w`). Soft, each with a default in Before you start: WP27 (`navConfig.ts`, `FOOTER_BROWSE`, `setSearchHref`, `PokefinMark`), `IntentLink` (WP11 step 13a; WP30 step 1 recreates it when missing), WP32 (`app/components/Price.tsx`), WP33 (`REDIRECT_CHECKS` and `judgeRedirect` in `prod-smoke-lib.mjs`).
 - **Unblocks**: nothing in Track 2 (last package). Deferred next-wave items build on it: type and era hubs (`/sealed/[slug]`, `/eras/[slug]`) reuse `product_types.slug` and `generations.slug` from 0041 and the hub components, editorial guides link set hubs.
 - **Placement**: last package of Track 2, after WP31 (product header data and breadcrumb location) and WP29 (set indices). It reserves migration **0041** and keeps that number if it merges out of order. Its redirect change supersedes WP13's `/stats` target: `/stats` and `/analytics` each answer one 308 to `/sets`.
 - **Suggested branch name**: `remediation/wp37-sets-section-and-share-cards`
@@ -155,7 +155,7 @@ Phone, 390 px (16 px gutters): the same header, then the preset control full wid
 
 States:
 - **Loading**: none of its own (dynamic page, cached reads; a `loading.tsx` would flash a skeleton on every sort click).
-- **Error** (`getCachedSetDirectory` failed, `loadSetHubs` returns null): `EmptyState` h2 "Sets could not be loaded", "This is usually temporary. Reload the page in a minute.", a secondary "Reload" link to the same URL. Never an empty table.
+- **Error** (`getCachedSetDirectory` failed so `loadSetHubs` returns null, or the summaries read rejected): `EmptyState` h2 "Sets could not be loaded", "This is usually temporary. Reload the page in a minute.", a secondary "Reload" link to the same URL. Never an empty table.
 - **Empty** (no set has an active product): `EmptyState` "No sets yet", "Sets appear once their products are priced."
 - **Stale data**: `AsOf` turns warn with the clock icon at 2 or more days (WP23); withheld products drop out of every median upstream.
 - **Missing values**: `--` with sr-only "Not available"; missing values sort last in both directions.
@@ -218,7 +218,8 @@ States:
 - **Renamed or duplicate-name slug**: 308 to the stored slug.
 - **Directory read failure**: the page throws, so ISR keeps serving the last good page (never caches a 404 for a real set).
 - **Withheld product**: price `--` with sr-only "No current price", changes `--` with "Price withheld", sparkline "No history" (WP26 never bakes a line for a withheld price); counted in summary sentence 5.
-- **Aging price** (2 to 13 days): `AsOf` table variant clock icon beside the price (desktop), the price still shown.
+- **Aging price** (2 to 13 days): the price is still shown; desktop puts the `AsOf` table-variant clock icon beside it, phones add the inline `AsOf` ("Last priced Sep 25" with the clock) to the row's second line, because a `title` tooltip never shows on touch (WP23).
+- **Sparkline read failure** (`getCachedSparklines` null): WP26's flat placeholder bars, never "No history"; the next regeneration (scrape or daily) fills them.
 - **No priced product at all**: no "as of" line, summary sentences 1 and 5 only, chart "No history", noindex.
 - **Chart read failure**: `EmptyState` "The set chart could not be loaded".
 
@@ -321,7 +322,8 @@ grep -n "PROVENANCE_SENTENCE" frontend/app/content/disclosures.ts               
 ls frontend/app/components/ui/{MetricLabel,DecisionNote}.tsx
 # WP23
 ls frontend/app/components/ui/{PageHeader,ProvenanceLine,AsOf,Stat,Delta,Badge,DataList,EmptyState,Skeleton,Button}.tsx
-grep -n "export function formatPercent\|export function formatSignedPercent\|export function changeDirection\|export function formatDecimal\|export function formatMonthYear" frontend/app/lib/format.ts   # 5 lines
+grep -n "export function formatPercent\|export function formatSignedPercent\|export function changeDirection\|export function formatDecimal\|export function formatMonthYear" frontend/app/lib/format.ts   # 5 lines (formatDecimal and formatMonthYear come from WP29)
+grep -n "export const STALE_AFTER_DAYS\|export function daysBetween" frontend/app/components/ui/AsOf.tsx   # 2 lines
 # WP22
 ls frontend/perf-budgets.json frontend/scripts/fixtures/perf.mjs frontend/scripts/prod-smoke-lib.mjs frontend/scripts/prod-confirm.mjs
 grep -n '"/analytics"' frontend/perf-budgets.json frontend/scripts/prod-smoke-lib.mjs           # budget, rum target and smoke check
@@ -360,6 +362,10 @@ Tooling: PostgreSQL 16 or 17 for the database tests (Docker `postgres:17` or `/u
 Baseline (record for the PR): from `frontend/`: `pnpm exec tsc --noEmit` (exit 0), `pnpm lint` (0 errors), `pnpm test --ci` (all pass, note the count), `pnpm run test:scripts`. From the repo root: `python -m pytest tests/ -q`.
 
 The work has two phases, like WP25 and WP29. **Phase A** is every step except step 21; at its end open a draft PR titled `[waiting for DB types] WP37: ...` and hand the owner Owner actions 1 to 3. In phase A `tsc` fails only on the new `.from("sets").select(...)` read in `serverMarketData.ts` (the generated `Database` type has no `slug` yet); that is the only allowed failure. **Phase B** (step 21) regenerates `app/types/database.ts` once 0041 is in production.
+
+`next build` type-checks, so that one error also fails `pnpm build:stub`, which Verification steps 5 to 7 and step 18h need. Two ways, in this order of preference (WP33 uses the same rule): (1) if the owner can apply 0041 and push the types quickly, do step 21 first and then the builds; (2) otherwise measure on a temporary, uncommitted edit of the generated file: in `app/types/database.ts` add `slug: string` to the `Row` of `sets`, `product_types` and `generations`, and `slug?: string` to each table's `Insert` and `Update`, run the builds, then discard it with `git checkout app/types/database.ts` before any commit (`git status` must not list the file). Never commit a hand edit of `database.ts`. The draft PR's CI build fails until phase B; that is expected.
+
+**Deploy order**: 0041 must be in production before this frontend deploys. Without `sets.slug` the directory read fails, so `/sets` shows its error state, set pages fail to render and `sitemap()` throws (Next then keeps the previous sitemap). Phase B enforces the order, because the types are generated from production.
 
 ## Implementation steps
 
@@ -1914,7 +1920,7 @@ export default function Breadcrumbs({ items, className = "" }: { items: readonly
                 <Link
                   href={item.href}
                   prefetch={false}
-                  className="rounded-control underline-offset-2 hover:text-action hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-action pointer-coarse:inline-flex pointer-coarse:min-h-11 pointer-coarse:items-center"
+                  className="rounded-control underline-offset-2 hover:text-action hover:underline focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-action pointer-coarse:inline-flex pointer-coarse:min-h-11 pointer-coarse:items-center"
                 >
                   {item.name}
                 </Link>
@@ -1941,7 +1947,7 @@ export default function Breadcrumbs({ items, className = "" }: { items: readonly
 
 All files in `frontend/app/sets/` are server components (no `"use client"`).
 
-11a. `app/sets/setsTable.ts` (presets, sort state, URLs):
+11a. `app/sets/setsState.ts` (presets, sort state, URLs). Do not name it `setsTable.ts`: next to `SetsTable.tsx` on a case-insensitive file system (macOS, Windows), `import SetsTable from "./SetsTable"` would resolve to the `.ts` file first and `forceConsistentCasingInFileNames` would fail the build.
 
 ```ts
 /**
@@ -2249,7 +2255,7 @@ import Delta from "../components/ui/Delta";
 import { formatDateOnly, formatDecimal, formatInteger, formatPercent } from "../lib/format";
 import { formatCompositePercentile } from "../lib/setAnalytics";
 import type { SetHub } from "../lib/setHubs";
-import { SETS_COLUMNS, type SetsColumn } from "./setsTable";
+import { SETS_COLUMNS, type SetsColumn } from "./setsState";
 
 function Missing() {
   return (
@@ -2302,12 +2308,14 @@ import MetricLabel from "../components/ui/MetricLabel";
 import { METRIC_DEFINITIONS } from "../lib/metricDefinitions";
 import type { SetHub } from "../lib/setHubs";
 import SetCell from "./SetCell";
-import { nextSort, SETS_COLUMNS, setsHref, viewSpec, type SetsSortKey, type SetsState } from "./setsTable";
+import { nextSort, SETS_COLUMNS, setsHref, viewSpec, type SetsSortKey, type SetsState } from "./setsState";
 
 const TH = "h-10 px-3 text-left align-middle text-small font-semibold text-ink-soft";
 const TD = "h-11 px-3 align-middle text-body tabular-nums text-ink";
+// The header text is MetricLabel (its "?" is a link), so the sort control is
+// its own link: at least 24 x 24 px (WCAG 2.5.8), 44 px on touch screens.
 const SORT_LINK =
-  "inline-flex items-center gap-1 rounded-control hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-action";
+  "inline-flex min-h-6 min-w-6 items-center justify-center rounded-control hover:bg-surface hover:text-ink focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-action pointer-coarse:min-h-11 pointer-coarse:min-w-11";
 
 function SortHeader({
   state,
@@ -2388,7 +2396,7 @@ export default function SetsTable({
                 <span className="flex min-w-0 items-baseline gap-2">
                   <IntentLink
                     href={hub.path}
-                    className="truncate font-medium text-ink hover:text-action focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-action"
+                    className="truncate font-medium text-ink hover:text-action focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-action"
                   >
                     {hub.name}
                   </IntentLink>
@@ -2420,10 +2428,10 @@ import Delta from "../components/ui/Delta";
 import { formatInteger, formatMonthYear } from "../lib/format";
 import type { SetHub } from "../lib/setHubs";
 import SetCell from "./SetCell";
-import { nextSort, SETS_COLUMNS, setsHref, viewSpec, type SetsSortKey, type SetsState } from "./setsTable";
+import { nextSort, SETS_COLUMNS, setsHref, viewSpec, type SetsSortKey, type SetsState } from "./setsState";
 
 const CHIP =
-  "inline-flex min-h-9 items-center rounded-control border border-line px-3 text-caption font-semibold transition-colors duration-150 motion-reduce:transition-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-action pointer-coarse:min-h-11";
+  "inline-flex min-h-9 items-center rounded-control border border-line px-3 text-caption font-semibold focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-action pointer-coarse:min-h-11";
 
 /** Phones (below 768 px): sort chips, then one two-line row per set (WP23 DataList). */
 export default function SetsList({
@@ -2489,7 +2497,7 @@ export default function SetsList({
 
 ```tsx
 import Link from "next/link";
-import { SETS_VIEWS, setsHref, type SetsState } from "./setsTable";
+import { SETS_VIEWS, setsHref, type SetsState } from "./setsState";
 
 /** Column presets as links (no client JavaScript), styled as WP23 segments. */
 export default function SetsViewNav({ state }: { state: SetsState }) {
@@ -2504,7 +2512,7 @@ export default function SetsViewNav({ state }: { state: SetsState }) {
             scroll={false}
             prefetch={false}
             aria-current={selected ? "page" : undefined}
-            className={`inline-flex flex-1 items-center justify-center rounded-control px-3 py-1.5 text-caption font-semibold transition-colors duration-150 motion-reduce:transition-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-action pointer-coarse:min-h-11 sm:flex-none ${
+            className={`inline-flex flex-1 items-center justify-center rounded-control px-3 py-1.5 text-caption font-semibold focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-action pointer-coarse:min-h-11 sm:flex-none ${
               selected ? "bg-action text-white" : "text-ink-soft hover:bg-surface-alt"
             }`}
           >
@@ -2522,7 +2530,7 @@ export default function SetsViewNav({ state }: { state: SetsState }) {
 ```tsx
 import Link from "next/link";
 import { METRIC_DEFINITIONS } from "../lib/metricDefinitions";
-import { SETS_COLUMNS, viewSpec, type SetsView } from "./setsTable";
+import { SETS_COLUMNS, viewSpec, type SetsView } from "./setsState";
 
 /**
  * The touch and screen-reader source of the column definitions (WP14's
@@ -2548,7 +2556,7 @@ export default function SetsDefinitions({ view }: { view: SetsView }) {
         <Link
           href="/methodology#set-pages"
           prefetch={false}
-          className="font-medium text-action underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-action"
+          className="font-medium text-action underline-offset-2 hover:underline focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-action"
         >
           Full definitions in the methodology
         </Link>
@@ -2655,7 +2663,7 @@ export default function RiskReturnChart({ model }: { model: RiskReturnModel }) {
             {byName.map((point) => (
               <tr key={point.id}>
                 <td className="py-2 pr-3">
-                  <Link href={point.path} prefetch={false} className="text-action underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-action">
+                  <Link href={point.path} prefetch={false} className="text-action underline-offset-2 hover:underline focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-action">
                     {point.name}
                   </Link>
                 </td>
@@ -2699,7 +2707,7 @@ import SetsList from "./SetsList";
 import SetsTable from "./SetsTable";
 import SetsDefinitions from "./SetsDefinitions";
 import SetsViewNav from "./SetsViewNav";
-import { parseSetsState, setsHref, sortHubs, viewSpec } from "./setsTable";
+import { parseSetsState, setsHref, sortHubs, viewSpec } from "./setsState";
 
 /*
  * /sets: every set on one table, with column presets and a risk and return
@@ -2730,7 +2738,9 @@ function Shell({ children }: { children: ReactNode }) {
 
 export default async function SetsPage({ searchParams }: PageProps) {
   const state = parseSetsState(await searchParams);
-  const data = await loadSetHubs();
+  // A failed summaries read rejects (WP11 throws when the RPC and its
+  // fallback both fail): show the same error state, not the error boundary.
+  const data = await loadSetHubs().catch(() => null);
 
   if (data === null) {
     return (
@@ -2747,7 +2757,7 @@ export default async function SetsPage({ searchParams }: PageProps) {
             </Link>
           }
         />
-        <CardRinkPromo variant="footer" />
+        <CardRinkPromo />
       </Shell>
     );
   }
@@ -2817,7 +2827,7 @@ export default async function SetsPage({ searchParams }: PageProps) {
         </>
       )}
 
-      <CardRinkPromo variant="footer" />
+      <CardRinkPromo />
     </Shell>
   );
 }
@@ -2838,7 +2848,7 @@ import IntentLink from "../../components/IntentLink";
 import MiniSparkline from "../../components/MarketView/MiniSparkline";
 import Breadcrumbs from "../../components/nav/Breadcrumbs";
 import Price from "../../components/Price";
-import AsOf from "../../components/ui/AsOf";
+import AsOf, { daysBetween, STALE_AFTER_DAYS } from "../../components/ui/AsOf";
 import Badge from "../../components/ui/Badge";
 import { DataList, DataListRow } from "../../components/ui/DataList";
 import Delta from "../../components/ui/Delta";
@@ -2849,9 +2859,9 @@ import ProvenanceLine from "../../components/ui/ProvenanceLine";
 import Stat from "../../components/ui/Stat";
 import { PROVENANCE_SENTENCE } from "../../content/disclosures";
 import IndexChart from "../../indices/sealed/IndexChart";
-import { formatDateOnly, formatDecimal, formatInteger } from "../../lib/format";
+import { formatDateOnly, formatDecimal, formatInteger, recordedAtDateKey } from "../../lib/format";
 import { buildBreadcrumbJsonLd, buildCollectionPageJsonLd, serializeJsonLd } from "../../lib/jsonLd";
-import { INDEX_RULES } from "../../lib/marketIndex";
+import { INDEX_RULES, utcTodayKey } from "../../lib/marketIndex";
 import type { SetHub } from "../../lib/setHubs";
 import { loadSetChart, loadSetHub, type SetChart } from "../../lib/setHubsData";
 import { NO_INDEX, OG_LOCALE, SITE_NAME } from "../../lib/site";
@@ -2874,7 +2884,17 @@ export async function generateStaticParams(): Promise<Array<{ slug: string }>> {
 type PageProps = { params: Promise<{ slug: string }> };
 
 const LINK =
-  "font-medium text-action underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-action";
+  "font-medium text-action underline-offset-2 hover:underline focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-action";
+
+/**
+ * A shown price 2 or more days old (WP23 STALE_AFTER_DAYS). Phone rows add
+ * the inline AsOf only then, so a fresh row is not cluttered with a date the
+ * page header already states. A module function keeps render lint-pure.
+ */
+function isAgingPrice(recordedAt: string | null): boolean {
+  const key = recordedAtDateKey(recordedAt);
+  return key !== null && daysBetween(key, utcTodayKey()) >= STALE_AFTER_DAYS;
+}
 
 function hubTitle(hub: SetHub): string {
   return `${hub.name} sealed product prices`;
@@ -3046,7 +3066,7 @@ export default async function SetPage({ params }: PageProps) {
               {rows.map((row) => (
                 <tr key={row.id} className="h-11 hover:bg-surface-alt">
                   <td className="max-w-80 px-3">
-                    <IntentLink href={row.href} className="block truncate font-medium text-ink hover:text-action focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-action">
+                    <IntentLink href={row.href} className="block truncate font-medium text-ink hover:text-action focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-action">
                       {row.name}
                     </IntentLink>
                   </td>
@@ -3082,7 +3102,17 @@ export default async function SetPage({ params }: PageProps) {
               key={row.id}
               href={row.href}
               title={row.name}
-              meta={row.unitsSold30d === null ? "Sales not available" : `${formatInteger(row.unitsSold30d)} sold 30D`}
+              meta={
+                <>
+                  {row.unitsSold30d === null ? "Sales not available" : `${formatInteger(row.unitsSold30d)} sold 30D`}
+                  {row.usdPrice !== null && isAgingPrice(row.priceRecordedAt) && (
+                    <>
+                      {" · "}
+                      <AsOf date={row.priceRecordedAt} />
+                    </>
+                  )}
+                </>
+              }
               value={row.usdPrice === null ? "--" : <Price usd={row.usdPrice} />}
               delta={<Delta value={row.change30d} period="30D" missingReason={row.usdPrice === null ? "Price withheld" : "Not available"} />}
               sparkline={<MiniSparkline series={sparklineFor(sparklines, row.id)} size="row" />}
@@ -3101,7 +3131,7 @@ export default async function SetPage({ params }: PageProps) {
       {(previous || next) && (
         <nav aria-label="Neighbouring sets" className="mt-6 grid gap-3 sm:grid-cols-2">
           {previous ? (
-            <Link href={previous.path} prefetch={false} className="rounded-card border border-line bg-surface p-4 hover:bg-surface-alt focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-action">
+            <Link href={previous.path} prefetch={false} className="rounded-card border border-line bg-surface p-4 hover:bg-surface-alt focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-action">
               <span className="block text-caption text-ink-soft">Previous set</span>
               <span className="block font-medium text-ink">{previous.name}</span>
               {previous.releaseDate && <span className="block text-caption text-ink-soft">Released {formatDateOnly(previous.releaseDate)}</span>}
@@ -3110,7 +3140,7 @@ export default async function SetPage({ params }: PageProps) {
             <span />
           )}
           {next && (
-            <Link href={next.path} prefetch={false} className="rounded-card border border-line bg-surface p-4 text-right hover:bg-surface-alt focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-action">
+            <Link href={next.path} prefetch={false} className="rounded-card border border-line bg-surface p-4 text-right hover:bg-surface-alt focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-action">
               <span className="block text-caption text-ink-soft">Next set</span>
               <span className="block font-medium text-ink">{next.name}</span>
               {next.releaseDate && <span className="block text-caption text-ink-soft">Released {formatDateOnly(next.releaseDate)}</span>}
@@ -3125,7 +3155,7 @@ export default async function SetPage({ params }: PageProps) {
         </Link>
       </p>
 
-      <CardRinkPromo variant="footer" />
+      <CardRinkPromo />
     </main>
   );
 }
@@ -3344,7 +3374,7 @@ import { buildProductCrumbs } from "./productBreadcrumbs";
               <Link
                 href={setPath(setSlug)}
                 prefetch={false}
-                className="font-medium text-action underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-action"
+                className="font-medium text-action underline-offset-2 hover:underline focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-action"
               >
                 {setName}
               </Link>
@@ -3364,7 +3394,7 @@ import { buildProductCrumbs } from "./productBreadcrumbs";
           <Link
             href={setHref}
             prefetch={false}
-            className="text-action underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-action"
+            className="text-action underline-offset-2 hover:underline focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-action"
           >
             {setName}
           </Link>
@@ -3538,6 +3568,8 @@ export const SHARE_TITLE_MAX_CHARS = 64;
 /** Pixel box of the 90-day line on the product card. */
 export const SHARE_SPARKLINE = { width: 600, height: 96, pad: 6 } as const;
 export const SHARE_SET_PHOTO_COUNT = 3;
+/** Photos the set card fetches at most (in parallel); WebP originals fall out, so it tries a few more than it shows. */
+export const SHARE_SET_PHOTO_TRIES = 6;
 
 export interface ShareChange {
   value: number;
@@ -3813,7 +3845,8 @@ function Mark() {
     <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
       <svg width="44" height="44" viewBox="0 0 32 32">
         <rect width="32" height="32" rx={MARK_TILE_RADIUS} fill={OG_COLORS.accent} />
-        <path d={MARK_GLYPH_PATH} fill={OG_COLORS.surface} />
+        {/* evenodd, as in PokefinMark: the square counter of the "P" is a hole. */}
+        <path d={MARK_GLYPH_PATH} fillRule="evenodd" fill={OG_COLORS.surface} />
       </svg>
       <div style={{ display: "flex", fontSize: 34, fontWeight: 600, color: OG_COLORS.ink }}>
         <span>Pok</span>
@@ -3998,7 +4031,9 @@ import { getProductDisplayName, parseProductId } from "./productMeta";
  * never show a price the page withholds. ISR: rendered on the first crawler
  * fetch and again after each scrape revalidation, daily at the latest.
  */
-export const alt = "Pokéfin share card: TCGplayer Market Price, 30-day change and 90-day price line";
+// Static, so it describes the card without a number: a withheld product's
+// card has no price, change or line (the alt must never claim one).
+export const alt = "Pokéfin share card: this product's TCGplayer Market Price status and the day it describes";
 export const size = SHARE_SIZE;
 export const contentType = "image/png";
 // ISR like the page (WP11, WP26 route pattern): rendered on the first
@@ -4066,7 +4101,7 @@ import { loadOgFonts, loadOgPhoto } from "../../components/og/ogAssets";
 import { SetShareCard, SHARE_SIZE } from "../../components/og/ShareCards";
 import { utcTodayKey } from "../../lib/marketIndex";
 import { loadSetHub } from "../../lib/setHubsData";
-import { buildSetShareModel, SHARE_SET_PHOTO_COUNT } from "../../lib/shareCard";
+import { buildSetShareModel, SHARE_SET_PHOTO_COUNT, SHARE_SET_PHOTO_TRIES } from "../../lib/shareCard";
 
 /*
  * Set share image (WP37): set name, era, release date, tracked products, the
@@ -4095,12 +4130,11 @@ export default async function Image({ params }: { params: Promise<{ slug: string
   const candidates = rows
     .filter((row) => row.usdPrice !== null && row.imageUrl)
     .map((row) => row.imageUrl as string);
-  const photos: string[] = [];
-  for (const url of candidates) {
-    if (photos.length >= SHARE_SET_PHOTO_COUNT) break;
-    const photo = await loadOgPhoto(url);
-    if (photo) photos.push(photo);
-  }
+  // At most SHARE_SET_PHOTO_TRIES photos, fetched in parallel: one 3 s
+  // timeout bounds the render. A sequential loop over every priced product
+  // could wait 27 x 3 s when the originals are WebP and past the function limit.
+  const tried = await Promise.all(candidates.slice(0, SHARE_SET_PHOTO_TRIES).map((url) => loadOgPhoto(url)));
+  const photos = tried.filter((photo): photo is string => photo !== null).slice(0, SHARE_SET_PHOTO_COUNT);
 
   const model = buildSetShareModel({
     name: hub.name,
@@ -4196,10 +4230,12 @@ export function fixtureSetSlug(name) {
 - In `buildPerfData`, directly above the final `return { ... };` (after every other table, so no earlier random draw changes):
 
 ```js
-  // WP37: public.sets as the set hubs read it (no random draws).
-  const setRows = sets.map((set) => ({
+  // WP37: public.sets as the set hubs read it (no random draws). The oldest
+  // set's stored slug carries its id, as 0041 gives a duplicate name, so its
+  // name-derived URL exercises the set page's 308 (Verification step 6).
+  const setRows = sets.map((set, i) => ({
     id: set.id,
-    slug: fixtureSetSlug(set.name),
+    slug: i === sets.length - 1 ? `${fixtureSetSlug(set.name)}-${set.id}` : fixtureSetSlug(set.name),
     name: set.name,
     code: set.code,
     release_date: set.release_date,
@@ -4252,7 +4288,7 @@ cd frontend && node --input-type=module -e 'import("./scripts/fixtures/perf.mjs"
 `page.tsx` files reach `serverMarketData` through `setHubsData.ts`, which the rule allows (it bans only the browser Supabase modules).
 
 18f. `frontend/scripts/prod-smoke-lib.mjs`:
-- In `PUBLIC_CHECKS`, replace `{ path: "/analytics", minPrices: 1 }` with `{ path: "/sets", minPrices: 0 }` (the sets table shows medians and counts, not prices; the set page check below counts prices).
+- In `PUBLIC_CHECKS`, replace the `/analytics` entry, whatever its fields (WP22 step 25 may have set `minPrices: 0` and added `minReturns`), with `{ path: "/sets", minPrices: 0, minReturns: 10 }` when `judgePage` supports `minReturns` (`grep -n "minReturns" scripts/prod-smoke-lib.mjs`), else `{ path: "/sets", minPrices: 0 }`. The sets table shows medians and counts, not prices; the set page check below counts prices.
 - Append to `REDIRECT_CHECKS` (WP33; soft check (e)): `{ from: "/analytics", to: "/sets" }, { from: "/stats", to: "/sets" }`.
 - Append:
 
@@ -4312,7 +4348,7 @@ and the warning text in the `if (!route)` branch with ``warnings.push(`no matchi
   });
 ```
 
-with `import { SETS_COLUMNS } from "../sets/setsTable";` at the top (`isMetricKey`, `fs`, `path` and `APP` are already imported by WP24).
+with `import { SETS_COLUMNS } from "../sets/setsState";` at the top (`isMetricKey`, `fs`, `path` and `APP` are already imported by WP24).
 
 19b. Hex ratchet: `app/lib/ogTheme.ts` holds 9 hex literals (Satori cannot read CSS variables). Run
 
@@ -4788,13 +4824,13 @@ describe("set share card", () => {
 });
 ```
 
-### 5. `app/sets/__tests__/setsTable.test.ts` (new, node)
+### 5. `app/sets/__tests__/setsState.test.ts` (new, node)
 
 ```ts
 /** @jest-environment node */
 import { isMetricKey } from "../../lib/metricDefinitions";
 import type { SetHub } from "../../lib/setHubs";
-import { nextSort, parseSetsState, SETS_COLUMNS, SETS_VIEWS, setsHref, sortHubs } from "../setsTable";
+import { nextSort, parseSetsState, SETS_COLUMNS, SETS_VIEWS, setsHref, sortHubs } from "../setsState";
 
 const hub = (id: number, name: string, med365: number | null) =>
   ({ id, name, analytics: med365 === null ? null : { median365: med365 } } as unknown as SetHub);
@@ -4939,8 +4975,9 @@ describe("/sets", () => {
     expect(screen.getByRole("heading", { level: 1 }).textContent).toBe("Pokémon TCG sets");
     expect(container.textContent).not.toContain("Invest Score");
     const table = screen.getAllByRole("table")[0];
+    // Two ranked sets: rank 1 is "Top 50%", rank 2 reads "Bottom 50%" (WP24 formatCompositePercentile), unranked "--".
     expect(within(table).getAllByText("Top 50%").length).toBe(1);
-    expect(within(table).getAllByText("Top 100%").length).toBe(1);
+    expect(within(table).getAllByText("Bottom 50%").length).toBe(1);
     expect(container.querySelector('a[href="/methodology#composite-score"]')).not.toBeNull();
     // Consistency is an integer percent.
     expect(within(table).getAllByText("50%").length).toBeGreaterThan(0);
@@ -5340,6 +5377,13 @@ curl -s "$O/sets?view=liquidity&sort=dos&dir=asc" | grep -c 'aria-sort="ascendin
 curl -s $O/sets/journey-prism-storm | grep -o '<h1[^>]*>[^<]*</h1>'             # ...>Journey Prism Storm sealed product prices</h1>
 for i in 1 2; do curl -sI $O/sets/journey-prism-storm | grep -i '^x-nextjs-cache'; done   # second answer HIT (or STALE)
 curl -s -o /dev/null -w '%{http_code}\n' $O/sets/no-such-set                    # 404
+# A name-derived slug that is not stored (the fixture's oldest set): one 308 to the stored slug, also when served from the ISR cache.
+OLD=$(node --input-type=module -e 'import("./scripts/fixtures/perf.mjs").then((m) => { const d = m.buildPerfData({ baseUrl: "http://127.0.0.1:3100" }); const r = d.setRows[d.setRows.length - 1]; console.log(m.fixtureSetSlug(r.name), r.slug); })')
+set -- $OLD; for i in 1 2; do curl -sI $O/sets/$1 | grep -iE '^HTTP|^location'; done   # twice: HTTP/1.1 308 and location: /sets/$2
+# If the second answer is not a 308 (a cached 200 with a meta refresh), record it in the PR under risks and keep the page:
+# the target still carries the canonical, and duplicate or renamed sets are rare.
+SETIMG=$(curl -s $O/sets/journey-prism-storm | grep -o '<meta property="og:image" content="[^"]*"' | head -1 | sed 's/.*content="//;s/"$//')
+curl -s "$SETIMG" -o /tmp/wp37-set.png && file /tmp/wp37-set.png                # PNG image data, 1200 x 630; open it: set name, product count, dated footer
 curl -s $O/product/900001 | grep -o '"@type":"BreadcrumbList"' | wc -l           # 1
 curl -s $O/product/900001 | grep -o 'href="/sets/journey-prism-storm"' | wc -l   # 3 or more (breadcrumb, header line, siblings)
 curl -s $O/product/900001 | grep -o '<meta name="twitter:card" content="[^"]*"'  # summary_large_image
@@ -5404,7 +5448,7 @@ ORDER BY tbl, base;
 ```
 
    No rows is the normal result. A row lists names that would share a slug, in fill order: the first keeps the bare slug, the next gets `-<code>` (sets) or `-<name>` (product types), then `-<id>`. An empty `base` row is a name with no letters or digits; it gets `set-<id>`, `type-<id>` or `era-<id>`. If you prefer other slugs, apply 0041 and then set them by hand before the deploy, for example `UPDATE public.sets SET slug = 'crown-zenith-galarian-gallery' WHERE id = 123;` (lower-case letters, digits and single hyphens; the CHECK rejects anything else). Paste the result into the PR.
-2. **Apply `migrations/0041_taxonomy_slugs.sql`** in the Supabase SQL editor (paste the whole file) or with `supabase db push`. Then run the verification query the executor attaches (`/tmp/wp37_0041.sql`): every row OK. Spot-check: `SELECT name, code, slug FROM public.sets ORDER BY release_date DESC NULLS LAST LIMIT 15;` and `SELECT count(*) FROM public.sets WHERE slug IS NULL;` (0).
+2. **Apply `migrations/0041_taxonomy_slugs.sql` before the PR merges** (the frontend reads `sets.slug`; see Deploy order in Before you start) in the Supabase SQL editor (paste the whole file) or with `supabase db push`. Then run the verification query the executor attaches (`/tmp/wp37_0041.sql`): every row OK. Spot-check: `SELECT name, code, slug FROM public.sets ORDER BY release_date DESC NULLS LAST LIMIT 15;` and `SELECT count(*) FROM public.sets WHERE slug IS NULL;` (0).
 3. **Generate the database types** for phase B: `pnpm types:db` in `frontend/` with your `SUPABASE_ACCESS_TOKEN`, or give the executor a token for one run; push `app/types/database.ts` to the PR branch.
 4. **After deploy**: `curl -sI https://www.pokefin.ca/stats` and `.../analytics` (one 308 each to `/sets`); open `/sets` and two set pages on a phone; paste a product link and a set link into Discord or the X card validator and check the date line; in Google Search Console resubmit `sitemap.xml` and, after a week, check that set pages are being indexed (URL Inspection on one `/sets/<slug>`). The daily smoke test now checks `/sets`, one set page and both redirects.
 5. **Renaming a set later** never changes its slug. To move a set's URL, update `slug` by hand; the old URL then 404s unless it is the name-derived slug of the set's current name, which redirects.
@@ -5422,6 +5466,9 @@ ORDER BY tbl, base;
 - [ ] Nav "Sets" points to `/sets`; set search results open set pages; the footer Browse column lists up to 5 newest released, indexed sets.
 - [ ] Product and set share images are 1200 x 630 PNGs with a mandatory date line and the Pokéfin mark; the product card shows the price in CAD and USD (or USD only without a rate), the 30D change with a glyph in the headline's currency, and the 90-day line; **a stale product's card shows "No current price"** and "Last priced {date}" and no price digits; WebP photos are never embedded (`og-formats.test.mjs` passes); fonts are committed under `frontend/assets/og/` (253,920 bytes total).
 - [ ] `buildProductMetadata` has no `openGraph.images` and sets `twitter.card` to `summary_large_image`.
+- [ ] The set share image fetches at most `SHARE_SET_PHOTO_TRIES` (6) photos, in parallel, so one 3 s timeout bounds its render; the share-card mark draws its glyph with `fillRule="evenodd"`.
+- [ ] A name-derived slug that is not stored answers one 308 to the stored slug (fixture check in Verification step 6, twice); an aging price on a phone row shows "Last priced {date}" with the clock.
+- [ ] New files use `focus-visible:outline-hidden` (never `outline-none`) and no colour transitions (WP23); every `CardRinkPromo` call is prop-less (WP15 removed `variant`); sort links are at least 24 px, 44 px on touch.
 - [ ] **`/sets` and a set page have zero client charting JS**: `perf:budget` reports recharts and supabase-js not reachable on both; `setsRoutes.test.ts` passes; **`/sets` and `/sets/[slug]` are in `perf-budgets.json`** with limits set and statuses ok or over target; the PR carries a `Perf budget raise:` line for each removed `routes./analytics.*` key and no other raise.
 - [ ] Methodology has a `#set-pages` section and a version bump with a change row; six new metric definitions resolve to it.
 - [ ] `tsc` exits 0 after phase B; lint 0 errors; Jest and script tests green; the conventions baseline raised only by `lib/ogTheme.ts: 9`.
