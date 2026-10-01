@@ -7,6 +7,7 @@
   - F146 (medium; partial, the verifier's "simplest low-risk fix"): the server fallback path (it runs only when `get_market_product_summaries` or `get_set_analytics` errors) fetches a year of price history oldest-first and truncates at 50k rows. At about 306 active products the surviving rows end roughly 200 days ago, so the 1D to 6M returns come out null and the 1Y return comes out as a wrong non-null number (measured from a months-old "latest" row); the set fallback's `returns365`, `vol90`, `drawdown365` and `trend90`/`trend365` are wrong the same way. This package orders the 367-day fetch newest first: afterwards 1D to 3M are correct, 6M and 1Y are null instead of wrong, and the set fallback's 365-day drawdown and trend describe only the surviving window (about five months). Not done here, and not scheduled by any package in the plan (both need a migration; WP11 adds none): a `get_latest_prices(p_product_ids bigint[] DEFAULT NULL)` RPC (`DISTINCT ON (product_id)` over `idx_price_history_product_recorded`) to replace the two "newest price per product" paging implementations (server `fetchNewestPricedAt`, which WP05's `fetchNewestPricedAtForProducts` reuses, and client `fetchNewestPricedAtClient`), and a per-product anchor RPC to replace the about 50 serial history pages the fallback still makes (the 14-day freshness pages run in parallel with them). List both as follow-ups in the PR, including this constraint for whoever writes the RPC: filter on `products.active` only when `p_product_ids` is NULL, never when ids are passed, or deactivated portfolio holdings lose their price.
   - F150 (low; full for the defect, partial for the call sites): the client exchange-rate cache never expires and pins the hard-coded 1.36 fallback into the tab forever after one failed read. Callers: `/portfolio`, `/compare` (public, not signed-in) and `/box-calculator` (through `useCurrencyConversion`). The Bank of Canada rate changes at most once per business day, so the harm is the pinned fallback, not drift. Fixed in `exchangeRate.ts` for every caller. `/compare` and `/box-calculator` also get the server-cached rate (steps 9 and 10). Known limit, state it in the PR: every consumer fetches once per mount, so the TTL takes effect on the next mount or client navigation; a page left open keeps the rate it mounted with in React state. Refreshing on `visibilitychange` would fix that but needs `useCurrencyConversion.ts`, which this package does not touch (WP17 owns its lint error; WP20's `CurrencyProvider` replaces these reads). `/portfolio` keeps its client read (now with the 1 hour TTL): it is a signed-in client page that WP04, WP05 and WP13 all edit, and turning it into a server wrapper is not worth one PostgREST read per tab per hour. Say so in the PR. (WP20 later closes this call site too: its `CurrencyProvider`, seeded by the root layout from `getCachedExchangeRate()`, replaces the `/portfolio` client read, which is why step 2e must keep `getCachedExchangeRate` non-throwing.)
   - F068 (full, as corrected by the verifier): `/prices` and `/market` serialise about 300 KB of product and volume JSON into the RSC payload, roughly a third of it fields no client component reads.
+  - N04 (low; full, as narrowed by both verifiers; completeness review after the audit): `unstable_cache` stores error fallbacks as successful results. Two cases remain after the verifiers' corrections: (a) a failed `exchange_rates` read caches `DEFAULT_EXCHANGE_RATE` 1.36, and the client does not refetch because 1.36 is truthy; (b) a failed price-history or sales-history query caches an empty chart or empty sales history for that product. Steps 2c and 2e cover (a); step 4 covers (b): `fetchProductDetailRows` throws on a failed price-history query and on a failed sales-history query (except a missing table), so `unstable_cache` keeps the last good entry. The verifiers removed the volume-metrics and `/stats` claims (`useVolumeMetrics` already refetches in the browser; set analytics fall back before any empty result is cached). The `/stats` "migration" copy is WP15's (F103).
   - Track 2 (01-PRODUCT-DIRECTION.md §9 item 1; research/performance-excellence.md §8, item PX06): once this PR makes `/product/[id]` ISR, Next 16 prefetches every product `<Link>` that enters the viewport in full, up to 306 product pages per catalog scroll, each one a cold ISR render the first time. Step 13 adds `IntentLink` (prefetch only after an 80 ms hover, on focus and on pointerdown), uses it for every internal product link, and sets `prefetch={false}` on the footer links and the header's `/auth/*` links. It ships in this PR, not later, because this PR is what switches the viewport prefetch on.
 - **Priority rationale**: the nested-cache bug found while scoping F151 is the main load generator on the database's heaviest RPC, and fixing it together with ISR and event-driven revalidation cuts that load by an order of magnitude while making pages fresher, not staler.
 - **Effort**: M, about 12 to 15 hours including tests (step 13 adds about 3).
@@ -368,9 +369,10 @@ type ProductDetailRows = {
  * The per-product queries behind /product/[id], cached per product id.
  * Deliberately does NOT read the market summaries: this runs inside
  * unstable_cache, where a nested cached read is never served from cache.
- * Rejects when the price-history query fails so the failure is not cached;
- * the sales and listings tables still degrade to empty (they may not exist
- * before their migrations).
+ * Rejects when the price-history or sales-history query fails so the failure
+ * is not cached and unstable_cache keeps serving the last good entry (N04).
+ * A missing sales table (42P01, PGRST205) and any listings failure still
+ * degrade to empty (those tables may not exist before their migrations).
  */
 async function fetchProductDetailRows(
   productId: number
@@ -380,6 +382,11 @@ async function fetchProductDetailRows(
 
   if (error) {
     throw error;
+  }
+  // N04: a transient sales failure (timeout, 5xx) must not be cached as an
+  // empty sales history. Only a table that does not exist yet degrades.
+  if (salesError && salesError.code !== "42P01" && salesError.code !== "PGRST205") {
+    throw salesError;
   }
 
   const history = groupHistoryRowsByProduct(historyRows || [])[productId] || [];
@@ -440,7 +447,7 @@ Inside block C, replace the comment block that starts `// Deliberately NOT compa
   // permissive, and a price a few hours old is well inside a 14-day tolerance.
 ```
 
-The history error log label changes from `logSupabaseError("server_product_history_failed", error)` to the `logCaughtError` in `loadProductDetail`. Keep the label string.
+The history error log label changes from `logSupabaseError("server_product_history_failed", error)` to the `logCaughtError` in `loadProductDetail`. Keep the label string. A thrown sales error is logged under the same label by the same `catch`; block B's own `logSupabaseError("server_product_sales_history_failed", salesError)` branch stays and now runs only for a missing table.
 
 ### Step 5. `serverMarketData.ts`: fallback history newest first (F146)
 
@@ -1688,6 +1695,8 @@ Cases:
 - **product detail reads the summaries from their cache, never nested**: with the default mocks, `await getCachedProductDetail(1)` and `await getCachedProductDetail(2)` both return non-null with `siblings` of length 1; `__nested` is empty; `rpcMock.mock.calls.filter(([name]) => name === "get_market_product_summaries")` has length 1.
 - **an unknown product id makes no per-product queries**: with the default mocks, `await getCachedProductDetail(999)` is `null` and `fromMock` was not called.
 - **a failed history query is not cached**: `fromMock.mockImplementation((table: string) => table === "product_price_history" ? query({ data: null, error: { message: "down" } }) : query({ data: [], error: null }))`; `(await getCachedProductDetail(1))?.history` equals `[]`. Then `fromMock.mockImplementation((table: string) => table === "product_price_history" ? query({ data: [{ product_id: 1, usd_price: 10, recorded_at: "2026-09-24T09:00:00" }], error: null }) : query({ data: [], error: null }))`; a second `getCachedProductDetail(1)` returns `history` equal to `[{ usd_price: 10, recorded_at: "2026-09-24T09:00:00" }]` (the failure was not stored).
+- **a failed sales-history query is not cached (N04)**: `fromMock.mockImplementation((table: string) => table === "product_sales_history" ? query({ data: null, error: { message: "timeout", code: "57014" } }) : query({ data: [], error: null }))`; `(await getCachedProductDetail(1))?.salesHistory` equals `[]`. Then `fromMock.mockImplementation((table: string) => table === "product_sales_history" ? query({ data: [{ bucket_date: "2026-09-24", granularity: "day", quantity_sold: 3, transaction_count: 2, low_sale_price: 9, high_sale_price: 11, market_price: 10 }], error: null }) : query({ data: [], error: null }))`; a second `getCachedProductDetail(1)` returns `salesHistory` of length 1 (the failure was not stored).
+- **a missing sales table still degrades (N04)**: `product_sales_history` returns `query({ data: null, error: { message: "relation does not exist", code: "42P01" } })` and `product_price_history` returns one row `{ product_id: 1, usd_price: 10, recorded_at: "2026-09-24T09:00:00" }`; `getCachedProductDetail(1)` resolves with `salesHistory` equal to `[]` and `history` of length 1.
 - **a failed exchange-rate read is not cached**: `fromMock` for `"exchange_rates"` returns `query({ data: null, error: { code: "PGRST116" } })`; `getCachedExchangeRate()` resolves `{ rate: 1.36, date: null }`; switch to `query({ data: { usd_to_cad: 1.41, recorded_at: "2026-09-25T00:00:00" }, error: null })`; the next call resolves `{ rate: 1.41, date: "2026-09-25T00:00:00" }`.
 - **a malformed rate is rejected**: `data: { usd_to_cad: null, recorded_at: null }` yields `{ rate: 1.36, date: null }`.
 - **a failed volume read is not cached**: `get_market_product_volume_metrics` errors once (result `{}`), then succeeds with one row (result has that product id).
@@ -2116,7 +2125,7 @@ Do these in this order. If steps 1, 3 and 4 are skipped, the site still works bu
 
 - [ ] `grep -rn "revalidate: 3600" frontend/app` returns nothing; all five `unstable_cache` calls use 86400 and a tag from `CACHE_TAGS`.
 - [ ] No cached callback in `serverMarketData.ts` calls another cached function (`serverMarketData.cache.test.ts` "never nested" cases pass).
-- [ ] A failed exchange-rate, volume or product-history read is not cached (tests pass).
+- [ ] A failed exchange-rate, volume, product price-history or product sales-history read is not cached; a missing sales table still degrades to an empty sales history (tests pass, including the two N04 cases).
 - [ ] `POST /api/revalidate` returns 503 without a configured secret, 401 with a wrong or missing header, 200 with the right one, and calls `revalidateTag(tag, "max")` for exactly `market-products`, `set-analytics`, `exchange-rate`.
 - [ ] `/product/[id]` exports `revalidate = 86400` and a `generateStaticParams` returning `[]`; `pnpm build:stub` does not list it as ƒ.
 - [ ] `/compare` and `/box-calculator` are server components that pass initial data; `CompareDashboard` fetches the catalog only when `initialMarketProducts` is `undefined` (an empty map does not refetch), and `useBoosterPackPrices` fetches only when the server data is absent or has no sets.

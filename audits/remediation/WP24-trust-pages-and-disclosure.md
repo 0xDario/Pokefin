@@ -2523,8 +2523,9 @@ export default function PrivacyPage() {
       <DocSection id="analytics" title="Analytics">
         <p>
           Pokéfin uses Vercel Web Analytics to count page views and Vercel Speed Insights to measure page speed
-          (loading, responsiveness and layout stability) with the page address and a device class. Neither sets
-          cookies, and neither tracks you across other websites. The data is aggregated.
+          (loading, responsiveness and layout stability) on every page. They record the page address, the referring
+          page, the browser and device type, and the country. Neither sets cookies, and neither tracks you across
+          other websites. The data is aggregated.
         </p>
       </DocSection>
       <DocSection id="not-collected" title="What we do not collect">
@@ -2547,7 +2548,7 @@ export default function PrivacyPage() {
           <li><strong>Vercel</strong>: hosting, application logs, Web Analytics and Speed Insights.</li>
           <li><strong>Cloudflare Turnstile</strong>: bot protection on sign-up and sign-in.</li>
           <li><strong>Brevo</strong>: email delivery, when Pokéfin sends you an email.</li>
-          <li><strong>Sentry</strong>: error reports, when enabled; personal data is removed before reports leave the server.</li>
+          <li><strong>Sentry</strong>: error reports, when enabled; email addresses, IP addresses and cookies are removed from each report before it is sent.</li>
         </ul>
         <p>These providers can store and process data outside Canada, including in the United States, where it is subject to local law.</p>
       </DocSection>
@@ -2584,6 +2585,8 @@ export default function PrivacyPage() {
 ```
 
 If the current privacy page mentions a sub-processor or data category not listed above (another package may have added one, for example a newsletter), keep it: add its bullet to the matching list.
+
+Completeness finding N06 (low; the verifiers' wording is binding): the old page names Vercel only for hosting and logs, says Sentry removes personal data "before events leave the server" (the browser config runs in the browser, and the edge config had no `beforeSend` until WP17), and says sessions are "rotated on every request" (`proxy.ts` runs only on `/account`, `/portfolio`, `/api` and `/auth`, and Supabase refreshes a session only when its access token expires). The text above fixes all three: the Analytics section names what Web Analytics and Speed Insights collect, the Sentry bullet says what is stripped and does not say where, and the Security section makes no rotation claim. Do not reintroduce "rotated on every request" or "leave the server". If session behaviour has to be described, write "refreshed automatically when they expire".
 
 ### Step 16. `/stats`: metric labels, composite percentile, decision note
 
@@ -2920,6 +2923,13 @@ describe("trust copy (WP24)", () => {
       expect([...source!.text.matchAll(RAW_PALETTE_RE)].map((m) => `${file}: ${m[0]}`)).toEqual([]);
       expect(source!.text).not.toMatch(/\boutline-none\b|\btransition-(?:colors|all)\b/);
     }
+  });
+
+  it("privacy policy names Web Analytics and Speed Insights and makes no unbacked Sentry or session claim (N06)", () => {
+    const privacy = SOURCES.find((s) => s.file === "privacy/page.tsx")!.text;
+    expect(privacy).toMatch(/Vercel Web Analytics/);
+    expect(privacy).toMatch(/Speed Insights/);
+    expect(privacy).not.toMatch(/rotated on every request|leave the server/);
   });
 
   it("keeps content/disclosures.ts import-free (client components import it)", () => {
@@ -3392,6 +3402,8 @@ grep -o 'type="application/ld+json"' .next/server/app/methodology.html | wc -l  
 grep -o '"@type":"Article"' .next/server/app/methodology.html | wc -l                  # 1
 grep -o 'type="application/ld+json"' .next/server/app/about.html | wc -l               # 2
 grep -o 'Market data for information only' .next/server/app/privacy.html | wc -l       # >= 1 (footer is server HTML)
+grep -o 'Speed Insights' .next/server/app/privacy.html | wc -l                         # >= 2 (Analytics section and Vercel bullet; N06)
+grep -oE 'rotated on every request|leave the server' .next/server/app/privacy.html | wc -l   # 0 (N06)
 grep -o 'href="/methodology#[a-z-]*"' .next/server/app/analytics.html | sort -u | wc -l   # >= 10
 grep -oE '(Top|Bottom) [0-9]+%' .next/server/app/analytics.html | wc -l                # >= 1
 # If a path differs, list .next/server/app/*.html and use the route's file.
@@ -3444,7 +3456,7 @@ After merge:
 
 - [ ] `/methodology` exists, is server-rendered with no route-specific client JS, shows "Version 1.0" with an effective date and a change log, has every anchor listed in Design (21 sections and 5 sub-sections), a current values box, and `Article` plus `BreadcrumbList` JSON-LD through `serializeJsonLd`.
 - [ ] Every window, threshold and weight on `/methodology` is interpolated from an exported constant; `MethodologyArticle.test.tsx` and `methodologyConstants.test.ts` pass (composite and momentum weights equal the newest SQL `CREATE` of `get_set_analytics`, the 14-day gate, series windows and the five return anchor tolerances match the newest `CREATE` of `get_market_product_metrics` (0028), the collector constants match `main.py`). `#returns` states the bound and the catalog and Market table fallback that lacks it.
-- [ ] `/about` (with `AboutPage` and `Organization` JSON-LD), `/terms` and a rewritten `/privacy` (PIPEDA, Vercel Web Analytics and Speed Insights, Brevo, `privacy@pokefin.ca`) exist; `/contact` is `noindex`, validates `topic`, `product`, `from`, `q`, `digest`, and renders `mailto:` links to `reports@` and `hello@` with prefilled subject and body; there is no form.
+- [ ] `/about` (with `AboutPage` and `Organization` JSON-LD), `/terms` and a rewritten `/privacy` (PIPEDA, Vercel Web Analytics and Speed Insights with what they record, Brevo, `privacy@pokefin.ca`, no "rotated on every request" or "leave the server" claim, N06) exist; `/contact` is `noindex`, validates `topic`, `product`, `from`, `q`, `digest`, and renders `mailto:` links to `reports@` and `hello@` with prefilled subject and body; there is no form.
 - [ ] `app/lib/metricDefinitions.ts` holds `{ key, label, unitLabel, window, short, anchor }` for every `/stats` column and product tile; `STAT_TOOLTIPS`, `StatHeader` and WP14's local array are gone; the test proves every `MetricTile`, `MetricLabel` and `/stats` header resolves to a defined key and anchor.
 - [ ] `MetricLabel`, `ReportLink` and `DecisionNote` exist in `components/ui/`, token-only, no `"use client"`, with axe-clean tests.
 - [ ] `/stats` shows "Composite score" as "Top N%" for the better half and "Bottom N%" for the rest (never "Top 100%" with more than one ranked set) with the z-score in `title`, and the decision note under the composite table; the box calculator shows "Below / Near / Above pack value" with the band text and the decision note on a neutral surface; internal names unchanged.
