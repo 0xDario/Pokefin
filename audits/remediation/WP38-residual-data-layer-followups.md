@@ -94,7 +94,7 @@ Decisions and assumptions:
 
 1. **`get_latest_prices` returns the gated price and the raw row.** The three paging reads returned "newest row inside the 14-day window" maps that `guardedPrice`/`resolvePrice` then judged against a separately read `products.usd_price`. To keep those callers' behaviour identical, the wrappers keep returning the same maps (`newestPricedAtInWindow`, step 5): the RPC returns the newest row whatever its age, and the wrapper drops rows older than the window, which is exactly what the paged `recorded_at >= windowStart` read produced. The search and import path (step 8) instead uses the RPC's own gated `usd_price`: it is 0023's verdict computed from one statement, the same rule `get_market_product_summaries` applies. Ids are passed for every portfolio call, so deactivated products keep their price (WP11's constraint: filter on `active` only when no ids are passed).
 2. **`export_my_data` is patched in place, not redefined.** The plan suggested a full `CREATE OR REPLACE` with 0024's body plus the column. That is wrong once Track 2 exists: the registry numbers this file after 0038 and 0039, so in a replayed database a full 0024-based body here would delete WP34's `watchlist` key and WP35's `price_alerts`/`alert_email` keys, and WP35's check would stop at "a file numbered 0040 or above replaces export_my_data". Step 2 uses WP36's proven pattern (`pg_get_functiondef` plus one anchored `replace()`), which keeps VOLATILE, SECURITY DEFINER, the search_path and the ACL, keeps every key, and never contains the text `FUNCTION public.export_my_data`.
-3. **The volume windows end on the last complete day.** The verifiers' binding fix: anchor the current windows at `current_date - 1`, or at the product's newest collected bucket when that is earlier, and shift the prior window by the same anchor. The anchor uses the newest bucket only while it is inside the 3-day freshness tolerance; for a stale product the windows are withheld anyway and the anchor stays at yesterday, which keeps every read inside a 66-day bound. The freshness gate itself (`newest_day_bucket >= current_date - 3`) does not move.
+3. **The volume windows end on the last complete day.** The review's fix anchors the current windows at `current_date - 1` and shifts the prior window by the same anchor. That alone still includes a partial bucket for every product not yet visited today: the scraper visits each product every 23 hours and stores the visit day's bucket while it is still filling (`main.py` `parse_daily_sales_buckets`), so a product's newest bucket is always partial, whatever its date. The anchor is therefore the day before the newest usable bucket, never later than `current_date - 1`: `LEAST(newest_day_bucket - 1, current_date - 1)`. It applies only while the newest bucket is inside the 3-day freshness tolerance; for a stale product the windows are withheld anyway and the anchor stays at yesterday, which keeps every read inside a 67-day bound. The freshness gate itself (`newest_day_bucket >= current_date - 3`) does not move. Measured on flat demand with a partial newest bucket: the yesterday-only anchor still gives a 7d figure of 64 instead of 70 for a product last visited 1 to 3 days ago; this anchor gives 70.
 4. **An empty catalog is a failure at runtime only.** During `next build` (`process.env.NEXT_PHASE === "phase-production-build"`, which Next sets before it starts the prerender workers) an empty read is returned as before, so `pnpm build:stub` (an empty stub by design) and a deploy during an outage still build. At runtime it throws inside the cached function, so `unstable_cache` stores nothing and the page that is regenerating fails, which makes ISR keep serving the last good page.
 5. **Two phases, like WP25.** `supabase.rpc("get_latest_prices", ...)` does not type-check until `app/types/database.ts` contains the function, and that file is generated from production (WP20). Phase A is steps 1 to 3 and 5 to 19 plus every test; at its end open a draft PR titled `[waiting for DB types] fix: residual data-layer follow-ups (WP38)` and hand the owner Owner actions 1 and 2. Phase B is step 4. Until then the only allowed `tsc` failures are the `get_latest_prices` calls in `serverMarketData.ts` and `clientMarketData.ts`; Jest runs without type-checking, so every test must already pass in phase A. Never hand-edit `database.ts` and never cast the client to get past it.
 6. **No local database is required**, but if you have PostgreSQL 16 (`/usr/lib/postgresql/16/bin`), run WP21's replay harness and the DB test (Verification) before opening the PR.
@@ -302,23 +302,26 @@ Exact content. Everything from `CREATE OR REPLACE FUNCTION` to the end is 0027's
 -- get_market_product_volume_metrics (last defined in 0027) summed the 7-day
 -- and 30-day windows up to current_date. TCGplayer's bucket for the current
 -- day is partial: main.py stores it on purpose and the next visit corrects it
--- (parse_daily_sales_buckets), and each product is visited about once a day.
--- So the "7d" window held six full days plus part of today, and the prior
--- 30-day window, which is complete, was compared against a short current one.
--- With flat demand of 10 units a day and a 2-day collection lag the old
--- function returned units_sold_7d = 50 (true 70), units_sold_30d = 280
--- against a prior 300 (a -6.7% "trend"). The verifiers put the steady-state
+-- (parse_daily_sales_buckets), and each product is visited about once a day
+-- (every 23 hours). So a product's newest bucket is always the partial day of
+-- its last visit, the "7d" window held at most six full days plus part of
+-- one, and the prior 30-day window, which is complete, was compared against
+-- a short current one. With flat demand of 10 units a day and a last visit
+-- two days ago (newest bucket a partial 4) the old function returned
+-- units_sold_7d = 44 (true 70), units_sold_30d = 274 against a prior 300 (a
+-- -8.7% "trend"). The verifiers put the steady-state
 -- bias at -2% to -5% on the 30-day trend and 7 to 21% low on the 7-day
 -- figure, pushing products toward "Cooling off" and "Thin supply" on
 -- /market, /prices and /product/[id].
 --
--- Each product's windows now end on its anchor day: yesterday, or the
--- product's newest collected daily bucket when that is older than yesterday
--- but still inside the 3-day freshness tolerance (collection lagged). The
--- prior 30-day window (anchor - 59 .. anchor - 30) and its weekly fallback
--- (anchor - 63 .. anchor - 36) move with the same anchor. Measured with the
--- function itself on flat demand: 70 / 300 / 300 for a lag of 0 (partial
--- bucket for today present), 1, 2 and 3 days.
+-- Each product's windows now end on its anchor day: the day before its
+-- newest usable daily bucket (the last complete day), never later than
+-- yesterday. That holds while the newest bucket is inside the 3-day
+-- freshness tolerance; a stale product keeps yesterday. The prior 30-day
+-- window (anchor - 59 .. anchor - 30) and its weekly fallback (anchor - 63 ..
+-- anchor - 36) move with the same anchor. Measured with the function itself
+-- on flat demand of 10 a day whose newest bucket is a partial 4: 70 / 300 /
+-- 300 for a last visit 0, 1, 2 and 3 days ago (0027: 7d 64, 54, 44, 34).
 --
 -- Unchanged: the freshness gate (newest usable daily bucket at least
 -- current_date - 3), the unbroken-window checks, the prior-window source
@@ -386,26 +389,26 @@ day_freshness AS (
   FROM active_products ap
 ),
 -- Where each product's current windows end (WP38, review N02). TCGplayer's
--- bucket for today is partial: the scraper stores it on purpose and fixes it
--- on its next visit (main.py parse_daily_sales_buckets), and it visits each
--- product about once a day. Windows that ended at current_date therefore
--- summed 6 full days plus a fraction of today: flat demand read as a falling
--- volume trend and the 7d figure ran 7 to 21% low. The windows now end at
--- yesterday, the last complete day, or at the product's newest collected
--- bucket when that is older but still inside the 3-day freshness tolerance
--- (collection lagged a day or two). The prior 30-day window and its weekly
--- fallback move with the same anchor, so the trend compares two equal spans.
--- A stale product (newest bucket older than 3 days, or none) keeps the
--- yesterday anchor; its 7d and 30d windows are withheld by the final SELECT
--- either way.
+-- bucket for the day of a visit is partial: the scraper stores it on purpose
+-- and fixes it on its next visit (main.py parse_daily_sales_buckets), and it
+-- visits each product about once a day. A product's newest bucket is
+-- therefore the partial day of its last visit, and the day before it is the
+-- last complete one. Windows that ended at current_date summed at most 6 full
+-- days plus a fraction of one: flat demand read as a falling volume trend and
+-- the 7d figure ran 7 to 21% low. The windows now end on the day before the
+-- newest usable bucket, and never later than yesterday (a bucket dated today
+-- or later cannot move the end forward). The prior 30-day window and its
+-- weekly fallback move with the same anchor, so the trend compares two equal
+-- spans. A stale product (newest usable bucket older than 3 days, or none)
+-- keeps the yesterday anchor; its 7d and 30d windows are withheld by the
+-- final SELECT either way.
 -- Mirrored by getVolumeWindowAnchorKey() in frontend/app/lib/marketPulse.ts.
 -- Keep both sides in sync.
 window_anchor AS (
   SELECT
     df.product_id,
     CASE WHEN df.newest_day_bucket >= current_date - 3
-          AND df.newest_day_bucket < current_date - 1
-         THEN df.newest_day_bucket
+         THEN LEAST(df.newest_day_bucket - 1, current_date - 1)
          ELSE current_date - 1
     END AS anchor_day
   FROM day_freshness df
@@ -487,8 +490,8 @@ sales_agg AS (
   FROM public.product_sales_history sh
   JOIN window_anchor wa ON wa.product_id = sh.product_id
   -- The oldest bucket any window reads: the weekly fallback starts at
-  -- anchor_day - 63, and anchor_day is at least current_date - 3.
-  WHERE sh.bucket_date >= current_date - 66
+  -- anchor_day - 63, and anchor_day is at least current_date - 4.
+  WHERE sh.bucket_date >= current_date - 67
   GROUP BY sh.product_id
 )
 -- Newest snapshot per product: one backward probe of (product_id,
@@ -991,14 +994,16 @@ function newestUsableDayKey(sales: SalesHistoryEntry[]): string | null {
 /**
  * The day the trailing sales windows end on (review N02).
  *
- * TCGplayer's bucket for today is partial (main.py stores it and corrects it
- * on the next visit), so a window ending today held six full days plus a
- * fraction of one: flat demand read as a falling trend and "Units sold (7d)"
- * ran 7 to 21% low. Windows end on yesterday, the last complete day, or on
- * the newest collected bucket when that is older than yesterday but still
- * inside DAILY_DATA_STALENESS_TOLERANCE_DAYS (collection lagged). The prior
- * window moves with the same anchor. Mirror of window_anchor in
- * migrations/NNNN_volume_windows_complete_days.sql. Keep both sides in sync.
+ * The bucket for the day of a visit is partial (main.py stores it and
+ * corrects it on the next visit, about 23 hours later), so a product's newest
+ * bucket is always partial and a window ending today held at most six full
+ * days plus a fraction of one: flat demand read as a falling trend and
+ * "Units sold (7d)" ran 7 to 21% low. Windows end on the day before the
+ * newest usable bucket, never later than yesterday, while that bucket is
+ * inside DAILY_DATA_STALENESS_TOLERANCE_DAYS; otherwise (stale or no data)
+ * on yesterday. The prior window moves with the same anchor. Mirror of
+ * window_anchor in migrations/NNNN_volume_windows_complete_days.sql
+ * (LEAST(newest_day_bucket - 1, current_date - 1)). Keep both sides in sync.
  */
 export function getVolumeWindowAnchorKey(
   sales: SalesHistoryEntry[],
@@ -1007,10 +1012,9 @@ export function getVolumeWindowAnchorKey(
   const yesterdayKey = localDayKey(referenceDate, -1);
   const oldestFreshKey = localDayKey(referenceDate, -DAILY_DATA_STALENESS_TOLERANCE_DAYS);
   const newest = newestUsableDayKey(sales);
-  if (newest !== null && newest >= oldestFreshKey && newest < yesterdayKey) {
-    return newest;
-  }
-  return yesterdayKey;
+  if (newest === null || newest < oldestFreshKey) return yesterdayKey;
+  const dayBeforeNewest = localDayKey(parseLocalDateKey(newest), -1);
+  return dayBeforeNewest < yesterdayKey ? dayBeforeNewest : yesterdayKey;
 }
 ```
 
@@ -1020,8 +1024,8 @@ export function getVolumeWindowAnchorKey(
 /**
  * Sum quantity_sold over granularity='day' rows inside the local-date window
  * [anchor - offsetDays - days + 1, anchor - offsetDays], where anchor is
- * getVolumeWindowAnchorKey (yesterday, or the newest collected bucket when
- * collection lags).
+ * getVolumeWindowAnchorKey (the day before the newest usable bucket, never
+ * later than yesterday).
  *
  * Returns null (meaning "unknown", not "zero") when the daily data does not
  * actually cover the window:
@@ -3379,7 +3383,7 @@ python3 verify_migration.py migrations/NNNN_get_latest_prices.sql > /tmp/wp38_la
 # -- privilege EXECUTE on public.get_latest_prices(bigint[]) for service_role: granted
 python3 verify_migration.py migrations/NNNN_volume_windows_complete_days.sql > /tmp/wp38_volume.sql; echo "exit=$?"
 # expect exit=0 and:
-# -- function get_market_product_volume_metrics(): body 69979bb76df58707bcafdac33dc25cb0, non-strict, parallel u, security invoker, sql, volatility s, config search_path=public
+# -- function get_market_product_volume_metrics(): body af73805508b3afe8f24f788b151a07e0, non-strict, parallel u, security invoker, sql, volatility s, config search_path=public
 python3 verify_migration.py migrations/NNNN_export_includes_box_recipe_currency.sql > /dev/null; echo "exit=$?"
 # expect exit=2 ("Nothing here can be verified": the patch is a DO block; the header queries are its check)
 ```
