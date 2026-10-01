@@ -470,3 +470,72 @@ Medium · Verified · M · `.github/workflows/ci.yml:19, 31-36, 48`
 Ten finder passes covered auth and session security, API and header security, database and RLS, the Python pipeline, initial load, scroll and render, data and caching, architecture, UX, and React correctness. A measurement pass ran `tsc`, ESLint, Jest and a production build against a stubbed PostgREST endpoint to get route sizes and chunk composition. The 141 raw findings were clustered by root cause into 89. Every Critical, High and Medium cluster was re-derived by an independent verifier instructed to refute it: by code reading, by replaying migrations on a local Postgres 16, by micro-benchmarks, and in several cases by read-only queries against production Supabase logs and `pg_stat_statements`. All 69 such clusters were confirmed; many had their severity lowered or their recommendation corrected, and those corrections are folded in above. The 20 Low and Info clusters marked "Unverified" were not independently re-checked.
 
 Not covered: no Lighthouse or WebPageTest run against the live site, since the review container could not reach `pokefin.ca`. No penetration testing or dependency exploitation. Production database inspection was limited to logs, statement statistics and two read-only aggregate queries. Bundle sizes come from a local build and may differ slightly from Vercel's output.
+
+---
+
+## 8. Addendum: re-verification and completeness pass (2026-10-01)
+
+Usage limits had cut short part of the original verification. As a result, some findings above were confirmed only by a single low-effort check, and the 20 Low and Info items were never independently checked. All 54 of those findings have now been re-derived from the code by independent full-effort adversarial verifiers. A completeness critic then looked for anything the review missed, and two separate verifiers checked each item it found.
+
+### Re-verification results
+
+| Result | Count | Findings |
+|---|---|---|
+| Held, same severity | 45 | All others in the re-verified set |
+| Severity lowered one level | 8 | F055, F058, F081, F083, F084, F145 (Medium to Low); F116, F131 (Low to Info) |
+| Refuted | 1 | F126 (mobile filter drawer animation) |
+| Raised | 0 | None |
+
+Several verdicts also corrected details: line numbers, impact scope, or a recommendation that would have regressed something. The work package specs in `audits/remediation/` incorporate every correction. The most important are:
+
+- **F032 (loading toast):** the severity is Medium, not High. It covers header controls only on screens narrower than about 1728 px.
+- **F058 (username resets on focus):** this is latent today, because the profile is always null while F001 is unfixed. It becomes visible as soon as F001 is fixed, so the two ship together.
+- **F059 (box recipe currency):** the new currency column must default to CAD, not USD, because the calculator starts in CAD.
+- **F142 (metrics RPC):** it is confirmed High. The fix rewrites the anchors as index-ordered reads and bounds the history to 366 days, in one migration.
+- **F126:** the animation exists in the code, but there is no measurable cost, so it is now informational.
+
+### New findings from the completeness pass
+
+The critic found these by reading files that no earlier finding cited. Two independent verifiers confirmed each one. Owners are listed in `audits/remediation/00-PLAN.md`.
+
+<!-- NEW_FINDINGS_OWNERS -->
+
+**N01. The Collectr import matcher picks the wrong variant and imports blank costs as $0** (Medium, `frontend/app/lib/import.ts:352`)
+- **Symptom:** a Pokémon Center or other variant row matches the lowest-id variant in its set, is labelled "exact" and is preselected. The holding is recorded against the wrong product.
+- **Other effects:** rows with no cost import at a $0 basis. Portfolios not named "Sealed Product" are silently dropped.
+- **Fix:** score candidates on variant tokens before set-name equality, return "low" when more than one candidate remains, and show the variant in the preview. Treat a blank cost as "needs cost", not 0. Drop the portfolio-name filter or make it a choice.
+
+**N02. Market Pulse volume windows end at today while day buckets lag** (Medium, `frontend/app/lib/marketPulse.ts:315`, and migration 0022)
+- **Symptom:** in steady state, "Units sold (7d)" reads about 7% to 21% low and the 30-day volume trend about 2% to 5% low. Products near the ±20% threshold lean toward "Cooling off".
+- **Fix:** anchor both current windows at `current_date - 1`, shift the prior window by the same amount, and change the SQL and TypeScript together.
+
+**N03. Sentry never initialises** (Medium, `frontend/next.config.ts:81`)
+- **Cause:** there is no `instrumentation.ts`, so the server and edge configs never load. Turbopack, the Next 16 default, also does not load `sentry.client.config.ts`.
+- **Symptom:** setting a DSN produces no events at all.
+- **Fix:** add `instrumentation.ts` with `register()` and `onRequestError`, rename the client config to `instrumentation-client.ts`, and give the edge config the same `beforeSend` scrubbing.
+
+**N04. unstable_cache stores error fallbacks as good results for an hour** (Low, `frontend/app/lib/serverMarketData.ts:845`)
+- **Symptom:** one transient error on the exchange-rate read pins CAD prices to 1.36 for an hour. One failed history query leaves a product chart empty for an hour.
+- **Fix:** throw from the cached fetchers so ISR keeps serving the last good entry, and never cache the default rate.
+
+**N05. The USD/CAD rate has no freshness guard and comes from scraping Bank of Canada HTML** (Low, `main.py:976`)
+- **Symptom:** a failing scrape leaves an old rate in use with no indication. CAD history charts apply today's rate to every past point, so CAD returns always equal USD returns.
+- **Fix:** switch to the Valet JSON API with an upsert keyed on the observation date, alert when the rate is stale, and show the rate date next to the currency toggle.
+
+**N06. The privacy policy omits Vercel Web Analytics and Speed Insights** (Low, `frontend/app/privacy/page.tsx:61`)
+- **Other issues:** it also overstates Sentry scrubbing and session rotation, and its last-updated date predates these components.
+- **Fix:** list both Vercel services as sub-processors, correct the two claims, and bump the date.
+
+**N07. CardRinkPromo reads sessionStorage without a guard** (Low, `frontend/app/components/CardRinkPromo.tsx:37`)
+- **Symptom:** visitors who block site data get the error page on `/market` and `/prices`. A dismissed banner flashes on every load.
+- **Fix:** wrap storage access in try/catch with an in-memory fallback, and render nothing until the stored state is known.
+
+**N08. Seller-tool scripts use unguarded prices and stamp the wrong SKUs** (Low, `update_shopify_skus.py:249`, `compare_prices.py:206`)
+- **Prices:** `compare_prices.py` compares against `products.usd_price` with no freshness or active filter.
+- **SKUs:** `update_shopify_skus.py` copies the parent SKU onto every variant row and can give a Japanese listing an English SKU.
+- **Fix:** read guarded prices, filter to active products, and leave variant SKUs alone or suffix them. Reject language mismatches, and warn on duplicate SKUs.
+
+**N09. This report contradicted itself in two places** (Info)
+- **Hydration mismatch:** F007 and F089 place the GroupHeader hydration mismatch on `/prices`. Today it happens only on `/`, because `/prices` cards are not server-rendered (F012). It moves to `/prices` once F012 is fixed, so the formatting fix (WP07) must land before or with the server-rendering fix (WP08), and the plan orders them that way.
+- **Sentry:** F108 and F128 assume Sentry initialises, but it does not (N03).
+- **Latent findings:** F033, F053, F144, F145 and F149 are latent behind F001, because those code paths cannot run until signed-in data access is fixed.
