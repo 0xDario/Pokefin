@@ -3,7 +3,7 @@
 - **Goal**: every pull request shows, per route, its bytes and their growth since the recorded baseline, and fails when it breaks a budget or a layout-stability rule; the owner gets one GitHub issue within a week when real-user p75 on a route regresses; and a production page that renders without prices, or a signed-in flow that stops working, is reported within a day instead of months.
 - **Why now / value**: WP08, WP09, WP11 and WP12 bought the site its speed, and nothing protects it. Track 2 adds 15 more packages, most of them new UI (indices, sparklines, screener, watchlist, share cards); without a gate each one can quietly add 10 to 30 kB, and the product direction makes this package the precondition for all of them (01-PRODUCT-DIRECTION.md §6.1, "WP22 lands first"). Separately, the signed-in features were broken in production for months (WP01, WP04 to WP06) without anyone noticing; a daily smoke test is the cheapest possible alarm.
 - **Effort**: L, 14 to 16 hours (fixture and stub 4 h, measurement and budget scripts 3 h, Lighthouse CI including one calibration round trip 2 h, smoke, confirmation and RUM workflows 3 h, tests 2 h, quick wins and docs 1 h). Plus about 1 hour of owner time.
-- **Depends on**: WP00 (stub harness, `pnpm build:stub`, `pnpm test:scripts`), WP08 (opt-in `SUPABASE_STUB_FIXTURE` mechanism), WP12 (supabase-js off the hydration path; limits must be recorded after it), WP17 (blocking lint, `instrumentation-client.ts`, the `error.tsx` comment this package edits), WP21 (adds the `database` job to `ci.yml`; landing after it avoids a merge conflict). Also reads the results of WP01 (`POST /api/account/export`), WP05 (`GET /api/portfolio`), WP11 (ISR product page with `generateStaticParams` returning `[]`), WP13 (`/sitemap.xml`, `/stats` redirect), WP15 (restyled error pages) and WP20 (`app/types/database.ts`, async root layout).
+- **Depends on**: WP00 (stub harness, `pnpm build:stub`, `pnpm test:scripts`), WP08 (opt-in `SUPABASE_STUB_FIXTURE` mechanism), WP12 (supabase-js off the hydration path; limits must be recorded after it), WP17 (blocking lint, `instrumentation-client.ts`, the `error.tsx` comment this package edits), WP21 (adds the `database` job to `ci.yml`; landing after it avoids a merge conflict). Also reads the results of WP01 (`POST /api/account/export`), WP02 (the apex `https://pokefin.ca` is the canonical host and `www` redirects to it, owner action 4; every production check here targets the apex), WP05 (`GET /api/portfolio`), WP11 (ISR product page with `generateStaticParams` returning `[]`), WP13 (`/sitemap.xml`, `/stats` redirect), WP15 (restyled error pages) and WP20 (`app/types/database.ts`, async root layout).
 - **Unblocks**: every Track 2 package that lists it: WP23, WP26, WP27, WP29, WP30, WP31, WP32, WP33 and WP37 (each adds its routes to `frontend/perf-budgets.json` and its new public reads to `scripts/fixtures/perf.mjs`), and indirectly all later ones.
 - **Placement**: first package of Track 2, after WP21. It can move to right after WP17 if the owner wants budgets to guard WP18 to WP21; nothing else changes if it moves, because it only adds CI steps, a fixture, scripts and workflows (see "Before you start" for what to do when WP21 has not landed).
 - **Suggested branch name**: `remediation/wp22-perf-budget-gate-and-rum`
@@ -31,6 +31,10 @@ This is infrastructure. There is no new page. The user-facing surfaces are the C
  node scripts/perf-serve.mjs  (background)
    http://127.0.0.1:3100  front door = the same stub, fixture "perf":
        /rest/v1/*, /storage/v1/*, /auth/v1/*  -> answered from the fixture
+                                                 (500 + logged unmatched if the
+                                                 route throws on the query)
+       /_vercel/*                              -> empty 200 (Vercel's edge serves
+                                                 these scripts in production)
        everything else                         -> proxied to next start
    http://127.0.0.1:3101  next start (the perf build)
    writes .perf/serve-requests.ndjson, then .perf/ready after warming every route
@@ -41,7 +45,7 @@ This is infrastructure. There is no new page. The user-facing surfaces are the C
  pnpm run test:scripts     again: the fixture-coverage test now sees both request logs
 ```
 
-One origin is required, not a convenience: the app's CSP (`next.config.ts`) allows `connect-src` and `img-src` only for `'self'` and `https://*.supabase.co`. A stub on a different port would be blocked in the browser, so every sparkline fetch and every product image would fail and Lighthouse would measure a broken page. The front door also removes the CSP `upgrade-insecure-requests` directive from proxied responses (it would ask the browser to move plain-http localhost requests to https) and drops `Strict-Transport-Security`. Neither affects any measured byte.
+One origin is required, not a convenience: the app's CSP (`next.config.ts`) allows `connect-src` and `img-src` only for `'self'` and `https://*.supabase.co`. A stub on a different port would be blocked in the browser, so every sparkline fetch and every product image would fail and Lighthouse would measure a broken page. The front door also removes the CSP `upgrade-insecure-requests` directive from proxied responses (it would ask the browser to move plain-http localhost requests to https) and drops `Strict-Transport-Security`. Neither affects any measured byte. It answers `/_vercel/*` itself with an empty `200`: `<Analytics />` and `<SpeedInsights />` inject `/_vercel/insights/script.js` and `/_vercel/speed-insights/script.js` on every page outside development, `next start` has no such files, and its 404 page (the full layout, several kB) would otherwise be counted by Lighthouse as script transfer and change whenever the not-found page does.
 
 ### D2. The perf fixture
 
@@ -63,7 +67,7 @@ Synthetic and seeded (mulberry32, seed `20260930`), generated at stub start with
 
 Table routes support the PostgREST subset the app uses: `eq`, `neq`, `gt`, `gte`, `lt`, `lte`, `in`, `is`, `not.<op>`, `order` (several keys, `asc`/`desc`), `limit`, `offset` and a flat `select` with aliases. Anything else throws, so an unsupported query fails loudly instead of returning a silently wrong page.
 
-Coverage rule: with `fixture: "perf"`, every Supabase request that has no fixture route is recorded as unmatched. `build:stub` exits 1 on any unmatched request during a perf build, `perf:budget` fails on any unmatched request in the serve log, and `scripts/supabase-stub.test.mjs` fails when either log contains one. Adding a query without a fixture turns CI red instead of making a page silently cheap.
+Coverage rule: with `fixture: "perf"`, every Supabase request that has no fixture route, or whose route throws (unsupported PostgREST syntax), is recorded as unmatched; a throwing route is answered `500` with the error message instead of crashing the stub in the middle of `next build`. `build:stub` exits 1 on any unmatched request during a perf build, `perf:budget` fails on any unmatched request in the serve log, and `scripts/supabase-stub.test.mjs` fails when either log contains one. Adding a query without a fixture turns CI red instead of making a page silently cheap.
 
 ### D3. Measurement definitions
 
@@ -80,16 +84,18 @@ All sizes in kB where 1 kB = 1024 bytes, one decimal.
 - **Third-party scripts** = any `<script src>` not starting with `/`. Must be zero except the origins a route lists in `thirdPartyAllow` (`/auth/login` may load `https://challenges.cloudflare.com`).
 - **Calibration** = fixture `/prices` raw HTML bytes vs `calibration.pricesHtmlBytesProd` (production `/prices` raw bytes). Warning, never failure, when the ratio is off by more than 15%.
 
-Edge cases: a route that does not answer 200 fails the gate; an empty `.perf/` (no perf build) fails with the command to run; the date strings in the HTML change length by a byte or two from day to day, which the 5% headroom absorbs.
+Edge cases: a route that does not answer 200 fails the gate; an empty `.perf/` (no perf build) fails with the command to run; the date strings in the HTML change length by a byte or two from day to day, which the minimum headroom of D4 (never less than 0.5 kB above the recorded value) absorbs.
 
 ### D4. Targets and limits
 
 `frontend/perf-budgets.json` holds, for each budget, a **target** (the research §4 number, the goal) and a **limit** (what CI enforces). Limits start as `null` and are written by `pnpm perf:budget --write-limits`:
 
 ```text
-limit = min(target, ceil(measured x 1.05))   when measured <= target
-limit = ceil(measured x 1.05)                when measured >  target
+limit = max(min(target, ceil(measured x 1.05)), ceil(measured + 0.5))   when measured <= target
+limit = max(ceil(measured x 1.05), ceil(measured + 0.5))                when measured >  target
 ```
+
+The `ceil(measured + 0.5)` floor matters only when a route sits just under its target: without it, 149.9 kB against a 150 target would get a limit of 150 and fail on the next day's date strings. With it the limit is 151.
 
 Why not simply enforce the targets: several are below what the plan can reach today. The shared floor is about 141 kB after WP12 and the lazy Sentry change (react-dom alone is 71.5 kB), against a 125 kB target. Enforcing 125 would make CI red on the day this lands; enforcing a generous number would let a 30 kB regression through. The ratchet blocks growth of more than 5% on every route from day one, keeps the target visible, and prints "over target" wherever the site has not reached it yet. The research's own tightening rule ("once a route has 2 weeks of green RUM, tighten its limit to the measured value plus 5%") uses the same formula.
 
@@ -110,7 +116,7 @@ Why not simply enforce the targets: several are below what the plan can reach to
 
 Statuses: `ok`; `over target` (passes, shown); `FAIL` (measured above limit); `unset` (limit null in CI: fails and says to run `--write-limits`); `missing` (the route could not be measured: fails).
 
-Raise rule, enforced: on a `pull_request` event the script reads the base branch's `perf-budgets.json` (`git show HEAD^1:...`, which is the base tip in a PR merge commit; the checkout fetches depth 2) and, for every key whose `limit` or `target` went up, and for every key that exists on the base branch but not in the PR (a removed or renamed budget is an unlimited raise), requires a line `Perf budget raise: <key> <reason>` in the PR body. Adding a new key is not a raise. The body is read live from the GitHub API with the job's read-only `GITHUB_TOKEN`, because a re-run reuses the original event payload: without the API read, editing the body and re-running the job would still see the old body. If the API call fails, the payload's body is used.
+Raise rule, enforced: on a `pull_request` event the script reads the base branch's `perf-budgets.json` (`git show HEAD^1:...`, which is the base tip in a PR merge commit; the checkout fetches depth 2) and, for every key whose `limit` or `target` went up, and for every key that exists on the base branch but not in the PR (a removed or renamed budget is an unlimited raise), requires a line `Perf budget raise: <key> <reason>` in the PR body. The two policy knobs that loosen the gate without a kB number count as raises too: a higher `fonts.maxPreloads` (key `fonts.maxPreloads`) and any origin added to a route's `thirdPartyAllow` (key `routes.<route>.thirdPartyAllow`, also for a new route). Adding a new kB key is not a raise. The body is read live from the GitHub API with the job's read-only `GITHUB_TOKEN`, because a re-run reuses the original event payload: without the API read, editing the body and re-running the job would still see the old body. If the API call fails, the payload's body is used.
 
 ### D5. Lighthouse CI
 
@@ -130,11 +136,13 @@ Reports go to `frontend/lhci-reports/` (filesystem target, never public temporar
 
 ### D6. Production confirmation (after each deploy, informational)
 
-`.github/workflows/prod-confirm.yml` runs on `deployment_status` when a deployment whose environment name starts with `Production` succeeds (Vercel's GitHub integration names it `Production`, or `Production` plus the project name when one repository feeds several projects; previews are `Preview...` and are skipped). It waits 30 s for the alias, then for each HTML route of the budget file (the product route uses the first `/product/<id>` link found on production `/prices`): one warm-up request, then a measured request with the same functions and units as the CI gate (static files fetched over HTTPS instead of read from disk). It records `x-vercel-cache` (expected `HIT`, `STALE` or `PRERENDER`), document and JS sizes, compares JS with the CI limit, checks that `https://pokefin.ca/` answers exactly one `308` to `https://www.pokefin.ca/`, and prints the `/prices` calibration drift. It never fails the run; problems are `::warning::` annotations.
+`.github/workflows/prod-confirm.yml` runs on `deployment_status` when a deployment whose environment name starts with `Production` succeeds (Vercel's GitHub integration names it `Production`, or `Production` plus the project name when one repository feeds several projects; previews are `Preview...` and are skipped). It waits 30 s for the alias, then for each HTML route of the budget file (the product route uses the first `/product/<id>` link found on production `/prices`): one warm-up request, then a measured request with the same functions and units as the CI gate (static files fetched over HTTPS instead of read from disk). It records `x-vercel-cache` (expected `HIT`, `STALE` or `PRERENDER`), document and JS sizes, compares JS with the CI limit, checks the host redirect, and prints the `/prices` calibration drift. It never fails the run; problems are `::warning::` annotations.
+
+**Canonical host.** The apex `https://pokefin.ca` is canonical: WP02 owner action 4 makes it the primary domain with `www` redirecting to it (the PKCE reset cookie is host-only), and WP13 derives every canonical URL and the sitemap from it. Research §2 measured `www` serving pages on 2026-09-30, before that owner action. Every production check in this package therefore targets `https://pokefin.ca` by default (repository variable `PROD_ORIGIN` overrides it, for the case where the owner keeps `www` primary), and the redirect check expects the other host (`https://www.pokefin.ca/`) to answer exactly one `308` to `https://pokefin.ca/`. It also warns when the configured origin itself redirects, which means the variable and the Vercel domain setup disagree.
 
 ### D7. Production smoke test (daily)
 
-`.github/workflows/prod-smoke.yml`, daily at 11:07 UTC and on demand. Playwright (Chromium, pinned `playwright@1.63.0`, installed into a temp prefix, no lockfile change) against `https://www.pokefin.ca`:
+`.github/workflows/prod-smoke.yml`, daily at 11:07 UTC and on demand. Playwright (Chromium, pinned `playwright@1.63.0`, installed into a temp prefix, no lockfile change) against the canonical origin (`https://pokefin.ca`, or `PROD_ORIGIN`; see D6):
 
 | Check | Pass condition |
 |---|---|
@@ -146,14 +154,14 @@ Reports go to `frontend/lhci-reports/` (filesystem target, never public temporar
 
 Each public check is retried once after 30 s before it counts as failed (a cold ISR render or a deploy in progress).
 
-**How the signed-in leg signs in.** A password sign-in needs a Cloudflare Turnstile token, and Supabase verifies it (WP02 made the token mandatory on every credential route), so a headless browser cannot sign in reliably, and a service-role key in GitHub would undo WP21's least-privilege work. Default design: a **rotating session**. The owner seeds it once with the `cookie` request header of a signed-in session of a dedicated smoke account (secret `SMOKE_SESSION_SEED`). Each run loads the previous run's Playwright storage state, visits `/portfolio`, where `proxy.ts` refreshes the Supabase session and sets rotated cookies, and saves the new state encrypted (`openssl enc -aes-256-cbc -pbkdf2`, key in secret `SMOKE_STATE_KEY`) into the Actions cache for the next run, even when a check failed (only the rotated token is valid tomorrow). The cache key carries a 12-character hash of the seed, so a re-seed starts a fresh chain and the dead state is never restored again. A rejected saved state never falls back to the seed within the same run: presenting an already-rotated refresh token makes Supabase revoke the whole session family, which would turn one transient auth outage into a permanent break. If the chain breaks (a run redirected to sign-in), the workflow opens a separate issue labelled `prod-smoke-session` with re-seed instructions, instead of reporting a site outage. The leg needs both secrets: with only the seed, the first run would rotate the token without being able to save it. Without both, the signed-in leg reports "not configured" and the public leg still runs. The export call writes one `data_exported` row to `auth_events` per day for the smoke account; that is expected.
+**How the signed-in leg signs in.** A password sign-in needs a Cloudflare Turnstile token, and Supabase verifies it (WP02 made the token mandatory on every credential route), so a headless browser cannot sign in reliably, and a service-role key in GitHub would undo WP21's least-privilege work. Default design: a **rotating session**. The owner seeds it once with the `cookie` request header of a signed-in session of a dedicated smoke account (secret `SMOKE_SESSION_SEED`). Each run loads the previous run's Playwright storage state, visits `/portfolio`, where `proxy.ts` refreshes the Supabase session and sets rotated cookies, and saves the new state encrypted (`openssl enc -aes-256-cbc -pbkdf2`, key in secret `SMOKE_STATE_KEY`) into the Actions cache for the next run, even when a check failed or threw (the save sits in a `finally`: once the proxy has rotated the token, only the new one is valid tomorrow). Only runs on the default branch (`master`) receive the two secrets: a manual run on another branch would save its rotated state in that branch's cache scope, the next scheduled run on `master` would restore the older state and present an already-rotated token, and the chain would die. Elsewhere the leg reports "not configured". The cache key carries a 12-character hash of the seed, so a re-seed starts a fresh chain and the dead state is never restored again. A rejected saved state never falls back to the seed within the same run: presenting an already-rotated refresh token makes Supabase revoke the whole session family, which would turn one transient auth outage into a permanent break. If the chain breaks (a run redirected to sign-in), the workflow opens a separate issue labelled `prod-smoke-session` with re-seed instructions, instead of reporting a site outage. The leg needs both secrets: with only the seed, the first run would rotate the token without being able to save it. Without both, the signed-in leg reports "not configured" and the public leg still runs. The export call writes one `data_exported` row to `auth_events` per day for the smoke account; that is expected.
 
 Issues: on failure, one open issue labelled `prod-smoke` is created or gets a new comment; when a later run passes, it gets a "passing again" comment and is closed. Labels are created on first use.
 
 ### D8. Real-user monitoring
 
 - **Speed Insights configuration** (`app/layout.tsx` through a small client wrapper, because a server component cannot pass a function prop to a client component): `sampleRate={1}` (explicit; low traffic needs every sample, research §6), and `beforeSend` that removes the query string and hash from `event.url`, because `/prices?q=` carries what users typed. Routes are still grouped by pattern (`/product/[id]`) by the library.
-- **Weekly check** (`.github/workflows/rum-weekly.yml`, Mondays 13:07 UTC and on demand): `vercel metrics <metric> -a p75 --group-by route --since 7d --prod` for LCP, INP, CLS and TTFB, plus `-a count` on the same metric for the sample count, compared with `rum.targets` in `perf-budgets.json` (from research §3 and 01-PRODUCT-DIRECTION.md §6.1). The script reads the `summary` array of the JSON output (one row per route over the whole window; checked against the `vercel@61.1.0` source: the value column is `<metric id>_<aggregation>` with dots as underscores, for example `vercel_speed_insights_lcp_ms_p75`), never the time-bucketed `data` array, so no granularity flag is needed (the CLI only accepts 1m to 1d buckets). A route with fewer than 200 samples is reported "insufficient data", never a breach. Any breach opens or updates one issue labelled `perf-regression`; a clean week comments and closes it. The raw CLI JSON is uploaded as an artifact.
+- **Weekly check** (`.github/workflows/rum-weekly.yml`, Mondays 13:07 UTC and on demand): `vercel metrics <metric> -a p75 --group-by route --since 7d --prod` for LCP, INP, CLS and TTFB, plus `-a count` on the same metric for the sample count, compared with `rum.targets` in `perf-budgets.json` (from research §3 and 01-PRODUCT-DIRECTION.md §6.1). The script reads the `summary` array of the JSON output (one row per route over the whole window; checked against the `vercel@61.1.0` source: the value column is `<metric id>_<aggregation>` with dots as underscores, for example `vercel_speed_insights_lcp_ms_p75`), never the time-bucketed `data` array, so no granularity flag is needed (the CLI only accepts 1m to 1d buckets). A route with fewer than 200 samples is reported "insufficient data", never a breach. Any breach opens or updates one issue labelled `perf-regression`; a clean week comments and closes it. The raw CLI JSON is uploaded as an artifact. Two CLI facts from the same source decide the configuration: `--project` resolves only inside a team context, and with a token and no `--scope` there is none (the command exits with `NO_TEAM`), so the team slug (`VERCEL_SCOPE`) is required; and `--filter` takes KQL (`device_type:mobile`), while OData (`device_type eq 'mobile'`) prints a deprecation warning and is due for removal.
 - The job is **disabled until the owner confirms the plan exposes the metrics**: it runs only when the repository variable `RUM_WEEKLY_ENABLED` is `true`. If `vercel metrics schema vercel.speed_insights` fails on the owner's plan, the variable stays unset and the self-hosted web-vitals beacon (research §6 fallback) becomes a follow-up, not part of this PR.
 
 RUM targets (p75, ms except CLS):
@@ -212,7 +220,7 @@ Smoke failure issue (label `prod-smoke`):
 
 ```text
 Title: Production smoke test failing
-Run: https://github.com/0xDario/Pokefin/actions/runs/123
+Origin https://pokefin.ca, run https://github.com/0xDario/Pokefin/actions/runs/123
 | Check        | Result | Detail                                   |
 | /prices      | FAIL   | HTTP 200, 0 prices (needs 50), retried   |
 | /market      | ok     | HTTP 200, 306 prices                     |
@@ -223,7 +231,7 @@ Likely causes: scraper stopped for 14+ days (0023 withholds every price), an RPC
 ### D11. Rules for every later package (also written into `frontend/README.md`)
 
 1. A PR that adds a route adds it to `frontend/perf-budgets.json` in the same PR with `"limit": null` (and a `rum.targets` entry for its route pattern when the route is public), runs `pnpm perf:budget --write-limits` against the perf build, and commits the result. A new data endpoint gets a fixture route in `scripts/fixtures/perf.mjs` in the same PR, with rows shaped like production's.
-2. A PR that raises any `limit` or `target`, or removes or renames a budget key, puts `Perf budget raise: <key> <reason>` in its body (for a rename, the old key). CI enforces it.
+2. A PR that raises any `limit` or `target`, raises `fonts.maxPreloads`, adds an origin to a `thirdPartyAllow` list, or removes or renames a budget key, puts `Perf budget raise: <key> <reason>` in its body (for a rename, the old key). CI enforces it.
 3. Never loosen a Lighthouse assertion to get green; fix the page or state the exception and its reason in the PR.
 
 ## Before you start
@@ -271,7 +279,7 @@ Measure the baseline Sentry cost (research §17 item 5) so the PR can state it:
 for f in $(grep -l "captureException" .next/static/chunks/*.js); do printf '%s ' "$f"; gzip -9c "$f" | wc -c; done
 ```
 
-Check the tools this package needs: `node --version` (22.x), `python3 -c "import PIL"` (only for step 4; if it fails, `python3 -m venv /tmp/wp22-venv && /tmp/wp22-venv/bin/pip install Pillow==12.3.0` and use `/tmp/wp22-venv/bin/python`), `curl -sI https://www.pokefin.ca/prices | head -1` (network to production, needed for calibration and the smoke dry run; without it, see steps 22 and the Verification fallbacks).
+Check the tools this package needs: `node --version` (22.x), `python3 -c "import PIL"` (only for step 4; if it fails, `python3 -m venv /tmp/wp22-venv && /tmp/wp22-venv/bin/pip install Pillow==12.3.0` and use `/tmp/wp22-venv/bin/python`), `curl -sI https://pokefin.ca/prices | head -1` and `curl -sI https://www.pokefin.ca/ | grep -iE '^HTTP|^location'` (network to production, needed for calibration and the smoke dry run; without it, see steps 22 and the Verification fallbacks). Expected after WP02 owner action 4: the apex answers `200` and `www` answers `308` to `https://pokefin.ca/`. If it is the other way round, use `https://www.pokefin.ca` wherever this spec runs a production command locally, and list "set repository variable `PROD_ORIGIN` to `https://www.pokefin.ca`, or finish WP02 owner action 4" in the PR.
 
 Never run a build or `perf-serve` while another agent builds in the same checkout: both use `.next/` and ports 3100 and 3101.
 
@@ -940,14 +948,15 @@ const JSON_HEADERS = { "content-type": "application/json; charset=utf-8" };
  *   port?: number,
  *   fixture?: string,
  *   fallthrough?: string,
- *   onRequest?: (method: string, url: string, info: { matched: boolean }) => void,
+ *   onRequest?: (method: string, url: string, info: { matched: boolean, error?: string }) => void,
  * }} [options]
  *   fixture: opt-in data set ("catalog", "perf"). Without it every request
  *     gets the empty answer described at the top of this file.
  *   fallthrough: origin (for example http://127.0.0.1:3101) that receives
- *     every request outside the Supabase API paths (perf-serve.mjs).
+ *     every request outside the Supabase API paths (perf-serve.mjs), except
+ *     /_vercel/*, which gets an empty 200.
  *   onRequest: called once per Supabase request; `matched` is true when a
- *     fixture route answered it.
+ *     fixture route answered it, false (with `error`) when the route threw.
  * @returns {Promise<{ url: string, port: number, close: () => Promise<void> }>}
  */
 export function startSupabaseStub({ port = DEFAULT_STUB_PORT, fixture, fallthrough, onRequest } = {}) {
@@ -961,6 +970,14 @@ export function startSupabaseStub({ port = DEFAULT_STUB_PORT, fixture, fallthrou
     const rawUrl = req.url ?? "/";
     const pathname = rawUrl.split("?")[0];
     if (fallthrough && !SUPABASE_PATH.test(pathname)) {
+      // Vercel's edge serves the Analytics and Speed Insights scripts and
+      // beacons; next start does not, and its 404 page would be counted as
+      // script bytes by Lighthouse.
+      if (pathname.startsWith("/_vercel/")) {
+        res.writeHead(200, { "content-type": "text/javascript; charset=utf-8", "cache-control": "no-store" });
+        res.end();
+        return;
+      }
       proxyRequest(fallthrough, req, res);
       return;
     }
@@ -973,17 +990,33 @@ export function startSupabaseStub({ port = DEFAULT_STUB_PORT, fixture, fallthrou
       const accept = String(req.headers.accept ?? "");
       const wantsObject = accept.includes("application/vnd.pgrst.object+json");
       const handler = fixtureRoutes ? findRoute(fixtureRoutes, pathname) : undefined;
-      onRequest?.(method, rawUrl, { matched: Boolean(handler) });
+      let result;
+      let failure = null;
+      if (handler) {
+        try {
+          result = handler({
+            method,
+            url: new URL(rawUrl, baseUrl),
+            pathname,
+            headers: req.headers,
+            body: Buffer.concat(chunks).toString("utf8"),
+            baseUrl,
+          });
+        } catch (err) {
+          // An unsupported query (postgrest.mjs throws) must fail the gate,
+          // not crash the stub in the middle of `next build`.
+          failure = err instanceof Error ? err.message : String(err);
+        }
+      }
+      onRequest?.(method, rawUrl, failure ? { matched: false, error: failure } : { matched: Boolean(handler) });
+
+      if (failure) {
+        res.writeHead(500, JSON_HEADERS);
+        res.end(method === "HEAD" ? undefined : JSON.stringify({ code: "STUB_FIXTURE_ERROR", message: failure }));
+        return;
+      }
 
       if (handler) {
-        const result = handler({
-          method,
-          url: new URL(rawUrl, baseUrl),
-          pathname,
-          headers: req.headers,
-          body: Buffer.concat(chunks).toString("utf8"),
-          baseUrl,
-        });
         if (result && !Array.isArray(result) && result.raw) {
           res.writeHead(result.raw.status, result.raw.headers);
           res.end(method === "HEAD" ? undefined : result.raw.body);
@@ -1044,7 +1077,7 @@ export function startSupabaseStub({ port = DEFAULT_STUB_PORT, fixture, fallthrou
 }
 ```
 
-This keeps every WP00 and WP08 behaviour: empty `200 []` with `content-range: */0` by default, `406 PGRST116` for `.single()` without a matching route, WP08's catalog answering with `0-1/2`, unknown fixture names rejected, `onRequest` called before answering (the extra third argument is ignored by the existing callers). Update the header comment at the top of the file: after the two bullets add `//   - with a fixture (SUPABASE_STUB_FIXTURE=catalog|perf), matching paths are answered from it (see FIXTURES);` and `//   - with fallthrough, non-Supabase paths are proxied to the app (perf-serve.mjs).`
+This keeps every WP00 and WP08 behaviour: empty `200 []` with `content-range: */0` by default, `406 PGRST116` for `.single()` without a matching route, WP08's catalog answering with `0-1/2`, unknown fixture names rejected, `onRequest` called before answering (the extra third argument is ignored by the existing callers). New: a route that throws is answered `500 STUB_FIXTURE_ERROR` and reported with `matched: false` and the message; before this, the throw escaped the `end` listener as an uncaught exception, killed the build script and left `next build` waiting on a request that never answers. Update the header comment at the top of the file: after the two bullets add `//   - with a fixture (SUPABASE_STUB_FIXTURE=catalog|perf), matching paths are answered from it (see FIXTURES);` and `//   - with fallthrough, non-Supabase paths are proxied to the app (perf-serve.mjs).`
 
 6d. CLI block at the bottom: no change needed beyond WP08's `fixture:` line. If the CLI's `onRequest` prints `${method} ${url}`, leave it.
 
@@ -1059,7 +1092,7 @@ import { PERF_DIR, PERF_FRONT_PORT } from "./perf-config.mjs";
 
 (WP00's file already has `import { rmSync } from "node:fs";`: add `mkdirSync, writeFileSync` to that import instead of a second import line. `path` is already imported too.)
 
-7b. Replace the block from `const port = process.env.SUPABASE_STUB_PORT ...` through the `startSupabaseStub({ ... })` call (WP08 put `const fixture = ...` between them) with:
+7b. Replace the block from the comment line that starts `// Port 0 = ephemeral` (WP00's two-line comment; the replacement carries its own, longer version of it, so keeping the old one would duplicate it) through the closing `});` of the `startSupabaseStub({ ... })` call (WP08 put `const fixture = ...` between them) with:
 
 ```js
   const fixture = process.env.SUPABASE_STUB_FIXTURE || undefined;
@@ -1081,8 +1114,11 @@ import { PERF_DIR, PERF_FRONT_PORT } from "./perf-config.mjs";
     fixture,
     onRequest: (method, url, info) => {
       const key = `${method} ${url.split("?")[0]}`;
-      const entry = requestCounts.get(key) ?? { count: 0, matched: info.matched };
+      const entry = requestCounts.get(key) ?? { count: 0, matched: true, error: null };
       entry.count += 1;
+      // One unanswered or failing call is enough to flag the endpoint.
+      if (!info?.matched) entry.matched = false;
+      if (info?.error) entry.error = info.error;
       requestCounts.set(key, entry);
     },
   });
@@ -1093,22 +1129,25 @@ import { PERF_DIR, PERF_FRONT_PORT } from "./perf-config.mjs";
 ```js
   const summary = [...requestCounts.entries()]
     .sort(([a], [b]) => a.localeCompare(b))
-    .map(([key, { count, matched }]) => `  ${count}x ${key}${fixture && !matched ? "  (no fixture route)" : ""}`)
+    .map(([key, { count, matched, error }]) => {
+      const flag = !fixture || matched ? "" : error ? `  (fixture error: ${error})` : "  (no fixture route)";
+      return `  ${count}x ${key}${flag}`;
+    })
     .join("\n");
   console.log(`[build:stub] stub requests during build:\n${summary || "  (none)"}`);
 
   if (fixture) {
     mkdirSync(PERF_DIR, { recursive: true });
-    const requests = [...requestCounts.entries()].map(([key, { count, matched }]) => {
+    const requests = [...requestCounts.entries()].map(([key, { count, matched, error }]) => {
       const [method, pathname] = key.split(" ");
-      return { method, path: pathname, count, matched };
+      return { method, path: pathname, count, matched, ...(error ? { error } : {}) };
     });
     writeFileSync(`${PERF_DIR}/build-requests.json`, `${JSON.stringify({ fixture, requests }, null, 2)}\n`);
     const unmatched = requests.filter((r) => !r.matched);
     if (fixture === "perf" && unmatched.length > 0) {
       console.error(
-        `[build:stub] the perf fixture has no route for:\n${unmatched.map((r) => `  ${r.method} ${r.path}`).join("\n")}\n` +
-          "Add a route in scripts/fixtures/perf.mjs (WP22 coverage rule)."
+        `[build:stub] the perf fixture did not answer:\n${unmatched.map((r) => `  ${r.method} ${r.path}${r.error ? ` (${r.error})` : ""}`).join("\n")}\n` +
+          "Add a route in scripts/fixtures/perf.mjs, or support the query in scripts/fixtures/postgrest.mjs (WP22 coverage rule)."
       );
       if (exitCode === 0) exitCode = 1;
     }
@@ -1192,7 +1231,10 @@ async function main() {
     fixture: "perf",
     fallthrough: `http://${PERF_HOST}:${PERF_NEXT_PORT}`,
     onRequest: (method, url, info) =>
-      fs.appendFileSync(logPath, `${JSON.stringify({ method, path: url.split("?")[0], matched: info.matched })}\n`),
+      fs.appendFileSync(
+        logPath,
+        `${JSON.stringify({ method, path: url.split("?")[0], matched: info.matched, ...(info.error ? { error: info.error } : {}) })}\n`
+      ),
   });
 
   const next = spawn(process.execPath, [nextBin, "start", "-p", String(PERF_NEXT_PORT), "-H", PERF_HOST], {
@@ -1379,7 +1421,16 @@ export async function sizeAssets(paths, readAsset) {
 
 /** Fetch a route's HTML and size everything it loads initially. */
 export async function measureHtmlRoute({ origin, route, readAsset }) {
-  const res = await fetch(origin + route, { redirect: "manual" });
+  let res = await fetch(origin + route, { redirect: "manual" });
+  if (res.status === 429) {
+    // proxy.ts allows 5 requests a minute per IP on /auth/* ("sensitive"):
+    // perf-serve's warm-up uses 2, so a third local perf:budget run within a
+    // minute would otherwise report /auth/login as a failed route.
+    const waitSeconds = Math.min(61, Number(res.headers.get("retry-after")) || 61);
+    await res.arrayBuffer();
+    await new Promise((resolve) => setTimeout(resolve, waitSeconds * 1000));
+    res = await fetch(origin + route, { redirect: "manual" });
+  }
   const headers = { cache: res.headers.get("x-vercel-cache"), age: res.headers.get("age") };
   if (res.status !== 200) {
     await res.arrayBuffer();
@@ -1441,14 +1492,16 @@ export function unmatchedStubRequests(perfDir) {
   const buildLog = path.join(perfDir, "build-requests.json");
   if (fs.existsSync(buildLog)) {
     const log = JSON.parse(fs.readFileSync(buildLog, "utf8"));
-    if (log.fixture === "perf") for (const r of log.requests) if (!r.matched) out.add(`build: ${r.method} ${r.path}`);
+    if (log.fixture === "perf") {
+      for (const r of log.requests) if (!r.matched) out.add(`build: ${r.method} ${r.path}${r.error ? ` (${r.error})` : ""}`);
+    }
   }
   const serveLog = path.join(perfDir, "serve-requests.ndjson");
   if (fs.existsSync(serveLog)) {
     for (const line of fs.readFileSync(serveLog, "utf8").split("\n")) {
       if (!line.trim()) continue;
       const r = JSON.parse(line);
-      if (!r.matched) out.add(`serve: ${r.method} ${r.path}`);
+      if (!r.matched) out.add(`serve: ${r.method} ${r.path}${r.error ? ` (${r.error})` : ""}`);
     }
   }
   return [...out].sort();
@@ -1473,10 +1526,15 @@ export function budgetSlots(budgets) {
   return slots;
 }
 
-/** The enforced limit for a new budget (design D4). Whole kB. */
+/**
+ * The enforced limit for a new budget (design D4). Whole kB, and never less
+ * than 0.5 kB above the measurement, so a route just under its target cannot
+ * fail on the next day's date strings.
+ */
 export function limitFor(measuredKb, targetKb, headroom = 1.05) {
   const padded = Math.ceil(measuredKb * headroom);
-  return measuredKb <= targetKb ? Math.min(targetKb, padded) : padded;
+  const floor = Math.ceil(measuredKb + 0.5);
+  return Math.max(measuredKb <= targetKb ? Math.min(targetKb, padded) : padded, floor);
 }
 
 export const FAILING = new Set(["FAIL", "unset", "missing"]);
@@ -1497,12 +1555,14 @@ export function evaluateSlots(slots, measured) {
 
 /**
  * Keys whose limit or target is higher than on the base branch, plus keys the
- * PR removed (a removed or renamed budget is an unlimited raise). New keys are
- * not raises.
+ * PR removed (a removed or renamed budget is an unlimited raise). New kB keys
+ * are not raises. Two policy knobs loosen the gate without a kB number and
+ * count as raises: a higher fonts.maxPreloads, and any origin added to a
+ * route's thirdPartyAllow (also on a new route).
  */
 export function findRaisedLimits(baseBudgets, headBudgets) {
   const head = new Map(budgetSlots(headBudgets).map((s) => [s.key, s.spec]));
-  return budgetSlots(baseBudgets)
+  const raised = budgetSlots(baseBudgets)
     .filter((slot) => {
       const after = head.get(slot.key);
       if (!after) return true;
@@ -1510,6 +1570,12 @@ export function findRaisedLimits(baseBudgets, headBudgets) {
       return limitRaised || after.target > slot.spec.target;
     })
     .map((slot) => slot.key);
+  if ((headBudgets.fonts?.maxPreloads ?? 0) > (baseBudgets.fonts?.maxPreloads ?? 0)) raised.push("fonts.maxPreloads");
+  for (const [route, spec] of Object.entries(headBudgets.routes ?? {})) {
+    const before = new Set(baseBudgets.routes?.[route]?.thirdPartyAllow ?? []);
+    if ((spec.thirdPartyAllow ?? []).some((origin) => !before.has(origin))) raised.push(`routes.${route}.thirdPartyAllow`);
+  }
+  return raised;
 }
 
 const escapeRegExp = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -1559,8 +1625,8 @@ Every `limit` and `recorded` starts as `null`; step 22 fills them from the measu
     "Performance budgets enforced by scripts/perf-budget.mjs in CI (WP22). Read frontend/README.md, 'Performance budgets'.",
     "Units: kB = 1024 bytes. JS and CSS: gzip -9 of each file, summed. Documents and inline flight: brotli quality 11.",
     "target: the goal (audits/remediation/research/performance-excellence.md section 4). limit: what CI enforces.",
-    "New budget: add it with \"limit\": null and run `pnpm perf:budget --write-limits` on the perf build. It sets limit = min(target, ceil(measured x headroomRatio)) when measured <= target, else ceil(measured x headroomRatio).",
-    "Raising a limit or a target needs the line `Perf budget raise: <key> <reason>` in the PR body; CI checks it.",
+    "New budget: add it with \"limit\": null and run `pnpm perf:budget --write-limits` on the perf build. It sets limit = min(target, ceil(measured x headroomRatio)) when measured <= target, else ceil(measured x headroomRatio), and never less than ceil(measured + 0.5).",
+    "Raising a limit, a target or fonts.maxPreloads, or adding a thirdPartyAllow origin, needs the line `Perf budget raise: <key> <reason>` in the PR body; CI checks it.",
     "After 2 weeks of green RUM on a route, tighten its limit to the measured value x 1.05."
   ],
   "headroomRatio": 1.05,
@@ -1801,10 +1867,10 @@ async function main() {
     const text = `calibration: fixture /prices HTML is ${prices.document.raw} bytes, production ${prodBytes} (${(drift * 100).toFixed(1)}%)`;
     warnings.push(Math.abs(drift) > budgets.calibration.warnDriftRatio ? `${text}, more than ${budgets.calibration.warnDriftRatio * 100}% apart: re-check the fixture` : text);
   } else {
-    warnings.push("calibration.pricesHtmlBytesProd is not set: `curl -s https://www.pokefin.ca/prices | wc -c` and store it");
+    warnings.push("calibration.pricesHtmlBytesProd is not set: `curl -sL https://pokefin.ca/prices | wc -c` and store it");
   }
 
-  for (const miss of unmatchedStubRequests(PERF_DIR)) errors.push(`perf fixture has no route for ${miss}`);
+  for (const miss of unmatchedStubRequests(PERF_DIR)) errors.push(`perf fixture did not answer ${miss}`);
 
   if (WRITE_LIMITS) {
     let written = 0;
@@ -1855,7 +1921,7 @@ main().catch((err) => {
 
 ### 12. Lighthouse CI: new `frontend/lighthouserc.json` and `frontend/scripts/perf-lhci-summary.mjs`
 
-12a. `frontend/lighthouserc.json`. The four `resource-summary` thresholds per URL start as `["warn", { "maxNumericValue": 1 }]` placeholders; step 23 replaces them with calibrated `error` values. Do not merge with a placeholder left.
+12a. `frontend/lighthouserc.json`. The two `resource-summary` thresholds per URL (script and image, eight in all) start as `["warn", { "maxNumericValue": 1, "aggregationMethod": "median" }]` placeholders; step 23 replaces them with calibrated `error` values. Do not merge with a placeholder left.
 
 ```json
 {
@@ -2043,6 +2109,7 @@ Only the `frontend` job changes. Keep its `name:` byte for byte (branch protecti
           SUPABASE_STUB_FIXTURE: perf
         run: pnpm build:stub
       - name: Start perf server
+        id: serve
         run: |
           nohup node scripts/perf-serve.mjs > "$RUNNER_TEMP/perf-serve.log" 2>&1 &
           echo $! > "$RUNNER_TEMP/perf-serve.pid"
@@ -2061,8 +2128,10 @@ Only the `frontend` job changes. Keep its `name:` byte for byte (branch protecti
         run: pnpm perf:budget
       # Pinned and run with dlx so the lockfile does not change. Blocks on
       # CLS, bf-cache, byte totals and catalog image sizing; LCP and TBT only
-      # warn (runner variance is 20 to 30%).
+      # warn (runner variance is 20 to 30%). Runs even when the byte gate
+      # failed, so one CI round shows the PR author both results.
       - name: Lighthouse CI
+        if: ${{ !cancelled() && steps.serve.outcome == 'success' }}
         run: pnpm dlx @lhci/cli@0.15.1 autorun
       - name: Lighthouse summary
         if: always()
@@ -2081,6 +2150,9 @@ Only the `frontend` job changes. Keep its `name:` byte for byte (branch protecti
             frontend/.perf/
             frontend/lhci-reports/
             frontend/.lighthouseci/
+          # .perf/ and .lighthouseci/ are dot-directories, which
+          # upload-artifact excludes unless this is true.
+          include-hidden-files: true
           if-no-files-found: ignore
           retention-days: 14
       - name: Stop perf server
@@ -2150,22 +2222,31 @@ export function resolveIssue({ label, body }) {
 /* eslint-disable no-console -- terminal tool; console output is its UI. */
 // Production confirmation after a deploy (WP22). Informational: it never
 // fails. Measures the budget routes on the live site with the same functions
-// and units as the CI gate, records x-vercel-cache, checks the apex redirect
+// and units as the CI gate, records x-vercel-cache, checks the host redirect
 // and the /prices calibration, and writes a table to the job summary.
-// Usage: node scripts/prod-confirm.mjs [--origin https://www.pokefin.ca]
+// Usage: node scripts/prod-confirm.mjs [--origin https://pokefin.ca]
 import fs from "node:fs";
 import { BUDGETS_FILE } from "./perf-config.mjs";
 import { kb, measureHtmlRoute, readAssetOverHttp, sum } from "./perf-measure.mjs";
 
 const flag = process.argv.indexOf("--origin");
-const ORIGIN = flag > -1 ? process.argv[flag + 1] : "https://www.pokefin.ca";
-const APEX = "https://pokefin.ca/";
+// The canonical host: the apex since WP02 owner action 4 (www redirects to it).
+const ORIGIN = (flag > -1 && process.argv[flag + 1] ? process.argv[flag + 1] : "https://pokefin.ca").replace(/\/+$/, "");
+// The other host, which must answer exactly one permanent redirect to ORIGIN.
+const ALIAS = ORIGIN.includes("://www.") ? ORIGIN.replace("://www.", "://") : ORIGIN.replace("://", "://www.");
 const CACHED = new Set(["HIT", "STALE", "PRERENDER"]);
 
 async function main() {
   const budgets = JSON.parse(fs.readFileSync(BUDGETS_FILE, "utf8"));
   const readAsset = readAssetOverHttp(ORIGIN);
   const warnings = [];
+  const home = await fetch(`${ORIGIN}/`, { redirect: "manual" });
+  await home.arrayBuffer();
+  if (home.status !== 200) {
+    warnings.push(
+      `${ORIGIN}/ answered ${home.status}, not 200: it is not the host that serves pages. Set repository variable PROD_ORIGIN to the serving host, or finish WP02 owner action 4 (apex primary, www redirecting to it)`
+    );
+  }
   const pricesHtml = await (await fetch(`${ORIGIN}/prices`)).text();
   const productId = /\/product\/(\d+)/.exec(pricesHtml)?.[1] ?? null;
   let calibration = null;
@@ -2205,11 +2286,18 @@ async function main() {
   }
   if (calibration) lines.push("", calibration);
 
-  const apex = await fetch(APEX, { redirect: "manual" });
-  const location = apex.headers.get("location") ?? "";
-  lines.push("", `Apex: ${APEX} answered ${apex.status} to ${location || "(no location)"}`);
-  if (apex.status !== 308 || !location.startsWith("https://www.pokefin.ca")) {
-    warnings.push(`apex redirect is ${apex.status} to "${location}" (expected one 308 to https://www.pokefin.ca/)`);
+  const alias = await fetch(`${ALIAS}/`, { redirect: "manual" });
+  await alias.arrayBuffer();
+  const location = alias.headers.get("location") ?? "";
+  let target = "";
+  try {
+    target = location ? new URL(location, `${ALIAS}/`).origin : "";
+  } catch {
+    target = "";
+  }
+  lines.push("", `Redirect: ${ALIAS}/ answered ${alias.status} to ${location || "(no location)"}`);
+  if (alias.status !== 308 || target !== ORIGIN) {
+    warnings.push(`${ALIAS}/ answered ${alias.status} to "${location}" (expected exactly one 308 to ${ORIGIN}/)`);
   }
 
   if (warnings.length) lines.push("", "**Warnings**", ...warnings.map((w) => `- ${w}`));
@@ -2258,8 +2346,11 @@ jobs:
       # The production alias moves to the new deployment around the time the
       # success event fires; give it a moment.
       - run: sleep 30
-      - name: Measure www.pokefin.ca
-        run: node scripts/prod-confirm.mjs --origin https://www.pokefin.ca
+      # The canonical host (D6): the apex, unless the owner set PROD_ORIGIN.
+      - name: Measure the production site
+        env:
+          PROD_ORIGIN: ${{ vars.PROD_ORIGIN || 'https://pokefin.ca' }}
+        run: node scripts/prod-confirm.mjs --origin "$PROD_ORIGIN"
 ```
 
 ### 17. Production smoke test: new `frontend/scripts/prod-smoke-lib.mjs`, `frontend/scripts/prod-smoke.mjs`, `.github/workflows/prod-smoke.yml`
@@ -2323,10 +2414,10 @@ export function cookiesFromHeader(header, domain) {
 
 export const SESSION_RESEED_HELP = [
   "The smoke test's signed-in session is no longer valid (the run was sent to /auth/login).",
-  "Either the rotating session chain broke (a failed run, a cache eviction after 7 idle days, or the smoke account's session was used elsewhere), or sign-in is broken on the site. Check the site first: sign in with any account and open /portfolio.",
+  "Either the rotating session chain broke (a run that could not save its state, a cache eviction after 7 idle days, or the smoke account's session was used elsewhere), or sign-in is broken on the site. Check the site first: sign in with any account and open /portfolio.",
   "",
   "To re-seed (owner):",
-  "1. Open a private browser window, sign in to https://www.pokefin.ca as the smoke account, open /portfolio.",
+  "1. Open a private browser window, sign in as the smoke account on the host the workflow tests (https://pokefin.ca, or the PROD_ORIGIN repository variable; cookies are per host), open /portfolio.",
   "2. DevTools, Network, click the /portfolio document request, copy the full value of the `cookie` request header.",
   "3. Close the private window without signing out (signing out revokes the session).",
   "4. GitHub, Settings, Secrets and variables, Actions: replace SMOKE_SESSION_SEED with the copied value.",
@@ -2360,7 +2451,7 @@ export function renderSummary(result, runUrl) {
 //   node scripts/prod-smoke.mjs            run the checks, write $SMOKE_RESULT, exit 1 on failure
 //   node scripts/prod-smoke.mjs --report   open, update or close the GitHub issues from $SMOKE_RESULT
 //
-// Env: SMOKE_ORIGIN (default https://www.pokefin.ca), SMOKE_PRODUCT_ID
+// Env: SMOKE_ORIGIN (default https://pokefin.ca, the canonical host), SMOKE_PRODUCT_ID
 // (optional), PLAYWRIGHT_PREFIX (npm prefix where playwright is installed),
 // SMOKE_STATE_IN / SMOKE_STATE_OUT (Playwright storage state of the rotating
 // session), SMOKE_SESSION_SEED (cookie header, used only when there is no
@@ -2373,7 +2464,7 @@ import path from "node:path";
 import { resolveIssue, upsertIssue } from "./gh-issue.mjs";
 import * as lib from "./prod-smoke-lib.mjs";
 
-const ORIGIN = process.env.SMOKE_ORIGIN || "https://www.pokefin.ca";
+const ORIGIN = (process.env.SMOKE_ORIGIN || "https://pokefin.ca").replace(/\/+$/, "");
 const RESULT = process.env.SMOKE_RESULT || path.join(process.cwd(), ".perf", "smoke-result.json");
 const RUN_URL = process.env.RUN_URL || "";
 
@@ -2419,9 +2510,6 @@ async function signedInPass(context) {
     const res = await fetch("/api/account/export", { method: "POST", headers: { "x-pokefin-request": "1" } });
     return res.status;
   });
-  // Save even when a check failed: proxy.ts has rotated the refresh token,
-  // and only the new one is valid tomorrow.
-  await context.storageState({ path: process.env.SMOKE_STATE_OUT });
   const ok = nav?.status() === 200 && api?.status() === 200 && exportStatus === 200;
   return {
     status: ok ? "ok" : "failed",
@@ -2435,7 +2523,10 @@ async function signedInLeg(browser) {
   // Without the key the rotated session cannot be saved, so the first run
   // would burn the seed's refresh token and every later run would fail.
   if (!process.env.SMOKE_STATE_KEY || !process.env.SMOKE_STATE_OUT || !seed) {
-    return { status: "not-configured", detail: "SMOKE_SESSION_SEED and SMOKE_STATE_KEY are both required; signed-in checks skipped" };
+    return {
+      status: "not-configured",
+      detail: "SMOKE_SESSION_SEED and SMOKE_STATE_KEY are both required, and the workflow passes them only on master; signed-in checks skipped",
+    };
   }
   // The saved state, else the seed. Never fall back to the seed after a saved
   // state was rejected: presenting an already-rotated refresh token makes
@@ -2452,6 +2543,11 @@ async function signedInLeg(browser) {
   try {
     return await signedInPass(context);
   } finally {
+    // Save even when a check failed or threw (a navigation timeout, say):
+    // proxy.ts may already have rotated the refresh token, and only the new
+    // one is valid tomorrow. Saving a dead state is harmless; losing a live
+    // one breaks the chain.
+    await context.storageState({ path: process.env.SMOKE_STATE_OUT }).catch(() => undefined);
     await context.close();
   }
 }
@@ -2563,7 +2659,8 @@ jobs:
     # The runner context is not available in job-level env, so the temp
     # paths are exported by the first step instead.
     env:
-      SMOKE_ORIGIN: https://www.pokefin.ca
+      # The canonical host (D6): the apex, unless the owner set PROD_ORIGIN.
+      SMOKE_ORIGIN: ${{ vars.PROD_ORIGIN || 'https://pokefin.ca' }}
       SMOKE_PRODUCT_ID: ${{ vars.SMOKE_PRODUCT_ID }}
       RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
     defaults:
@@ -2603,25 +2700,31 @@ jobs:
           path: ${{ runner.temp }}/smoke-state.enc
           key: smoke-session-${{ env.SEED_ID }}-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: smoke-session-${{ env.SEED_ID }}-
+      # Only master advances the rotating session. A run on another branch
+      # would save its rotated state in that branch's cache scope; the next
+      # scheduled run on master would restore the older state, present an
+      # already-rotated refresh token, and Supabase would revoke the session.
+      # Elsewhere the secrets are empty and the signed-in leg reports
+      # "not configured".
       - name: Decrypt the session
         env:
-          SMOKE_STATE_KEY: ${{ secrets.SMOKE_STATE_KEY }}
+          SMOKE_STATE_KEY: ${{ github.ref == 'refs/heads/master' && secrets.SMOKE_STATE_KEY || '' }}
         run: |
           if [ -n "$SMOKE_STATE_KEY" ] && [ -f "$RUNNER_TEMP/smoke-state.enc" ]; then
             openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -pass env:SMOKE_STATE_KEY \
               -in "$RUNNER_TEMP/smoke-state.enc" -out "$SMOKE_STATE_IN" \
-              || { echo "::warning::could not decrypt the saved smoke session; falling back to SMOKE_SESSION_SEED"; rm -f "$SMOKE_STATE_IN"; }
+              || { echo "::warning::could not decrypt the saved smoke session (was SMOKE_STATE_KEY replaced?). This run uses SMOKE_SESSION_SEED, which works only if the seed was never used; otherwise re-seed when the prod-smoke-session issue opens."; rm -f "$SMOKE_STATE_IN"; }
           fi
       - name: Smoke test
         env:
-          SMOKE_SESSION_SEED: ${{ secrets.SMOKE_SESSION_SEED }}
-          SMOKE_STATE_KEY: ${{ secrets.SMOKE_STATE_KEY }}
+          SMOKE_SESSION_SEED: ${{ github.ref == 'refs/heads/master' && secrets.SMOKE_SESSION_SEED || '' }}
+          SMOKE_STATE_KEY: ${{ github.ref == 'refs/heads/master' && secrets.SMOKE_STATE_KEY || '' }}
         run: node scripts/prod-smoke.mjs
       - name: Encrypt the rotated session
         id: encrypt
         if: always()
         env:
-          SMOKE_STATE_KEY: ${{ secrets.SMOKE_STATE_KEY }}
+          SMOKE_STATE_KEY: ${{ github.ref == 'refs/heads/master' && secrets.SMOKE_STATE_KEY || '' }}
         run: |
           if [ -n "$SMOKE_STATE_KEY" ] && [ -f "$SMOKE_STATE_OUT" ]; then
             openssl enc -e -aes-256-cbc -pbkdf2 -iter 200000 -pass env:SMOKE_STATE_KEY \
@@ -2709,8 +2812,10 @@ and the element `<SpeedInsights />` with `<SpeedInsightsClient />`. Change nothi
 // perf-budgets.json. Routes with fewer than
 // rum.minSamples samples are "insufficient data", never a breach. A breach
 // opens or updates the issue labelled perf-regression; a clean week closes it.
-// Env: VERCEL_TOKEN, VERCEL_PROJECT (default pokefin), VERCEL_SCOPE
-// (optional team slug), RUN_URL, GH_TOKEN and GH_REPO for the issue.
+// Env: VERCEL_TOKEN, VERCEL_PROJECT (default pokefin), VERCEL_SCOPE (the
+// team slug, required: with a token and no --scope, `--project` has no team
+// context and the CLI exits with NO_TEAM), RUN_URL, GH_TOKEN and GH_REPO for
+// the issue.
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -2778,9 +2883,9 @@ export function renderRumReport(rows, { since, runUrl }) {
 }
 
 function query(metricId, aggregation, rum, env) {
-  const args = ["metrics", metricId, "--aggregation", aggregation, "--group-by", "route", "--since", rum.since, "--limit", "100", "--prod", "--project", env.project, "--format", "json", "--non-interactive", "--token", env.token];
+  const args = ["metrics", metricId, "--aggregation", aggregation, "--group-by", "route", "--since", rum.since, "--limit", "100", "--prod", "--project", env.project, "--scope", env.scope, "--format", "json", "--non-interactive", "--token", env.token];
+  // KQL, for example "device_type:mobile"; the CLI deprecates OData filters.
   for (const filter of rum.filters ?? []) args.push("--filter", filter);
-  if (env.scope) args.push("--scope", env.scope);
   const out = execFileSync("vercel", args, {
     encoding: "utf8",
     stdio: ["ignore", "pipe", "inherit"],
@@ -2800,6 +2905,9 @@ function main() {
   }
   const { rum } = JSON.parse(fs.readFileSync(BUDGETS_FILE, "utf8"));
   const env = { token, project: process.env.VERCEL_PROJECT || "pokefin", scope: process.env.VERCEL_SCOPE || "" };
+  if (!env.scope) {
+    throw new Error("VERCEL_SCOPE is not set. Set the repository variable to the Vercel team slug (the segment after vercel.com/ in the dashboard URL); without it `vercel metrics --project` exits with NO_TEAM.");
+  }
   const p75 = {};
   const counts = {};
   for (const metric of METRICS) {
@@ -2884,6 +2992,8 @@ jobs:
         with:
           name: rum-raw
           path: frontend/.perf/rum-raw/
+          # .perf/ is a dot-directory; excluded unless this is true.
+          include-hidden-files: true
           if-no-files-found: ignore
           retention-days: 30
 ```
@@ -2929,7 +3039,7 @@ pnpm dlx @lhci/cli@0.15.1 autorun            # optional, needs Chrome: Lighthous
 - Budgets live in `perf-budgets.json`: `target` is the goal, `limit` is enforced (1 kB = 1024 bytes; JS and CSS gzip -9 per file; documents brotli).
 - A new route goes into `perf-budgets.json` in the same PR, with `"limit": null`; then run `pnpm perf:budget --write-limits` and commit the file.
 - A new Supabase query the public pages make needs a route in `scripts/fixtures/perf.mjs` in the same PR; the perf build fails otherwise.
-- Raising a `limit` or `target`, or removing or renaming a budget key, needs `Perf budget raise: <key> <reason>` in the PR body. CI checks it (it reads the live body, so edit the body and re-run the job).
+- Raising a `limit`, a `target` or `fonts.maxPreloads`, adding a `thirdPartyAllow` origin, or removing or renaming a budget key, needs `Perf budget raise: <key> <reason>` in the PR body. CI checks it (it reads the live body, so edit the body and re-run the job).
 - Lighthouse assertions (`lighthouserc.json`) are never loosened to get green.
 - Production is checked by three workflows: `prod-confirm.yml` (after each deploy, informational), `prod-smoke.yml` (daily, opens a `prod-smoke` issue) and `rum-weekly.yml` (weekly real-user p75, opens a `perf-regression` issue once enabled).
 
@@ -2942,8 +3052,11 @@ From `frontend/`:
 
 ```bash
 SUPABASE_STUB_FIXTURE=perf pnpm build:stub > /tmp/wp22-perf-build.log 2>&1; echo "exit=$?"
-# exit=0, the log shows "(fixture: perf)", a stub URL of http://127.0.0.1:3100, and no "(no fixture route)" lines.
-# A "(no fixture route)" line: add the route in scripts/fixtures/perf.mjs (step 5) and rebuild.
+# exit=0, the log shows "(fixture: perf)", a stub URL of http://127.0.0.1:3100, and no "(no fixture route)"
+# or "(fixture error: ...)" lines. A "(no fixture route)" line: add the route in scripts/fixtures/perf.mjs
+# (step 5) and rebuild. A "(fixture error: ...)" line: the query uses PostgREST syntax postgrest.mjs does not
+# support (an embedded select, an or= group); add that operator to postgrest.mjs with a test case, or add a
+# dedicated route in perf.mjs that answers the query, then rebuild.
 node scripts/perf-serve.mjs > /tmp/wp22-serve.log 2>&1 &
 for i in $(seq 120); do [ -f .perf/ready ] && break; node -e "setTimeout(()=>{},1000)"; done; cat .perf/ready
 pnpm perf:budget --write-limits; echo "exit=$?"
@@ -2953,12 +3066,12 @@ pnpm perf:budget --write-limits; echo "exit=$?"
 Then calibration, if you have network:
 
 ```bash
-PROD=$(curl -s https://www.pokefin.ca/prices | wc -c); echo "$PROD"
+PROD=$(curl -sL https://pokefin.ca/prices | wc -c); echo "$PROD"   # raw HTML bytes (curl sends no accept-encoding)
 ```
 
 Put the number into `calibration.pricesHtmlBytesProd` and today's date (`YYYY-MM-DD`) into `calibration.measuredOn` in `perf-budgets.json`, then run `pnpm perf:budget` again and read the calibration warning. More than 15% apart: compare the fixture's `/prices` HTML with production's (card count, set group count, name lengths) and adjust `scripts/fixtures/perf.mjs` (set-name word counts, variant rate, image share), then rebuild and re-measure; if it stays apart after one adjustment, keep it, since calibration only warns, and state the numbers in the PR. Without network, leave both `null` and list it under Owner actions.
 
-Stop the server (`kill %1` or `pkill -f scripts/perf-serve.mjs`) and check `git diff perf-budgets.json`: only `limit`, `recorded` and the calibration fields changed. Every `limit` below its `target` equals `min(target, ceil(recorded x 1.05))`; every `limit` above its `target` equals `ceil(recorded x 1.05)`. Paste the table into the PR.
+Stop the server (`kill %1` or `pkill -f scripts/perf-serve.mjs`) and check `git diff perf-budgets.json`: only `limit`, `recorded` and the calibration fields changed. For every slot whose `recorded` is at or below its `target`, `limit` equals `max(min(target, ceil(recorded x 1.05)), ceil(recorded + 0.5))`; for every slot above its target, `max(ceil(recorded x 1.05), ceil(recorded + 0.5))`. Paste the table into the PR.
 
 ### 23. Lighthouse calibration (one CI round trip)
 
@@ -2968,7 +3081,7 @@ Stop the server (`kill %1` or `pkill -f scripts/perf-serve.mjs`) and check `git 
 4. In the same table check: CLS below 0.05 and bf-cache "3/3 pass" on all four URLs, and 0 oversized images on `/` and `/prices`. If a URL fails bf-cache or CLS, find the cause in the uploaded report (`perf-reports` artifact, `lhci-reports/*.html`, "Page prevented back/forward cache restoration" or "Avoid large layout shifts"). A real defect in the page is out of scope: switch only that URL's assertion to `warn`, open a follow-up issue with the reason and the report, and list it in the PR. Do the same if `uses-responsive-images` fails on `/` or `/prices`. Never raise the CLS threshold.
 5. Push. The Lighthouse step must now pass with every remaining assertion at `error`.
 
-Facts that decide step 4, checked in `lighthouse@12.6.1` (the version `@lhci/cli@0.15.1` pins): `bf-cache`, `uses-responsive-images` and `resource-summary` are all in the performance category (weight 0), so `onlyCategories: ["performance"]` keeps them; `bf-cache` scores 0 for any failure reason, including the "Pending browser support" and "Not actionable" types, so read the reason type in the report before calling a failure a page defect. The pages are ISR, so Next sends no `Cache-Control: no-store` that would block bfcache; if the report names `MainResourceHasCacheControlNoStore`, some package made a public route dynamic, which is itself a regression to report.
+Facts that decide step 4, checked in `lighthouse@12.6.1` (the version `@lhci/cli@0.15.1` pins): `bf-cache`, `uses-responsive-images` and `resource-summary` are all in the performance category (weight 0), so `onlyCategories: ["performance"]` keeps them; `bf-cache` scores 0 for any failure reason, including the "Pending browser support" and "Not actionable" types, so read the reason type in the report before calling a failure a page defect. In old headless Chrome (`HeadlessChrome` in the host product) the audit is not applicable (score null, which the summary shows as "0/3 pass" with a headless warning in the report); `@lhci/cli@0.15.1` launches `--headless=new`, where it runs. If the report shows that warning, do not add a `--headless` flag of your own to `chromeFlags`. The pages are ISR, so Next sends no `Cache-Control: no-store` that would block bfcache; if the report names `MainResourceHasCacheControlNoStore`, some package made a public route dynamic, which is itself a regression to report.
 
 If Chrome does not start at all in the Lighthouse step (a "No usable sandbox" or `ECONNREFUSED` from chrome-launcher), add `"chromeFlags": "--no-sandbox"` to `ci.collect.settings` in `lighthouserc.json` and say so in the PR. Do not remove any assertion.
 
@@ -2987,6 +3100,8 @@ If Chrome does not start at all in the Lighthouse step (a "No usable sandbox" or
 - **Do not rename the `Frontend (lint + typecheck + tests)` job or add a new required job.** Branch protection requires the existing names; the gate is steps in the existing job.
 - **Do not put a Supabase service-role key, a password or a Turnstile bypass in GitHub** to make the signed-in smoke leg work. The rotating session is the design; WP21 removed the service key from everything that does not need it.
 - **Do not log the export response body or the session state.** The smoke script reads the status only; the state file is encrypted before it touches the cache and deleted from the runner after use. Never upload it as an artifact.
+- **Do not point the production checks at `www.pokefin.ca`.** WP02 owner action 4 and WP13 make the apex canonical; `www` is the redirecting host. A seed copied on one host does not work on the other (host-only cookies). Change the host only through the `PROD_ORIGIN` variable, never in the scripts.
+- **Do not remove the `refs/heads/master` guard on the smoke secrets**, and do not let any other workflow restore or save the `smoke-session-*` cache. Two writers of one rotating refresh token kill the session.
 - **Do not sign out of the smoke account in the browser you copied the seed from.** Signing out revokes the session family and breaks the chain. Close the private window instead.
 - **Do not pass `beforeSend` from `layout.tsx` directly.** The layout is a server component; a function prop to the client `SpeedInsights` component fails the build ("Functions cannot be passed directly to Client Components"). Use the `SpeedInsightsClient` wrapper.
 - **Do not lower `sampleRate`** below 1 in this PR. Traffic is low; sampling would push routes below the 200-sample floor.
@@ -3000,7 +3115,7 @@ If Chrome does not start at all in the Lighthouse step (a "No usable sandbox" or
 
 Node test runner (`pnpm run test:scripts`, files in `frontend/scripts/*.test.mjs`) for the tooling, Jest for the two app changes.
 
-### 1. `frontend/scripts/supabase-stub.test.mjs` (update: 4 new tests)
+### 1. `frontend/scripts/supabase-stub.test.mjs` (update: 5 new tests)
 
 Add to the import block: `import fs from "node:fs";`, `import http from "node:http";`, `import path from "node:path";`, `import { fileURLToPath } from "node:url";`. Append:
 
@@ -3067,10 +3182,31 @@ test("fallthrough proxies app paths and drops upgrade-insecure-requests and HSTS
     assert.equal(page.headers.get("strict-transport-security"), null);
     const api = await fetch(`${fx.url}/rest/v1/rpc/get_set_analytics`, { method: "POST", body: "{}" });
     assert.equal((await api.json()).length, 55);
+    // Vercel's script paths never reach the app (its 404 page would count as script bytes).
+    const vercel = await fetch(`${fx.url}/_vercel/insights/script.js`);
+    assert.equal(vercel.status, 200);
+    assert.equal(await vercel.text(), "");
   } finally {
     await fx.close();
     app.closeAllConnections();
     await new Promise((resolve) => app.close(resolve));
+  }
+});
+
+test("a query the perf fixture cannot answer gets a 500 and is reported, and the stub keeps serving", async () => {
+  const seen = [];
+  const fx = await startSupabaseStub({ port: 0, fixture: "perf", onRequest: (method, url, info) => seen.push(info) });
+  try {
+    const res = await fetch(`${fx.url}/rest/v1/product_price_history?or=(product_id.eq.900001)`);
+    assert.equal(res.status, 500);
+    assert.match((await res.json()).message, /not supported/);
+    assert.equal(seen[0].matched, false);
+    assert.match(seen[0].error, /not supported/);
+    const next = await fetch(`${fx.url}/rest/v1/exchange_rates?select=usd_to_cad`);
+    assert.equal(next.status, 200);
+    assert.equal(seen[1].matched, true);
+  } finally {
+    await fx.close();
   }
 });
 
@@ -3297,10 +3433,12 @@ test("sharedScripts is the intersection of every route's scripts", () => {
   assert.deepEqual(sharedScripts([r("a", "b", "c"), r("b", "c", "d"), r("c", "b")]), ["b", "c"]);
 });
 
-test("limitFor: 5% headroom, capped at the target while under it", () => {
+test("limitFor: 5% headroom, capped at the target while under it, never under measured + 0.5", () => {
   assert.equal(limitFor(100, 150), 105);
   assert.equal(limitFor(148, 150), 150);
+  assert.equal(limitFor(149.9, 150), 151);
   assert.equal(limitFor(163.9, 155), 173);
+  assert.equal(limitFor(0, 35), 1);
 });
 
 test("evaluateSlots: ok, over target, FAIL, unset", () => {
@@ -3326,6 +3464,17 @@ test("a raised or removed limit needs a reason line; a new route is not a raise"
   assert.deepEqual(missingRaiseReasons(raised, "no reason here"), ["routes./a.jsGzKb"]);
   assert.deepEqual(missingRaiseReasons(raised, "Perf budget raise: routes./a.jsGzKb"), ["routes./a.jsGzKb"]);
   assert.deepEqual(missingRaiseReasons(raised, "Summary\nPerf budget raise: routes./a.jsGzKb index chart adds 9 kB"), []);
+  // Policy knobs: a second preloaded font, or a new third-party origin, is a raise too.
+  const policyBase = { fonts: { maxPreloads: 1 }, routes: { "/auth/login": { thirdPartyAllow: ["https://challenges.cloudflare.com"] } } };
+  const policyHead = {
+    fonts: { maxPreloads: 2 },
+    routes: {
+      "/auth/login": { thirdPartyAllow: ["https://challenges.cloudflare.com"] },
+      "/new": { thirdPartyAllow: ["https://cdn.example"] },
+    },
+  };
+  assert.deepEqual(findRaisedLimits(policyBase, policyHead), ["fonts.maxPreloads", "routes./new.thirdPartyAllow"]);
+  assert.deepEqual(findRaisedLimits(policyBase, policyBase), []);
 });
 ```
 
@@ -3352,21 +3501,21 @@ test("judgePage: pass, no prices, HTTP error, redirect, error page", () => {
 test("firstProductId and countSitemapProducts", () => {
   assert.equal(firstProductId('<a href="/product/123456">x</a><a href="/product/9">'), "123456");
   assert.equal(firstProductId("<p>none</p>"), null);
-  const xml = "<urlset><url><loc>https://www.pokefin.ca/</loc></url><url><loc>https://www.pokefin.ca/product/1</loc></url><url><loc>https://www.pokefin.ca/product/2</loc></url></urlset>";
+  const xml = "<urlset><url><loc>https://pokefin.ca/</loc></url><url><loc>https://pokefin.ca/product/1</loc></url><url><loc>https://pokefin.ca/product/2</loc></url></urlset>";
   assert.equal(countSitemapProducts(xml), 2);
 });
 
 test("cookiesFromHeader keeps only non-empty sb- cookies, scoped to the host", () => {
-  const cookies = cookiesFromHeader("_ga=1; sb-abc-auth-token.0=base64-eyJ=; sb-abc-auth-token.1=more; sb-empty=", "www.pokefin.ca");
+  const cookies = cookiesFromHeader("_ga=1; sb-abc-auth-token.0=base64-eyJ=; sb-abc-auth-token.1=more; sb-empty=", "pokefin.ca");
   assert.deepEqual(cookies.map((c) => c.name), ["sb-abc-auth-token.0", "sb-abc-auth-token.1"]);
   assert.equal(cookies[0].value, "base64-eyJ=");
-  assert.equal(cookies[0].domain, "www.pokefin.ca");
+  assert.equal(cookies[0].domain, "pokefin.ca");
   assert.equal(cookies[0].secure, true);
 });
 
 test("renderSummary lists every check and the signed-in leg", () => {
   const md = renderSummary(
-    { origin: "https://www.pokefin.ca", startedAt: "2026-09-30T11:07:00Z", failed: true, checks: [{ name: "/prices", ok: false, detail: "0 prices (needs 50)", retried: true }], auth: { status: "ok", detail: "/portfolio 200, /api/portfolio 200, export 200" } },
+    { origin: "https://pokefin.ca", startedAt: "2026-09-30T11:07:00Z", failed: true, checks: [{ name: "/prices", ok: false, detail: "0 prices (needs 50)", retried: true }], auth: { status: "ok", detail: "/portfolio 200, /api/portfolio 200, export 200" } },
     "https://example.test/run/1"
   );
   assert.match(md, /FAILING/);
@@ -3422,12 +3571,12 @@ import { stripQueryFromVitalsUrl } from "../rum";
 
 describe("stripQueryFromVitalsUrl", () => {
   it("drops the query string and the hash", () => {
-    expect(stripQueryFromVitalsUrl({ type: "vital", url: "https://www.pokefin.ca/prices?q=etb&sort=price#top" }).url).toBe(
-      "https://www.pokefin.ca/prices"
+    expect(stripQueryFromVitalsUrl({ type: "vital", url: "https://pokefin.ca/prices?q=etb&sort=price#top" }).url).toBe(
+      "https://pokefin.ca/prices"
     );
   });
   it("returns the same object when there is nothing to strip", () => {
-    const event = { type: "vital", url: "https://www.pokefin.ca/product/42" };
+    const event = { type: "vital", url: "https://pokefin.ca/product/42" };
     expect(stripQueryFromVitalsUrl(event)).toBe(event);
   });
   it("keeps the other fields", () => {
@@ -3500,7 +3649,7 @@ it.each(["error.tsx", "global-error.tsx"])("%s imports @sentry/nextjs only dynam
 
 If the default export of `app/error.tsx` has another name after WP15, keep the default import as written (the name does not matter). If Jest's module registry returns the real SDK for the dynamic import (the mock not applied), report it in the PR and keep only the two static tests; do not mock `import()` by hand.
 
-Expected totals: `pnpm run test:scripts` gains 27 tests (4 + 9 + 6 + 5 + 3); `pnpm test --ci` gains 3 suites and 8 tests.
+Expected totals: `pnpm run test:scripts` gains 28 tests (5 + 9 + 6 + 5 + 3); `pnpm test --ci` gains 3 suites and 8 tests.
 
 ## Verification
 
@@ -3526,7 +3675,7 @@ The perf gate end to end (step 22 did this once; repeat on the final commit):
 ```bash
 rm -rf .perf
 SUPABASE_STUB_FIXTURE=perf pnpm build:stub > /tmp/wp22-perf-build.log 2>&1; echo "exit=$?"   # exit=0
-grep -c "no fixture route" /tmp/wp22-perf-build.log                                           # 0
+grep -cE "no fixture route|fixture error" /tmp/wp22-perf-build.log                              # 0
 node scripts/perf-serve.mjs > /tmp/wp22-serve.log 2>&1 &
 for i in $(seq 120); do [ -f .perf/ready ] && break; node -e "setTimeout(()=>{},1000)"; done; cat .perf/ready
 curl -s -o /dev/null -w '%{http_code} %{size_download}\n' http://127.0.0.1:3100/prices           # 200 and a size close to calibration.pricesHtmlBytesProd
@@ -3594,25 +3743,25 @@ If `actionlint` is installed, run it on all four files and expect no output.
 
 Production (needs network; before merge):
 
-- Smoke dry run from step 17d: exit 0 against `https://www.pokefin.ca`, signed-in row "not configured". Paste the table.
-- `node scripts/prod-confirm.mjs --origin https://www.pokefin.ca`: a table for 9 routes, and read the apex line. A warning is information for the owner, not a blocker.
+- Smoke dry run from step 17d: exit 0 against `https://pokefin.ca` (the default `SMOKE_ORIGIN`), signed-in row "not configured". Paste the table.
+- `node scripts/prod-confirm.mjs --origin https://pokefin.ca`: a table for 9 routes, and read the "Redirect:" line (expected: `https://www.pokefin.ca/` answered 308 to `https://pokefin.ca/`). A warning is information for the owner, not a blocker; a warning that the origin itself redirects goes into the PR as an owner action (set `PROD_ORIGIN` or finish WP02 owner action 4).
 
 Manual checks at 390 px and 1440 px: there is no visual change in this PR. On the PR's Vercel preview, at both widths, open `/prices?q=etb`, interact once (tap a filter), then in DevTools Network filter `speed-insights`: the vitals request's JSON `url` field has no `?q=`. On a production build the beacon posts to `/_vercel/speed-insights/vitals`; on a preview it may not send at all, in which case note that in the PR and let the owner check it on production after merge.
 
 ## Owner actions
 
-1. **Function region** (research §7.4): Vercel, Project pokefin, Settings, Functions, Region: `cle1` (Cleveland, next to Supabase us-east-2). Confirmation: `curl -sI https://www.pokefin.ca/product/<any id> | grep -i x-vercel-id` on a cold response contains `cle1`.
-2. **Apex redirect**: `curl -sI https://pokefin.ca/ | head -3` must show exactly one `308` with `location: https://www.pokefin.ca/`. If it shows `307`, Vercel, Domains, `pokefin.ca`, set the redirect to permanent (308). The `prod-confirm` workflow reports it after every deploy.
-3. **Speed Insights metrics access**: create a Vercel access token (Account Settings, Tokens; scope: the team that owns pokefin; no expiry or 1 year). Locally, `npx vercel@61.1.0 metrics schema vercel.speed_insights --token <token>`.
-   - If it lists metrics: compare the four ids in `perf-budgets.json` `rum.metricIds` (`vercel.speed_insights.lcp_ms`, `.inp_ms`, `.cls`, `.ttfb_ms`) with the printed names and correct any that differ (CLS is unitless, so its id is the one most likely to differ) in a small PR. Add the repository secret `VERCEL_TOKEN`, variables `VERCEL_PROJECT` (the project name, `pokefin` if that is its name) and `VERCEL_SCOPE` (the team slug, empty for a personal account), then run the exact query once: `npx vercel@61.1.0 metrics vercel.speed_insights.lcp_ms --aggregation p75 --group-by route --since 7d --limit 100 --prod --project <name> --format json --non-interactive --token <token>`. Confirm the JSON has a `summary` array whose rows carry `route` and `vercel_speed_insights_lcp_ms_p75`; if the shape differs, paste it into an issue and leave the job disabled (the parser in `rum-weekly.mjs` must change first). If `vercel metrics schema vercel.speed_insights.lcp_ms` lists device and country dimensions, add the filters (for example `"device_type eq 'mobile'"`, `"country eq 'CA'"`, with the names the schema prints) to `rum.filters`, because the targets are mobile, Canada p75. Then set the repository variable `RUM_WEEKLY_ENABLED` to `true` and run "RUM weekly" once from the Actions tab. Confirmation: a green run with the p75 table in its summary.
+1. **Function region** (research §7.4): Vercel, Project pokefin, Settings, Functions, Region: `cle1` (Cleveland, next to Supabase us-east-2). Confirmation: `curl -sI https://pokefin.ca/product/<any id> | grep -i x-vercel-id` on a cold response contains `cle1`.
+2. **Host redirect** (same decision as WP02 owner action 4 and WP13 owner action 1: the apex is canonical): `curl -sI https://www.pokefin.ca/ | head -3` must show exactly one `308` with `location: https://pokefin.ca/`, and `curl -sI https://pokefin.ca/ | head -1` must show `200`. If `www` answers `307`, Vercel, Domains, `www.pokefin.ca`, set the redirect to permanent (308). If the apex redirects to `www` instead, WP02 owner action 4 is not done: do it (apex primary, `www` redirecting to it), or, if you deliberately keep `www` primary, set repository variable `PROD_ORIGIN` to `https://www.pokefin.ca` so the smoke and confirmation workflows test the serving host (and tell whoever owns WP13 that canonical URLs then point at a redirect). The `prod-confirm` workflow reports the redirect after every deploy.
+3. **Speed Insights metrics access**: create a Vercel access token (Account Settings, Tokens; scope: the team that owns pokefin; no expiry or 1 year). Find the team slug: the segment after `vercel.com/` in the dashboard URL of the project (every account, Hobby included, has one). Locally, `npx vercel@61.1.0 metrics schema vercel.speed_insights --scope <slug> --token <token>`.
+   - If it lists metrics: compare the four ids in `perf-budgets.json` `rum.metricIds` (`vercel.speed_insights.lcp_ms`, `.inp_ms`, `.cls`, `.ttfb_ms`) with the printed names and correct any that differ (CLS is unitless, so its id is the one most likely to differ) in a small PR. Add the repository secret `VERCEL_TOKEN`, variables `VERCEL_PROJECT` (the project name, `pokefin` if that is its name) and `VERCEL_SCOPE` (the team slug; required, because with a token and no `--scope` the CLI has no team context and `--project` exits with `NO_TEAM`), then run the exact query once: `npx vercel@61.1.0 metrics vercel.speed_insights.lcp_ms --aggregation p75 --group-by route --since 7d --limit 100 --prod --project <name> --scope <slug> --format json --non-interactive --token <token>`. Confirm the JSON has a `summary` array whose rows carry `route` and `vercel_speed_insights_lcp_ms_p75`; if the shape differs, paste it into an issue and leave the job disabled (the parser in `rum-weekly.mjs` must change first). If `vercel metrics schema vercel.speed_insights.lcp_ms` lists device and country dimensions, add the filters in KQL syntax (for example `"device_type:mobile"` and `"country:CA"`, with the dimension names and values the schema prints) to `rum.filters`, because the targets are mobile, Canada p75. Do not use OData (`device_type eq 'mobile'`): vercel 61.1.0 prints a deprecation warning for it and will drop it. Re-run the exact query with `--filter` to confirm the rows still come back. Then set the repository variable `RUM_WEEKLY_ENABLED` to `true` and run "RUM weekly" once from the Actions tab. Confirmation: a green run with the p75 table in its summary.
    - If the schema command fails on the plan: do nothing more; the workflow stays disabled and the self-hosted web-vitals beacon becomes a follow-up.
 4. **Smoke account and secrets**: create a dedicated account (for example `smoke+pokefin@<your domain>`) through the normal sign-up, add one holding to its portfolio. Then:
    - `openssl rand -base64 48`, save it as repository secret `SMOKE_STATE_KEY`.
-   - Private browser window: sign in as the smoke account, open `/portfolio`, DevTools, Network, the `/portfolio` document request, copy the full `cookie` request header value; close the window without signing out. Save it as repository secret `SMOKE_SESSION_SEED`.
+   - Private browser window, on the host the workflows test (`https://pokefin.ca`, or `PROD_ORIGIN` if you set it; the session cookies are host-only): sign in as the smoke account, open `/portfolio`, DevTools, Network, the `/portfolio` document request, copy the full `cookie` request header value; close the window without signing out. Save it as repository secret `SMOKE_SESSION_SEED`.
    - Optional: repository variable `SMOKE_PRODUCT_ID` with a long-lived product id.
-   - Actions, "Production smoke", Run workflow. Confirmation: green, and the summary's "Signed in" row shows `/portfolio 200, /api/portfolio 200, export 200`. From then on the workflow rotates the session itself; re-seed only when a `prod-smoke-session` issue asks.
+   - Actions, "Production smoke", Run workflow, branch `master` (the workflow passes the session secrets only on `master`; a run on another branch reports the signed-in leg as "not configured"). Confirmation: green, and the summary's "Signed in" row shows `/portfolio 200, /api/portfolio 200, export 200`. From then on the workflow rotates the session itself; re-seed only when a `prod-smoke-session` issue asks.
 5. **RUM baseline** (research §17 item 1): in Vercel, Speed Insights, Device Mobile, Country Canada (or the CLI with the filters from item 3), read the 28-day p75 LCP, INP, CLS and TTFB and the sample count per route, and put them into `perf-budgets.json` under `baseline` in a small PR: `{ "exportedOn": "YYYY-MM-DD", "window": "28d", "filters": "mobile, CA", "routes": { "/prices": { "lcpMs": 0, "inpMs": 0, "cls": 0, "ttfbMs": 0, "samples": 0 } } }` with the real numbers.
-6. **Calibration**, only if the PR says the executor had no network: `curl -s https://www.pokefin.ca/prices | wc -c` into `calibration.pricesHtmlBytesProd`, with the date in `calibration.measuredOn`.
+6. **Calibration**, only if the PR says the executor had no network: `curl -sL https://pokefin.ca/prices | wc -c` into `calibration.pricesHtmlBytesProd`, with the date in `calibration.measuredOn`.
 7. Nothing to change in branch protection: the gate runs inside the already-required `Frontend (lint + typecheck + tests)` check.
 
 ## Acceptance criteria
@@ -3621,7 +3770,7 @@ Manual checks at 390 px and 1440 px: there is no visual change in this PR. On th
 - [ ] `scripts/fixtures/perf.mjs` generates 306 products, 55 sets, 9 generations, 12 product types, about 15% variants, volume for about 80% of priced products, 6 stale products withheld as 0023 does, daily history for every priced product of a released set (365 days for 900001 to 900003, about 100,000 rows), set analytics for all 55 sets, from a mulberry32 seed; `scripts/fixtures/img/` holds exactly `original.jpg` and `thumb.webp`, about 100 kB together, generated by the committed script.
 - [ ] `perf-serve` serves the app and the stub on one origin (127.0.0.1:3100), without `upgrade-insecure-requests` in the proxied CSP, and wipes `.next/cache/fetch-cache` on exit.
 - [ ] `frontend/perf-budgets.json` holds the D4 targets, a non-null `limit` and `recorded` for all 19 slots computed by the D4 rule, the calibration fields, and the RUM targets.
-- [ ] CI prints the budget table and the Lighthouse table in the Frontend job summary and uploads the `perf-reports` artifact.
+- [ ] CI prints the budget table and the Lighthouse table in the Frontend job summary and uploads the `perf-reports` artifact, which contains `.perf/budget-result.json`, `.perf/build-requests.json` and the `.lighthouseci/lhr-*.json` files (download it once from the PR run and check; an artifact with only `lhci-reports/` means `include-hidden-files` is missing).
 - [ ] The JS probe (about 30 kB gz added to `/prices`) fails the "Performance budgets" step (link in the PR).
 - [ ] The CLS probe fails the "Lighthouse CI" step on `cumulative-layout-shift` for `/prices` (link in the PR).
 - [ ] `lighthouserc.json` has no `"maxNumericValue": 1` placeholder; CLS, bf-cache and resource-summary are `error` on all four URLs (except exceptions documented in the PR per step 23), `uses-responsive-images` is `error` on `/` and `/prices`, LCP and TBT are `warn`.
@@ -3630,9 +3779,10 @@ Manual checks at 390 px and 1440 px: there is no visual change in this PR. On th
 - [ ] `pnpm-lock.yaml` is unchanged; `package.json` gains only `perf:serve` and `perf:budget`.
 - [ ] `app/error.tsx` and `app/global-error.tsx` have no static `@sentry/nextjs` import; the shared floor dropped by the Sentry chunk (number in the PR).
 - [ ] `app/layout.tsx` renders `<SpeedInsightsClient />` with `sampleRate={1}` and the query-stripping `beforeSend`.
-- [ ] `prod-confirm.yml`, `prod-smoke.yml` and `rum-weekly.yml` exist, parse, declare least-privilege `permissions`, and `rum-weekly` runs only when `RUM_WEEKLY_ENABLED` is `true`.
+- [ ] `prod-confirm.yml`, `prod-smoke.yml` and `rum-weekly.yml` exist, parse, declare least-privilege `permissions`, and `rum-weekly` runs only when `RUM_WEEKLY_ENABLED` is `true`. Both production workflows default to `https://pokefin.ca` (overridable by `PROD_ORIGIN`), `prod-confirm` expects `https://www.pokefin.ca/` to answer one 308 to it, and `prod-smoke` passes the session secrets only on `master`.
+- [ ] A perf-fixture route that throws (unsupported PostgREST syntax) answers 500, is reported as unmatched with its message, and fails `build:stub` with exit 1 instead of crashing the stub (covered by the new stub test).
 - [ ] The smoke script passes against production locally (public checks) before merge, and the "Production smoke" workflow is green on its first manual run after the owner adds the secrets.
-- [ ] `pnpm run test:scripts` passes with 27 more tests, `pnpm test --ci` with 3 more suites and 8 more tests, `pnpm run lint` exits 0.
+- [ ] `pnpm run test:scripts` passes with 28 more tests, `pnpm test --ci` with 3 more suites and 8 more tests, `pnpm run lint` exits 0.
 - [ ] `frontend/README.md` documents the gate and the rules for later packages.
 
 ## Rollback
@@ -3645,7 +3795,7 @@ Manual checks at 390 px and 1440 px: there is no visual change in this PR. On th
 - Smoke or RUM workflows noisy: disable them in the Actions tab (Disable workflow) and open an issue; the scripts can stay.
 - Sentry or Speed Insights change: revert `app/error.tsx`, `app/global-error.tsx`, `app/layout.tsx` and `app/components/SpeedInsightsClient.tsx` only.
 
-The owner's secrets and variables (`VERCEL_TOKEN`, `SMOKE_*`, `RUM_WEEKLY_ENABLED`) can be deleted in Settings, Secrets and variables, Actions. The `smoke-session-*` cache entries expire on their own after 7 days, or can be deleted in Actions, Caches.
+The owner's secrets and variables (`VERCEL_TOKEN`, `VERCEL_PROJECT`, `VERCEL_SCOPE`, `SMOKE_*`, `PROD_ORIGIN`, `RUM_WEEKLY_ENABLED`) can be deleted in Settings, Secrets and variables, Actions. The `smoke-session-*` cache entries expire on their own after 7 days, or can be deleted in Actions, Caches.
 
 ## Commit and PR
 

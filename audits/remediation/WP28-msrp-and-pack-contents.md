@@ -4,8 +4,8 @@
 - **Why now / value**: "x MSRP" and "price per pack" are the lingua franca of sealed investing and no page shows either (`research/competitive-landscape.md` §2 "Community norms": "x MSRP and price per pack are the lingua franca"; `research/ui-audit.md` `/product/[id]`: "No MSRP and no x times MSRP, the single most-used number in sealed-product investing"). WP31 (product decision page), WP33 (Value preset, Below pack value), WP30 (list column) and WP35 (MSRP alert suggestion) read these fields; landing the data path first lets them ship without inventing it.
 - **Effort**: M, 12 to 14 hours (migration and DB tests 3 h, loader and template scripts with tests 3 h, server reads, `/prices` and calculator UI 4 h, methodology and definitions 1 h, fixture, verification and PR 2 h). Owner curation (D7) is separate: 3 to 5 hours.
 - **Depends on**: WP06 (box recipes API, `BoxRecipe.currency`, `loadRecipeIntoState`, `copyState`/`shareStatus`), WP11 (`boosterPackData.ts`, server-fed `/box-calculator`, `revalidate_hook.py`, cache tags), WP21 (`pokefin_scraper`, replay harness, schema baseline, `load_supabase_readonly_credentials`), WP23 (tokens, `AsOf`, `SegmentedControl` currency control), WP24 (`/methodology`, `metricDefinitions.ts`, `PACK_VALUE_LABELS`, `packValueBandsText`, `#box-nav`), WP25 (`product_daily_stats`, `refresh_market_analytics`, `product_stats_latest`, `getCachedProductStats`, `fetchAllRows`, perf fixture `productStats`). Through them: WP07 (`format.ts`), WP13 (`productMeta.ts`), WP17 (`nav.ts`, blocking lint and tests), WP20 (`CurrencyProvider`, `app/types/market.ts`, `pnpm types:db`), WP22 (perf fixture and budgets). Soft: WP26 (card `sparkline` prop; the card edit works with or without it), WP27 (relabels the calculator's currency control "Recipe currency" and makes it follow the header; the catalog amounts follow either), WP30 (list rows; see step 12d).
-- **Unblocks**: WP30 (x MSRP on list rows: `MsrpMultiple`, `initialMsrpMultiples`), WP31 (x MSRP, cost per pack, NAV with reason, "Open in Box NAV" through `boxCalculatorHref`, product release date), WP32 (release date through `product_catalog_attributes` for new releases), WP33 (Value preset and Below pack value from `premium_to_packs_pct`), WP35 (MSRP alert suggestion).
-- **Placement**: after WP25, because it replaces `refresh_market_analytics` again. Reserves migration **0036** and keeps it if it merges out of order. It must merge before WP29 (0037), which replaces the same function (see Before you start, check 3). WP30, WP31 and WP33 read its fields softly and hide them when absent, so curation (D7) can lag without blocking them.
+- **Unblocks**: WP30 (x MSRP on list rows: `formatMsrpMultiple`, `initialMsrpMultiples`), WP31 (x MSRP, cost per pack, NAV with reason, "Open in Box NAV" through `boxCalculatorHref`, product release date), WP33 (Value preset and Below pack value from `premium_to_packs_pct`), WP34 (x MSRP column), WP35 (MSRP alert suggestion). WP32 lists per-product release dates as a follow-up; `product_catalog_attributes.release_date` is ready for it.
+- **Placement**: after WP25, because it replaces `refresh_market_analytics` again. Reserves migration **0036** and keeps it if it merges out of order. It can merge before or after WP29: WP29's 0037 only calls `refresh_market_analytics` and does not redefine it (WP29 spec, Pitfalls: "0037 does not replace it; it only calls it"). No other Track 2 spec redefines the function; Before you start, check 2, stops the executor if one has. WP30, WP31, WP33, WP34 and WP35 read its fields softly and hide them when absent, so curation (D7) can lag without blocking them.
 - **Suggested branch name**: `remediation/wp28-msrp-and-pack-contents`
 - **Risk level**: medium. It replaces the SECURITY DEFINER refresh the scraper calls every run and adds a SECURITY DEFINER write function; both are contained by EXECUTE grants (`service_role` only for the write), an additive schema, a database test module that proves every gate and role, and a loader that writes nothing unless its input validates.
 
@@ -67,7 +67,7 @@ Performance: the structure step reads about 306 stats rows, 150 contents rows an
 - The two CSVs are the whole truth. After `--apply`, a product without a reviewed row has no MSRP, no release date override and no contents. Rows with `reviewed=no` are skipped and counted, so a template guess never reaches the site.
 - Columns. `product_attributes.csv`: `product_id,product_name,msrp_usd,msrp_cad,msrp_source,release_date,reviewed,notes`. `product_contents.csv`: `product_id,product_name,pack_set_id,pack_set_name,quantity,promo_value_usd,reviewed,notes`. `product_name`, `pack_set_name` and `notes` are for the human; the loader ignores them.
 - Loader validation (exit 2, nothing written, on any failure): exact header; integer ids; `msrp_usd` 1.00 to 2000.00, `msrp_cad` 1.00 to 3000.00, at most 2 decimals; `msrp_source` required with an MSRP, at most 200 characters; `release_date` ISO, 1996-01-01 to today plus 366 days; `quantity` 1 to 100; `promo_value_usd` 0 to 1000.00 and on at most one row per product; `reviewed` is `yes` or `no`; no duplicate product (attributes) or product and set (contents); contents on a `booster_pack` product. Unknown product or set ids are reported and skipped (exit 1 and nothing written with `--strict`). An empty reviewed attribute set while MSRPs exist needs `--allow-clear-all` (the SQL function enforces it too).
-- Template rules (defaults to verify, never facts): booster box 36 packs, booster bundle 6 packs, each with MSRP = packs x era pack MSRP (Scarlet & Violet $4.49; Sword & Shield, Sun & Moon, XY $3.99); Elite Trainer Box 9 packs (Scarlet & Violet, Mega Evolution) or 8 (Sword & Shield, Sun & Moon, XY), 10 for Sword & Shield and Sun & Moon special expansions, MSRP $49.99 (Scarlet & Violet) or $39.99 (older eras), none for Mega Evolution; variants and every other type get no defaults. `msrp_source` is "template default, verify" until the owner replaces it.
+- Template rules (defaults to verify, never facts): booster box 36 packs, booster bundle 6 packs, each with MSRP = packs x era pack MSRP (Scarlet & Violet $4.49; Sword & Shield, Sun & Moon, XY $3.99); Elite Trainer Box 9 packs (Scarlet & Violet, Mega Evolution) or 8 (Sword & Shield, Sun & Moon, XY), 10 for Sword & Shield and Sun & Moon special expansions, MSRP $49.99 (Scarlet & Violet) or $39.99 (older eras), none for Mega Evolution; a standard booster pack gets the era pack MSRP and no contents (x MSRP on single packs is the most quoted pack number); variants and every other type get no defaults. `msrp_source` is "template default, verify" until the owner replaces it.
 
 ### UI
 
@@ -112,7 +112,7 @@ A new card between the currency control and the recipe name card. It renders onl
 | value and today's Market Price.    |
 | Every field stays editable.        |
 | Market Price C$271.96 as of Sep 29 |
-| · MSRP $143.64 USD · 1.4x MSRP     |
+| · MSRP $161.64 USD · 1.2x MSRP     |
 | · 36 packs                         |
 +------------------------------------+
 | [Surging Sparks Booster Box] [Save]|  recipe name card (WP06), name pre-filled
@@ -141,7 +141,7 @@ A new card between the currency control and the recipe name card. It renders onl
 | Start from a product                                                                 |
 | [Surging Sparks Booster Box                                                       v] |
 | Fills the packs, the recorded promo value and today's Market Price. Every field ...  |
-| Market Price C$271.96 as of Sep 29 · MSRP $143.64 USD · 1.4x MSRP · 36 packs         |
+| Market Price C$271.96 as of Sep 29 · MSRP $161.64 USD · 1.2x MSRP · 36 packs         |
 +--------------------------------------------------------------------------------------+
 ```
 
@@ -151,7 +151,7 @@ States:
 |---|---|
 | No product has contents (before D7, or the attributes read failed) | No picker card. The read failure is logged (`server_product_attributes_failed`) and retried on the next render. |
 | `?product=<id>` of a product with contents | Picker set to it; name, packs, promo and retail pre-filled on first render (no flash of an empty recipe). |
-| `?product=<id>` unknown, not active, or without contents | Status line in a small card: "Product {id} has no recorded pack contents yet. Build the recipe by hand." |
+| `?product=<id>` unknown, not active, or without contents | Status line in a small card: "Product {id} has no recorded pack contents yet. Pick a product above or build the recipe by hand." A malformed value (`?product=abc`) is never echoed: "This link's product has no recorded pack contents yet. ..." |
 | `?product=` and `?recipe=` together | The shared recipe wins (WP06 behaviour); the product is ignored. |
 | Picked product's price withheld | Retail stays empty; the summary line reads, in warn text, "No current Market Price; last priced Sep 2, 2026. Enter the price you were quoted." |
 | A pack in the recipe has no current price | Warn card: "NAV unavailable: no current Market Price for Evolving Skies (prices older than 14 days are hidden). A missing pack is never valued at $0." A set with no tracked pack at all reads "no booster pack tracked for {set}". |
@@ -196,15 +196,18 @@ Confirm the starting state (repo root):
 ls migrations | grep -E '^0036_'                        # expect no output
 ls migrations/0033_* migrations/0034_*                  # expect 2 files (WP25)
 
-# 2. The newest definition of refresh_market_analytics is WP25's.
-grep -l "FUNCTION public.refresh_market_analytics" migrations/*.sql | sort | tail -1
+# 2. The newest definition of refresh_market_analytics is WP25's. WP29's 0037 and the
+#    other Track 2 migrations only call it, so they do not show up here.
+grep -lE "CREATE (OR REPLACE )?FUNCTION public\.refresh_market_analytics" migrations/*.sql | sort | tail -1
 # expect: migrations/0034_fx_daily.sql
 
-# 3. WP29 (0037) has not merged. It replaces the same function.
-ls migrations | grep -E '^00(3[7-9]|4[01])_'            # expect no output
+# 3. No trigger on products rewrites columns on every UPDATE (apply_product_attributes
+#    updates products rows; a trigger that bumps last_updated would change the
+#    scraper's due-products order and the "updated" dates the site prints).
+grep -n "TRIGGER" migrations/0000_baseline.sql migrations/00*.sql | grep -i "ON public.products\b"   # expect no output
 ```
 
-If check 2 or 3 prints a later file, stop and report it to the owner. Do not improvise: a migration numbered 0037 or higher that replaces `refresh_market_analytics` would run after 0036 in every replay and drop this package's step, and 0036 cannot be edited after merge. The owner's fix is to merge this package first and have WP29 copy 0036's function body; say so in your report.
+If check 2 prints a later file, stop and report it to the owner. Do not improvise: a migration numbered above 0036 that replaces `refresh_market_analytics` would run after 0036 in every replay and drop this package's step, and 0036 cannot be edited after merge. The owner's fix is to have that later migration copy 0036's function body; say so in your report. If check 3 prints a trigger, read its function: if it only reacts to `usd_price` (WP16's plausibility guard style), continue and name it in the PR; if it sets `last_updated` or any other column on every UPDATE, stop and report it.
 
 ```bash
 # WP06 and WP11: recipe sharing state, server-fed calculator
@@ -244,16 +247,18 @@ grep -n "export const METRIC_DEFINITIONS" frontend/app/lib/metricDefinitions.ts 
 grep -n "export async function getCachedProductStats\|const PRODUCT_STATS_SELECT\|async function fetchAllRows" frontend/app/lib/serverMarketData.ts   # 3 lines
 grep -n '"/rest/v1/product_stats_latest": rows("productStats")' frontend/scripts/fixtures/perf.mjs     # 1 line
 grep -n 'key: "distinctPrices365d"' frontend/app/lib/metricDefinitions.ts                             # 1 line
+grep -n "export const STALE_ROW_WITHHELD_COLUMNS\|stats.is_price_fresh = false;" frontend/app/lib/marketStats.ts   # 2 lines (read-time gate, step 5c)
 grep -n "METHODOLOGY_VERSION = \|METHODOLOGY_EFFECTIVE_DATE = " frontend/app/content/methodology.ts   # note both values
 
-# Soft: WP30 may already render an x MSRP slot
-grep -rln "msrpMultiple\|msrp_multiple\|MsrpMultiple" frontend/app/components                         # expect no output
+# Soft: WP30 may already render an x MSRP slot (its variant B copy of the formatter)
+ls frontend/app/components/ProductPrices/shared/msrp.ts                                                # expect: no such file
+grep -n "initialMsrpMultiples" frontend/app/components/ProductPrices/index.tsx                         # expect no output
 ```
 
 If a hard check fails, stop and report which package is missing; this package extends their files and must not recreate them. Defaults for the soft cases:
 
-- The WP30 grep prints files: WP30 merged first and already renders a multiple slot. Do steps 7, 8, 12a and 12b as written, skip step 12c (card edit) and do step 12d instead.
-- `METHODOLOGY_VERSION` is not `"1.1"` (another package bumped it): use the next minor version above the current one wherever this spec says `"1.2"`, and keep every other instruction.
+- The WP30 checks find `shared/msrp.ts` and `initialMsrpMultiples`: WP30 merged first and already renders a multiple column and card detail line. Do steps 7, 8 and 12a as written, skip steps 12b and 12c, and do step 12d instead.
+- `METHODOLOGY_VERSION` is not `"1.1"` (another package bumped it, for example WP29 merged first and set `"1.2"`): use the next minor version above the current one wherever this spec says `"1.2"`, and keep every other instruction.
 - `load_supabase_readonly_credentials` is missing: stop (WP21 is missing). The template script falls back at runtime, but the dependency check guards the rest of WP21.
 
 Tooling:
@@ -1156,8 +1161,9 @@ Notes:
 Starter rows for data/product_attributes.csv and data/product_contents.csv (WP28).
 
 Reads the active products and appends one attribute row per product that the
-files do not list yet, plus contents rows for the formulaic types (booster
-box, booster bundle, Elite Trainer Box), with rule-based defaults by era.
+files do not list yet (standard booster packs included, for their x MSRP),
+plus contents rows for the formulaic types (booster box, booster bundle,
+Elite Trainer Box), with rule-based defaults by era.
 Every generated row has reviewed=no: the loader ignores it until the owner
 checks it against the product's listing or announcement, corrects it and
 sets reviewed=yes. Existing rows are never changed.
@@ -1244,6 +1250,10 @@ def default_rows(product: dict, pack_sets: set[int]) -> tuple[dict, list[dict]]:
         packs = packs or ETB_PACKS.get(era)
         msrp = ETB_MSRP_USD.get(era)
         notes.append(f"ETB, era {era or 'unknown'}{', special expansion' if special else ''}")
+    elif type_name == PACK_TYPE_NAME and not product.get("variant"):
+        # A pack holds no packs: an MSRP default only, never contents.
+        msrp = PACK_MSRP_USD.get(era)
+        notes.append(f"booster pack, era {era or 'unknown'}")
     else:
         notes.append("no rule: fill MSRP and contents by hand, or leave blank")
 
@@ -1281,7 +1291,7 @@ def existing_ids(path: Path, column: str = "product_id") -> set[int]:
 
 
 def plan(products: list[dict], attributes_path: Path, contents_path: Path):
-    """Rows to append: products missing from each file, newest set first."""
+    """Rows to append: products missing from each file, newest set first. Packs get no contents rows."""
     pack_sets = {
         p["set_id"] for p in products
         if (p.get("product_types") or {}).get("name") == PACK_TYPE_NAME and not p.get("variant")
@@ -1289,7 +1299,7 @@ def plan(products: list[dict], attributes_path: Path, contents_path: Path):
     listed_attributes = existing_ids(attributes_path)
     listed_contents = existing_ids(contents_path)
     ordered = sorted(
-        (p for p in products if (p.get("product_types") or {}).get("name") != PACK_TYPE_NAME),
+        products,
         key=lambda p: ((p.get("sets") or {}).get("release_date") or "", p["id"]),
         reverse=True,
     )
@@ -1388,6 +1398,8 @@ The era table holds defaults for the owner to check, not facts. Do not add rules
 
 `nav_status` stays `string | null` because the generated view type is `string`; readers narrow it with `isNavStatus`.
 
+The five fields are required, so `tsc` flags any existing test or fixture that builds a complete `ProductDailyStats` literal (WP25's `marketStats.test.ts` full row, WP29's or WP33's fixtures if they merged first). In WP25's "full row" (every column non-null) add `msrp_multiple: 1.4, cost_per_pack_usd: 5.5, nav_usd: 180, premium_to_packs_pct: 10, nav_status: "ok"` so it stays full; in every other literal add the five fields as `null`. Change nothing else in those files.
+
 5b. Append at the end of the file:
 
 ```ts
@@ -1416,6 +1428,28 @@ export interface ProductContentRow {
   promo_value_usd: number | null;
 }
 ```
+
+5c. `frontend/app/lib/marketStats.ts` (WP25): the read-time staleness gate must cover the new columns. WP25 evaluates every gate as of the row's own day and re-checks the row's age at read time; its comment on `STALE_ROW_WITHHELD_COLUMNS` says "A later package that adds such a column to product_daily_stats adds it here too". Without this edit, a scraper and nightly job that both stop would leave "1.4x MSRP", a cost per pack and a NAV on screen indefinitely, which breaks the 0023 rule.
+
+- Append to `STALE_ROW_WITHHELD_COLUMNS`, after `"liquidity_score",`:
+
+```ts
+  // WP28 (0036): anchored on the product's current price and its packs' prices.
+  "msrp_multiple",
+  "cost_per_pack_usd",
+  "nav_usd",
+  "premium_to_packs_pct",
+```
+
+- In `toProductStatsSnapshot`, inside the stale branch, directly after `stats.is_price_fresh = false;`, add:
+
+```ts
+      // WP28: a product with recorded contents keeps a reason, never a bare
+      // NULL (NULL means "no recorded contents"). Its price is withheld now.
+      if (typeof stats.nav_status === "string") stats.nav_status = "box_price_withheld";
+```
+
+`typeof` rather than `!== null`: a row read without the column (an older fixture) has `undefined` there and must stay as it is. The `satisfies readonly (keyof ProductDailyStats)[]` clause type-checks the four names against step 5a.
 
 ### Step 6. `frontend/app/lib/productAttributes.ts` (new)
 
@@ -1515,11 +1549,20 @@ export function formatMsrpMultiple(value: number | null | undefined): string | n
 /**
  * product id -> x MSRP, only for products that have one, rounded to 3
  * decimals. This, not the stats snapshot, is what /prices sends to the browser.
+ *
+ * `pricedIds`: the products the page shows with a current Market Price. The
+ * stats row and the catalog summary apply the same 14-day gate but at
+ * different moments, so near the cutoff they can disagree for a few hours; a
+ * product the page shows as withheld never gets a multiple beside it.
  */
-export function msrpMultiplesById(snapshot: ProductStatsSnapshot): Record<number, number> {
+export function msrpMultiplesById(
+  snapshot: ProductStatsSnapshot,
+  pricedIds?: ReadonlySet<number>
+): Record<number, number> {
   const out: Record<number, number> = {};
   for (const row of Object.values(snapshot.byProductId)) {
     const value = row.msrp_multiple;
+    if (pricedIds && !pricedIds.has(row.product_id)) continue;
     if (typeof value === "number" && Number.isFinite(value) && value > 0) {
       out[row.product_id] = Math.round(value * 1000) / 1000;
     }
@@ -2108,6 +2151,8 @@ function replaceProductParam(productId: number | null): void {
   const productLinkMissing =
     productParam !== null && initialCatalog === null && !searchParams.get("recipe") &&
     catalogProductId === null && packs.length === 0;
+  // Never echo a malformed parameter back to the page; name only a real id.
+  const productParamId = parseProductParam(productParam);
 ```
 
 11j. The picker card. Directly after the currency control element (the `<CurrencySelector ... />` call; its `onChange` calls `rememberCurrency` after WP20, or is `setSelectedCurrency` with `label="Recipe currency"` after WP27), insert:
@@ -2126,7 +2171,9 @@ function replaceProductParam(productId: number | null): void {
       )}
       {productLinkMissing && (
         <p role="status" className="rounded-card border border-line bg-surface p-5 text-small text-ink-soft">
-          Product {productParam} has no recorded pack contents yet. Build the recipe by hand.
+          {productParamId !== null ? `Product ${productParamId} has` : "This link's product has"} no recorded pack
+          contents yet.{" "}
+          {catalogBoxes.length > 0 ? "Pick a product above or build the recipe by hand." : "Build the recipe by hand."}
         </p>
       )}
 ```
@@ -2171,13 +2218,21 @@ Directly after the retail input's wrapping `<div className="relative">...</div>`
       )}
 ```
 
-11n. "How it works" list (rendered when `packs.length === 0`): add as its first `<li>`: `Pick a product under Start from a product to fill its packs, promo value and Market Price, or add packs by hand.` Leave the other items as the file has them.
+11n. "How it works" list (rendered when `packs.length === 0`): add as its first item, only when the picker exists, `{catalogBoxes.length > 0 && <li>Pick a product under Start from a product to fill its packs, promo value and Market Price, or add packs by hand.</li>}`. Before curation the list stays as it is, so it never points at a control that is not on the page. Leave the other items as the file has them.
 
 11o. Verify WP24's verdict block is intact: `grep -n "packValueBandsText()\|PACK_VALUE_LABELS\[navResult.signal\]\|DecisionNote" app/components/BoxCalculator/BoxCalculator.tsx` prints 3 lines. The band thresholds beside the verdict are WP24's; do not duplicate them.
 
 ### Step 12. `/prices`: x MSRP on cards
 
-12a. `frontend/app/prices/page.tsx`. Add `getCachedProductStats` to the `../lib/serverMarketData` import and `import { msrpMultiplesById } from "../lib/productAttributes";`. Add `getCachedProductStats()` as the last element of the page's `Promise.all` and `productStats` as the last destructured name (keep every other element, including WP26's `getCachedSparklines`), then pass `initialMsrpMultiples={msrpMultiplesById(productStats)}` to `<ProductPrices ...>`. Example with WP26's shape:
+12a. `frontend/app/prices/page.tsx`. Add `getCachedProductStats` to the `../lib/serverMarketData` import and `import { msrpMultiplesById } from "../lib/productAttributes";`. Add `getCachedProductStats()` as the last element of the page's `Promise.all` and `productStats` as the last destructured name (keep every other element, including WP26's `getCachedSparklines`). After the `Promise.all`, build the map from the products the page shows priced, and pass `initialMsrpMultiples={msrpMultiples}` to `<ProductPrices ...>`:
+
+```tsx
+  // WP28: a multiple only beside a price the page actually shows.
+  const pricedIds = new Set(products.filter((p) => typeof p.usd_price === "number").map((p) => p.id));
+  const msrpMultiples = msrpMultiplesById(productStats, pricedIds);
+```
+
+Use the guarded summaries the page already has (`products`, or `catalogProducts` after WP11's projection: both keep `usd_price`). Example of the `Promise.all` with WP26's shape:
 
 ```tsx
   const [products, volumeMetrics, sparklines, productStats] = await Promise.all([
@@ -2202,7 +2257,17 @@ Directly after the retail input's wrapping `<div className="relative">...</div>`
 - Props interface: add `/** WP28: x MSRP; null or absent hides the line. */ msrpMultiple?: number | null;` and destructure `msrpMultiple`.
 - In BOTH view branches (flat and grouped), directly after the element that prints the card's current price (the one that calls `formatPrice(` with the product's price), add `<MsrpMultiple value={msrpMultiple} className="block" />` as its next sibling. If that price element shares a flex row with the sparkline (WP26 layout), put the `MsrpMultiple` directly after the row's closing tag instead, so the 96x40 sparkline slot keeps its size and position.
 
-12d. Only when the WP30 check in Before you start printed files: WP30 already renders a slot. Pass `initialMsrpMultiples={msrpMultiplesById(productStats)}` (12a) into whatever prop WP30's list and card components take (read their prop types; map the multiple for each product the same way as 12b), replace any local multiple formatting with `MsrpMultiple` or `formatMsrpMultiple`, and skip 12c.
+12d. Only when the WP30 checks in Before you start found its files (WP30 merged first). WP30 already declares `initialMsrpMultiples` on the container, feeds it to its list rows (x MSRP column and sort) and to its card detail line, and hides both while the map is empty. Then:
+
+- Replace the whole body of `frontend/app/components/ProductPrices/shared/msrp.ts` (WP30's variant B, a copy of the formatter) with WP30's variant A:
+
+```ts
+/** x MSRP text ("1.4x"), or null. WP28 owns the formatter. */
+export { formatMsrpMultiple } from "../../../lib/productAttributes";
+```
+
+- Step 12a's `initialMsrpMultiples={msrpMultiples}` on `<ProductPrices>` is the only wiring needed. Do not add a second prop, and skip 12b and 12c.
+- Tests: in Tests item 9 use WP30's card props (`showSet` true and false instead of `viewMode`), as WP30's spec says; keep the assertions.
 
 Home (`RecentlyReleased`) and `/market` do not pass `msrpMultiple`; the prop is optional, so their cards and rows are unchanged. WP32 and WP33 wire their own surfaces.
 
@@ -2448,8 +2513,10 @@ Do not edit the generated file. If `tsc` rejects a row assignment in `fetchProdu
 - **Do not compute x MSRP from `msrp_cad`,** and do not convert it at today's rate. Market Price is a US marketplace price; the multiple is `usd_price / msrp_usd`, the same in USD and CAD views.
 - **Do not price a set from a variant pack in SQL,** and do not let the calculator do it silently: the catalog NAV uses only the standard pack (`variant` NULL or blank); the calculator's existing fallback stays but its row now says "priced from {variant} pack".
 - **Do not value a withheld pack at $0,** and do not compute NAV when the product's own price is withheld. `nav_status` says why; the UI shows `--` or the reason.
-- **Do not re-run 0033 or 0034 after 0036 is applied.** Their `CREATE OR REPLACE` would put back a `refresh_market_analytics` without the structure step. Only re-run the newest file that defines it. The same rule binds WP29 and every later package: copy 0036's function body, keep `refresh_product_structure_stats(p_day)` after `refresh_product_daily_stats(p_day)`, and keep the `structure_rows` key.
+- **Do not re-run 0033 or 0034 after 0036 is applied.** Their `CREATE OR REPLACE` would put back a `refresh_market_analytics` without the structure step. Only re-run the newest file that defines it. The same rule binds any later package that replaces the function (none of WP29 to WP37 does today; WP29's 0037 only calls it): copy 0036's function body, keep `refresh_product_structure_stats(p_day)` after `refresh_product_daily_stats(p_day)`, and keep the `structure_rows` key.
 - **Do not drop and re-create `product_stats_latest`** in a later migration without `s.*` (or without the five columns): `getCachedProductStats` selects them by name.
+- **Do not skip step 5c.** The four structure numbers are price-anchored; WP25's read-time gate must withhold them like `usd_price` when the stats rows stop advancing.
+- **Do not show a multiple beside a withheld price.** `/prices` builds its map only from the products it shows priced (`pricedIds`, step 12a).
 - **Do not grant any write on `product_contents` or the new `products` columns** to `anon`, `authenticated` or `pokefin_scraper`. The only write path is `apply_product_attributes`, EXECUTE for `service_role`. Do not give it to the scraper role "to make the loader easier".
 - **Do not add an admin UI or an API route** for attributes. The CSVs in git are the audit trail.
 - **Do not commit guessed MSRPs or contents** in `data/*.csv`. The PR ships headers only; the template writes `reviewed=no` rows that the loader ignores.
@@ -2497,7 +2564,7 @@ product_id,product_name,pack_set_id,pack_set_name,quantity,promo_value_usd,revie
 
 ### 2. `tests/test_wp28_product_attributes.py` (new, unit, no network, no database)
 
-40 cases, all passing on the prototype (`python -m pytest tests/test_wp28_product_attributes.py -q`: `40 passed`).
+41 cases (`python -m pytest tests/test_wp28_product_attributes.py -q`: `41 passed`). The prototype ran 40; the booster-pack template case and the pack row in the append test were added in review and must pass too.
 
 ```python
 """
@@ -2764,6 +2831,7 @@ def product(pid, type_name, gen, *, special=False, variant=None, set_id=10, rele
     (product(6, "elite_trainer_box", "Mega Evolution"), "", 9),
     (product(7, "premium_collection", "Scarlet & Violet"), "", None),
     (product(8, "elite_trainer_box", "Scarlet & Violet", variant="Pokemon Center"), "", None),
+    (product(9, "booster_pack", "Scarlet & Violet"), "4.49", None),
 ])
 def test_template_rules(p, msrp, packs):
     attribute, rows = template.default_rows(p, pack_sets={10})
@@ -2777,18 +2845,18 @@ def test_template_notes_a_set_without_a_standard_pack():
     assert "no standard booster pack" in rows[0]["notes"]
 
 
-def test_template_appends_only_missing_products_and_skips_packs(tmp_path):
+def test_template_appends_only_missing_products_and_gives_packs_no_contents(tmp_path):
     a = write(tmp_path, "a.csv", ATTR_HEADER, "1,Listed,,,,,yes,")
     c = tmp_path / "c.csv"
     products = [product(1, "booster_box", "Scarlet & Violet"), product(2, "booster_box", "Scarlet & Violet"),
                 product(3, "booster_pack", "Scarlet & Violet")]
     new_a, new_c = template.plan(products, a, c)
-    assert [r["product_id"] for r in new_a] == [2]
-    assert [r["product_id"] for r in new_c] == [2, 1]
+    assert [r["product_id"] for r in new_a] == [3, 2]  # same set date: higher id first
+    assert [r["product_id"] for r in new_c] == [2, 1]  # the pack (3) gets no contents row
     template.append_rows(a, loader.ATTRIBUTE_COLUMNS, new_a)
     template.append_rows(c, loader.CONTENT_COLUMNS, new_c)
     with a.open() as handle:
-        assert [r["product_id"] for r in csv.DictReader(handle)] == ["1", "2"]
+        assert [r["product_id"] for r in csv.DictReader(handle)] == ["1", "3", "2"]
     assert c.read_text().splitlines()[0] == CONT_HEADER
     # The appended rows load (reviewed=no, so they are skipped, not rejected).
     _, _, errors = loader.load_files(TODAY, a, c)
@@ -3072,9 +3140,10 @@ def test_empty_payload_needs_the_explicit_flag(admin, loaded):
 
 
 @pytest.mark.parametrize("attributes, contents, error", [
-    ([{"product_id": 1}], [], errors.ForeignKeyViolation),
+    # 9289999: outside every fixture range, so it cannot exist in the replayed database.
+    ([{"product_id": 9289999}], [], errors.ForeignKeyViolation),
     ([{"product_id": BOX}, {"product_id": BOX}], [], errors.InvalidParameterValue),
-    ([{"product_id": BOX}], [{"product_id": BOX, "pack_set_id": 1, "quantity": 1}], errors.ForeignKeyViolation),
+    ([{"product_id": BOX}], [{"product_id": BOX, "pack_set_id": 9289999, "quantity": 1}], errors.ForeignKeyViolation),
     ([{"product_id": BOX}], [{"product_id": BOX, "pack_set_id": SET_ALPHA, "quantity": 0}], errors.CheckViolation),
     ([{"product_id": BOX, "msrp_usd": "10"}], [], errors.CheckViolation),  # an MSRP needs a source
 ])
@@ -3196,6 +3265,12 @@ describe("msrpMultiplesById", () => {
     expect(msrpMultiplesById(snapshot)).toEqual({ 1: 1.378 });
   });
 
+  it("drops products the page shows without a current price", () => {
+    const snapshot = { day: "2026-09-30", byProductId: { 1: statsRow(1, 1.4), 4: statsRow(4, 2.1) } };
+    expect(msrpMultiplesById(snapshot, new Set([4]))).toEqual({ 4: 2.1 });
+    expect(msrpMultiplesById(snapshot, new Set())).toEqual({});
+  });
+
   it("is empty for an empty snapshot", () => {
     expect(msrpMultiplesById({ day: null, byProductId: {} })).toEqual({});
   });
@@ -3257,14 +3332,15 @@ function newestDefinition(fn: string): string {
   const files = fs.readdirSync(MIGRATIONS).filter((f) => /^\d{4}_.*\.sql$/.test(f)).sort().reverse();
   for (const file of files) {
     const text = fs.readFileSync(path.join(MIGRATIONS, file), "utf8");
-    if (new RegExp(`FUNCTION\\s+public\\.${fn}\\s*\\(`, "i").test(text)) return text;
+    if (new RegExp(`CREATE\\s+(?:OR\\s+REPLACE\\s+)?FUNCTION\\s+public\\.${fn}\\s*\\(`, "i").test(text)) return text;
   }
   throw new Error(`no numbered migration defines ${fn}`);
 }
 
-/** The text from `FUNCTION public.<fn>(` to the next `$$;`. */
+/** The text from `CREATE OR REPLACE FUNCTION public.<fn>(` to the next `$$;`. */
 function functionBody(text: string, fn: string): string {
-  const start = text.search(new RegExp(`FUNCTION\\s+public\\.${fn}\\s*\\(`, "i"));
+  // CREATE only: a GRANT or REVOKE line also contains "FUNCTION public.<fn>(".
+  const start = text.search(new RegExp(`CREATE\\s+(?:OR\\s+REPLACE\\s+)?FUNCTION\\s+public\\.${fn}\\s*\\(`, "i"));
   expect(start).toBeGreaterThan(-1);
   const end = text.indexOf("$$;", start);
   return text.slice(start, end);
@@ -3449,7 +3525,7 @@ const BOX: CatalogBoxOption = {
   releaseDate: "2024-11-08",
   usdPrice: 199.97,
   pricedOn: "2026-09-29",
-  msrpUsd: 143.64,
+  msrpUsd: 161.64, // 36 x $4.49, the template's Scarlet & Violet rule
   msrpCad: null,
   promoValueUsd: null,
   packs: [{ setId: 7, setName: "Surging Sparks", quantity: 36 }],
@@ -3507,8 +3583,8 @@ it("?product=<id> pre-fills name, packs, retail and cost per pack on the first r
   expect(screen.getAllByText("Surging Sparks").length).toBeGreaterThan(0); // pack row and breakdown
   expect(Number(retailInput().value)).toBe(cad(199.97));
   expect(promoInput().value).toBe("");
-  expect(screen.getByText(/1\.4x MSRP/)).toBeInTheDocument();
-  expect(screen.getByText(/MSRP \$143\.64 USD/)).toBeInTheDocument();
+  expect(screen.getByText(/1\.2x MSRP/)).toBeInTheDocument(); // 199.97 / 161.64 = 1.237
+  expect(screen.getByText(/MSRP \$161\.64 USD/)).toBeInTheDocument();
   const perPack = formatMoney(cad(199.97) / 36, "CAD");
   expect(screen.getByText(new RegExp(`Cost per pack: ${perPack.replace(/[$.]/g, "\\$&")} across 36 packs`))).toBeInTheDocument();
   // 36 packs at $5.00 = $180 NAV; $199.97 is 11.1% above it: WP24's label and bands.
@@ -3585,7 +3661,7 @@ Adapt only what the earlier packages force, and say so in the PR: the `AuthConte
 - `render(<MsrpMultiple value={1.378} />)`: the visible text is `1.4x MSRP` (in an `aria-hidden` span), the `sr-only` text is `1.4 times MSRP`, and the wrapper's `title` is "Market Price divided by US MSRP".
 - `value={12.6}` shows `13x MSRP`.
 - `value={null}`, `undefined`, `0` and `NaN` render nothing (`container` is empty).
-- `expect(await axeViolations(container)).toEqual([])` for the 1.378 case (WP14's `@/test-utils/axe`).
+- `expect(await axeViolations(container)).toEqual([])` for the 1.378 case (WP23's `@/test-utils/axe`).
 
 ### 9. `frontend/app/components/ProductPrices/__tests__/ProductCard.msrp.test.tsx` (new)
 
@@ -3613,8 +3689,9 @@ Keep every existing case. Add, using the file's `buildBoosterPackData` helpers:
 ### 12. Updates to WP24's and WP25's tests
 
 - `app/lib/__tests__/metricDefinitions.test.ts`: add `metricHref("msrpMultiple")` is `/methodology#msrp`, `metricHref("costPerPack")` is `/methodology#cost-per-pack`, `metricHref("packNav")` and `metricHref("premiumToPacks")` are `/methodology#box-nav`. The existing cases (unique keys, 120-character limit, real anchors, banned words) cover the new entries unchanged.
-- `app/methodology/__tests__/MethodologyArticle.test.tsx`: add cases: `#msrp` contains `x MSRP = Market Price ÷ US MSRP`; `#cost-per-pack` contains `Cost per pack = Market Price ÷ booster packs`; for every status in `NAV_STATUSES`, `#box-nav tr[data-nav-status="<status>"]` contains `NAV_STATUS_TEXT[status]`; `#changes` has three rows, the first with `METHODOLOGY_VERSION`, the second with the previous version (`"1.1"` unless Before you start said otherwise). The existing anchor-existence, em dash and axe cases cover the new sections unchanged.
+- `app/methodology/__tests__/MethodologyArticle.test.tsx`: add cases: `#msrp` contains `x MSRP = Market Price ÷ US MSRP`; `#cost-per-pack` contains `Cost per pack = Market Price ÷ booster packs`; for every status in `NAV_STATUSES`, `#box-nav tr[data-nav-status="<status>"]` contains `NAV_STATUS_TEXT[status]`; `#changes` has one more row than before this package (three after WP24 and WP25; four if WP29 merged first), the first with `METHODOLOGY_VERSION`, the second with the previous version (`"1.1"` unless Before you start said otherwise). Count the rows with `METHODOLOGY_CHANGES.length`, not a literal. The existing anchor-existence, em dash and axe cases cover the new sections unchanged.
 - WP06's `app/components/BoxCalculator/__tests__/BoxCalculator.test.tsx`: only the `getPackVariant: () => null` addition from step 10.
+- WP25's `app/lib/__tests__/marketStats.test.ts`, read-time gate case (step 5c): with the full row (now carrying `msrp_multiple: 1.4`, `cost_per_pack_usd: 5.5`, `nav_usd: 180`, `premium_to_packs_pct: 10`, `nav_status: "ok"`) and `{ today: "2026-10-02" }` (3 days), the four numbers are `null` and `nav_status` is `"box_price_withheld"`; with `{ today: "2026-10-01" }` they are unchanged. Add a row with `nav_status: null` read 3 days late: it stays `null` (no contents is not a withheld price). Add `"msrp_multiple"`, `"cost_per_pack_usd"`, `"nav_usd"` and `"premium_to_packs_pct"` to the case that lists the price-anchored columns `STALE_ROW_WITHHELD_COLUMNS` must contain.
 
 ## Verification
 
@@ -3634,7 +3711,7 @@ POKEFIN_TEST_DATABASE_URL=postgresql://postgres:postgres@localhost:55432/replay_
 # all pass: tests/test_wp28_product_attributes_db.py 19 passed, tests/test_wp25_market_analytics_db.py 22 passed;
 # run it twice: the second run must pass too
 
-python -m pytest tests/test_wp28_product_attributes.py -q                  # 40 passed
+python -m pytest tests/test_wp28_product_attributes.py -q                  # 41 passed
 python3 -m py_compile scripts/load_product_attributes.py scripts/make_attribute_template.py
 python scripts/load_product_attributes.py --check
 # "Files OK: 0 reviewed attribute rows, 0 reviewed contents rows, 0 rows pending review."
@@ -3677,7 +3754,7 @@ node scripts/perf-serve.mjs &                     # wait for .perf/ready
 pnpm perf:budget                                  # exit 0, no limit raised
 ```
 
-Compare with the same run on `master` and paste both tables in the PR. Expected deltas: `/prices` `documentBrKb` at most +1.0 and `jsGzKb` at most +0.5; `/box-calculator` `jsGzKb` at most +3.0; every other route unchanged within 0.3 kB. A larger delta means the snapshot or the product list leaked into a client prop: fix it, do not raise a limit. `pnpm run test:scripts` passes (fixture coverage sees both request logs).
+Compare with the same run on `master` and paste both tables in the PR. Expected deltas: `/prices` `documentBrKb` at most +1.0, `flightBrKb` at most +1.0 and `jsGzKb` at most +0.5; `/box-calculator` `jsGzKb` at most +3.0; every other route unchanged within 0.3 kB. A larger delta means the snapshot or the product list leaked into a client prop: fix it, do not raise a limit. `pnpm run test:scripts` passes (fixture coverage sees both request logs).
 
 Manual checks (`pnpm build:stub` with the perf fixture, then `node scripts/perf-serve.mjs`, browser at 390x844 and 1440x900):
 
@@ -3710,10 +3787,11 @@ Manual checks (`pnpm build:stub` with the perf fixture, then `node scripts/perf-
 - [ ] A stale pack gives `nav_usd` NULL with `nav_status = 'pack_price_withheld'` and keeps cost per pack; a stale box has every structure column NULL (`box_price_withheld`); a variant-only set gives `no_standard_pack`; no structure value exists where `is_price_fresh` is false.
 - [ ] `anon` and `authenticated` can SELECT `product_contents`, `product_catalog_attributes` and the new `product_stats_latest` columns, and cannot write `product_contents` or execute `apply_product_attributes` or `refresh_product_structure_stats`; `pokefin_scraper` cannot execute `apply_product_attributes` but its refresh includes the structure step; `service_role` can execute `apply_product_attributes`.
 - [ ] `apply_product_attributes` is a full sync, idempotent (a second identical call changes 0 rows), rejects unknown ids, duplicates and an unguarded empty payload, and writes nothing when it fails.
-- [ ] `scripts/load_product_attributes.py` and `scripts/make_attribute_template.py` exist and are executable; `tests/test_wp28_product_attributes.py` passes (40 cases); `--check` passes on the committed header-only CSVs.
+- [ ] `scripts/load_product_attributes.py` and `scripts/make_attribute_template.py` exist and are executable; `tests/test_wp28_product_attributes.py` passes (41 cases); `--check` passes on the committed header-only CSVs.
 - [ ] `data/product_attributes.csv` and `data/product_contents.csv` are committed with headers only.
 - [ ] `getCachedProductStats` exposes the five new fields; `getCachedProductAttributes` exists, is tagged `market-products`, degrades uncached on error.
-- [ ] `/prices` cards show `N.Nx MSRP` under the price when a multiple exists and nothing otherwise; the page sends only an id-to-multiple map.
+- [ ] `STALE_ROW_WITHHELD_COLUMNS` contains the four structure numbers, and a stats row read more than `STATS_ROW_MAX_AGE_DAYS` late has them `null` and `nav_status` `"box_price_withheld"` (or `null` when it had no contents); `marketStats.test.ts` proves it.
+- [ ] `/prices` cards show `N.Nx MSRP` under the price when a multiple exists and nothing otherwise; the page sends only an id-to-multiple map, built only for products it shows with a current price; with WP30 merged first, `shared/msrp.ts` is WP30's variant A re-export.
 - [ ] `/box-calculator?product=<id>` renders with the picker set, recipe name, packs, promo and retail pre-filled on the first render; the retail and promo follow the currency until edited; picking updates `?product=` without navigation; a shared `?recipe=` wins; an unknown id shows the "no recorded pack contents" line; the picker is hidden when no product has contents.
 - [ ] A stale pack in the calculator shows "NAV unavailable:" with the set name and the 14-day reason and no verdict; cost per pack still shows; a variant-priced pack row says "priced from {variant} pack".
 - [ ] WP24's verdict label, band thresholds and decision note render unchanged beside the verdict.
@@ -3726,7 +3804,7 @@ Manual checks (`pnpm build:stub` with the perf fixture, then `node scripts/perf-
 
 - **Code**: revert the PR. `/prices` loses the caption, the calculator loses the picker; the loader and template disappear. The database objects stay and are harmless: nothing else reads them, and the refresh keeps filling the columns.
 - **Curated data**: the CSVs in git are the source of truth; re-running the loader restores the database from them at any time.
-- **Database** (after the code revert, only if no later package depends on these objects, WP29 onward included; revert those first). As a new numbered migration `NNNN_drop_product_attributes.sql` at the next free number, never by editing 0036:
+- **Database** (after the code revert, and only after reverting the packages that read these objects: WP30, WP31, WP33, WP34 and WP35 read them softly, so their code must stop selecting the columns first). As a new numbered migration `NNNN_drop_product_attributes.sql` at the next free number, never by editing 0036:
 
 ```sql
 -- 1. Put back the refresh without the structure step: paste section 3 of

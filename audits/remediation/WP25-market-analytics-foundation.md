@@ -29,9 +29,9 @@ Pokéfin collects listings depth, transaction counts and dated Bank of Canada ra
             |                                         v
             v                                  product_stats_latest (view: newest day, active products)
  Next caches (tag market-products, exchange-rate) <- getCachedProductStats(), getCachedFxDaily()
-            |
+            |                                          (read-time staleness gate in toProductStatsSnapshot)
             v
- WP28 to WP37 pages (server components), CurrencyProvider.convertDailySeries(points, fx)
+ WP28 to WP37 pages (server components); client charts import fx.ts helpers (rateOn, toCadAtDatedRates)
 ```
 
 - `p_day` is a UTC calendar day. Every input is read "as of" that day: price rows with `recorded_at < p_day + 1`, sales buckets with `bucket_date <= p_day`, listings with `snapshot_date <= p_day`. Re-running a past day reproduces it, which is what the backfill and the nightly D-1 finalisation rely on.
@@ -48,7 +48,7 @@ All percent columns are percent points (`12.5` means +12.5%). `NULL` always mean
 | `is_price_fresh` | `price_day >= D - 14` AND (a newer row exists after `D` OR `products.usd_price IS NOT DISTINCT FROM` that row's price) | Mirrors 0023. The agreement check only applies when the row is the product's newest overall: for past days `products.usd_price` says nothing |
 | `usd_price` | That row's price. Gated | |
 | `ret_1d` | `(price / prev - 1) * 100`, `prev` = newest row strictly before `price_day` and at most 3 days before it. Gated; also `NULL` unless `price_day >= D - 1` | A product last repriced 5 days ago has no 1D change, not a stale one |
-| `ret_7d`, `ret_30d`, `ret_90d`, `ret_365d` | `(price / anchor - 1) * 100`, anchor = newest row on or before `D - N` and not older than `D - N - tol`; `tol` = 7 for 7D and 1M, 14 for 3M and 1Y. Gated | Anchor price `<= 0` gives `NULL`. This is the bounded anchor the WP10 plan change deferred to WP25; WP10's RPC is not changed |
+| `ret_7d`, `ret_30d`, `ret_90d`, `ret_365d` | `(price / anchor - 1) * 100`, anchor = newest row on or before `D - N` and not older than `D - N - tol`; `tol` = 7 for 7D and 1M, 14 for 3M and 1Y. Gated | Anchor price `<= 0` gives `NULL`. Same rule and tolerances as WP10's 0028 (its default variant), so the catalog and the daily statistics agree. If WP10 shipped its neutral variant, step 1b applies the rule to `get_market_product_metrics` as well (`01-PRODUCT-DIRECTION.md` §9 item 5) |
 | `first_tracked_day` | Oldest price row date | |
 | `tracked_high_usd`, `tracked_high_day` | Per day, `min3` = min of that day's price and the 2 previous recorded prices (3 rows). Tracked high = max of `min3` over all rows up to `D`; its day = the latest day that reached it | Needs 3 rows. A one-day spike cannot set it. Labelled "tracked high since {first_tracked_day}", never all-time. Not gated (describes history) |
 | `dd_from_high_pct` | `(price / tracked_high_usd - 1) * 100`. Gated | Can be above 0 when a move is under 3 days old; UI shows "at tracked high" for values `>= 0` |
@@ -67,9 +67,11 @@ All percent columns are percent points (`12.5` means +12.5%). `NULL` always mean
 | `liquidity_score` | `round(100 * mean(percent_rank))` of units sold 30D, transactions 30D, sell-through 30D and `-abs(ask_premium_pct)`, each ranked within the product type among products that have all four | Needs all four and at least 5 peers of the type, else `NULL` |
 | `refreshed_at` | When the row was written | A row is final once `refreshed_at >= D + 1 day` |
 
+**Read-time staleness gate.** Every gate above is evaluated as of the row's own day `D`. If both the scraper and the nightly job stop, `product_stats_latest` keeps serving the last day's rows, and a price that was fresh on `D` would look fresh for ever, which breaks the 0023 rule. The server read therefore re-checks the row's age: `toProductStatsSnapshot(rows, { today })` withholds every price-anchored, sales and listings column (the list `STALE_ROW_WITHHELD_COLUMNS` in `marketStats.ts`) and sets `is_price_fresh` to `false` when `today - day > STATS_ROW_MAX_AGE_DAYS` (2: the nightly job writes `D - 1` at 00:30 UTC, plus the 30 minutes after midnight before it runs). Series columns and dates stay. The gate lives in TypeScript, not in the view, because WP28 and WP33 re-create `product_stats_latest` with the same `SELECT s.*` text; a gate inside the view would be dropped silently by the first re-creation.
+
 ### fx_daily
 
-One row per UTC day from the first BoC date in `exchange_rates` through the refresh day: the newest BoC date on or before the day (among duplicate rows of one date, the newest `id`), carried forward at most 14 days. `source = 'boc'` when the day has its own rate, `'carry_forward'` otherwise; `source_date` is the BoC date used. A day more than 14 days after the newest rate gets no row, so CAD history is withheld rather than converted at a stale rate (the 0023 principle). Rates outside 0.5 to 3 are ignored.
+One row per UTC day from the first BoC date in `exchange_rates` through the refresh day: the newest BoC date on or before the day (among duplicate rows of one date, the newest `id`), carried forward at most 14 days. `source = 'boc'` when the day has its own rate, `'carry_forward'` otherwise; `source_date` is the BoC date used. A day more than 14 days after the newest rate gets no row, so CAD history is withheld rather than converted at a stale rate (the 0023 principle). Rates outside 0.5 to 3 are ignored. `fx.ts` applies the same cap past the end of a cached series: a day after the last row gets the last rate only while it is at most 14 days after that row's `source_date` (the Bank of Canada date), never 14 days after a row that is itself carried.
 
 ### Read paths and performance
 
@@ -77,7 +79,7 @@ One row per UTC day from the first BoC date in `exchange_rates` through the refr
 - Per-product history reads use `product_daily_stats_product_day_idx (product_id, day DESC)` (consumers add them).
 - `getCachedProductStats()` and `getCachedFxDaily()` are `unstable_cache` reads with WP11's daily backstop, tagged `market-products` (and `exchange-rate` for FX), so the scrape hook refreshes them. Neither is called by a page in this package, so no route changes.
 - `refresh_market_analytics(D)` took 0.4 to 0.6 s on 306 products x 600 days of prices, 90 days of sales, 85 days of listings (PostgreSQL 16, scratch). Budget: under 10 s (a CI test enforces it).
-- Client bundle: `fx.ts` (about 0.6 kB gz) enters the shared bundle through `CurrencyProvider`. It imports nothing. No series data is added to the root layout: a page passes a sliced `FxDailySeries` to the client component that needs it.
+- Client bundle: unchanged in this package. `fx.ts` (about 0.6 kB gz, no imports) is not added to `CurrencyProvider`: a provider member would put it in every page's shared bundle while no page in this package uses it. A later client chart imports `toCadAtDatedRates` or `rateOn` from `fx.ts` directly and reads the currency from `useCurrency().currency`, so only that route's chunk pays for it. No series data is added to the root layout: a page passes a sliced `FxDailySeries` to the client component that needs it.
 
 ### UI
 
@@ -97,11 +99,13 @@ Confirm the starting state (repo root):
 # Migration numbers: nothing may use 0033 to 0041 yet except this package's files
 ls migrations | grep -E '^00(3[3-9]|4[01])_'          # expect no output
 
-# WP10 landed and stayed behaviour-neutral on anchors
+# WP10 landed, and which anchor variant it shipped
 ls migrations/0027_* migrations/0028_* migrations/0029_*  # expect 3 files
-grep -nE "recorded_at >= current_date - (14|37|104|379)" migrations/0028_bounded_market_metrics.sql
-# expect no output (anchors unbounded). If this prints lines, WP10 adopted the tolerance: use the
-# alternate #returns paragraph in step 14c.
+grep -nE "recorded_at >= current_date - (14|37|104|194|379)$" migrations/0028_bounded_market_metrics.sql
+# expect 5 lines: WP10 shipped its default variant (return anchors bounded). Skip step 1b.
+# No output: the owner chose WP10's behaviour-neutral variant, and the product direction
+# (01-PRODUCT-DIRECTION.md section 9 item 5) hands the rule to this package: do step 1b.
+# Any other count: stop and report; 0028 was edited by hand.
 
 # WP11
 grep -n "exchangeRate\|marketProducts" frontend/app/lib/cacheTags.ts        # both tags
@@ -175,8 +179,8 @@ Create the file with exactly this content. It was applied twice in a row to a Su
 --     listings_snapshot_date and price_day are never nulled, so a reader can
 --     say when data was last seen.
 --
--- Return anchors have a maximum age, unlike get_market_product_metrics: the
--- newest price row on or before (day - window) and no older than
+-- Return anchors have a maximum age, the same rule as the catalog RPC (0028):
+-- the newest price row on or before (day - window) and no older than
 -- (day - window - tolerance). 7D and 1M: 7 days. 3M and 1Y: 14 days. 1D is the
 -- change on the latest recorded day, when that day is the refresh day or the
 -- day before and the previous recorded day is at most 3 days earlier.
@@ -190,7 +194,9 @@ Create the file with exactly this content. It was applied twice in a row to a Su
 -- 0034 replaces refresh_market_analytics to add the FX step; later packages
 -- (WP28, WP29) replace it again to add theirs, keeping every earlier call.
 --
--- Idempotent. Safe to re-run.
+-- Idempotent on its own. Once 0034 or a later file has replaced
+-- refresh_market_analytics, re-run only the newest file that defines it:
+-- re-running this one would put back the version without the later steps.
 --
 -- Verification:
 --   SELECT public.refresh_market_analytics((now() AT TIME ZONE 'UTC')::date);
@@ -709,6 +715,25 @@ python3 verify_migration.py migrations/0033_product_daily_stats.sql > /tmp/wp25_
 ```
 
 With the file copied verbatim the two body hashes are `b519a333d1786c3c25775e3eda136435` and `d3390e5adcfa952e1ccc639046e7c52f`. Any edit changes them, which is fine: what matters is that the generated query returns OK rows after apply.
+
+### Step 1b. Only if WP10 shipped its neutral variant: bound the catalog's return anchors
+
+Skip this step when the WP10 check in Before you start printed 5 lines (the default). When it printed nothing, the owner kept WP10 behaviour-neutral, and WP10's "Owner decision" paragraph and `01-PRODUCT-DIRECTION.md` §9 item 5 make this package apply the anchor-age rule to the catalog RPC, so the catalog, the daily statistics and `/methodology#returns` state one rule.
+
+1. Append to the end of `migrations/0033_product_daily_stats.sql`, after section 5, a section headed
+
+```sql
+-- ============================================================
+-- 6. Catalog return anchors get the same maximum age (WP10 neutral
+--    variant shipped; 01-PRODUCT-DIRECTION.md section 9 item 5)
+-- ============================================================
+```
+
+followed by, copied verbatim from `audits/remediation/WP10-db-rpc-performance.md` step 2 (the default variant, with the five `AND h.recorded_at >= current_date - 14` / `- 37` / `- 104` / `- 194` / `- 379` lines), the statement from `CREATE OR REPLACE FUNCTION public.get_market_product_metrics()` through `ALTER FUNCTION public.get_market_product_metrics()` and its `  SET search_path = public;` line. Do not copy WP10's file header. The function keeps its `RETURNS TABLE`, so `CREATE OR REPLACE` keeps its ACL; the `ALTER FUNCTION` re-pins `search_path`.
+2. Check: `diff <(sed -n '/^CREATE OR REPLACE FUNCTION public.get_market_product_metrics/,/SET search_path = public;/p' migrations/0028_bounded_market_metrics.sql) <(sed -n '/^CREATE OR REPLACE FUNCTION public.get_market_product_metrics/,/SET search_path = public;/p' migrations/0033_product_daily_stats.sql)` prints the five anchor-age lines as additions and otherwise only lines that start with `--` after their indentation (WP10's neutral variant rewords a comment). Any other difference means the copy is wrong: copy it again.
+3. In `tests/test_wp10_market_rpc_bounds.py`, restore `test_metrics_return_anchors_have_a_maximum_age` exactly as WP10's spec step 11 prints it. Its `effective()` helper reads the last definition in apply order, which is now 0033's.
+4. Expected side effects: `verify_migration.py migrations/0033_product_daily_stats.sql` prints one more function line (`get_market_product_metrics`); after apply, 0028's verification query reports `MISMATCH` for `get_market_product_metrics` (superseded by 0033, the expected cross-file result). Add both to the PR. The methodology text (step 14) is the same in both variants, because after this step every return has the bound.
+5. Owner action 2 gains one check: run `SELECT count(*) FILTER (WHERE return_7d IS NULL) AS r7, count(*) FILTER (WHERE return_30d IS NULL) AS r30, count(*) FILTER (WHERE return_365d IS NULL) AS r365 FROM public.get_market_product_summaries() WHERE usd_price IS NOT NULL;` once before applying 0033 and once after, and paste both rows into the PR. Each count may only grow (the rule blanks returns whose lookback price is too old; it never changes a non-NULL value). Do not use WP10's equivalence script here: in the neutral variant it was generated with no tolerance and would report every intended NULL as a difference.
 
 ### Step 2. `migrations/0034_fx_daily.sql` (new)
 
@@ -1426,14 +1451,25 @@ export interface ProductDailyStats {
 import type { ProductDailyStats } from "../types/market";
 
 /**
- * Maximum age of a return anchor beyond its window: the anchor is the newest
- * price on or before (day - window) and no older than (day - window - tolerance).
+ * Return anchor tolerances, the same two values as WP10's 0028 header
+ * (RETURN_ANCHOR_TOLERANCE_SHORT_DAYS and _LONG_DAYS). The anchor is the
+ * newest price on or before (day - window) and no older than
+ * (day - window - tolerance). Drift-tested against both SQL functions.
  */
+export const RETURN_ANCHOR_TOLERANCE_SHORT_DAYS = 7;
+export const RETURN_ANCHOR_TOLERANCE_LONG_DAYS = 14;
+
+/** Tolerance for a window of `days`: short up to 1M, long for 3M, 6M and 1Y. */
+export function returnAnchorToleranceDays(days: number): number {
+  return days <= 30 ? RETURN_ANCHOR_TOLERANCE_SHORT_DAYS : RETURN_ANCHOR_TOLERANCE_LONG_DAYS;
+}
+
+/** The windows product_daily_stats stores (the VALUES list in 0033). */
 export const RETURN_ANCHOR_WINDOWS = [
-  { key: "ret_7d", label: "7D", days: 7, toleranceDays: 7 },
-  { key: "ret_30d", label: "1M", days: 30, toleranceDays: 7 },
-  { key: "ret_90d", label: "3M", days: 90, toleranceDays: 14 },
-  { key: "ret_365d", label: "1Y", days: 365, toleranceDays: 14 },
+  { key: "ret_7d", label: "7D", days: 7, toleranceDays: RETURN_ANCHOR_TOLERANCE_SHORT_DAYS },
+  { key: "ret_30d", label: "1M", days: 30, toleranceDays: RETURN_ANCHOR_TOLERANCE_SHORT_DAYS },
+  { key: "ret_90d", label: "3M", days: 90, toleranceDays: RETURN_ANCHOR_TOLERANCE_LONG_DAYS },
+  { key: "ret_365d", label: "1Y", days: 365, toleranceDays: RETURN_ANCHOR_TOLERANCE_LONG_DAYS },
 ] as const;
 
 /** 1D: the previous recorded day may be at most this many days earlier. */
@@ -1454,10 +1490,57 @@ export const LIQUIDITY_MIN_PEERS = 5;
 
 export const LIQUIDITY_COMPONENTS = [
   "Units sold, 30 days",
-  "Transactions, 30 days",
+  "Orders, 30 days",
   "Sell-through, 30 days",
   "Lowest ask closeness to Market Price",
 ] as const;
+
+/**
+ * Read-time staleness gate. A row whose day is more than this many UTC days
+ * before the read keeps only its history columns. 2 = the nightly job writes
+ * D - 1 at 00:30 UTC, plus the half hour after midnight before it runs. It
+ * only bites when the scraper and the nightly job have both stopped.
+ */
+export const STATS_ROW_MAX_AGE_DAYS = 2;
+
+/**
+ * Columns whose gate was evaluated as of the row's own day: everything
+ * anchored on the current price or on the last few days of sales and
+ * listings (0023, 0018 to 0022). A later package that adds such a column to
+ * product_daily_stats adds it here too. Series columns (tracked high,
+ * 52-week range, distinct prices, observations, weekly volatility) and the
+ * dates are never withheld.
+ */
+export const STALE_ROW_WITHHELD_COLUMNS = [
+  "usd_price",
+  "ret_1d",
+  "ret_7d",
+  "ret_30d",
+  "ret_90d",
+  "ret_365d",
+  "dd_from_high_pct",
+  "pos_in_52w",
+  "units_sold_7d",
+  "units_sold_30d",
+  "tx_30d",
+  "active_listings",
+  "qty_available",
+  "lowest_ask_usd",
+  "ask_premium_pct",
+  "days_of_supply",
+  "sell_through_30d",
+  "qty_change_7d_pct",
+  "qty_change_30d_pct",
+  "liquidity_score",
+] as const satisfies readonly (keyof ProductDailyStats)[];
+
+/** Days since 1970-01-01 for a "YYYY-MM-DD..." string, or null. Zone-free. */
+function utcDayNumber(dateKey: string): number | null {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(dateKey);
+  if (!m) return null;
+  const ms = Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  return Number.isFinite(ms) ? Math.round(ms / 86_400_000) : null;
+}
 
 /** Latest stats keyed by product id. JSON-safe (unstable_cache stores JSON). */
 export interface ProductStatsSnapshot {
@@ -1474,18 +1557,34 @@ export const EMPTY_PRODUCT_STATS: ProductStatsSnapshot = { day: null, byProductI
  */
 export type ProductDailyStatsRow = { [K in keyof ProductDailyStats]: ProductDailyStats[K] | null };
 
-export function toProductStatsSnapshot(rows: readonly ProductDailyStatsRow[]): ProductStatsSnapshot {
+/**
+ * Rows to a snapshot. With `today` (YYYY-MM-DD, UTC), a row older than
+ * STATS_ROW_MAX_AGE_DAYS loses STALE_ROW_WITHHELD_COLUMNS and is_price_fresh
+ * (the read-time gate). The server read always passes `today`; tests and
+ * fixtures that want rows unchanged omit it.
+ */
+export function toProductStatsSnapshot(
+  rows: readonly ProductDailyStatsRow[],
+  options: { today?: string } = {}
+): ProductStatsSnapshot {
+  const todayNum = options.today === undefined ? null : utcDayNumber(options.today);
   const byProductId: Record<number, ProductDailyStats> = {};
   let day: string | null = null;
   for (const row of rows) {
     if (typeof row?.product_id !== "number" || typeof row.day !== "string") continue;
-    byProductId[row.product_id] = {
+    const stats: ProductDailyStats = {
       ...row,
       day: row.day,
       product_id: row.product_id,
       is_price_fresh: row.is_price_fresh === true,
       refreshed_at: row.refreshed_at ?? row.day,
     };
+    const rowDayNum = utcDayNumber(row.day);
+    if (todayNum !== null && (rowDayNum === null || todayNum - rowDayNum > STATS_ROW_MAX_AGE_DAYS)) {
+      for (const key of STALE_ROW_WITHHELD_COLUMNS) stats[key] = null;
+      stats.is_price_fresh = false;
+    }
+    byProductId[row.product_id] = stats;
     if (day === null || row.day > day) day = row.day;
   }
   return { day, byProductId };
@@ -1507,8 +1606,11 @@ export function statsFor(snapshot: ProductStatsSnapshot, productId: number): Pro
  * at most FX_CARRY_MAX_DAYS. A CAD return is (P1 x FX1) / (P0 x FX0) - 1, so
  * converting history at today's rate leaves the currency move out.
  *
- * Isomorphic and tiny: CurrencyProvider (in every page's shared bundle)
- * imports it. No React, no Supabase, no import from marketMath or format.
+ * Isomorphic and tiny, with no imports, so a client chart can import it
+ * without pulling anything else into its route chunk. It is deliberately
+ * not wired into CurrencyProvider: that would put it in every page's shared
+ * bundle. A client component reads the currency from useCurrency().currency
+ * and calls toCadAtDatedRates or rateOn itself.
  */
 
 /** Mirrors the 14 in refresh_fx_daily (0034); drift-tested. */
@@ -1589,9 +1691,12 @@ export function sliceFxSeries(series: FxDailySeries, fromDay: string): FxDailySe
 }
 
 /**
- * The rate for a day. After the series ends, the last rate is used for at
- * most FX_CARRY_MAX_DAYS (today's row may not exist before the next
- * refresh). Before the series starts, or in a gap: null.
+ * The rate for a day. After the series ends (today's row may not exist
+ * before the next refresh), the last rate is used while the day is at most
+ * FX_CARRY_MAX_DAYS after the Bank of Canada date behind it
+ * (latestSourceDate), the same cap refresh_fx_daily applies. The cap counts
+ * from that date, not from the last row, which may itself be carried.
+ * Before the series starts, in a gap, or past the cap: null.
  */
 export function rateOn(series: FxDailySeries, day: string): number | null {
   const start = dayNumber(series.start);
@@ -1599,9 +1704,10 @@ export function rateOn(series: FxDailySeries, day: string): number | null {
   if (start === null || n === null || n < start) return null;
   const i = n - start;
   if (i < series.rates.length) return series.rates[i] ?? null;
-  const lastIndex = series.rates.length - 1;
-  const last = series.rates[lastIndex];
-  return last !== null && last !== undefined && i - lastIndex <= FX_CARRY_MAX_DAYS ? last : null;
+  const last = series.rates[series.rates.length - 1];
+  const source = dayNumber(series.latestSourceDate);
+  if (last === null || last === undefined || source === null) return null;
+  return n - source <= FX_CARRY_MAX_DAYS ? last : null;
 }
 
 /** A USD amount in CAD at the rate of `day`, or null when that day has no rate. */
@@ -1661,7 +1767,7 @@ export function createFxLookup(series: FxDailySeries): FxLookup {
 }
 ```
 
-Keep it free of imports. `CurrencyProvider` is in every page's shared bundle, and importing `format.ts`, `marketMath.ts` or `marketPulse.ts` here would pull them in too.
+Keep it free of imports. Client charts in later packages import it, and importing `format.ts`, `marketMath.ts` or `marketPulse.ts` here would pull those into every chunk that converts a series.
 
 ### Step 11. `frontend/app/lib/serverMarketData.ts`: two cached reads
 
@@ -1677,7 +1783,7 @@ import {
 } from "./marketStats";
 ```
 
-11b. Directly above the comment block that starts the cached exports (WP11 step 2e, the line `const getCachedExchangeRateSnapshot = unstable_cache(`), add the fetchers:
+11b. Directly above the line `const getCachedExchangeRateSnapshot = unstable_cache(` (the first statement of WP11's step 2e block of cached exports), add the fetchers:
 
 ```ts
 /** PostgREST returns at most 1000 rows per request (Supabase max rows). */
@@ -1719,7 +1825,14 @@ const PRODUCT_STATS_SELECT = `day, product_id, usd_price, price_day, is_price_fr
   ask_premium_pct, days_of_supply, sell_through_30d,
   qty_change_7d_pct, qty_change_30d_pct, liquidity_score, refreshed_at`;
 
-/** Latest product_daily_stats row of every active product: one indexed query. */
+/**
+ * Latest product_daily_stats row of every active product: one indexed query.
+ * `today` applies the read-time staleness gate (marketStats.ts): if the
+ * scraper and the nightly job have both stopped, rows older than
+ * STATS_ROW_MAX_AGE_DAYS keep only their history columns. The cache holds the
+ * gated result for at most DAILY_BACKSTOP_SECONDS, the bound WP11 accepts
+ * for the 0023 gate too.
+ */
 async function fetchProductStatsLatest(): Promise<ProductStatsSnapshot> {
   const supabase = createMarketDataSupabaseClient();
   const rows: ProductDailyStatsRow[] = await fetchAllRows("product_stats_latest", (from, to) =>
@@ -1729,7 +1842,8 @@ async function fetchProductStatsLatest(): Promise<ProductStatsSnapshot> {
       .order("product_id", { ascending: true })
       .range(from, to)
   );
-  return rows.length ? toProductStatsSnapshot(rows) : EMPTY_PRODUCT_STATS;
+  const today = new Date().toISOString().slice(0, 10);
+  return rows.length ? toProductStatsSnapshot(rows, { today }) : EMPTY_PRODUCT_STATS;
 }
 
 /** fx_daily (migration 0034), oldest first, as a dense daily series. */
@@ -1808,52 +1922,20 @@ Do not call either function from another cached function's callback (WP11's nest
 
 Until phase B (step 15), `tsc` reports that `"product_stats_latest"` and `"fx_daily"` are not in `Database`. Do not cast the client to `any` to get around it.
 
-### Step 12. `frontend/app/context/CurrencyContext.tsx`: the dated series helper
+### Step 12. `CurrencyProvider`: no change
 
-12a. Import, below the `../lib/currency` import:
+Do not edit `frontend/app/context/CurrencyContext.tsx` or the root layout. A provider member that converts series would import `fx.ts` into every page's shared bundle while no page in this package converts a series, and the FX series itself (about 20 kB of JSON) must never ride in the layout's RSC payload. The pattern later packages follow (WP31, WP36):
 
-```ts
-import { toCadAtDatedRates, type DatedPrice, type FxDailySeries } from "../lib/fx";
+```tsx
+// Server component: read once, slice to the chart's range, pass down.
+const fx = sliceFxSeries(await getCachedFxDaily(), points[0]?.dateKey ?? today);
+
+// Client component: the visitor's currency from the provider, the series from props.
+const { currency } = useCurrency();
+const shown = currency === "CAD" ? toCadAtDatedRates(points, fx) : points;
+// fx.start === null (the read failed): show USD with the note
+// "Shown in USD: Bank of Canada rates are unavailable.", never CAD at today's rate.
 ```
-
-12b. Add a module-level helper directly above `const FALLBACK_VALUE`:
-
-```ts
-/**
- * A USD daily series in `currency`: CAD at each day's Bank of Canada rate
- * from `fx`, USD unchanged. A CAD day without a rate is null (a chart gap),
- * never today's rate.
- */
-function convertSeries(
-  points: readonly DatedPrice[],
-  fx: FxDailySeries,
-  currency: Currency
-): Array<{ dateKey: string; price: number | null }> {
-  return currency === "CAD"
-    ? toCadAtDatedRates(points, fx)
-    : points.map((p) => ({ dateKey: p.dateKey, price: p.price }));
-}
-```
-
-12c. Add the member to `CurrencyContextValue`, after `formatPrice`:
-
-```ts
-  /**
-   * WP25: a USD daily series (WP18 DailyPoint shape) in the selected
-   * currency, CAD at each day's Bank of Canada rate. Pass the page's
-   * getCachedFxDaily() result, sliced to the chart's range with
-   * sliceFxSeries. With EMPTY_FX_SERIES (the read failed) every CAD point is
-   * null: show the USD series with a note instead of an empty chart.
-   */
-  convertDailySeries: (
-    points: readonly DatedPrice[],
-    fx: FxDailySeries
-  ) => Array<{ dateKey: string; price: number | null }>;
-```
-
-12d. In `FALLBACK_VALUE` add `convertDailySeries: (points, fx) => convertSeries(points, fx, DEFAULT_CURRENCY),`. In the provider's `useMemo` object add `convertDailySeries: (points, fx) => convertSeries(points, fx, currency),` (the dependency list already contains `currency`; leave it unchanged).
-
-The root layout keeps passing only `initialRate`. Do not put the FX series in the provider's props or state: it would ship about 20 kB of JSON in every page's RSC payload.
 
 ### Step 13. `frontend/scripts/fixtures/perf.mjs`: fixture routes for the two new reads
 
@@ -1935,7 +2017,7 @@ and add `productStats, fxDaily` to the returned object.
     "/rest/v1/fx_daily": rows("fxDaily"),
 ```
 
-If `applyPostgrest` does not support `.range()` (check `frontend/scripts/fixtures/postgrest.mjs` for `Range` or `offset` handling), leave the routes as written: both reads fit in one page and the stub returns every row.
+supabase-js sends `.range(from, to)` as `offset` and `limit` query parameters, which WP22's `applyPostgrest` supports, and it strips the whitespace from the multi-line select before sending it. Both reads fit in one page of the fixture (306 and 800 rows).
 
 ### Step 14. Methodology v1.1 and metric definitions
 
@@ -1961,7 +2043,7 @@ export const METHODOLOGY_CHANGES: readonly MethodologyChange[] = [
     version: METHODOLOGY_VERSION,
     date: METHODOLOGY_EFFECTIVE_DATE,
     summary:
-      "Adds the daily statistics: tracked high, 52-week range, weekly volatility, liquidity score, sell-through, supply trend and lowest ask. Returns from the daily statistics have a maximum lookback age. CAD history uses the Bank of Canada rate of each day.",
+      "Adds the daily statistics: tracked high, 52-week range, weekly volatility, liquidity score, sell-through, supply trend and lowest ask. Every return now states the maximum age of its lookback price. CAD history uses the Bank of Canada rate of each day. Statistics that stop updating keep only their history figures.",
   },
   {
     version: "1.0",
@@ -1972,7 +2054,7 @@ export const METHODOLOGY_CHANGES: readonly MethodologyChange[] = [
 ```
 
 14b. `frontend/app/lib/metricDefinitions.ts`:
-- Add the import: `import { LIQUIDITY_MIN_PEERS, TRACKED_HIGH_ROLLING_ROWS, WEEKS_PER_YEAR } from "./marketStats";`
+- Add the import: `import { LIQUIDITY_MIN_PEERS, TRACKED_HIGH_ROLLING_ROWS, VOL_WEEKLY_MIN_RETURNS, WEEKS_PER_YEAR } from "./marketStats";`
 - Append these entries to the product-level group of `DEFINITIONS`, directly after the `marketPulse` entry:
 
 ```ts
@@ -1981,17 +2063,17 @@ export const METHODOLOGY_CHANGES: readonly MethodologyChange[] = [
   def({ key: "fromTrackedHigh", label: "From tracked high", unitLabel: "%", window: "since first tracked day", short: "Percent between the current Market Price and the tracked high. Hidden when the price is withheld.", anchor: "tracked-high" }),
   def({ key: "range52w", label: "52-week range", unitLabel: "USD", window: "52 weeks", short: `Lowest and highest prices held for ${TRACKED_HIGH_ROLLING_ROWS} recorded days in a row over the last 52 weeks.`, anchor: "range-52w" }),
   def({ key: "positionIn52w", label: "Position in 52-week range", unitLabel: "%", window: "52 weeks", short: "Where the current price sits between the 52-week low (0%) and the 52-week high (100%).", anchor: "range-52w" }),
-  def({ key: "volatilityWeekly52w", label: "Volatility 1Y (weekly, annualised)", unitLabel: "% annualised", window: `${WEEKS_PER_YEAR} weeks`, short: `Std dev of weekly log changes over ${WEEKS_PER_YEAR} Monday prices, times the square root of ${WEEKS_PER_YEAR}.`, anchor: "volatility" }),
+  def({ key: "volatilityWeekly52w", label: "Volatility 1Y (weekly, annualised)", unitLabel: "% annualised", window: `${WEEKS_PER_YEAR} weeks`, short: `Std dev of the last ${WEEKS_PER_YEAR} weekly log changes (Monday prices, at least ${VOL_WEEKLY_MIN_RETURNS}), times the square root of ${WEEKS_PER_YEAR}.`, anchor: "volatility" }),
   def({ key: "liquidityScore", label: "Liquidity (percentile)", unitLabel: "percentile", window: "30 days", short: `Mean percentile within the product type (${LIQUIDITY_MIN_PEERS}+ peers) of units sold, orders, sell-through and ask closeness.`, anchor: "liquidity" }),
   def({ key: "transactions30d", label: "Orders (30d)", unitLabel: "orders", window: "30 days", short: "Completed TCGplayer orders in the last 30 days, from daily sales buckets.", anchor: "volume" }),
   def({ key: "sellThrough30d", label: "Sell-through (30d)", unitLabel: "%", window: "30 days", short: "Units sold in 30 days divided by units sold plus units on market.", anchor: "sell-through" }),
   def({ key: "supplyChange7d", label: "Supply change (7d)", unitLabel: "%", window: "7 days", short: "Change in units on market against the snapshot about 7 days earlier.", anchor: "supply-trend" }),
   def({ key: "supplyChange30d", label: "Supply change (30d)", unitLabel: "%", window: "30 days", short: "Change in units on market against the snapshot about 30 days earlier.", anchor: "supply-trend" }),
   def({ key: "askPremium", label: "Lowest ask vs Market Price", unitLabel: "%", window: "latest snapshot", short: "Cheapest listing, before shipping, against Market Price. Negative means listed below it.", anchor: "ask-premium" }),
-  def({ key: "distinctPrices365d", label: "Distinct prices (1Y)", unitLabel: "count", window: "365 days", short: "Number of different daily prices recorded in the last year. Few means thin trading.", anchor: "coverage" }),
+  def({ key: "distinctPrices365d", label: "Distinct prices (1Y)", unitLabel: "count", window: "365 days", short: "Number of different daily prices recorded in the last year. A low count means Market Price rarely moved.", anchor: "liquidity" }),
 ```
 
-Every `short` is at most 120 characters (longest: `liquidityScore`, 105 once interpolated) and contains no banned word from WP24's test. Do not change existing entries: `volatility30dAnnualised` still describes the pages that show it.
+Every `short` is at most 120 characters (longest: `liquidityScore`, 105 once interpolated) and contains no banned word from WP24's test (`\bbuy\b` included). Do not change existing entries: `volatility30dAnnualised` still describes the pages that show it.
 
 14c. `frontend/app/methodology/MethodologyArticle.tsx`:
 
@@ -2003,7 +2085,8 @@ import {
   LIQUIDITY_COMPONENTS,
   LIQUIDITY_MIN_PEERS,
   ONE_DAY_PREVIOUS_MAX_GAP_DAYS,
-  RETURN_ANCHOR_WINDOWS,
+  returnAnchorToleranceDays,
+  STATS_ROW_MAX_AGE_DAYS,
   SUPPLY_CHANGE_TOLERANCE_DAYS,
   TRACKED_HIGH_ROLLING_ROWS,
   VOL_WEEKLY_MIN_RETURNS,
@@ -2014,15 +2097,25 @@ import {
 - Above `export default function MethodologyArticle`, add:
 
 ```tsx
-/** Oldest lookback price the daily statistics accept, per return label. */
-function maxLookbackAge(label: string, days: number): string {
-  if (label === "1D") return `previous recorded day, at most ${ONE_DAY_PREVIOUS_MAX_GAP_DAYS} days earlier`;
-  const window = RETURN_ANCHOR_WINDOWS.find((w) => w.label === label);
-  return window ? `${days + window.toleranceDays} days` : "not used";
+/** Oldest lookback price a return accepts, per window length in days. */
+function maxLookbackAge(days: number): string {
+  if (days === 1) {
+    return `the previous recorded price; on pages built on the daily statistics, at most ${ONE_DAY_PREVIOUS_MAX_GAP_DAYS} days earlier`;
+  }
+  return `${days + returnAnchorToleranceDays(days)} days`;
 }
 ```
 
-- `#cadence`: append one sentence to its paragraph: `Pokéfin's daily statistics are recomputed after each run and finalised for the previous UTC day shortly after midnight UTC.`
+- `#cadence`: directly after its existing paragraph (keep that paragraph as it is), add:
+
+```tsx
+            <p>
+              Pokéfin&apos;s daily statistics are recomputed after each run and finalised for the previous UTC day
+              shortly after midnight UTC. If they are more than {STATS_ROW_MAX_AGE_DAYS} days old, every figure
+              that depends on the current price, recent sales or listings shows <code>--</code>; the tracked
+              high, the 52-week range and volatility stay visible.
+            </p>
+```
 
 - Replace the whole `<Section id="currency">...</Section>` with:
 
@@ -2034,9 +2127,10 @@ function maxLookbackAge(label: string, days: number): string {
               {current.fxRate !== null && current.fxDate !== null
                 ? ` (${current.fxRate.toFixed(4)} on ${formatDateOnly(current.fxDate)})`
                 : ""}
-              . CAD history, CAD returns and CAD cost basis use the Bank of Canada rate of each day instead. On
-              weekends and bank holidays the last published rate carries forward for at most {FX_CARRY_MAX_DAYS}{" "}
-              days; a day further from a published rate shows no CAD value rather than a guessed one.
+              . CAD history, CAD returns and CAD cost basis use the Bank of Canada rate of each day instead
+              (Known limits lists the charts that have not moved yet). On weekends and bank holidays the last
+              published rate carries forward for at most {FX_CARRY_MAX_DAYS} days; a day further from a
+              published rate shows no CAD value rather than a guessed one.
             </p>
             <p>
               A CAD return is therefore (price now × rate now) ÷ (price then × rate then) - 1, so it includes the
@@ -2053,7 +2147,7 @@ function maxLookbackAge(label: string, days: number): string {
                 <tr>
                   <th className={TH}>Label</th>
                   <th className={TH}>Lookback</th>
-                  <th className={TH}>Oldest lookback price (daily statistics)</th>
+                  <th className={TH}>Oldest lookback price</th>
                 </tr>
               </thead>
               <tbody>
@@ -2061,27 +2155,25 @@ function maxLookbackAge(label: string, days: number): string {
                   <tr key={label} data-window={label}>
                     <td className={TD}>{label}</td>
                     <td className={TD}>{days} {days === 1 ? "day" : "days"}</td>
-                    <td className={TD}>{maxLookbackAge(label, days)}</td>
+                    <td className={TD}>{maxLookbackAge(days)}</td>
                   </tr>
                 ))}
               </tbody>
             </table>
             <p>
-              Returns computed from Pokéfin&apos;s daily statistics use the lookback price only if it is no older
-              than the last column; otherwise the return shows <code>--</code>. Pages that still compute returns on
-              request (the catalog and the Market table) accept an older lookback price, so a product with a gap
-              in its history can report a return over a longer span than its label there. Returns are withheld
-              with the price.
+              A return uses the lookback price only if it is no older than the last column, so a product with a
+              gap in its history shows <code>--</code> instead of a return measured over a longer span than its
+              label. Returns are withheld with the price.
             </p>
 ```
 
-If the WP10 check in Before you start printed lines (WP10 bounded its anchors too), use this paragraph instead: `Every return uses the lookback price only if it is no older than the last column; otherwise the return shows <code>--</code>. Returns are withheld with the price.`
+The text is the same whichever WP10 variant shipped: in the neutral case step 1b gives the catalog the same bound.
 
 - `#volatility`: add a third row to its table, after `tr[data-vol="set"]`:
 
 ```tsx
                 <tr data-vol="weekly">
-                  <td className={TD}>Daily statistics (from version 1.1)</td>
+                  <td className={TD}>Pages built on the daily statistics</td>
                   <td className={TD}>
                     Last {WEEKS_PER_YEAR} weekly changes on a Monday grid, at least {VOL_WEEKLY_MIN_RETURNS}
                   </td>
@@ -2108,9 +2200,9 @@ and append this paragraph at the end of the section:
               The tracked high is the highest price a product held for {TRACKED_HIGH_ROLLING_ROWS} recorded days
               in a row: for each day, take the lowest of that day&apos;s price and the{" "}
               {TRACKED_HIGH_ROLLING_ROWS - 1} recorded prices before it, then the highest of those values since
-              Pokéfin began tracking the product. A single day&apos;s spike cannot set it. It is shown as
-              &quot;tracked high since&quot; the first tracked day, because history starts about a year before
-              daily collection and an older product&apos;s real peak may be earlier.
+              Pokéfin began tracking the product. A single day&apos;s spike cannot set it. It is always shown as
+              &quot;tracked high since&quot; the product&apos;s first tracked day: Pokéfin has no prices from
+              before that day, and an older product&apos;s real peak may be earlier.
             </p>
             <p>
               From tracked high = current price ÷ tracked high - 1. It is withheld with the price; the tracked high
@@ -2118,7 +2210,7 @@ and append this paragraph at the end of the section:
             </p>
             <Sub id="range-52w">
               <p>
-                The 52-week high applies the same rule to the last 52 weeks. The 52-week low is its mirror: the
+                The 52-week high applies the same rule to the last {WEEKS_PER_YEAR} weeks. The 52-week low is its mirror: the
                 lowest price held for {TRACKED_HIGH_ROLLING_ROWS} recorded days in a row. Position in range = (price
                 - low) ÷ (high - low), from 0% at the low to 100% at the high, and is withheld with the price.
               </p>
@@ -2158,8 +2250,9 @@ and append this paragraph at the end of the section:
           <Section id="liquidity">
             <p>
               The liquidity score compares a product with the other products of its type (booster boxes with
-              booster boxes) on four inputs. Each input becomes a percentile from 0 to 1 within the type; the
-              score is their mean × 100, rounded.
+              booster boxes) on {LIQUIDITY_COMPONENTS.length} inputs. Each input becomes a percentile from 0 to 1
+              within the type, higher being more liquid; the score is their mean × 100, rounded. For the lowest
+              ask, the listing closest to Market Price, above or below it, ranks highest.
             </p>
             <ul className="ml-5 list-disc space-y-1">
               {LIQUIDITY_COMPONENTS.map((c) => (
@@ -2167,9 +2260,14 @@ and append this paragraph at the end of the section:
               ))}
             </ul>
             <p>
-              It is published only when all four inputs exist and at least {LIQUIDITY_MIN_PEERS} products of the
-              type have them. It counts TCGplayer sales only, so it is relative, not a measure of how many buyers
-              exist, and it says nothing about value.
+              It is published only when every input exists and at least {LIQUIDITY_MIN_PEERS} products of the
+              type have them all. It counts TCGplayer sales only, so it is relative, not a measure of how many
+              buyers exist, and it says nothing about value.
+            </p>
+            <p>
+              Distinct prices (1Y) counts the different daily prices recorded in the last year. Market Price is
+              smoothed from completed sales, so a low count means it rarely moved, usually because few copies
+              sold.
             </p>
           </Section>
 ```
@@ -2240,10 +2338,11 @@ and below the block: `Run the FX backfill first. Both connect as pokefin_scraper
 - **Do not grant the scraper role table privileges** on `product_daily_stats` or `fx_daily`. Writes go through the SECURITY DEFINER function only.
 - **Do not leave Supabase's default table grants in place.** `REVOKE ALL ... FROM anon, authenticated` then `GRANT SELECT`: RLS does not stop `TRUNCATE`.
 - **Do not make the view SECURITY DEFINER** (drop `security_invoker = true`). Supabase's advisor flags definer views, and anon must go through RLS.
-- **Do not change WP10's `get_market_product_metrics`, `get_market_product_summaries` or `get_set_analytics`.** The bounded anchors live in `product_daily_stats` only; moving the catalog onto the table is a later package's job.
+- **Do not change WP10's `get_market_product_metrics`, `get_market_product_summaries` or `get_set_analytics`**, with one exception: step 1b, only when WP10 shipped its neutral variant, and then only by copying WP10's default-variant function verbatim. Moving the catalog onto the table is a later package's job.
+- **Do not put the read-time staleness gate in the view.** WP28 and WP33 re-create `product_stats_latest` as `SELECT s.*`; a gate inside it would vanish at the first re-creation. It lives in `toProductStatsSnapshot`, and `fetchProductStatsLatest` must pass `{ today }`.
 - **Do not fall back to today's rate inside `fx.ts`.** A day without a dated rate is `null`. The consumer decides what to show, and must label it.
-- **Do not import `format.ts`, `marketMath.ts`, `marketPulse.ts` or React into `fx.ts`.** It ships in the shared bundle.
-- **Do not put the FX series or the stats snapshot into `CurrencyProvider` props, the root layout or any client component whole.** Pages pass slices.
+- **Do not import anything into `fx.ts`**, `format.ts`, `marketMath.ts`, `marketPulse.ts` and React included. Client charts import it.
+- **Do not add `fx.ts` or a series converter to `CurrencyProvider`, and do not put the FX series or the stats snapshot into provider props, the root layout or any client component whole.** The provider is in every page's shared bundle; pages pass slices to the components that need them.
 - **Do not call `getCachedProductStats()` or `getCachedFxDaily()` from a page in this package**, and never from inside another `unstable_cache` callback.
 - **Do not hand-write `app/types/database.ts`** or cast the Supabase client to `any` to get past phase A.
 - **Do not let the scraper hook raise.** `refresh_after_run` swallows and logs; `run_jobs_once` must finish and revalidate even when the refresh fails.
@@ -2265,7 +2364,7 @@ refresh_market_analytics) and 0034 (fx_daily), run against a database rebuilt
 by scripts/db/replay_migrations.sh.
 
 Skipped unless POKEFIN_TEST_DATABASE_URL points at that replayed database as a
-superuser (CI sets it; job "database"). NEVER point it at production: the
+superuser (CI job "Database replay and Python tests" sets it). NEVER point it at production: the
 fixtures write rows and change the pokefin_scraper password.
 
   POKEFIN_TEST_DATABASE_URL=postgresql://postgres:postgres@localhost:5432/replay_once \
@@ -3010,9 +3109,18 @@ describe("fx", () => {
     expect(rateOn(series, "2026-09-28T23:59:59")).toBe(1.4); // a recorded_at string works too
   });
 
-  it(`carries the last rate at most ${FX_CARRY_MAX_DAYS} days past the end`, () => {
+  it(`carries the last rate at most ${FX_CARRY_MAX_DAYS} days past its Bank of Canada date`, () => {
     expect(rateOn(series, "2026-10-12")).toBe(1.4); // 14 days after 09-28
     expect(rateOn(series, "2026-10-13")).toBeNull();
+    // The last row is itself carried from 09-25: the cap counts from 09-25, not from 09-27.
+    const carried = buildFxSeries([
+      { day: "2026-09-25", usd_to_cad: 1.36, source_date: "2026-09-25", source: "boc" },
+      { day: "2026-09-26", usd_to_cad: 1.36, source_date: "2026-09-25", source: "carry_forward" },
+      { day: "2026-09-27", usd_to_cad: 1.36, source_date: "2026-09-25", source: "carry_forward" },
+    ]);
+    expect(carried.latestSourceDate).toBe("2026-09-25");
+    expect(rateOn(carried, "2026-10-09")).toBe(1.36);
+    expect(rateOn(carried, "2026-10-10")).toBeNull();
   });
 
   it("converts amounts and series at dated rates", () => {
@@ -3053,10 +3161,12 @@ Proves every constant `/methodology` prints equals the SQL (same technique as WP
 import fs from "node:fs";
 import path from "node:path";
 import { FX_CARRY_MAX_DAYS } from "../fx";
+import { RETURN_WINDOW_DAYS } from "../marketMath";
 import {
   LIQUIDITY_MIN_PEERS,
   ONE_DAY_PREVIOUS_MAX_GAP_DAYS,
   RETURN_ANCHOR_WINDOWS,
+  returnAnchorToleranceDays,
   SUPPLY_CHANGE_TOLERANCE_DAYS,
   TRACKED_HIGH_ROLLING_ROWS,
   VOL_WEEKLY_MIN_RETURNS,
@@ -3084,7 +3194,8 @@ describe("refresh_product_daily_stats mirrors", () => {
   const sql = newestDefinition("refresh_product_daily_stats");
 
   it("return windows and anchor tolerances", () => {
-    const values = sql.match(/VALUES\s*((?:\('\w+',\s*\d+,\s*\d+\),?\s*)+)\s*AS w\(label, days, tolerance\)/);
+    // The list ends "('365d', 365, 14))": one ")" closes the last tuple, the next closes VALUES.
+    const values = sql.match(/VALUES\s*((?:\('\w+',\s*\d+,\s*\d+\),?\s*)+)\)\s*AS w\(label, days, tolerance\)/);
     expect(values).not.toBeNull();
     const parsed = [...values![1].matchAll(/\('(\w+)',\s*(\d+),\s*(\d+)\)/g)].map((m) => ({
       key: `ret_${m[1]}`,
@@ -3112,6 +3223,20 @@ describe("refresh_product_daily_stats mirrors", () => {
   });
 });
 
+describe("return anchors agree everywhere", () => {
+  it("every stored window uses the shared tolerance rule", () => {
+    for (const w of RETURN_ANCHOR_WINDOWS) expect(w.toleranceDays).toBe(returnAnchorToleranceDays(w.days));
+  });
+
+  it("the catalog RPC (0028, or 0033 after step 1b) bounds every window except 1D the same way", () => {
+    const sql = newestDefinition("get_market_product_metrics");
+    for (const [label, days] of Object.entries(RETURN_WINDOW_DAYS)) {
+      if (days === 1) continue;
+      expect([label, sql.includes(`h.recorded_at >= current_date - ${days + returnAnchorToleranceDays(days)}`)]).toEqual([label, true]);
+    }
+  });
+});
+
 describe("refresh_fx_daily mirrors", () => {
   it("the carry-forward cap equals FX_CARRY_MAX_DAYS", () => {
     const sql = newestDefinition("refresh_fx_daily");
@@ -3127,6 +3252,9 @@ If WP24 left `DAILY_DATA_STALENESS_TOLERANCE_DAYS` or `LISTINGS_STALENESS_TOLERA
 - `toProductStatsSnapshot` keys rows by `product_id`, takes the newest `day`, skips a row whose `product_id` or `day` is not the right type, turns `is_price_fresh: null` into `false`, and returns `{ day: null, byProductId: {} }` for `[]`.
 - `statsFor(snapshot, 999)` returns `null` for an unknown id.
 - `RETURN_ANCHOR_WINDOWS` labels are a subset of `Object.keys(RETURN_WINDOW_DAYS)` from `marketMath.ts` and each `days` equals `RETURN_WINDOW_DAYS[label]`.
+- `returnAnchorToleranceDays`: 7 for 7 and 30, 14 for 90, 180 and 365.
+- Read-time gate. Build one full row (every column non-null, `is_price_fresh: true`, `day: "2026-09-29"`). With `{ today: "2026-10-01" }` (2 days) the row is unchanged. With `{ today: "2026-10-02" }` (3 days) every key of `STALE_ROW_WITHHELD_COLUMNS` is `null`, `is_price_fresh` is `false`, and `tracked_high_usd`, `high_52w`, `low_52w`, `vol_weekly_52w`, `distinct_prices_365d`, `obs_90d`, `price_day`, `listings_snapshot_date` and `first_tracked_day` keep their values. Without `options` the 3-day-old row is unchanged (fixtures and WP33's test rely on that). A row whose `day` is not a date string is skipped, as before.
+- `STALE_ROW_WITHHELD_COLUMNS` contains every price-anchored column of the 0033 header's gate list (`usd_price`, the five `ret_*`, `dd_from_high_pct`, `pos_in_52w`, `ask_premium_pct`, `liquidity_score`) and none of `tracked_high_usd`, `high_52w`, `low_52w`, `vol_weekly_52w`, `distinct_prices_365d`, `obs_90d`.
 
 ### 8. `frontend/app/lib/__tests__/serverMarketData.stats.test.ts` (new, `@jest-environment node`)
 
@@ -3149,7 +3277,8 @@ function tableMock(pages: Array<{ data: unknown[] | null; error: unknown }>) {
 ```
 
 Cases:
-- `getCachedProductStats` reads `product_stats_latest` (assert `fromMock` was called with it), the select string contains `liquidity_score` and `refreshed_at` and no `*`, orders by `product_id` ascending, and returns `{ day: "2026-09-30", byProductId: { 1: ..., 2: ... } }` for two rows.
+- `getCachedProductStats` reads `product_stats_latest` (assert `fromMock` was called with it), the select string contains `liquidity_score` and `refreshed_at` and no `*`, orders by `product_id` ascending, and returns `{ day: "2026-09-30", byProductId: { 1: ..., 2: ... } }` for two rows. Pin the clock for every case in this file: `jest.useFakeTimers({ doNotFake: ["nextTick", "setImmediate"] }).setSystemTime(new Date("2026-09-30T12:00:00Z"))` in `beforeEach`, `jest.useRealTimers()` in `afterEach`.
+- The read applies the staleness gate: with the clock at `2026-10-05T12:00:00Z`, a row with `day: "2026-09-30"`, `usd_price: 50` and `tracked_high_usd: 60` comes back with `usd_price: null`, `is_price_fresh: false` and `tracked_high_usd: 60`.
 - A row with `product_id: null` is skipped.
 - An error (`{ data: null, error: { message: "down" } }`) returns `{ day: null, byProductId: {} }` and calls `logCaughtError` with `"server_product_stats_failed"`.
 - `getCachedFxDaily` pages: first page 1000 rows (`day` from `2024-01-01` on, `source: "boc"`), second page 3 rows; `calls.range` equals `[[0, 999], [1000, 1999]]`, `calls.order[0]` equals `["day", { ascending: true }]`, and the series has `rates.length === 1003` and `start === "2024-01-01"`.
@@ -3159,75 +3288,18 @@ Cases:
 
 Build the 1000 rows with a loop over `Date.UTC(2024, 0, 1 + i)`; do not hand-write them.
 
-### 9. `frontend/app/context/__tests__/CurrencyContext.fx.test.tsx` (new, jsdom)
+### 9. `CurrencyContext`: no new test
 
-```tsx
-import { act, render } from "@testing-library/react";
-import {
-  CurrencyProvider,
-  _resetCurrencyPreferenceForTests,
-  useCurrency,
-  type CurrencyContextValue,
-} from "../CurrencyContext";
-import { buildFxSeries, EMPTY_FX_SERIES } from "../../lib/fx";
-
-const FX = buildFxSeries([
-  { day: "2026-09-28", usd_to_cad: 1.3, source_date: "2026-09-28", source: "boc" },
-  { day: "2026-09-29", usd_to_cad: 1.4, source_date: "2026-09-29", source: "boc" },
-]);
-const POINTS = [
-  { dateKey: "2026-09-27", price: 10 },
-  { dateKey: "2026-09-28", price: 10 },
-  { dateKey: "2026-09-29", price: 20 },
-];
-
-let ctx: CurrencyContextValue;
-function Probe() {
-  ctx = useCurrency();
-  return null;
-}
-
-beforeEach(() => {
-  _resetCurrencyPreferenceForTests();
-  window.localStorage.clear();
-});
-
-it("converts a USD series at each day's rate when CAD is selected", () => {
-  render(<CurrencyProvider initialRate={{ rate: 1.5, date: "2026-09-29" }}><Probe /></CurrencyProvider>);
-  expect(ctx.currency).toBe("CAD");
-  expect(ctx.convertDailySeries(POINTS, FX)).toEqual([
-    { dateKey: "2026-09-27", price: null },
-    { dateKey: "2026-09-28", price: 13 },
-    { dateKey: "2026-09-29", price: 28 },
-  ]);
-});
-
-it("returns USD points unchanged when USD is selected", () => {
-  render(<CurrencyProvider initialRate={{ rate: 1.5, date: "2026-09-29" }}><Probe /></CurrencyProvider>);
-  act(() => ctx.setCurrency("USD"));
-  expect(ctx.convertDailySeries(POINTS, FX)).toEqual(POINTS);
-});
-
-it("never falls back to the current rate when the FX series is empty", () => {
-  render(<CurrencyProvider initialRate={{ rate: 1.5, date: "2026-09-29" }}><Probe /></CurrencyProvider>);
-  expect(ctx.convertDailySeries(POINTS, EMPTY_FX_SERIES).every((p) => p.price === null)).toBe(true);
-});
-
-it("works outside the provider (component tests)", () => {
-  render(<Probe />);
-  expect(ctx.convertDailySeries(POINTS, FX)[2].price).toBe(28);
-});
-```
-
-If WP20 named the reset helper differently, use its name (`grep -n "export function _reset" frontend/app/context/CurrencyContext.tsx`).
+Step 12 changes nothing there; WP20's tests keep passing unchanged. `fx.test.ts` covers the conversion a client chart will call.
 
 ### 10. Updates to WP24's tests
 
-- `app/lib/__tests__/metricDefinitions.test.ts`: add a case: `metricHref("trackedHigh")` is `/methodology#tracked-high`, `metricHref("liquidityScore")` is `/methodology#liquidity`, `metricHref("sellThrough30d")` is `/methodology#sell-through`, `metricHref("supplyChange30d")` is `/methodology#supply-trend`, `metricHref("askPremium")` is `/methodology#ask-premium`, `metricHref("volatilityWeekly52w")` is `/methodology#volatility`. The existing cases (unique keys, 120-character limit, real anchors, banned words) cover the new entries unchanged.
+- `app/lib/__tests__/metricDefinitions.test.ts`: add a case: `metricHref("trackedHigh")` is `/methodology#tracked-high`, `metricHref("liquidityScore")` is `/methodology#liquidity`, `metricHref("sellThrough30d")` is `/methodology#sell-through`, `metricHref("supplyChange30d")` is `/methodology#supply-trend`, `metricHref("askPremium")` is `/methodology#ask-premium`, `metricHref("volatilityWeekly52w")` is `/methodology#volatility`, `metricHref("distinctPrices365d")` is `/methodology#liquidity`. The existing cases (unique keys, 120-character limit, real anchors, banned words) cover the new entries unchanged.
 - `app/methodology/__tests__/MethodologyArticle.test.tsx`: add cases:
   - the provenance line contains `Version 1.1` (it reads `METHODOLOGY_VERSION`, so the existing case already asserts this; keep it);
   - `#changes` has two rows, the first with `METHODOLOGY_VERSION` and the second with `1.0`;
-  - `tr[data-window="7D"]` contains `${7 + 7} days` and `tr[data-window="1Y"]` contains `${365 + 14} days`, both computed from `RETURN_ANCHOR_WINDOWS`; `tr[data-window="1D"]` contains `String(ONE_DAY_PREVIOUS_MAX_GAP_DAYS)`; `tr[data-window="6M"]` contains `not used`;
+  - for every `[label, days]` of `RETURN_WINDOW_DAYS` except 1D, `tr[data-window="${label}"]` contains `${days + returnAnchorToleranceDays(days)} days` (7D: 14 days, 6M: 194 days, 1Y: 379 days); `tr[data-window="1D"]` contains `String(ONE_DAY_PREVIOUS_MAX_GAP_DAYS)` and `previous recorded price`; no row contains `not used`;
+  - `#cadence` contains `String(STATS_ROW_MAX_AGE_DAYS)` and `finalised for the previous UTC day`;
   - `tr[data-vol="weekly"]` contains `√${WEEKS_PER_YEAR}` and `String(VOL_WEEKLY_MIN_RETURNS)`;
   - `#tracked-high` contains `String(TRACKED_HIGH_ROLLING_ROWS)` and the text `tracked high since`; `#range-52w` exists;
   - `#liquidity` contains `String(LIQUIDITY_MIN_PEERS)` and every entry of `LIQUIDITY_COMPONENTS`;
@@ -3271,7 +3343,7 @@ From `frontend/` (phase B, after step 15):
 pnpm exec tsc --noEmit                                       # exit 0
 pnpm lint                                                    # 0 errors (WP17 gate)
 pnpm test --ci app/lib/__tests__/fx app/lib/__tests__/marketStats app/lib/__tests__/marketStatsConstants \
-  app/lib/__tests__/serverMarketData app/context app/lib/__tests__/metricDefinitions app/methodology
+  app/lib/__tests__/serverMarketData app/lib/__tests__/metricDefinitions app/methodology
 # all pass
 pnpm test --ci                                               # whole suite passes
 pnpm build:stub                                              # exit 0; route table unchanged
@@ -3286,7 +3358,7 @@ pnpm perf:serve &                              # wait for .perf/ready
 pnpm perf:budget                               # exit 0, every row "ok" or "over target" as before
 ```
 
-Expected: shared JS grows by at most 1 kB gz (the `fx.ts` import in `CurrencyProvider`); every route's document size is unchanged except `/methodology` (a few kB of new prose, within its limit). If any limit is breached, remove the cause (almost always a heavier import in `fx.ts`); do not raise a limit.
+Expected: shared JS unchanged (no client file imports `fx.ts` or `marketStats.ts` in this package; `grep -rln "lib/fx\|lib/marketStats" app --include=*.tsx | xargs -r grep -l '"use client"'` prints nothing); every route's document size is unchanged except `/methodology` (a few kB of new prose, within its limit). If any limit is breached, remove the cause; do not raise a limit.
 
 Manual checks (`pnpm dev` is not needed; `pnpm perf:serve` serves the stub build):
 - `/methodology` at 390 px: no horizontal scroll; the returns table's third column wraps inside the article; the new sections appear in the "On this page" list in order (Max drawdown, Tracked high and 52-week range, Trend, ... Listings, Liquidity score, Market Pulse).
@@ -3306,7 +3378,7 @@ EXPLAIN ANALYZE SELECT * FROM public.product_stats_latest;  -- product_daily_sta
 
    The refresh is SECURITY DEFINER, so it reads the source tables as the role that applied the migration. RLS does not filter that role if it owns the tables or has BYPASSRLS. If the refresh returns `"product_rows": 0` while active products exist, run `SELECT current_user, rolbypassrls FROM pg_roles WHERE rolname = current_user;` and `SELECT relname, pg_get_userbyid(relowner) FROM pg_class WHERE relname IN ('products', 'product_price_history', 'product_sales_history', 'product_listings_history', 'exchange_rates');`, paste both into the PR and stop. Do not add policies to work around it.
 
-3. **Enable pg_cron and schedule the job.** Dashboard > Database > Extensions > enable `pg_cron`. Then run exactly:
+3. **Enable pg_cron and schedule the job** (decision D8). If step 2's output said "scheduled", pg_cron was already on: run only the `SELECT jobname ...` check below. Otherwise Dashboard > Database > Extensions > enable `pg_cron`, then run exactly:
 
 ```sql
 SELECT cron.schedule('pokefin-finalise-market-analytics', '30 0 * * *',
@@ -3338,12 +3410,13 @@ SELECT count(*) FILTER (WHERE vol_weekly_52w IS NOT NULL) AS vol,
 
 Paste the outputs into the PR.
 
-6. **After merge**, watch the next scraper run's log for `Market analytics refreshed for <date>: {...}` before `Site caches revalidated.`. A `Market analytics refresh skipped: ... apply migrations 0033 and 0034` line means step 2 was not done on this database.
-7. **Record it.** In `audits/HARDENING_FOLLOWUPS.md` section 7, change "**Migrations 0033 and 0034: pending apply**" to "**Migrations 0033 and 0034 applied** (YYYY-MM-DD, via Supabase MCP)", add the refresh `ms`, the backfill counts and whether pg_cron is scheduled, and commit to master as `docs: record migrations 0033-0034 as applied`.
+6. **After merge**, watch the next scraper run's log for `Market analytics refreshed for <date>: {...}` before `Site caches revalidated.` (or `Site revalidation not needed` on a run that wrote nothing). A `Market analytics refresh skipped: ... apply migrations 0033 and 0034` line means step 2 was not done on this database.
+7. **Record it.** In `audits/HARDENING_FOLLOWUPS.md` section 7, change "**Migrations 0033 and 0034: pending apply**" to "**Migrations 0033 and 0034 applied** (YYYY-MM-DD, via Supabase MCP)", add the refresh `ms`, the backfill counts and whether pg_cron is scheduled. Refresh `schema.sql` from production as README "Database" describes (WP21: `pg_dump --schema-only --schema=public ... | python3 scripts/db/normalize_dump.py -`), so CI's drift step stops reporting the two new tables. Commit both to master as `docs: record migrations 0033-0034 as applied`.
 
 ## Acceptance criteria
 
-- [ ] `migrations/0033_product_daily_stats.sql` and `migrations/0034_fx_daily.sql` exist with the content of steps 1 and 2; no other migration file changed.
+- [ ] `migrations/0033_product_daily_stats.sql` and `migrations/0034_fx_daily.sql` exist with the content of steps 1 and 2 (0033 plus section 6 only if step 1b applied); no other migration file changed.
+- [ ] The PR states which WP10 variant was found. Either way, `marketStatsConstants.test.ts` proves every catalog anchor except 1D carries the `window + tolerance` bound.
 - [ ] `scripts/db/replay_migrations.sh` passes with both files (applied once and twice).
 - [ ] `verify_migration.py` exits 3 for both; after apply, every row is OK except 0033's superseded `refresh_market_analytics` body.
 - [ ] `tests/test_wp25_market_analytics_db.py`: 22 passed against `replay_once`, twice in a row; skipped without the env var.
@@ -3351,12 +3424,14 @@ Paste the outputs into the PR.
 - [ ] anon and authenticated can SELECT `product_daily_stats`, `product_stats_latest` and `fx_daily`, and cannot TRUNCATE, DELETE or execute any of the three refresh functions; `pokefin_scraper` can execute `refresh_market_analytics` and cannot delete from `product_daily_stats`.
 - [ ] `main.run_jobs_once` calls `refresh_after_run` after a successful `update_prices` and before `trigger_site_revalidation`; a failed refresh still revalidates; `tests/test_main.py` passes.
 - [ ] `scripts/backfill_fx_valet.py` and `scripts/backfill_daily_stats.py` exist, are executable, support `--dry-run`, and `tests/test_wp25_scripts.py` passes (20 cases).
-- [ ] `app/lib/fx.ts` has no import statement; `CurrencyProvider` exposes `convertDailySeries`; the root layout passes nothing new.
+- [ ] `app/lib/fx.ts` has no import statement; `rateOn` never carries a rate more than `FX_CARRY_MAX_DAYS` past its Bank of Canada date; `CurrencyContext.tsx` and the root layout are unchanged; shared JS is unchanged in `perf:budget`.
+- [ ] `toProductStatsSnapshot(rows, { today })` withholds `STALE_ROW_WITHHELD_COLUMNS` and `is_price_fresh` for rows more than `STATS_ROW_MAX_AGE_DAYS` old, and `fetchProductStatsLatest` passes `today`; `marketStats.test.ts` and `serverMarketData.stats.test.ts` prove it.
 - [ ] `getCachedProductStats()` and `getCachedFxDaily()` exist, are tagged with WP11's tags, degrade uncached on error, and no page calls them.
 - [ ] `perf.mjs` routes `/rest/v1/product_stats_latest` and `/rest/v1/fx_daily`; `pnpm perf:budget` exits 0 with no limit raised.
 - [ ] `/methodology` shows version 1.1 with the new sections and a two-row change log; every number in the new text is an interpolated constant; the drift test passes.
 - [ ] `app/types/database.ts` is regenerated (phase B) and contains the four new names; `tsc`, lint and the whole Jest suite pass.
 - [ ] README and `audits/HARDENING_FOLLOWUPS.md` updated (step 16).
+- [ ] No em dash in any file this PR adds or changes (`grep -rlP '\x{2014}'` over them prints nothing).
 
 ## Rollback
 
@@ -3405,8 +3480,8 @@ return left out the currency move.
   00:30 UTC pg_cron job that finalises D-1 when pg_cron is enabled.
 - Scraper refreshes after each successful run, before revalidation.
 - Backfills: Bank of Canada Valet into exchange_rates; 400 days of stats.
-- lib/fx.ts, lib/marketStats.ts, cached getCachedProductStats and
-  getCachedFxDaily, CurrencyProvider.convertDailySeries, perf fixture routes.
+- lib/fx.ts, lib/marketStats.ts (with a read-time staleness gate),
+  cached getCachedProductStats and getCachedFxDaily, perf fixture routes.
 - /methodology v1.1: tracked high, 52-week range, liquidity, sell-through,
   supply trend, lowest ask, weekly volatility, dated CAD, anchor ages.
 ```
@@ -3420,4 +3495,5 @@ PR body:
 - Screenshots of `/methodology` at 390 and 1440 px: the returns table, `#tracked-high`, `#liquidity`, the change log.
 - Owner actions 1 to 7 copied from this spec, with the outputs of 1, 2 and 5 once the owner has run them.
 - Any dependency artifact that was missing and what was done (Before you start).
-- "Noticed, out of scope": the catalog RPC's returns still accept an unbounded anchor (the catalog moves to `product_daily_stats` in WP30 or WP33); `/product/[id]` and the portfolio still convert CAD history at the latest rate (WP31, WP36); `product_daily_stats` has no retention rollup (revisit after two years); the scraper still inserts about six duplicate `exchange_rates` rows per day (harmless now that `fx_daily` dedupes; a WP16-style upsert is a later cleanup).
+- Which WP10 variant was found, and whether step 1b was applied.
+- "Noticed, out of scope": the Market table's client fallback (WP18's shared return function) still fills a return the catalog left blank from loaded history without the lookback bound, until WP33 replaces Market View; later packages that add price-anchored columns to `product_daily_stats` (WP28's `msrp_multiple`, for example) must add them to `STALE_ROW_WITHHELD_COLUMNS`; `/product/[id]` and the portfolio still convert CAD history at the latest rate (WP31, WP36); `product_daily_stats` has no retention rollup (revisit after two years); the scraper still inserts about six duplicate `exchange_rates` rows per day (harmless now that `fx_daily` dedupes; a WP16-style upsert is a later cleanup).

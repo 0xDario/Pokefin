@@ -1,6 +1,6 @@
 # WP26: Server-baked sparklines and public read routes
 
-- **Goal**: on the home page, `/prices` and `/market`, every product's sparkline is in the first paint (drawn from the server HTML, no pop-in, no fake line), scrolling the whole catalog makes zero history requests, the "Period" control changes the sparkline window with at most one CDN-cached request, and none of these three routes can load the Supabase client library.
+- **Goal**: on the home page and `/prices`, every product's sparkline is in the first paint (drawn from the server HTML, no pop-in, no fake line); on `/market`, whose Trend column is hidden until "all columns" is on, the lines arrive with one CDN-cached request when the column is first shown, so the default `/market` document carries no series. Scrolling the whole catalog makes zero history requests, the "Period" control changes the sparkline window with at most one CDN-cached request, and none of these three routes can load the Supabase client library.
 - **Why now / value**: after WP09 and WP12 the three most visited routes still load the 66 kB gz supabase-js chunk right after hydration and make 15 to 30 batched history requests per full `/prices` scroll, only to draw 96x40 px lines (research/performance-excellence.md §1 item 1, §7.1). WP30, WP32, WP33 and WP37 all render sparklines on new surfaces; if this lands first they inherit the cheap path instead of copying the client-fetch one.
 - **Effort**: L, 14 to 16 hours (migration and DB tests 2.5 h, server cache and three routes 2 h, client data layer and components 4 h, `/market` and home wiring 1.5 h, perf gate, fixture and cache check 2.5 h, scraper warm 0.5 h, tests and verification 2 h). Plus about 1 hour of owner time.
 - **Depends on**: WP09 (SVG `MiniSparkline`, `historyLoadingStore`, the history batcher this package deletes), WP10 (migrations 0027 to 0029 exist, so 0035 replays after them), WP11 (`cacheTags.ts`, `DAILY_BACKSTOP_SECONDS`, `getCachedProductDetailRows`, `getCachedExchangeRateSnapshot`, ISR pages, `revalidate_hook.py`), WP12 (`supabaseLoader.ts` and its ESLint guard, extended here), WP19 (`MarketView/columns.tsx`, `MarketTableRow.tsx`, `MarketCellContext`), WP21 (replay harness and CI job "Database replay and Python tests", `pokefin_scraper` role, schema baseline), WP22 (perf fixture, `perf-measure.mjs`, `perf-budget.mjs`, `perf-budgets.json`, `lighthouserc.json`, the CI perf steps), WP23 (`Skeleton`, the "No history" sparkline state, `SegmentedControl`, the `--pf-chart-line` token and its `stroke-chart-line` utility). Also reads WP08 (`PRICES_URL_DEFAULTS`, `cardList`), WP20 (`app/types/market.ts`, `CurrencyProvider`, `pnpm types:db`, `import "client-only"`).
@@ -77,7 +77,7 @@ loading                         loaded (>= 2 days)             failed           
 +--------------------------+    +--------------------------+   +--------------------------+
 ```
 
-`/market` at 1440 px with "all columns" on: the sparkline column is renamed "Trend" (it was "Last 7D", which was never true) and shows the Period's baked line for every row without expanding it:
+`/market` at 1440 px with "all columns" on: the sparkline column is renamed "Trend" (it was "Last 7D", which was never true) and shows the Period's baked line for every row without expanding it. The column is hidden in the default key-column view, so `/market` does not embed any series in its HTML: the first time "all columns" is turned on, every Trend cell shows the flat bar until one request to `/api/public/sparklines/<period>` resolves (CDN-cached, about 10 kB br), then draws. Turning the column off and on again, or returning to a period already fetched, draws at once with no request:
 
 ```
 #  PRODUCT                 SET              PRICE     1D     7D    ...  UNITS 30D  VOL TREND  TREND        CHART
@@ -89,8 +89,8 @@ loading                         loaded (>= 2 days)             failed           
 
 Interactions:
 
-- **Period** (`/prices`, `/market`): selects the sparkline window (7D, 1M, 3M, 6M, 1Y) and the range any chart opened afterwards starts at. The page's default period (3M on `/prices`, 1Y on `/market`) is embedded in the HTML; choosing another one makes one request to `/api/public/sparklines/<period>` (CDN-cached, about 10 kB br), shows flat bars in every slot until it resolves, then draws. A period fetched once is kept for the tab (1 hour). On `/prices` the Period still also picks which return lines a card shows (existing behaviour); WP30 reduces that to the single return of the period.
-- **Show full chart** / `/market` **Show**: one request to `/api/public/history/<id>` the first time, served from memory afterwards. Hiding and reopening makes no request. A failure shows "Chart unavailable." with a "Try again" button on cards; on `/market` closing and reopening the row retries.
+- **Period** (`/prices`, `/market`): selects the sparkline window (7D, 1M, 3M, 6M, 1Y) and the range any chart opened afterwards starts at. On `/prices` the default period (3M) is embedded in the HTML; choosing another one makes one request to `/api/public/sparklines/<period>` (CDN-cached, about 10 kB br), shows flat bars in every slot until it resolves, then draws. On `/market` (default 1Y) nothing is embedded and the request is made only while the Trend column is visible. A period fetched once is kept for the tab (1 hour) and switching back to it draws immediately, with no flat-bar flash. On `/prices` the Period still also picks which return lines a card shows (existing behaviour); WP30 reduces that to the single return of the period.
+- **Show full chart** / `/market` **Show**: one request to `/api/public/history/<id>` the first time, served from memory afterwards. Hiding and reopening makes no request. A failure shows "Chart unavailable." with a "Try again" button on cards; reopening a card's chart after a failure retries and shows the loading bar, not the stale error, while it runs. On `/market` closing and reopening the row retries.
 - Scrolling makes no request of any kind for sparklines.
 
 Copy (every new or changed user-facing string): "Period", "Trend", "Price over the selected period, scaled to its own low and high" (the `title` of the Trend header), "No history" (WP23's), "Loading chart" (screen-reader only), "Chart unavailable.", "Try again", "Show full chart", "Hide chart". No "live", "real-time" or "all-time".
@@ -102,7 +102,7 @@ Accessibility:
 - The chart loading placeholder is a `role="status"` region with the sr-only text "Loading chart"; the failure line is plain text with a real `<button>`.
 - The line does not encode direction by colour: one `--pf-chart-line` stroke for every product (01-PRODUCT-DIRECTION.md §3.4: "The price line does not change colour with direction; the change chip carries gain or loss colour"). WP09's green/red stroke constants are deleted.
 
-Design system use: `Skeleton` (flat bars in the slot and the chart area), WP23's "No history" state, `stroke-chart-line`, `text-ink-soft`, `text-action`, `text-small`. No new component in `app/components/ui/`.
+Design system use: `Skeleton` (flat bars in the slot and the chart area), WP23's "No history" state (`text-caption text-ink-soft`, as WP23 step 21 wrote it), `stroke-chart-line`, `text-ink-soft`, `text-action`, `text-small`, `ring-action` with `focus-visible:outline-hidden` (Tailwind 4: keeps a transparent outline for Windows forced-colors mode, which `outline-none` removes). No new component in `app/components/ui/`.
 
 ### D2. The encoded series (data definition)
 
@@ -164,10 +164,11 @@ get_catalog_sparklines(days, points)   <- once per period per scrape, never per 
         |
 serverMarketData.getCachedSparklines(period)      unstable_cache, tag "market-products", 1 day backstop
         |                                  \
-  /, /prices, /market (ISR HTML)            /api/public/sparklines/[period]  (ISR route, CDN)
-  default period embedded as a prop               ^ other periods, one request each
-        |                                         |
-  ProductCard / MarketTableRow  --MiniSparkline(series)-->  SVG path in the server HTML
+  /, /prices (ISR HTML)                     /api/public/sparklines/[period]  (ISR route, CDN)
+  default period embedded as a prop               ^ other periods on /prices; every period on
+        |                                         |   /market, only while its Trend column shows
+  ProductCard --MiniSparkline(series)-->  SVG path in the server HTML
+  MarketTableRow --MiniSparkline(series)-->  SVG drawn after the one request
 
 "Show full chart" / row expand  ->  /api/public/history/[id]  (ISR route, CDN, shares the
                                     product page's cached rows: getCachedProductDetailRows)
@@ -191,7 +192,7 @@ Every 200 from the two ISR routes carries `x-pokefin-generated-at: <ISO time of 
 | `/prices` document (br) | +13 to +18 kB | about 7 kB br of series in the inline flight plus about 8 to 10 kB br of SVG path data in the HTML, measured on a 306-product synthetic walk while writing this spec (random walks compress worst; real sealed prices, with many flat days, compress better) |
 | `/prices` inline flight (br) | +6 to +7 kB | the series map |
 | `/` document (br) | +1 kB | only the Recently Released products' series are embedded |
-| `/market` document (br) | +6 to +7 kB | series map in the flight; the Trend column is hidden by default, so no SVG in the HTML |
+| `/market` document (br) | about 0 | nothing embedded: the Trend column is hidden by default, so its series are fetched only when it is shown |
 | JS on `/`, `/prices`, `/market` (gz) | about 0 | the WP09 batcher and observers go, the decoder and hook arrive |
 | Lighthouse `resource-summary:script:size` on those routes | about -66 kB gz | supabase-js no longer loads after hydration |
 | History requests per full `/prices` scroll | 15 to 30 -> 0 | |
@@ -201,6 +202,8 @@ The `/prices` document target stays 70 kB br. The package's limit raises are dec
 ### D5. Browser Supabase reads after this package
 
 Moved: sparkline history (baked), full-chart history (`/api/public/history`), the catalog client fallback in `useProductData` (deleted: the pages always pass server data), the volume client fallback in `useVolumeMetrics` (deleted, as research §7.2 recommends; a failed volume read shows no volume chip until the next ISR regeneration), the CurrencyProvider fallback rate (`/api/public/rate`).
+
+The CurrencyProvider keeps loading its fallback reader lazily (`import("../lib/publicMarketApi")`), as it loaded `exchangeRate.ts` before: the provider sits in the root layout, so a static import would put the public-route client (and `sparkline.ts`, `compactHistory.ts`) in the shared chunk of every page for a path that runs only when the server had no rate.
 
 Remaining, listed as follow-ups in the PR (out of scope, none on `/`, `/prices` or `/market`): `app/lib/portfolio.ts` (product search, `getAllProducts`, the browser price-history fallback), `app/components/BoxCalculator/sharedRecipe.ts` (`get_shared_recipe`), and `fetchMarketProductsClient` / `fetchNewestPricedAtClient` behind `/compare`, `/box-calculator` and `/portfolio`. Because reads remain, CSP `connect-src` keeps `https://*.supabase.co` (the task's rule: drop it only when no browser read remains anywhere). `img-src` keeps it too: product images are still served from Supabase Storage.
 
@@ -532,7 +535,10 @@ export const SPARKLINE_PERIODS: Readonly<Record<ChartTimeframe, SparklinePeriodS
 
 /** The home page strip has no Period control; it always shows this window. */
 export const HOME_SPARKLINE_PERIOD: ChartTimeframe = "3M";
-/** MarketView's initial period (its Period control starts here). */
+/**
+ * MarketView's initial period (its Period control starts here). /market does
+ * not embed series: its Trend column fetches them when shown.
+ */
 export const MARKET_DEFAULT_PERIOD: ChartTimeframe = "1Y";
 
 export function isSparklinePeriod(value: unknown): value is ChartTimeframe {
@@ -1060,7 +1066,7 @@ If WP20 put `ExchangeRateSnapshot` somewhere other than `app/lib/currency.ts`, i
 
 ### Step 9. `frontend/app/context/CurrencyContext.tsx`: fallback rate from the public route
 
-9a. Add `import { fetchPublicRate } from "../lib/publicMarketApi";` to the imports.
+9a. No new static import: the provider is in the root layout, so the reader stays a lazy chunk that only the fallback path loads (D5).
 
 9b. In `CurrencyProvider`'s effect, replace
 
@@ -1074,8 +1080,11 @@ If WP20 put `ExchangeRateSnapshot` somewhere other than `app/lib/currency.ts`, i
 with
 
 ```ts
-    // Same-origin and CDN-cached (WP26): no page loads supabase-js for the rate.
-    fetchPublicRate()
+    // Same-origin and CDN-cached (WP26): no page loads supabase-js for the
+    // rate. Still a lazy import: this provider is in the root layout and the
+    // path runs only when the server render had the fallback rate.
+    import("../lib/publicMarketApi")
+      .then(({ fetchPublicRate }) => fetchPublicRate())
 ```
 
 Keep the `.then(...)` and `.catch(...)` that follow unchanged.
@@ -1131,7 +1140,7 @@ function SparklineSkeleton({ box, className }: { box: string; className: string 
 // Withheld price (migration 0023) or fewer than two points: say so.
 function SparklineEmpty({ box, className }: { box: string; className: string }) {
   return (
-    <div className={`flex items-center justify-center text-xs text-ink-soft ${box} ${className}`}>
+    <div className={`flex items-center justify-center text-caption text-ink-soft ${box} ${className}`}>
       No history
     </div>
   );
@@ -1189,28 +1198,37 @@ import { logCaughtError } from "../../../lib/logger";
 import type { SparklinePayload } from "../../../lib/sparkline";
 import type { ChartTimeframe } from "../../../types/market";
 
+type FetchedSparklines = Partial<Record<ChartTimeframe, SparklinePayload>>;
+
 /**
  * The sparkline series for `period` (WP26).
  *
- * The page embeds one period (`seed`, from getCachedSparklines). Any other
+ * A page may embed one period (`seed`, from getCachedSparklines). Any other
  * period, or the seeded one when the server had none (seed null), is fetched
- * once per tab from the CDN-cached /api/public/sparklines/[period].
- * undefined while that request is pending or after it failed: cards then show
- * the flat bar, never another period's line.
+ * once per tab from the CDN-cached /api/public/sparklines/[period], and only
+ * while `enabled` (/market passes its "all columns" flag, because its Trend
+ * column is hidden by default). Every period fetched is kept here, so
+ * switching back to one draws at once.
+ * undefined while that request is pending, after it failed, or while
+ * disabled: cards then show the flat bar, never another period's line.
  */
 export function useSparklines(
   seed: SparklinePayload | null,
-  period: ChartTimeframe
+  period: ChartTimeframe,
+  enabled = true
 ): SparklinePayload | undefined {
   const seeded = seed !== null && seed.period === period;
-  const [fetched, setFetched] = useState<SparklinePayload | null>(null);
+  const [fetched, setFetched] = useState<FetchedSparklines>({});
 
   useEffect(() => {
-    if (seeded) return;
+    if (seeded || !enabled) return;
     let cancelled = false;
     fetchPublicSparklines(period)
       .then((payload) => {
-        if (!cancelled) setFetched(payload);
+        if (cancelled) return;
+        // The module cache hands back the same object until its TTL ends,
+        // so a repeat answer does not re-render the list.
+        setFetched((prev) => (prev[period] === payload ? prev : { ...prev, [period]: payload }));
       })
       .catch((error: unknown) => {
         logCaughtError("sparklines_load_failed", error);
@@ -1218,12 +1236,14 @@ export function useSparklines(
     return () => {
       cancelled = true;
     };
-  }, [seeded, period]);
+  }, [seeded, enabled, period]);
 
   if (seeded) return seed;
-  return fetched !== null && fetched.period === period ? fetched : undefined;
+  return enabled ? fetched[period] : undefined;
 }
 ```
+
+State is set only inside the promise callback, never synchronously in the effect (`react-hooks/set-state-in-effect`, which WP17's zero-lint gate enforces).
 
 ### Step 12. Data hooks and `clientMarketData.ts`
 
@@ -1429,7 +1449,7 @@ function FullChartToggle({ open, onToggle }: { open: boolean; onToggle: () => vo
       type="button"
       onClick={onToggle}
       aria-expanded={open}
-      className="rounded-control border border-line px-3 py-1.5 text-xs font-semibold text-ink transition-colors hover:bg-surface-alt focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-action pointer-coarse:min-h-11"
+      className="rounded-control border border-line px-3 py-1.5 text-caption font-semibold text-ink transition-colors hover:bg-surface-alt focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-action pointer-coarse:min-h-11"
     >
       {open ? "Hide chart" : "Show full chart"}
     </button>
@@ -1450,14 +1470,17 @@ function FullChartPanel({
   onRetry: () => void;
   renderChart: (history: PriceHistoryEntry[]) => ReactNode;
 }) {
-  if (failed && history === undefined) {
+  // Loading wins over an earlier failure: reopening the chart after a failed
+  // request retries (the effect calls onLoadChart again) and must show the
+  // bar, not the old error, while that retry runs.
+  if (!loading && failed && history === undefined) {
     return (
       <p className="mt-3 text-small text-ink-soft">
         Chart unavailable.{" "}
         <button
           type="button"
           onClick={onRetry}
-          className="font-medium text-action hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-action"
+          className="font-medium text-action hover:underline focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-action pointer-coarse:min-h-11"
         >
           Try again
         </button>
@@ -1479,7 +1502,7 @@ function FullChartPanel({
 }
 ```
 
-Add `type ReactNode` to the React import. If the card's existing button classes differ (WP14, WP15 or WP23 restyled it), keep the existing class string on the toggle and only add `aria-expanded`.
+Add `type ReactNode` to the React import. If the card's existing button classes differ (WP14, WP15 or WP23 restyled it), keep that file's colour, border and radius classes on the toggle, but drop the WP09 parts that depended on history (the `${hasHistory || loading ? "" : "invisible"}` conditional, `disabled` and every `disabled:` and `enabled:` prefix: the button is never disabled now), and keep `pointer-coarse:min-h-11` and `aria-expanded`.
 
 13f. In BOTH view branches (flat and grouped):
 
@@ -1599,13 +1622,22 @@ Keep the file name, the component name and the `chart` URL key (`?chart=3M` link
 
 ### Step 16. `/market`
 
-16a. `frontend/app/market/page.tsx`: add `getCachedSparklines(MARKET_DEFAULT_PERIOD)` to the `Promise.all` (import `MARKET_DEFAULT_PERIOD` from `../lib/sparkline`), destructure `sparklines`, pass `initialSparklines={sparklines}` to `<MarketView>`.
+16a. `frontend/app/market/page.tsx`: no change. The Trend column is not in the default key-column view, so embedding a series map would add about 6 to 7 kB br to every `/market` document for a column most visits never show. Do not add `getCachedSparklines` here.
 
 16b. `frontend/app/components/MarketView/MarketView.tsx`:
 
-- Imports: `useSparklines` from `../ProductPrices/hooks/useSparklines`; `MARKET_DEFAULT_PERIOD`, `sparklineFor`, `type SparklinePayload` from `../../lib/sparkline`.
-- Props: add `initialSparklines: SparklinePayload | null;` and destructure it.
-- Replace the initial value of the Period state, `useState<ChartTimeframe>("1Y")`, with `useState<ChartTimeframe>(MARKET_DEFAULT_PERIOD)`, and add below it `const sparklines = useSparklines(initialSparklines, chartTimeframe);`.
+- Imports: `useSparklines` from `../ProductPrices/hooks/useSparklines`; `MARKET_DEFAULT_PERIOD` and `sparklineFor` from `../../lib/sparkline`.
+- No new prop.
+- Replace the initial value of the Period state, `useState<ChartTimeframe>("1Y")`, with `useState<ChartTimeframe>(MARKET_DEFAULT_PERIOD)`.
+- Directly below the line `const [showAllColumns, setShowAllColumns] = useState(false);` (it is declared after the Period state, so the hook call must come after it), add:
+
+```tsx
+  // Trend column series (WP26). Not embedded in the page: fetched once per
+  // period from the CDN-cached /api/public/sparklines/[period], and only while
+  // "all columns" is on, because the column is hidden otherwise.
+  const sparklines = useSparklines(null, chartTimeframe, showAllColumns);
+```
+
 - The `useProductData` destructure loses `loading`; delete the loading branch it guarded (the "Loading products..." element or skeleton) the same way as step 14b.
 - `toggleExpanded`: replace `void ensureHistoryLoaded(next, chartTimeframe);` with `void ensureHistoryLoaded(next);` and drop `chartTimeframe` from that `useCallback`'s dependency array if nothing else in it reads it.
 - Delete the effect that reloads the expanded row on a period change (its body is `if (expandedProductId !== null) { void ensureHistoryLoaded(expandedProductId, chartTimeframe); }`): the route returns the full year once.
@@ -1770,6 +1802,8 @@ export function catalogSparklineRows(summaries, body, now = new Date()) {
 
 The default stub (no fixture) keeps answering `[]`, which the pages read as "no series" (every slot says "No history" in a `pnpm build:stub` without a fixture, which is correct for an empty catalog).
 
+The fixture's walks are sized and shaped like real series for the byte budgets; they are not derived from the fixture's `product_price_history` rows, so in the perf build a card's sparkline and its "Show full chart" do not match. That is expected there. Shape agreement is checked on the Vercel preview against production data (Verification, manual checks), and the SQL encoder itself by the database test.
+
 ### Step 19. Perf gate: supabase-js must not be loadable on `/`, `/prices`, `/market`
 
 The byte gate measures initial scripts; the supabase-js chunk is lazy (WP12), so it never appears there. This step walks the chunks a route can ever load. Turbopack writes each lazy import's chunk list into the importing chunk as string literals (checked on a Next 16.3.6 production build while writing this spec: `e.v(t=>Promise.all(["static/chunks/2w_e0zj-t3ijn.js","static/chunks/3ndtgz5kdpcst.js"].map(t=>e.l(t)))...)`), so following `static/chunks/<name>.js` references from the initial scripts finds every reachable chunk, and the supabase-js chunk contains the string `GoTrueClient`.
@@ -1909,6 +1943,12 @@ export function checkForbiddenChunks(nextDir, budgets, results) {
 ```
 
 `$comment` line: `"forbiddenChunks: chunks (found by a marker string) that must not be reachable from the listed routes, initial or lazy. reachabilityControl proves the reachability walk still follows lazy imports."`
+
+If the gate reports `/`, `/prices` or `/market` "can load supabase-js", read the printed chain before changing anything:
+
+- The chain ends in a module this package should have cut (a `ProductPrices`, `MarketView`, `dashboard` or `CurrencyContext` import of `clientMarketData`, `exchangeRate`, `supabaseLoader` or `portfolio`): fix that import. This is the gate doing its job.
+- The chain runs through the root layout into a module outside this package (for example a header or auth component that lazily imports `supabaseLoader`): stop and report it in the PR with the chain; do not move that module's read in this package, and do not delete or narrow the rule.
+- Every route, including `/product/900001`, reaches every chunk (the first link is one chunk that names all others, such as a runtime manifest): the walk over-reaches on this Next build. Do not ship the rule; keep steps 19a and 19b (they are tested), leave `forbiddenChunks` out of `perf-budgets.json`, and report the chain and the Next version in the PR. The ESLint guard (step 17) and the manual "no chunk containing `GoTrueClient`" check still hold the line.
 
 ### Step 20. Cache check for the public routes
 
@@ -2133,12 +2173,12 @@ Expected: `app/lib/clientMarketData.ts`, `app/lib/portfolio.ts`, `app/components
 
 Run `pnpm test --ci` and fix each failure as follows. Never weaken an assertion about behaviour that did not change.
 
-- Files that render `ProductPrices`, `MarketView` or `RecentlyReleased` (WP08's `ProductPrices.urlSync.test.tsx`, WP13's MarketView tests, WP19's `MarketView.table.test.tsx`, WP23's transition test, and any other): add the new required prop, `initialSparklines={emptySparklinePayload("3M")}` for `ProductPrices` and `RecentlyReleased`, `emptySparklinePayload("1Y")` for `MarketView` (import it from the `lib/sparkline` path relative to the test). A test that changes the Period additionally needs `jest.mock("<relative>/lib/publicMarketApi", () => ({ fetchPublicSparklines: jest.fn(() => new Promise(() => {})), fetchPublicHistory: jest.fn(() => Promise.resolve([])), fetchPublicRate: jest.fn() }))`.
+- Files that render `ProductPrices` or `RecentlyReleased` (WP08's `ProductPrices.urlSync.test.tsx`, WP23's transition test, and any other): add the new required prop, `initialSparklines={emptySparklinePayload("3M")}` (import it from the `lib/sparkline` path relative to the test). `MarketView` gets no new prop. Any test that changes the Period on `/prices`, or turns on "all columns" on `/market` (WP13's MarketView tests, WP19's `MarketView.table.test.tsx`), additionally needs `jest.mock("<relative>/lib/publicMarketApi", () => ({ fetchPublicSparklines: jest.fn(() => new Promise(() => {})), fetchPublicHistory: jest.fn(() => Promise.resolve([])), fetchPublicRate: jest.fn() }))`; without it jsdom has no `fetch` and the hook logs `sparklines_load_failed`. A MarketView test that mocked `fetchProductHistoryClient` to drive the expanded row now mocks `fetchPublicHistory` with the same resolved rows (WP19 step 9 already anticipated this: "mock whatever `useProductData` now calls").
 - A test that asserted the product list's loading text from `useProductData`'s `loading`: delete that case (the state no longer exists).
 - WP19's `columns.test.ts`: the sparkline column's label is now "Trend"; update the expected label, nothing else.
 - WP19's `MarketTableRow.test.tsx`: pass `sparkline={undefined}` (or a series where the case is about the Trend cell).
 - WP14/WP23 `controls.a11y.test.tsx` and any test that finds the control by the name "Chart timeframe" or the text "Chart": use `getByRole("radiogroup", { name: "Period" })`.
-- WP20's CurrencyContext test: replace its mock of `../../lib/exchangeRate` (`fetchLatestExchangeRateClient`) with a mock of the `lib/publicMarketApi` module's `fetchPublicRate`, same resolved values.
+- WP20's CurrencyContext test: replace its mock of `../../lib/exchangeRate` (`fetchLatestExchangeRateClient`) with a mock of the `lib/publicMarketApi` module's `fetchPublicRate`, same resolved values. `jest.mock` covers the provider's dynamic `import()` (next/jest compiles it to `require`), so no other change is needed.
 - WP09's `app/lib/__tests__/clientMarketData.history.test.ts`: `git rm` it (the batcher is gone). In `clientMarketData.cache.test.ts` and WP12's `supabaseLazyLoad.test.ts`, delete only the cases or lines that call `fetchProductHistoryClient` or `fetchVolumeMetrics`; keep every other case.
 - WP09's `MiniSparkline.test.tsx`, `MiniSparkline.ssr.test.tsx`, `useProductData.test.tsx` and `ProductCard.history.test.tsx`: replaced by the versions in Tests.
 - A test of `useVolumeMetrics` that mocked `fetchVolumeMetrics`: replace its cases with "returns the server metrics as given" and "returns a stable empty record for null or undefined".
@@ -2154,7 +2194,7 @@ pnpm perf:budget                         # expect FAIL rows only on document/fli
 node scripts/check-public-cache.mjs      # expect "ok"
 ```
 
-For each budget row that now fails its `limit` (expected: `routes./prices.documentBrKb`, `routes./prices.flightBrKb`, `routes./market.documentBrKb`, maybe `routes./.documentBrKb`), set that slot's `limit` to `null` in `perf-budgets.json`, run `pnpm perf:budget --write-limits`, and add one line per raised key to the PR body, for example `Perf budget raise: routes./prices.documentBrKb baked sparklines (+15.8 kB br: series in the flight, SVG paths in the HTML); replaces 15 to 30 history requests and the 66 kB gz supabase-js chunk after hydration`. Never raise a `target`. Limits that went down stay as they are (WP22 tightens after two weeks of RUM).
+For each budget row that now fails its `limit` (expected: `routes./prices.documentBrKb`, `routes./prices.flightBrKb`, maybe `routes./.documentBrKb`; never `routes./market.documentBrKb`, which embeds nothing: if it grew, a series map reached `MarketView`'s props, so fix step 16 instead of raising), set that slot's `limit` to `null` in `perf-budgets.json`, run `pnpm perf:budget --write-limits`, and add one line per raised key to the PR body, for example `Perf budget raise: routes./prices.documentBrKb baked sparklines (+15.8 kB br: series in the flight, SVG paths in the HTML); replaces 15 to 30 history requests and the 66 kB gz supabase-js chunk after hydration`. Never raise a `target`. Limits that went down stay as they are (WP22 tightens after two weeks of RUM).
 
 If `/prices` document (br) is above its 70 kB target after this, do not trim anything else to hide it: keep the raised limit, mark the "/prices document ≤ 70 kB br" acceptance line unchecked with the measured value, and request the owner's approval in the PR (Owner actions, item 4). WP30's list view is the planned recovery (it drops card chrome).
 
@@ -2171,6 +2211,8 @@ If `/prices` document (br) is above its 70 kB target after this, do not trim any
 - **Do not add Suspense boundaries keyed by position** (runs of N cards in the flat view, row chunks on `/market`): re-sorting moves items across boundaries and remounts them. Group keys (set, type) are stable; the flat view is never in the static HTML (WP08 always prerenders the grouped default), so it gains nothing from boundaries.
 - **Do not add `rand()` calls to `buildPerfData`.** Every other fixture byte depends on that sequence; the sparkline walk uses its own `mulberry32(PERF_SEED ^ id)`.
 - **Do not raise a perf `target`, and do not trim other markup to fit a limit.** Raise the limit with a reason (WP22 D11).
+- **Do not embed series on `/market`.** Its Trend column is hidden in the default view; `useSparklines(null, chartTimeframe, showAllColumns)` fetches only when it is shown. WP33's screener, which shows a trend on every row, decides its own embedding.
+- **Do not import `publicMarketApi` statically in `CurrencyContext.tsx`.** The provider is in the root layout; a static import moves the public-route client into every page's shared chunk.
 - **Do not hand-edit `app/types/database.ts`** or cast the RPC result to get past `tsc` (WP20).
 - **Do not change `PRICES_URL_DEFAULTS` or the `chart` URL key.** Shared `?chart=` links must keep working.
 - **Do not grant EXECUTE to PUBLIC or `pokefin_scraper`,** and do not make the function `SECURITY DEFINER`.
@@ -2534,7 +2576,9 @@ Mock `../../../lib/publicMarketApi` (`fetchPublicSparklines: jest.fn()`) and `..
 - `rerender({ period: "1Y" })` returns `undefined`, calls `fetchPublicSparklines("1Y")` once, and after the promise resolves (inside `act`) returns the 1Y payload;
 - `rerender({ period: "3M" })` returns the seed again with no new fetch;
 - a rejected fetch leaves the result `undefined` and calls `logCaughtError` with `"sparklines_load_failed"`;
-- with `seed = null` and period "3M", it fetches "3M".
+- with `seed = null` and period "3M", it fetches "3M";
+- with `seed = null`, after "1Y" then "6M" have both resolved, `rerender({ period: "1Y" })` returns the 1Y payload on that same render (no `undefined` frame, so no flat-bar flash);
+- `renderHook(({ enabled }) => useSparklines(null, "1Y", enabled), { initialProps: { enabled: false } })` returns `undefined` and never calls `fetchPublicSparklines`; `rerender({ enabled: true })` fetches "1Y" once and returns it after resolution; `rerender({ enabled: false })` returns `undefined` again with no new call.
 
 ### 9. `frontend/app/components/MarketView/__tests__/useProductData.test.tsx` (replace)
 
@@ -2577,7 +2621,8 @@ Mock `../shared/LazyPriceChart` as `() => <div data-testid="full-chart" />`. Ren
 - on mount with `sparkline="ACEG"`: a `path` is rendered, `onLoadChart` is not called, and `IntersectionObserver` was never constructed;
 - `sparkline={null}` renders "No history";
 - clicking "Show full chart" calls `onLoadChart` once with `1`, shows the "Loading chart" status, and the button reads "Hide chart" with `aria-expanded="true"`; rerendering with `history` of 2 entries shows `full-chart`; rerendering with `history={[]}` shows "No history" inside the panel;
-- when `onLoadChart` resolves `null`, "Chart unavailable." appears; clicking "Try again" calls `onLoadChart` a second time.
+- when `onLoadChart` resolves `null`, "Chart unavailable." appears; clicking "Try again" calls `onLoadChart` a second time;
+- reopen after a failure: keep the store in a variable; `onLoadChart` resolves `null` the first time, and the second time calls `store.start(1)` and returns a promise that never settles (what `ensureHistoryLoaded` does). Open, see "Chart unavailable.", click "Hide chart", click "Show full chart": the "Loading chart" status is shown and "Chart unavailable." is not.
 
 ### 12. `frontend/scripts/perf-measure.test.mjs` (add 3 tests)
 
@@ -2594,6 +2639,12 @@ import { catalogSparklineRows, encodeSparkline, PERF_PRODUCT_COUNT } from "./fix
 
 test("sparkline encoder matches the shared anchors", () => {
   assert.equal(encodeSparkline([1, 2, 3, 4, 5, 6, 7]), "ALVgq1_");
+  // The 32 bucket values of the 90-day ramp (same list as sparkline.test.ts).
+  const ramp = [
+    102, 105, 108, 111, 114, 116, 119, 122, 125, 128, 130, 133, 136, 139, 142, 144,
+    147, 150, 153, 156, 159, 161, 164, 167, 170, 173, 175, 178, 181, 184, 187, 189,
+  ];
+  assert.equal(encodeSparkline(ramp), "ACEHJKMORTUWZbdehjlnprtvxz1357-_");
   assert.equal(encodeSparkline(Array.from({ length: 32 }, (_, i) => i + 1)), "ACEGIKMOQSUWYacehjlnprtvxz13579_");
   assert.equal(encodeSparkline([5, 5, 5]), "ggg");
 });
@@ -2792,6 +2843,14 @@ def test_one_observation_is_not_a_line(db, set_id):
     assert sparklines(db, 90, 32)[pid] == (None, None, 0)
 
 
+def test_a_fresh_seed_alone_draws_a_flat_line(db, set_id):
+    # 7D window, last price 10 days ago (still inside the 14-day gate): the
+    # card shows that price, so the line is flat at it, not "No history".
+    pid = product(db, set_id, 42)
+    price(db, pid, -10, 42)
+    assert sparklines(db, 7, 7)[pid] == ("g" * 7, -6, -10)
+
+
 def test_inactive_products_are_left_out(db, set_id):
     pid = product(db, set_id, 10, active=False)
     price(db, pid, -1, 9)
@@ -2873,8 +2932,11 @@ pnpm dlx @lhci/cli@0.15.1 autorun && node scripts/perf-lhci-summary.mjs
 #   /, /prices, /market: script KiB about 66 kB lower than .perf/wp26-lhci-before.md
 kill %1
 
-# Database (repo root): replay and the DB tests
-cd .. && PGSERVER_URL=postgresql://postgres:postgres@localhost:55432/postgres scripts/db/replay_migrations.sh
+# Database (repo root): deployment check, replay and the DB tests
+cd .. && python3 verify_migration.py migrations/0035_catalog_sparklines.sql > /tmp/wp26_0035_check.sql; echo "exit=$?"
+#   exit=0; stderr lists 4 expectations: the function (security invoker, volatility s,
+#   config search_path=public,pg_temp) and EXECUTE revoked for public, granted to anon and authenticated
+PGSERVER_URL=postgresql://postgres:postgres@localhost:55432/postgres scripts/db/replay_migrations.sh
 POKEFIN_TEST_DATABASE_URL=postgresql://postgres:postgres@localhost:55432/replay_once python -m pytest tests/test_wp26_catalog_sparklines.py tests/test_revalidate_hook.py -q
 python -m pytest tests/ -q                               # whole Python suite green
 ```
@@ -2883,7 +2945,7 @@ The perf build's `grep '<path d="M0 '` count assumes the grouped default renders
 
 Performance checks against the budget:
 
-- `pnpm perf:budget` passes; `.perf/budget-result.json` against `.perf/wp26-before.json`: `/`, `/prices`, `/market` JS within 1 kB of before; document and flight growth in the D4 ranges.
+- `pnpm perf:budget` passes; `.perf/budget-result.json` against `.perf/wp26-before.json`: `/`, `/prices`, `/market` JS within 1 kB of before; document and flight growth in the D4 ranges, and the `/market` document within 1 kB of before (nothing embedded there).
 - `/prices` document (br) ≤ 70 kB (target). If not, step 26's rule applies.
 - Lighthouse `resource-summary:script:size` on the three URLs is lower than before by about 60 kB or more; CLS on `/prices` is unchanged or lower (no skeleton-to-line swap any more).
 
@@ -2892,14 +2954,15 @@ Manual checks (`node scripts/perf-serve.mjs` and a browser at `http://127.0.0.1:
 - 1440 px, `/prices`: every card has its line in the page source (View Source shows `<path d=` inside each card); "PERIOD" label; select 1Y: slots turn to flat bars for a moment, then 1Y lines; Network shows exactly one request, `/api/public/sparklines/1Y`; select 1Y again after 3M: no request.
 - 1440 px, DevTools Performance or Network, reload `/prices` and scroll to the bottom and back: zero requests to `/api/public/history`, zero to `/rest/v1/`, and no chunk containing `GoTrueClient` (search the Sources panel).
 - 1440 px, click "Show full chart" on a card: one `/api/public/history/<id>` request, flat bar then chart; hide and reopen: no request. In DevTools set the request to fail (block the URL) on another card: "Chart unavailable." with a working "Try again".
-- 1440 px, `/market` with all columns: "Trend" header with its tooltip; lines on every row without expanding; expand a row: one history request.
+- 1440 px, `/market`: reload with Network open: no `/api/public/sparklines` request while the key-column view is shown. Turn on all columns: "Trend" header with its tooltip, flat bars, then exactly one `/api/public/sparklines/1Y` request and lines on every row without expanding; switch Period to 6M and back to 1Y: one 6M request, and 1Y draws at once with no request; expand a row: one history request.
 - 390 px (device toolbar, iPhone 12 Pro), `/prices`: lines present on first paint, "No history" on stale products (in the perf fixture, 900300 to 900305), "Show full chart" 44 px tall on touch emulation, no horizontal scroll; the filter drawer shows "PERIOD".
 - 390 px, `/`: Recently Released cards show 3M lines on first paint.
+- Shape agreement, on the Vercel preview only (it reads production data; the perf fixture's sparkline walks are synthetic and do not match its history rows): open `/prices`, pick 1Y, and compare three products' sparklines with "Show full chart" at 1Y (one rising, one falling, one flat). Each line must have the chart's shape, with its low and high at the same dates. Paste the three screenshots into the PR.
 - Screen reader (VoiceOver or NVDA) on `/prices`: the period control is announced as "Period, radio group"; sparklines are silent; "No history" is read.
 
 ## Owner actions
 
-1. **Apply migration 0035 to production before merge** (Supabase SQL editor or MCP `apply_migration`, contents of `migrations/0035_catalog_sparklines.sql`). It is additive and read-only. Then run the four verification queries in the file's header: 0 rows, 0 rows, about 300 drawn, and an `EXPLAIN ANALYZE` well under 1 s. Record the date in `audits/HARDENING_FOLLOWUPS.md` (step 24) and refresh `schema.sql` as WP21 describes.
+1. **Apply migration 0035 to production before merge** (Supabase SQL editor or MCP `apply_migration`, contents of `migrations/0035_catalog_sparklines.sql`). It is additive and read-only. Then run the four verification queries in the file's header: 0 rows, 0 rows, about 300 drawn, and an `EXPLAIN ANALYZE` well under 1 s. Then prove the applied object is the file's (the repo's rule since the 2026-08-13 incident): `python3 verify_migration.py migrations/0035_catalog_sparklines.sql`, paste the printed statement into the SQL editor with nothing selected, Run: 4 rows, all `OK`. Record the date in `audits/HARDENING_FOLLOWUPS.md` (step 24) and refresh `schema.sql` as WP21 describes.
 2. **Database types**: run `pnpm types:db` with your `SUPABASE_ACCESS_TOKEN` and push `frontend/app/types/database.ts` to the branch, or give the executor a token (step 2). WP20's "Database types" workflow fails on master until production and the file agree.
 3. **Preview cache check** (acceptance): if the preview deployment is protected, create a "Protection Bypass for Automation" secret in Vercel (Project, Settings, Deployment Protection; free) and run from `frontend/`: `VERCEL_AUTOMATION_BYPASS_SECRET=<secret> node scripts/check-public-cache.mjs https://<preview host> --require-vercel-hit`. Expected: `ok`, with `x-vercel-cache: HIT` on each second request. Paste the output into the PR.
 4. **Approve or reject any `Perf budget raise` lines** in the PR body; if the `/prices` document is above its 70 kB br target, decide between accepting the raised limit until WP30 or holding the PR.
@@ -2907,12 +2970,12 @@ Manual checks (`node scripts/perf-serve.mjs` and a browser at `http://127.0.0.1:
 
 ## Acceptance criteria
 
-- [ ] `migrations/0035_catalog_sparklines.sql` exists, replays once and twice (WP21 harness), is `SECURITY INVOKER`, `STABLE`, pins `search_path`, and grants EXECUTE to `anon` and `authenticated` only; `tests/test_wp26_catalog_sparklines.py` passes in CI (all 16 cases).
-- [ ] The anchor strings `ALVgq1_` and `ACEHJKMORTUWZbdehjlnprtvxz1357-_` are produced by the SQL, `encodeSparkline` and the perf fixture (tests 1, 13, 16).
-- [ ] `/`, `/prices` and `/market` render sparklines from the server HTML: `renderToString` of `MiniSparkline` contains the path, and the perf build's `/prices` HTML contains one `<path d="M0 ` per drawn product.
+- [ ] `migrations/0035_catalog_sparklines.sql` exists, replays once and twice (WP21 harness), is `SECURITY INVOKER`, `STABLE`, pins `search_path`, and grants EXECUTE to `anon` and `authenticated` only; `python3 verify_migration.py migrations/0035_catalog_sparklines.sql` exits 0 with 4 expectations; `tests/test_wp26_catalog_sparklines.py` passes in CI (17 cases: 13 test functions, one of them parametrised 5 ways).
+- [ ] The anchor strings `ALVgq1_` and `ACEHJKMORTUWZbdehjlnprtvxz1357-_` are produced by the SQL, `encodeSparkline` and the perf fixture's encoder (tests 1, 13, 16).
+- [ ] `/` and `/prices` render sparklines from the server HTML: `renderToString` of `MiniSparkline` contains the path, and the perf build's `/prices` HTML contains one `<path d="M0 ` per drawn product. `/market` embeds no series (its page passes no `initialSparklines`) and requests one period only while "all columns" is on (test 8, manual check).
 - [ ] A product withheld by the 14-day rule renders "No history" and no line (perf fixture 900300 to 900305; unit and SSR tests).
 - [ ] A DevTools trace of a full `/prices` scroll shows 0 history requests (owner or executor trace, screenshot in the PR), and `ProductCard.tsx` contains no `IntersectionObserver`.
-- [ ] `perf-budgets.json` has the `forbiddenChunks` rule for `/`, `/prices`, `/market` and the reachability control, and `pnpm perf:budget` passes with "supabase-js not reachable" for all three.
+- [ ] `perf-budgets.json` has the `forbiddenChunks` rule for `/`, `/prices`, `/market` and the reachability control, and `pnpm perf:budget` passes with "supabase-js not reachable" for all three (only exception: the over-reach case of step 19c, documented in the PR with the chain, and then the manual Sources-panel check below is the proof).
 - [ ] The `/prices` document is ≤ 70 kB br in `pnpm perf:budget` (or the owner approved the raise under Owner actions 4, recorded in the PR).
 - [ ] `node scripts/check-public-cache.mjs` passes in CI, and the preview run with `--require-vercel-hit` shows `x-vercel-cache: HIT` (Owner actions 3).
 - [ ] The Period control is labelled and named "Period" on `/prices` and `/market` and changes the sparkline window with at most one `/api/public/sparklines/<period>` request per period per tab.
@@ -2944,9 +3007,9 @@ PR title: `WP26: server-baked sparklines and public read routes`
 
 PR body:
 
-- What: sparklines baked by `get_catalog_sparklines` (migration 0035) and embedded in `/`, `/prices`, `/market`; other periods from `/api/public/sparklines/[period]` (ISR); full charts from `/api/public/history/[id]` (ISR); fallback rate from `/api/public/rate`; "CHART" renamed "Period"; WP09's per-card history loading and batcher removed; supabase-js unreachable from the three routes (ESLint and `perf-budgets.json` `forbiddenChunks`); scraper warms 8 URLs after each revalidation.
+- What: sparklines baked by `get_catalog_sparklines` (migration 0035) and embedded in `/` and `/prices`; other periods, and `/market`'s Trend column (only while shown), from `/api/public/sparklines/[period]` (ISR); full charts from `/api/public/history/[id]` (ISR); fallback rate from `/api/public/rate`; "CHART" renamed "Period"; WP09's per-card history loading and batcher removed; supabase-js unreachable from the three routes (ESLint and `perf-budgets.json` `forbiddenChunks`); scraper warms 8 URLs after each revalidation.
 - Numbers: before and after table from `.perf/wp26-before.json` and `.perf/budget-result.json` (JS, document and flight per route), Lighthouse script KiB before and after, and the `check-public-cache` outputs (CI and preview).
 - `Perf budget raise: <key> <reason>` lines, one per raised limit (step 26).
 - Owner actions 1 to 5, with 1 and 2 marked done or pending.
-- Follow-ups: the remaining browser Supabase reads from step 23 (file and function per line); WP30 reduces the Period to a single return per card and must not rename the control again; WP33 must update `WARM_PATHS` when `/market` moves; `/market`'s expanded row says "Price history not available yet." after a failed request (fixed when WP33 replaces the view).
+- Follow-ups: the remaining browser Supabase reads from step 23 (file and function per line); WP30 reduces the Period to a single return per card and must not rename the control again; WP33 must update `WARM_PATHS` when `/market` moves; `/market`'s expanded row says "Price history not available yet." after a failed request (fixed when WP33 replaces the view); the two ISR routes cache every distinct path they are asked for, 404s included (`app-route` stores any status), so a crawler walking random `/api/public/history/<n>` ids creates cache entries the way it already can on `/product/<n>` (WP11). Watch Vercel's ISR write usage after deploy; if it climbs, open a follow-up to reject unknown ids before the route renders (for both routes and `/product/[id]`).
 - Migration: 0035 (reserved in 01-PRODUCT-DIRECTION.md §8; 0033 and 0034 belong to WP25).

@@ -3,7 +3,7 @@
 - **Goal**: a first-time visitor can see where every number comes from and how it is computed (a versioned `/methodology` whose figures come from the code's own constants), who runs Pokéfin and how CardRinkTCG.ca relates to it (`/about`, the footer and the promo say the same sentence), what the site does not promise (`/terms`, a one-line disclaimer), and can report a wrong price from the page it appears on (prefilled email links, no backend).
 - **Why now / value**: the data integrity work (freshness gate 0023, withheld prices, WP16 plausibility checks, WP18 volatility units) is invisible today. Every Track 2 feature (index, screener presets, alerts, portfolio benchmark) adds numbers that need a published definition, and every one of them will import `metricDefinitions.ts`, `MetricLabel`, `ReportLink` and `app/content/disclosures.ts` from this package instead of inventing copy. The advice-sounding labels ("Invest Score", "Good Deal", "Overpriced") and the undisclosed store relationship are the two largest trust and compliance risks the research found.
 - **Effort**: M, about 13 hours (constants and definitions modules 2.5 h, components and footer 2 h, methodology page 3 h, about, terms, contact and privacy 2.5 h, label renames and copy sweeps 1.5 h, tests and verification 1.5 h).
-- **Depends on**: WP13 (`app/lib/site.ts`, `app/lib/redirects.ts`, `app/sitemap.ts`, `app/components/NoResults.tsx`, `app/product/[id]/productMeta.ts` with `serializeJsonLd`, `parseProductId`, `productPath`, `getProductDisplayName`), WP14 (`METRIC_DEFINITIONS` and the "What do these columns mean?" `<details>` in `app/stats/page.tsx`, the non-focusable `InfoIcon`), WP15 (`CardRinkPromo` as an `<aside>`, `app/__tests__/uiConventions.test.ts` with `SOURCES` and `violations`, restyled `error.tsx` and `global-error.tsx`), WP18 (`app/lib/marketMath.ts`, the "(daily)" and "(annualised)" volatility labels), WP23 (`Stat`, `AsOf`, `PageHeader`, `ProvenanceLine`, `Button`/`buttonClasses`, token utilities, `test-utils/axe.ts`, the ratcheted conventions test). Through them: WP07 (`app/lib/format.ts`), WP11 (`getCachedMarketProductSummaries`, `getCachedExchangeRate`, cache tags), WP16 (price plausibility constants in `main.py`), WP17 (`app/components/BoxCalculator/nav.ts`, blocking lint), WP20 (async root layout), WP22 (`frontend/perf-budgets.json`, `pnpm perf:budget`, lazy Sentry in the error files).
+- **Depends on**: WP13 (`app/lib/site.ts`, `app/lib/redirects.ts`, `app/sitemap.ts`, `app/components/NoResults.tsx`, `app/product/[id]/productMeta.ts` with `serializeJsonLd`, `parseProductId`, `productPath`, `getProductDisplayName`), WP14 (`METRIC_DEFINITIONS` and the "What do these columns mean?" `<details>` in `app/stats/page.tsx`, the non-focusable `InfoIcon`), WP15 (`app/content/disclosures.ts` with `STORE_NAME`, `STORE_URL` and `PROMO_RELATIONSHIP_LABEL`, which this package extends; `CardRinkPromo` as an `<aside>` whose `aria-label={PROMO_RELATIONSHIP_LABEL}` WP15's conventions test pins; `app/__tests__/uiConventions.test.ts` with `SOURCES` and `violations`; restyled `error.tsx` and `global-error.tsx`), WP18 (`app/lib/marketMath.ts`, which already exports `DAYS_PER_YEAR`, `ANNUALISATION_FACTOR`, `PRODUCT_VOLATILITY_LOOKBACK_POINTS` and `RETURN_WINDOW_DAYS`; the "(daily)" and "(annualised)" volatility labels), WP10 (migration 0028: `get_market_product_metrics` with the return anchor-age tolerance this package documents), WP23 (`Stat`, `AsOf`, `PageHeader`, `ProvenanceLine`, `Button`/`buttonClasses`, token utilities, `test-utils/axe.ts`, the ratcheted conventions test). Through them: WP07 (`app/lib/format.ts`), WP11 (`getCachedMarketProductSummaries`, `getCachedExchangeRate`, cache tags), WP16 (price plausibility constants in `main.py`), WP17 (`app/components/BoxCalculator/nav.ts`, blocking lint), WP20 (async root layout), WP22 (`frontend/perf-budgets.json`, `pnpm perf:budget`, lazy Sentry in the error files).
 - **Unblocks**: WP25 (extends `#currency` and `#returns`, bumps the methodology version), WP27 (footer rows, `/methodology#cadence` for the data clock chip), WP28 (`#box-nav`), WP29 (fills `#index`), WP31 (`MetricLabel` in `Stat` labels, `ReportLink` in the product hero), WP32 and WP33 (`MetricLabel`, `DecisionNote`), WP35 (alert email disclaimer and sender lines from `disclosures.ts`), WP36, WP37.
 - **Placement**: after WP23, before WP25 and WP27. Owner decisions D1, D2 and D5 are needed before merge (see Owner actions). If D1 is still open at merge time, `STORE_RELATIONSHIP` stays `null`: the promo keeps WP15's "Partner store" label, the footer relationship sentence is omitted, `/about#disclosures` states only neutral facts, and the PR says so.
 - **Suggested branch name**: `remediation/wp24-trust-pages-and-disclosure`
@@ -21,7 +21,8 @@ A collector-investor deciding whether to trust a number cannot learn today what 
 - **Renames (owner decision D5).** "Invest Score" becomes "Composite score", displayed as a percentile of ranked sets ("Top 12%") with the raw z-blend in the `title` attribute. The box verdicts become "Below pack value", "Near pack value", "Above pack value", with the band thresholds printed next to the verdict. Internal names (`investScore`, `invest_score`, `signal: "buy" | "hold" | "avoid"`) do not change.
 - **Disclosure copy follows owner decision D1** (`research/trust-seo-brand.md` §7.2 scenarios A, B, C), through one exported function so the promo, the footer and `/about` cannot disagree.
 - **No new client JavaScript on the trust pages.** `/methodology`, `/about`, `/terms`, `/contact` and `/privacy` are server components. The footer becomes a server component wrapped in a 10-line client gate.
-- **Numbers are never retyped.** Every window, threshold and weight on `/methodology` is interpolated from an exported constant: WP18's `marketMath.ts`, `marketPulse.ts`, the box calculator's `nav.ts`, one TypeScript mirror of the 0023 composite weights (`app/lib/setAnalytics.ts`) and one mirror of WP16's Python plausibility constants (`app/lib/pipelineConstants.ts`). Tests parse the SQL and the Python to prove the mirrors match.
+- **Numbers are never retyped.** Every window, threshold and weight on `/methodology` is interpolated from an exported constant: WP18's `marketMath.ts`, `marketPulse.ts`, the box calculator's `nav.ts`, one TypeScript mirror of the SQL (`app/lib/setAnalytics.ts`: the 0023 composite and momentum weights, the series windows and WP10's 0028 return anchor tolerances) and one mirror of WP16's Python plausibility constants (`app/lib/pipelineConstants.ts`). Tests parse the SQL and the Python to prove the mirrors match.
+- **`app/content/disclosures.ts` stays import-free.** WP15 created it as a plain module with no imports so that client components can import it cheaply (the box calculator does, through `DecisionNote`). The one number it prints (14 days) is a local constant tied to `PRICE_STALENESS_TOLERANCE_DAYS` by a test, not an import of `marketPulse.ts`.
 - **Methodology is versioned.** v1.0 with a change log. Any change to a formula, window, threshold or gate bumps `METHODOLOGY_VERSION` and adds a row.
 - Light-only, WP23 tokens only (`text-ink`, `text-ink-soft`, `text-action`, `border-line`, `bg-surface`, `bg-surface-alt`, `rounded-card`, `rounded-control`, `text-h1` to `text-caption`, `text-prose`). No raw palette classes in any file this package creates.
 
@@ -29,11 +30,11 @@ A collector-investor deciding whether to trust a number cannot learn today what 
 
 | File | Role |
 |---|---|
-| `app/content/disclosures.ts` | D1 and D2 values, `disclosureCopy()`, footer disclaimer, trademark notices, independence policy, decision note, provenance sentence, store name and URL |
+| `app/content/disclosures.ts` (WP15's file, extended) | D1 and D2 values, `disclosureCopy()`, `PROMO_RELATIONSHIP_LABEL` (kept, now derived), revenue sentence, footer disclaimer, trademark notices, independence policy, decision note, provenance sentence, store name and URL. No imports |
 | `app/content/contact.ts` | `CONTACT_EMAILS` (`hello@`, `reports@`, `privacy@pokefin.ca`), reply expectation |
 | `app/content/methodology.ts` | `METHODOLOGY_VERSION`, effective date, sections and sub-sections (the anchors), change log, `LISTINGS_HISTORY_START` |
 | `app/lib/metricDefinitions.ts` | `{ key, label, unitLabel, window, short, anchor }` for every metric label shown on `/stats` and the product page; `MetricKey`, `isMetricKey`, `metricHref` |
-| `app/lib/setAnalytics.ts` | `COMPOSITE_SCORE_WEIGHTS`, `COMPOSITE_WEIGHT_LABELS`, `MOMENTUM_WEIGHTS`, `SET_METRIC_WINDOWS` (SQL mirrors), `compositeTopPercent`, `formatCompositePercentile` |
+| `app/lib/setAnalytics.ts` | `COMPOSITE_SCORE_WEIGHTS`, `COMPOSITE_WEIGHT_LABELS`, `MOMENTUM_WEIGHTS`, `SET_METRIC_WINDOWS`, `SQL_RETURN_ANCHOR_TOLERANCE_DAYS` (SQL mirrors), `compositeTopPercent`, `formatCompositePercentile` |
 | `app/lib/pipelineConstants.ts` | Mirrors of `main.py`: `PRICE_LARGE_DELTA_RATIO`, `PRICE_CONFIRM_TOLERANCE`, `PRICE_PENDING_MAX_AGE_HOURS`, `PRICE_ABSOLUTE_MAX_USD`, `PRICE_REPRICE_INTERVAL_HOURS`, `SCRAPE_RUN_INTERVAL_HOURS` |
 | `app/lib/contactLink.ts` | Client-safe and tiny: topic ids, `buildContactHref()`. Loaded by error boundaries on every route, so nothing else goes in it |
 | `app/lib/jsonLd.ts` | `serializeJsonLd` (moved from WP13's `productMeta.ts`, re-exported there), breadcrumb, organization, about-page and article builders |
@@ -107,7 +108,7 @@ Phone, 390 px (16 px gutters, no horizontal scroll; tables are two or three shor
 ```
 
 States:
-- Current values, newest price 2 or more days old: WP23 `AsOf variant="table"` adds the clock icon with "Last priced Sep 25" as its accessible text beside the date.
+- Current values, newest price 2 or more days old (WP23 `STALE_AFTER_DAYS`): a visible WP23 `AsOf variant="inline"` line under the date, clock icon plus "Last priced Sep 25" in warn text, on both breakpoints. The `table` variant is not used here: its text is a tooltip, which never shows on touch. Fresh: no extra line (the value already is the date).
 - FX read failed (`getCachedExchangeRate()` returned `date: null`): value `--`, sub-line "Rate unavailable".
 - Summaries read failed: not caught, same as WP13's sitemap. The render fails, Next keeps serving the previous ISR version, and the next scrape revalidation retries.
 - `#index`: placeholder text until WP29 ships the index.
@@ -127,11 +128,11 @@ Server page, ISR, `AboutPage` + `Organization` + `BreadcrumbList` JSON-LD. Secti
 | Who runs it                        |
 | Pokéfin is built and run by ...    |
 | How Pokéfin makes money            |
-| Pokéfin is free. It has no ads ... |
+| <revenue sentence, D1>             |
 | <relationship sentence, D1>        |
 | Independence policy                |
 | . CardRinkTCG.ca never affects ... |
-| . Pokéfin sells no placements ...  |
+| . No product, set or shop can pay..|
 | . Prices are never edited by hand..|
 | . The operator may hold inventory..|
 | Data and methodology               |
@@ -218,10 +219,11 @@ Every footer link has `prefetch={false}` (`01-PRODUCT-DIRECTION.md` §9 item 1).
 RANK (?)  SET              RELEASE (?)  PRODUCTS (?)  AVG 90D (?)  ...  COMPOSITE SCORE (?)
 1         Prismatic Evol.  Jan 17, 2025  9            +38.21%            Top 2%      <- title="Composite z-score 1.87, rank 1 of 58"
 ...
+58        Some Old Set     Mar 3, 2017   4            -12.40%            Bottom 2%
 Screens describe past prices. They are not recommendations. How we calculate this
 ```
 
-The `(?)` is a 24 px link box around a 16 px circled "?" (`MetricLabel`); its `title` is the short definition and its accessible name is "How {label} is calculated". The composite cell is neutral ink: it is a rank, not a gain or loss.
+The `(?)` is a 24 px link box around a 16 px circled "?" (`MetricLabel`); its `title` is the short definition and its accessible name is "How {label} is calculated". The composite cell is neutral ink: it is a rank, not a gain or loss. The better half of ranked sets reads "Top N%", the rest "Bottom N%" (the last of 58 is "Bottom 2%", never "Top 100%").
 
 Box calculator result, 390 px:
 
@@ -229,8 +231,8 @@ Box calculator result, 390 px:
 +------------------------------------+
 | Near pack value      3.2% above NAV|  text-h2 ink, neutral surface (no green, amber, rose)
 | Below: 10% or more under NAV. Near:|  caption, ink-soft
-| from 10% under to 5% over. Above:  |
-| more than 5% over.                 |
+| less than 10% under, up to 5% over.|
+| Above: more than 5% over.          |
 | Screens describe past prices. They |
 | are not recommendations. How we    |
 | calculate this                     |
@@ -258,10 +260,12 @@ Product page: every `MetricTile` label becomes a `MetricLabel`; the "Market Puls
 - Provenance (under the `/stats` title, and exported for WP30 and WP32): "TCGplayer Market Price in USD, updated daily. Prices older than 14 days are hidden." plus link "Methodology".
 - Trademarks: "Pokémon and Pokémon character names are trademarks of Nintendo, Creatures Inc. and GAME FREAK inc. Pokéfin is not affiliated with, endorsed or sponsored by Nintendo, The Pokémon Company, Creatures or GAME FREAK." and "TCGplayer is a trademark of TCGplayer, Inc. Pokéfin is not affiliated with TCGplayer."
 - Relationship (D1): scenario A "owned": label "From the team behind Pokéfin", sentence "Pokéfin is run by the team behind CardRinkTCG.ca, a Canadian card shop. The shop never affects the prices, rankings, scores or screens shown here."; B "paid": label "Sponsored", sentence "CardRinkTCG.ca pays Pokéfin for this placement. The shop never affects ..."; C "unpaid": label "A shop we like", sentence "Pokéfin has a personal connection to CardRinkTCG.ca and is not paid for this link. The shop never affects ..."; open: label "Partner store", no sentence.
-- Spelling: "TCGplayer" everywhere a user can read it. Banned in `app/**`: "TCGPlayer", "Invest Score", "live price", "real-time", "all-time high"; em dashes banned in `app/**/*.tsx`.
+- Revenue (D1, `/about#disclosures`): A and C "Pokéfin is free. It runs no third-party ads, has no paid tier and sells no data."; B "Pokéfin is free. Its only income is the CardRinkTCG.ca placement described below: no other ads, no paid tier, no data sales."; open "Pokéfin is free. It has no paid tier and sells no data." (no "no ads" claim while the store relationship is undecided).
+- Spelling: "TCGplayer" everywhere a user can read it. Banned in `app/**`: "TCGPlayer", "Invest Score", "live price", "real-time", "all-time high"; em dashes banned in `app/**/*.tsx`, whether written as the character, as `&mdash;`/`&#8212;`, or as the escape `\u2014` in a string (WP18's `compareColumns.tsx` uses the escape for its missing-value placeholder).
 
 ### Accessibility
 
+- Focus styles everywhere in this package are `focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-action` (WP23 rule): Tailwind 4's `outline-none` sets `outline-style: none`, which removes the only focus cue in Windows forced-colours mode. No `transition-colors` (colour changes are instant, `01-PRODUCT-DIRECTION.md` §3.5).
 - `MetricLabel`: the link is a 24 px target (WCAG 2.5.8), has a visible focus ring, and an accessible name that says where it goes. WP14's `<details>` list on `/stats` stays as the touch and screen-reader source of the definitions.
 - Every new page has one `h1`, sequential `h2`/`h3`, and `section` elements labelled by their headings. In-page anchors get `scroll-mt-20` so the sticky 64 px header does not cover the heading.
 - The two "On this page" navs are never visible at the same time (one `lg:hidden`, one `hidden lg:block`), so assistive technology sees one.
@@ -271,10 +275,10 @@ Product page: every `MetricTile` label becomes a `MetricLabel`; the "Market Puls
 ### Performance
 
 - The four new pages add zero route-specific client JavaScript: their `jsGzKb` in `pnpm perf:budget` equals `/privacy`'s within 0.3 kB.
-- The footer moves from a client component to a server component: its copy leaves the shared client bundle (shared JS goes down slightly). `FooterGate` is about 0.2 kB.
+- The footer moves from a client component to a server component: its code and copy leave the shared client bundle (shared JS goes down by roughly 1 kB gz). `FooterGate` is about 0.2 kB. The trade-off: the footer's rendered tree now travels in every page's inline RSC payload instead of a client reference, so every route's document grows by about 0.5 to 1 kB br (the HTML itself was already server-rendered before). That is less parse and execute work on every route for a small byte cost; Verification step 6 bounds it at 1.5 kB br per route.
 - `lib/contactLink.ts` plus `ReportLink` add under 0.5 kB gz to the error-boundary chunk that ships on every route.
-- `DecisionNote` in the box calculator (a client component) brings `content/disclosures.ts` into that route's bundle: under 1 kB gz, inside the `/box-calculator` limit.
-- `/methodology` and `/about` each make two cached reads that `/` already makes (summaries and FX), no new query.
+- `DecisionNote` in the box calculator (a client component) brings `content/disclosures.ts` into that route's bundle: under 1 kB gz, inside the `/box-calculator` limit. It stays that small only because `disclosures.ts` imports nothing (an import of `marketPulse.ts` would pull its whole module into the box calculator chunk).
+- `/methodology` makes two cached reads that `/` already makes (summaries and FX) and `/about` one (summaries); `/contact` reads the cached summaries only when a `product` parameter is present. No new query.
 - JSON-LD adds 1 to 2 kB of HTML on `/methodology` and `/about`.
 
 ## Before you start
@@ -288,7 +292,8 @@ Read in full:
 - `app/components/Footer.tsx`, `app/components/CardRinkPromo.tsx`, `app/layout.tsx`, `app/error.tsx`, `app/global-error.tsx`, `app/components/NoResults.tsx`, `app/privacy/page.tsx`, `app/sitemap.ts`, `app/__tests__/sitemap.test.ts`.
 - `app/lib/marketMath.ts`, `app/lib/marketPulse.ts` (constants at the top and around `PRICE_STALENESS_TOLERANCE_DAYS`), `app/lib/serverMarketData.ts` (`fetchSetAnalyticsFallback`: the `momentumScore` and `investScore` expressions), `app/lib/site.ts`, `app/lib/redirects.ts`, `app/lib/validation.ts` (`stripControlChars`), `app/lib/format.ts`, `app/product/[id]/productMeta.ts`.
 - `app/components/ui/Stat.tsx`, `AsOf.tsx`, `PageHeader.tsx`, `ProvenanceLine.tsx`, `Button.tsx`, `README.md`; `test-utils/axe.ts`; `app/__tests__/uiConventions.test.ts` and `app/__tests__/uiConventions.baseline.json`.
-- `migrations/0023_price_freshness_guard.sql` (the `scored` CTE with the composite weights, `momentum_score`, the `current_date - 14` gates), the newest numbered migration that defines `get_market_product_metrics` (WP10's), `main.py` (WP16's price constants, `price_update_interval_hours`, `seconds_until_next_utc_interval`).
+- `migrations/0023_price_freshness_guard.sql` (the `scored` CTE with the composite weights, `momentum_score`, the `current_date - 14` gates), `migrations/0028_bounded_market_metrics.sql` (WP10: the newest `CREATE OR REPLACE FUNCTION public.get_market_product_metrics`, its `anchors` CTE with the anchor-age lower bounds, and the window CTEs), `main.py` (WP16's price constants and `evaluate_scraped_price`, `price_update_interval_hours`, `seconds_until_next_utc_interval`).
+- `app/content/disclosures.ts` (WP15: note the current value of `PROMO_RELATIONSHIP_LABEL` and whether `CardRinkPromo.tsx`'s store link `rel` contains `sponsored`; both carry an owner D1 answer if WP15 had one).
 - `perf-budgets.json` and `scripts/perf-budget.mjs` (WP22).
 
 Confirm that the dependencies landed. Run from `frontend/`; every command must print what its comment says, otherwise stop and report which package is missing:
@@ -305,11 +310,15 @@ grep -n "export function safeNextPath\|export const NO_INDEX\|export function ab
 grep -n "METRIC_DEFINITIONS\|What do these columns mean" app/stats/page.tsx   # at least 2 lines
 # WP15
 grep -n '<aside' app/components/CardRinkPromo.tsx                              # 1 line
+grep -n 'aria-label={PROMO_RELATIONSHIP_LABEL}' app/components/CardRinkPromo.tsx   # 1 line
+grep -n "export const STORE_NAME\|export const STORE_URL\|export const PROMO_RELATIONSHIP_LABEL" app/content/disclosures.ts   # 3 lines
 grep -n "const SOURCES\|function violations" app/__tests__/uiConventions.test.ts   # 2 lines
 # WP17
 grep -n "export function calculateNav" app/components/BoxCalculator/nav.ts     # 1 line
-# WP18
-grep -n "export const RETURN_WINDOW_DAYS\|const DAYS_PER_YEAR\|export type VolatilityUnit" app/lib/marketMath.ts   # 3 lines
+# WP18 (it already exports the constants this package prints; do not declare them again)
+grep -n "export const RETURN_WINDOW_DAYS\|export const DAYS_PER_YEAR\|export const PRODUCT_VOLATILITY_LOOKBACK_POINTS\|export type VolatilityUnit" app/lib/marketMath.ts   # 4 lines
+# WP10 (0028 bounds the return anchors; step 1d mirrors the tolerances)
+grep -cE "recorded_at >= current_date - (14|37|104|194|379)$" ../migrations/0028_*.sql   # 5
 grep -rn "Volatility 90D (daily)" app/stats/page.tsx | head -1                 # 1 line
 grep -n "Volatility 30D (annualised)" "app/product/[id]/page.tsx"              # 1 line
 # WP22
@@ -324,11 +333,13 @@ grep -n "^PRICE_LARGE_DELTA_RATIO\|^PRICE_CONFIRM_TOLERANCE\|^PRICE_PENDING_MAX_
 
 If a WP16 constant is not in `main.py`, find it with `grep -rn "PRICE_LARGE_DELTA_RATIO" --include=*.py ..` (WP21 may have moved scraper code into `scraper_*.py`) and use that file in step 1e's test instead of `main.py`.
 
+If the WP10 check prints 0 (the owner rolled back WP10's anchor-age rule, WP10 Rollback), the database returns have no maximum lookback age: in step 1d set `SQL_RETURN_ANCHOR_TOLERANCE_DAYS` to `null` (type `... | null`), in step 10a use the fallback returns paragraph given there (no third column, no `oldestLookback`), and drop the tolerance cases of tests 2, 3 and 4. Any other count: stop and report.
+
 Record the starting state (paste into the PR):
 
 ```bash
 grep -rn "TCGPlayer" app --include=*.ts --include=*.tsx | wc -l
-grep -rln -e $'\xe2\x80\x94' -e '&mdash;' app --include=*.tsx | grep -v __tests__ | wc -l
+grep -rln -e $'\xe2\x80\x94' -e '&mdash;' -e '&#8212;' -e '\\u2014' app --include=*.tsx | grep -v __tests__ | wc -l
 grep -rniE "invest score|live price|real-time|all-time high" app --include=*.ts --include=*.tsx | grep -v __tests__
 grep -rn "Good Deal\|Fair Price\|Overpriced" app --include=*.tsx
 pnpm exec jest app/__tests__/uiConventions.test.ts   # passes
@@ -347,18 +358,7 @@ kill <PID>
 
 ### Step 1. Export the constants the methodology prints
 
-1a. `app/lib/marketMath.ts` (WP18). Change `const DAYS_PER_YEAR = 365;` to `export const DAYS_PER_YEAR = 365;`. Directly below `RETURN_WINDOW_DAYS`, add:
-
-```ts
-/**
- * Product pages and the Market table: volatility over the newest 30 daily
- * prices (points, not calendar days), annualised. /methodology#volatility
- * prints this value; change it only with a methodology version bump.
- */
-export const PRODUCT_VOLATILITY_LOOKBACK_POINTS = 30;
-```
-
-Replace every literal 30 that feeds product volatility with the constant:
+1a. `app/lib/marketMath.ts` (WP18) needs no edit: WP18 already exports `DAYS_PER_YEAR`, `ANNUALISATION_FACTOR`, `PRODUCT_VOLATILITY_LOOKBACK_POINTS` and `RETURN_WINDOW_DAYS` (Before you start checks it). Do not declare any of them again: a second `export const` is a TypeScript redeclaration error. WP18 deliberately left the two call-site literals for this step (WP19's preflight greps match them). Replace every literal 30 that feeds product volatility with the constant:
 
 ```bash
 grep -rn "lookbackPoints: 30\|slice(-30)\|Math.max(30, 3)" app --include=*.ts --include=*.tsx | grep -v __tests__
@@ -418,7 +418,7 @@ export const PACK_VALUE_LABELS: Readonly<Record<NavResult["signal"], string>> = 
 export function packValueBandsText(): string {
   const below = Math.abs(PACK_VALUE_BANDS.belowMaxPercent);
   const near = PACK_VALUE_BANDS.nearMaxPercent;
-  return `Below: ${below}% or more under NAV. Near: from ${below}% under to ${near}% over. Above: more than ${near}% over.`;
+  return `Below: ${below}% or more under NAV. Near: less than ${below}% under, up to ${near}% over. Above: more than ${near}% over.`;
 }
 ```
 
@@ -484,8 +484,27 @@ export const SET_METRIC_WINDOWS = {
 } as const;
 
 /**
- * "Top N%" for a composite rank: ceil(rank / rankedCount x 100), at least 1.
- * Null for an unranked set or impossible input.
+ * How much older than its target date (today minus the window) a return's
+ * lookback price may be in get_market_product_metrics (WP10's 0028 `anchors`
+ * CTE: e.g. 7D accepts a price recorded on or after current_date - 14). An
+ * older lookback price gives a NULL return, shown as "--". 1D has no bound.
+ * The returns on the catalog, the Market table, the product page and Set
+ * Analytics come from this function (only the serverMarketData fallback,
+ * used while get_set_analytics fails, has no bound). Keys are
+ * RETURN_WINDOW_DAYS labels.
+ */
+export const SQL_RETURN_ANCHOR_TOLERANCE_DAYS = {
+  "7D": 7,
+  "1M": 7,
+  "3M": 14,
+  "6M": 14,
+  "1Y": 14,
+} as const;
+
+/**
+ * Position of a composite rank as a percent of ranked sets, from the top:
+ * ceil(rank / rankedCount x 100), at least 1. Null for an unranked set or
+ * impossible input.
  */
 export function compositeTopPercent(
   rank: number | null | undefined,
@@ -497,14 +516,25 @@ export function compositeTopPercent(
   return Math.max(1, Math.ceil((rank / rankedCount) * 100));
 }
 
+/**
+ * The composite cell text. The better half reads "Top N%"; the rest reads
+ * "Bottom N%" with N = ceil((rankedCount - rank + 1) / rankedCount x 100),
+ * so the last of 58 sets is "Bottom 2%", never "Top 100%". "--" when unranked.
+ */
 export function formatCompositePercentile(
   rank: number | null | undefined,
   rankedCount: number
 ): string {
   const top = compositeTopPercent(rank, rankedCount);
-  return top === null ? "--" : `Top ${top}%`;
+  if (top === null || rank === null || rank === undefined) return "--";
+  // A lone ranked set has no "bottom": it stays "Top 100%".
+  if (top <= 50 || rankedCount === 1) return `Top ${top}%`;
+  const bottom = Math.max(1, Math.ceil(((rankedCount - rank + 1) / rankedCount) * 100));
+  return `Bottom ${bottom}%`;
 }
 ```
+
+The tolerance values above are the ones 0028 ships; Before you start confirmed them (5 lines). Test 2 ties each one to the SQL text.
 
 1e. New `app/lib/pipelineConstants.ts`:
 
@@ -543,7 +573,11 @@ export const SCRAPE_RUN_INTERVAL_HOURS = 4;
 
 and in the composite expression write every term as `+ computeZScore(...) * COMPOSITE_SCORE_WEIGHTS.<key>`; the volatility and drawdown terms change from `- ... * 0.2` and `- ... * 0.15` to `+ ... * COMPOSITE_SCORE_WEIGHTS.volatility90` and `+ ... * COMPOSITE_SCORE_WEIGHTS.max_drawdown365` (the constants are negative, so the value is identical). Keep the `momentumScore` condition exactly as the current code writes it (the snippet above shows the review-time shape; if the condition differs, keep yours and change only the three weights). Run `grep -n "\* 0\.[0-9]" app/lib/serverMarketData.ts`: expect no output (a hit that is not a composite or momentum weight stays; name it in the PR).
 
-### Step 2. `app/content/disclosures.ts` (new)
+### Step 2. `app/content/disclosures.ts` (WP15's file, rewritten and extended)
+
+WP15 created this file with `STORE_NAME`, `STORE_URL` and `PROMO_RELATIONSHIP_LABEL`, and its conventions test imports `PROMO_RELATIONSHIP_LABEL` and requires `CardRinkPromo.tsx` to contain `aria-label={PROMO_RELATIONSHIP_LABEL}`. Keep all three names exported. Before replacing the file, carry WP15's D1 answer over: map the current `PROMO_RELATIONSHIP_LABEL` value to `STORE_RELATIONSHIP` ("From the team behind Pokéfin" is `"owned"`, "Sponsored" is `"paid"`, "A shop we like" is `"unpaid"`, "Partner store" is `null`). If the label is "Sponsored" but `CardRinkPromo.tsx`'s `rel` lacks `sponsored`, or the reverse, stop and report the mismatch instead of guessing.
+
+The file stays import-free (WP15's contract: client components import it, and an import here would pull that module into their bundles). Replace it with:
 
 ```ts
 /**
@@ -554,8 +588,10 @@ and in the composite expression write every term as `+ computeZScore(...) * COMP
  *
  * Owner decisions: D1 sets STORE_RELATIONSHIP and OPERATOR_HOLDS_INVENTORY,
  * D2 sets OPERATOR. null means "not decided"; the copy then claims nothing.
+ *
+ * Plain module with no imports: client components (the box calculator,
+ * through DecisionNote) import it, so it must stay tiny.
  */
-import { PRICE_STALENESS_TOLERANCE_DAYS } from "../lib/marketPulse";
 
 /**
  * "owned": the operator owns or co-owns the store (scenario A).
@@ -585,6 +621,8 @@ export interface DisclosureCopy {
   promoLabel: string;
   /** Footer, promo and /about#disclosures sentence. null while D1 is open. */
   relationshipSentence: string | null;
+  /** First sentence of /about#disclosures: how Pokéfin is funded. */
+  revenueSentence: string;
   /** rel for every link to the store. "sponsored" only when it is paid. */
   storeLinkRel: string;
   /** Appended to the footer store link text. */
@@ -594,12 +632,15 @@ export interface DisclosureCopy {
 const NEVER_AFFECTS =
   "The shop never affects the prices, rankings, scores or screens shown here.";
 
+const FREE_NO_ADS = "Pokéfin is free. It runs no third-party ads, has no paid tier and sells no data.";
+
 export function disclosureCopy(relationship: StoreRelationship | null): DisclosureCopy {
   switch (relationship) {
     case "owned":
       return {
         promoLabel: "From the team behind Pokéfin",
         relationshipSentence: `Pokéfin is run by the team behind ${STORE_NAME}, a Canadian card shop. ${NEVER_AFFECTS}`,
+        revenueSentence: FREE_NO_ADS,
         storeLinkRel: "noopener noreferrer",
         storeLinkSuffix: "",
       };
@@ -607,6 +648,7 @@ export function disclosureCopy(relationship: StoreRelationship | null): Disclosu
       return {
         promoLabel: "Sponsored",
         relationshipSentence: `${STORE_NAME} pays Pokéfin for this placement. ${NEVER_AFFECTS}`,
+        revenueSentence: `Pokéfin is free. Its only income is the ${STORE_NAME} placement described below: no other ads, no paid tier, no data sales.`,
         storeLinkRel: "sponsored noopener noreferrer",
         storeLinkSuffix: " (sponsored)",
       };
@@ -614,6 +656,7 @@ export function disclosureCopy(relationship: StoreRelationship | null): Disclosu
       return {
         promoLabel: "A shop we like",
         relationshipSentence: `Pokéfin has a personal connection to ${STORE_NAME} and is not paid for this link. ${NEVER_AFFECTS}`,
+        revenueSentence: FREE_NO_ADS,
         storeLinkRel: "noopener noreferrer",
         storeLinkSuffix: "",
       };
@@ -621,6 +664,8 @@ export function disclosureCopy(relationship: StoreRelationship | null): Disclosu
       return {
         promoLabel: "Partner store",
         relationshipSentence: null,
+        // No "no ads" claim while the store relationship is undecided.
+        revenueSentence: "Pokéfin is free. It has no paid tier and sells no data.",
         storeLinkRel: "noopener noreferrer",
         storeLinkSuffix: "",
       };
@@ -628,6 +673,12 @@ export function disclosureCopy(relationship: StoreRelationship | null): Disclosu
 }
 
 export const DISCLOSURE: DisclosureCopy = disclosureCopy(STORE_RELATIONSHIP);
+
+/**
+ * WP15's name for the promo label, kept: CardRinkPromo.tsx and WP15's
+ * conventions test read it. Now derived from D1, never written by hand.
+ */
+export const PROMO_RELATIONSHIP_LABEL = DISCLOSURE.promoLabel;
 
 export function inventorySentence(
   holds: boolean | null,
@@ -642,7 +693,7 @@ export function inventorySentence(
 
 export const INDEPENDENCE_POLICY: readonly string[] = [
   `${STORE_NAME} never affects which products are tracked, or the rankings, scores, screens or movers shown here.`,
-  "Pokéfin sells no placements: no product, set or shop can pay to rank higher or to be featured.",
+  "No product, set or shop can pay to be tracked, to rank higher, or to appear in a screen, a ranking or the movers.",
   "Prices are never edited by hand. A wrong price is fixed at the source, or the product is excluded until it is.",
   inventorySentence(OPERATOR_HOLDS_INVENTORY, STORE_RELATIONSHIP),
 ];
@@ -658,9 +709,18 @@ export const POKEMON_TRADEMARK_NOTICE =
 export const TCGPLAYER_TRADEMARK_NOTICE =
   "TCGplayer is a trademark of TCGplayer, Inc. Pokéfin is not affiliated with TCGplayer.";
 
+/**
+ * Days after which a price is withheld. Equals PRICE_STALENESS_TOLERANCE_DAYS
+ * in lib/marketPulse.ts (migration 0023); a literal so this file stays
+ * import-free. content/__tests__/disclosures.test.ts fails if they differ.
+ */
+export const PRICE_HIDDEN_AFTER_DAYS = 14;
+
 /** The one line under a data page's title (WP23 ProvenanceLine children). */
-export const PROVENANCE_SENTENCE = `TCGplayer Market Price in USD, updated daily. Prices older than ${PRICE_STALENESS_TOLERANCE_DAYS} days are hidden.`;
+export const PROVENANCE_SENTENCE = `TCGplayer Market Price in USD, updated daily. Prices older than ${PRICE_HIDDEN_AFTER_DAYS} days are hidden.`;
 ```
+
+Keep `PROVENANCE_SENTENCE` as the last statement: WP35 appends its email constants below it.
 
 When the owner answers D1 and D2 (Owner actions), set the three constants in this file and nowhere else.
 
@@ -908,7 +968,7 @@ const DEFINITIONS = [
   def({ key: "setTrend365", label: "Trend 1Y", unitLabel: "% per day", window: `${V.trendLongDays} days`, short: `Least-squares slope of daily prices over ${V.trendLongDays} days, as a percent of the mean price, averaged.`, anchor: "trend" }),
   def({ key: "setPricePerDay", label: "Price/Day", unitLabel: "USD per day", window: null, short: "Mean across the set's products of Market Price divided by days since release.", anchor: "price-per-day" }),
   def({ key: "setMomentum", label: "Momentum", unitLabel: "%", window: "30D, 90D, 1Y", short: `Weighted mean return: 90D x ${MOMENTUM_WEIGHTS.avg90}, 30D x ${MOMENTUM_WEIGHTS.avg30}, 1Y x ${MOMENTUM_WEIGHTS.avg365}.`, anchor: "momentum" }),
-  def({ key: "compositeScore", label: "Composite score", unitLabel: "percentile", window: "30D to 1Y", short: "Percentile of a weighted z-score blend of returns, consistency and trend, less volatility and drawdown.", anchor: "composite-score" }),
+  def({ key: "compositeScore", label: "Composite score", unitLabel: "percentile of ranked sets", window: "30D to 1Y", short: "Top or Bottom N% of ranked sets on a weighted z-score blend of returns, consistency, trend and risk.", anchor: "composite-score" }),
 ] as const;
 
 export type MetricKey = (typeof DEFINITIONS)[number]["key"];
@@ -966,7 +1026,7 @@ export default function MetricLabel({ metric, hideLink = false, className = "" }
         prefetch={false}
         title={definition.short}
         aria-label={`How ${definition.label} is calculated`}
-        className="group inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-control focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-action"
+        className="group inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-control focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-action"
       >
         <span
           aria-hidden="true"
@@ -1008,7 +1068,7 @@ export default function ReportLink({ children, className = "", ...params }: Repo
       href={buildContactHref(params)}
       prefetch={false}
       rel="nofollow"
-      className={`rounded-control text-small font-medium text-action underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-action pointer-coarse:inline-flex pointer-coarse:min-h-11 pointer-coarse:items-center ${className}`}
+      className={`rounded-control text-small font-medium text-action underline-offset-2 hover:underline focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-action pointer-coarse:inline-flex pointer-coarse:min-h-11 pointer-coarse:items-center ${className}`}
     >
       {children ?? DEFAULT_TEXT[params.topic]}
     </Link>
@@ -1041,7 +1101,7 @@ export default function DecisionNote({ anchor, className = "" }: DecisionNotePro
       <Link
         href={`/methodology#${anchor}`}
         prefetch={false}
-        className="font-medium text-action underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-action"
+        className="font-medium text-action underline-offset-2 hover:underline focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-action"
       >
         How we calculate this
       </Link>
@@ -1166,13 +1226,7 @@ export { serializeJsonLd } from "../../lib/jsonLd";
 
 WP13's `productMeta.test.ts` imports `serializeJsonLd` from `../productMeta` and must pass unchanged.
 
-7c. Same file, `buildProductMetadata`: the description says "Live price", which the new conventions rule bans. Replace it with:
-
-```ts
-    description: `Daily TCGplayer Market Price, returns, volatility and price history for ${setName} ${label}. Prices in USD and CAD.`,
-```
-
-If a test asserts the old description (`grep -rn "Live price" app`), update it.
+7c. Same file, `buildProductMetadata`: WP13 already writes "Daily TCGplayer Market Price, returns, volatility and price history for ..." and deliberately omits "Prices in USD and CAD." (the product page shows USD only until WP31). Change nothing. Check: `grep -rn "Live price\|live price" app --include=*.ts --include=*.tsx` prints nothing; if it prints the old product description (WP13 deviated), replace that string with WP13's wording above, not with a CAD claim.
 
 ### Step 8. Footer: server component with a client gate
 
@@ -1222,12 +1276,12 @@ const TRUST_LINKS = [
 // function PokeballGlyph(...) { ... }  keep verbatim
 
 const LINK_CLASS =
-  "text-sm text-ink-soft transition-colors hover:text-action focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-action rounded-control";
+  "text-sm text-ink-soft hover:text-action focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-action rounded-control";
 
 function LinkColumn({ title, links }: { title: string; links: ReadonlyArray<{ href: string; label: string }> }) {
   return (
     <div>
-      <h3 className="mb-3 text-caption font-semibold uppercase tracking-[0.18em] text-ink-soft">{title}</h3>
+      <h2 className="mb-3 text-caption font-semibold uppercase tracking-[0.18em] text-ink-soft">{title}</h2>
       <ul className="space-y-2">
         {links.map((link) => (
           <li key={link.href}>
@@ -1241,8 +1295,17 @@ function LinkColumn({ title, links }: { title: string; links: ReadonlyArray<{ hr
   );
 }
 
+/**
+ * The copyright year. A module function, so the component body makes no
+ * clock call (react-hooks/purity, WP23 rule). Static and ISR pages bake it
+ * at render; the daily backstop moves it on New Year's Day.
+ */
+function copyrightYear(): number {
+  return new Date().getUTCFullYear();
+}
+
 export default function Footer() {
-  const year = new Date().getFullYear();
+  const year = copyrightYear();
   return (
     <FooterGate>
       <footer className="mt-8 border-t border-line bg-surface">
@@ -1265,7 +1328,7 @@ export default function Footer() {
                 href={STORE_URL}
                 target="_blank"
                 rel={DISCLOSURE.storeLinkRel}
-                className="mt-2 inline-block text-sm font-semibold text-action hover:text-action-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-action rounded-control"
+                className="mt-2 inline-block text-sm font-semibold text-action hover:text-action-strong focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-action rounded-control"
               >
                 Shop at {STORE_NAME}
                 {DISCLOSURE.storeLinkSuffix} →
@@ -1299,12 +1362,13 @@ export default function Footer() {
 }
 ```
 
-The store link is a plain `<a>` (external). `app/layout.tsx` keeps `<Footer />` where it is; nothing changes there.
+The store link is a plain `<a>` (external). `app/layout.tsx` keeps `<Footer />` where it is; nothing changes there (a server component rendered as a child of WP04's client `AuthProvider` is allowed: the layout, a server component, creates it). Column headings are `h2`, not `h3`: the page's `h1` is followed by `h2` sections, so the footer headings do not skip a level. WP11's check still holds: `grep -c "prefetch={false}" app/components/Footer.tsx` equals `grep -c "<Link" app/components/Footer.tsx` (3 each).
 
 ### Step 9. `app/components/CardRinkPromo.tsx`: the disclosure next to the promotion
 
-- Replace the local `const STORE_URL = "https://cardrinktcg.ca";` with `import { DISCLOSURE, STORE_URL } from "../content/disclosures";`.
-- `<aside aria-label="Partner store" ...>` becomes `<aside aria-label={DISCLOSURE.promoLabel} ...>`, and the visible label text `Partner store` becomes `{DISCLOSURE.promoLabel}`.
+WP15's version already imports `PROMO_RELATIONSHIP_LABEL`, `STORE_NAME` and `STORE_URL` from `../content/disclosures` and uses `aria-label={PROMO_RELATIONSHIP_LABEL}` plus `{PROMO_RELATIONSHIP_LABEL}` as the visible label. Keep both exactly (WP15's conventions test matches `aria-label=\{PROMO_RELATIONSHIP_LABEL\}`); the label now follows D1 because step 2 derives the constant from `DISCLOSURE`.
+
+- Add `DISCLOSURE` to the existing `../content/disclosures` import.
 - Directly after the `<p>` that says "Visit CardRinkTCG.ca for Pokémon sealed products, singles, and graded slabs.", add:
 
 ```tsx
@@ -1313,10 +1377,9 @@ The store link is a plain `<a>` (external). `app/layout.tsx` keeps `<Footer />` 
             )}
 ```
 
-- The store `<Link>`: `rel="noopener noreferrer"` becomes `rel={DISCLOSURE.storeLinkRel}`.
-- Update the doc comment's "An <aside> labelled 'Partner store'" to "An <aside> labelled with the D1 relationship (content/disclosures.ts)".
+- The store `<Link>`: its `rel` (`"noopener noreferrer"`, or `"sponsored noopener noreferrer"` if WP15 had a "paid" answer) becomes `rel={DISCLOSURE.storeLinkRel}`.
 
-Change nothing else (placement rules, categories, CTA styling are WP15's and WP27's).
+Change nothing else (placement rules, categories, CTA styling are WP15's and WP27's). Check: `grep -c "PROMO_RELATIONSHIP_LABEL" app/components/CardRinkPromo.tsx` prints 3 (import, `aria-label`, visible label).
 
 ### Step 10. `/methodology`
 
@@ -1366,6 +1429,7 @@ import {
   COMPOSITE_WEIGHT_LABELS,
   MOMENTUM_WEIGHTS,
   SET_METRIC_WINDOWS,
+  SQL_RETURN_ANCHOR_TOLERANCE_DAYS,
   type CompositeWeightKey,
 } from "../lib/setAnalytics";
 
@@ -1374,6 +1438,8 @@ export interface MethodologyCurrentValues {
   pricedRecently: number;
   /** YYYY-MM-DD of the newest price_recorded_at, or null. */
   latestPriceDate: string | null;
+  /** True when latestPriceDate is at least WP23's STALE_AFTER_DAYS old (computed by the page). */
+  latestPriceStale: boolean;
   fxRate: number | null;
   /** YYYY-MM-DD of the Bank of Canada rate, or null when the read failed. */
   fxDate: string | null;
@@ -1381,7 +1447,7 @@ export interface MethodologyCurrentValues {
 }
 
 const LINK =
-  "font-medium text-action underline underline-offset-2 hover:text-action-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-action";
+  "font-medium text-action underline underline-offset-2 hover:text-action-strong focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-action";
 const TH = "border-b border-line py-2 pr-4 text-left text-small font-semibold text-ink-soft";
 const TD = "border-b border-line py-2 pr-4 align-top text-body tabular-nums";
 
@@ -1415,7 +1481,7 @@ function Toc() {
         <li key={s.anchor}>
           <a
             href={`#${s.anchor}`}
-            className="block rounded-control py-1 text-ink-soft hover:text-action focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-action pointer-coarse:min-h-11"
+            className="block rounded-control py-1 text-ink-soft hover:text-action focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-action pointer-coarse:min-h-11"
           >
             {s.title}
           </a>
@@ -1434,6 +1500,12 @@ const PULSE_RULES: ReadonlyArray<{ signal: PulseSignal; price: "up" | "down"; vo
 
 const rule = (direction: "up" | "down", threshold: number) =>
   direction === "up" ? `+${threshold}% or more` : `-${threshold}% or less`;
+
+/** Third column of the returns table (WP10's 0028 anchor bounds). */
+function oldestLookback(label: string, days: number): string {
+  const tolerance = (SQL_RETURN_ANCHOR_TOLERANCE_DAYS as Readonly<Record<string, number | undefined>>)[label];
+  return tolerance === undefined ? "Newest price before today, any age" : `${days + tolerance} days ago`;
+}
 
 export default function MethodologyArticle({ current }: { current: MethodologyCurrentValues }) {
   const below = Math.abs(PACK_VALUE_BANDS.belowMaxPercent);
@@ -1475,7 +1547,11 @@ export default function MethodologyArticle({ current }: { current: MethodologyCu
               <Stat
                 label="Newest price"
                 value={formatDateOnly(current.latestPriceDate, "--")}
-                asOf={current.latestPriceDate ? <AsOf date={current.latestPriceDate} variant="table" /> : undefined}
+                asOf={
+                  current.latestPriceStale && current.latestPriceDate ? (
+                    <AsOf date={current.latestPriceDate} variant="inline" />
+                  ) : undefined
+                }
               />
               <Stat
                 label="USD to CAD"
@@ -1551,11 +1627,11 @@ export default function MethodologyArticle({ current }: { current: MethodologyCu
           <Section id="plausibility">
             <p>
               Every new price is checked before it is stored. A value that is not a positive number, or that is $
-              {formatInteger(PRICE_ABSOLUTE_MAX_USD)} USD or more, is rejected. A price that is{" "}
-              {PRICE_LARGE_DELTA_RATIO} times or more above or below the stored price is held, and published only
-              if a later run within {PRICE_PENDING_MAX_AGE_HOURS} hours sees it again within{" "}
-              {pct(Math.round(PRICE_CONFIRM_TOLERANCE * 100))}. A wrong stored price can always be corrected this
-              way.
+              {formatInteger(PRICE_ABSOLUTE_MAX_USD)} USD or more, is rejected. A price at least{" "}
+              {PRICE_LARGE_DELTA_RATIO} times the stored price, or at most 1/{PRICE_LARGE_DELTA_RATIO} of it, is
+              held, and published only if a later run within {PRICE_PENDING_MAX_AGE_HOURS} hours sees it again
+              within {pct(Math.round(PRICE_CONFIRM_TOLERANCE * 100))}. A held price is never shown, and a real jump
+              is published one run later, so a wrong stored price can always be corrected this way.
             </p>
           </Section>
 
@@ -1578,20 +1654,28 @@ export default function MethodologyArticle({ current }: { current: MethodologyCu
             </p>
             <table className="w-full border-collapse">
               <thead>
-                <tr><th className={TH}>Label</th><th className={TH}>Lookback</th></tr>
+                <tr>
+                  <th className={TH}>Label</th>
+                  <th className={TH}>Lookback</th>
+                  <th className={TH}>Oldest lookback price used</th>
+                </tr>
               </thead>
               <tbody>
                 {Object.entries(RETURN_WINDOW_DAYS).map(([label, days]) => (
                   <tr key={label} data-window={label}>
                     <td className={TD}>{label}</td>
                     <td className={TD}>{days} {days === 1 ? "day" : "days"}</td>
+                    <td className={TD}>{oldestLookback(label, days)}</td>
                   </tr>
                 ))}
               </tbody>
             </table>
             <p>
-              The lookback price has no maximum age: a product with a gap in its history can report a return
-              measured over a longer span than its label. Returns are withheld with the price.
+              Returns are computed in the database, which uses the lookback price only if it is no older than the
+              last column; otherwise the return shows <code>--</code> rather than a return measured over a longer
+              span than its label. The catalog cards and the Market table fill a missing return from the price
+              history they have already loaded, and that fallback has no age limit, so there a product with a gap
+              in its history can still show one. Returns are withheld with the price.
             </p>
             <Sub id="set-averages">
               <p>
@@ -1657,8 +1741,8 @@ export default function MethodologyArticle({ current }: { current: MethodologyCu
 
           <Section id="drawdown">
             <p>
-              Max drawdown is the largest fall from a prior peak to a later low in the daily prices, shown as a
-              positive percent. Product pages measure it over the last year of recorded history; Set Analytics
+              Max drawdown is the largest fall from a prior peak to a later low in the daily prices, as a percent
+              of that peak. Product pages measure it over the last year of recorded history; Set Analytics
               averages each product&apos;s drawdown over the last {SET_METRIC_WINDOWS.drawdownDays} days. It stays
               visible when a price is withheld because it describes recorded history.
             </p>
@@ -1667,7 +1751,8 @@ export default function MethodologyArticle({ current }: { current: MethodologyCu
           <Section id="trend">
             <p>
               Trend is the slope of a least-squares line through the daily prices, divided by the mean price and
-              expressed in percent per day. Set Analytics reports it over {SET_METRIC_WINDOWS.trendShortDays} and{" "}
+              expressed in percent per recorded day (a day with no price is skipped, not counted). Set Analytics
+              reports it over {SET_METRIC_WINDOWS.trendShortDays} and{" "}
               {SET_METRIC_WINDOWS.trendLongDays} days, averaged across a set&apos;s products.
             </p>
           </Section>
@@ -1733,16 +1818,21 @@ export default function MethodologyArticle({ current }: { current: MethodologyCu
               </tbody>
             </table>
             <p>
-              Pokéfin shows the composite as a percentile of ranked sets: Top N% = rank ÷ ranked sets × 100,
-              rounded up, at least 1%. &quot;Top 12%&quot; means the set ranks in the best 12%. The raw weighted
-              sum is in the cell&apos;s tooltip. The score describes past prices; it is not a recommendation.
+              Pokéfin shows the composite as the set&apos;s position among ranked sets. In the better half it reads
+              Top N%, with N = rank ÷ ranked sets × 100, rounded up, at least 1: &quot;Top 12%&quot; means the set
+              ranks in the best 12%. In the rest it reads Bottom N%, with N = (ranked sets - rank + 1) ÷ ranked
+              sets × 100, rounded up: the last set is in the bottom few percent, never &quot;Top 100%&quot;. The raw
+              weighted sum is in the cell&apos;s tooltip. The score describes past prices; it is not a
+              recommendation.
             </p>
           </Section>
 
           <Section id="box-nav">
             <p>
               Box NAV (net asset value) is the sum of the Market Prices of the packs in a box, plus the value you
-              give any promo cards. Premium = (box price - NAV) ÷ NAV. The calculator says where a box price sits:
+              give any promo cards. Each pack is priced at its set&apos;s standard booster pack (the cheapest
+              variant only when the set has no standard pack). Premium = (box price - NAV) ÷ NAV. The calculator
+              says where a box price sits:
             </p>
             <table className="w-full border-collapse">
               <thead>
@@ -1831,7 +1921,11 @@ export default function MethodologyArticle({ current }: { current: MethodologyCu
 }
 ```
 
-Notes: `PulseSignal` is already exported by `marketPulse.ts`. If `formatDateOnly`'s second parameter is not a fallback string in your `format.ts`, pass `"--"` the way the file's signature allows (WP07 defines `formatDateOnly(value, fallback = "Unknown")`). The `$` before `{formatInteger(PRICE_ABSOLUTE_MAX_USD)}` is literal text: keep it on the same line as the expression so JSX renders "$500,000 USD" without a space (reformat the paragraph if Prettier splits it).
+Notes: `PulseSignal` is already exported by `marketPulse.ts`. If `formatDateOnly`'s second parameter is not a fallback string in your `format.ts`, pass `"--"` the way the file's signature allows (WP07 defines `formatDateOnly(value, fallback = "Unknown")`). The `$` before `{formatInteger(PRICE_ABSOLUTE_MAX_USD)}` is literal text; JSX drops whitespace that contains a line break, so it renders "$500,000 USD" without a space whether or not Prettier puts the expression on the next line. Never insert `{" "}` between them.
+
+`#returns`: if Before you start's WP10 check printed 0 (anchor bounds rolled back), drop the third table column and `oldestLookback`, and use this paragraph instead: "The lookback price has no maximum age: a product with a gap in its history can report a return measured over a longer span than its label. Returns are withheld with the price." WP25 step 14c replaces this table and the paragraph under it (it calls that paragraph "the paragraph that begins 'The lookback price has no maximum age'"; with the bounds in place it is the paragraph beginning "Returns are computed in the database"), and its test then asserts its own third column.
+
+`AsOf variant="inline"` is rendered only when the page says the newest price is stale, so a fresh date is not printed twice; `AsOf` repeats the age check itself and prints "Last priced Sep 25" with the clock icon.
 
 10b. New `app/methodology/page.tsx`:
 
@@ -1843,6 +1937,7 @@ import {
   METHODOLOGY_FIRST_PUBLISHED,
   METHODOLOGY_VERSION,
 } from "../content/methodology";
+import { daysBetween, STALE_AFTER_DAYS } from "../components/ui/AsOf";
 import { recordedAtDateKey } from "../lib/format";
 import { buildArticleJsonLd, buildBreadcrumbJsonLd, serializeJsonLd } from "../lib/jsonLd";
 import { hasCurrentPrice } from "../lib/priceGuard";
@@ -1874,10 +1969,16 @@ async function loadCurrentValues(): Promise<MethodologyCurrentValues> {
     byType.set(label, (byType.get(label) ?? 0) + 1);
   }
 
+  // A plain async function, not a component, so reading the clock here keeps
+  // render pure (react-hooks/purity). ISR: the flag can lag by up to a day,
+  // the printed date never does.
+  const todayKey = new Date().toISOString().slice(0, 10);
+
   return {
     productsTracked: products.length,
     pricedRecently: products.filter((product) => hasCurrentPrice(product)).length,
     latestPriceDate: latest,
+    latestPriceStale: latest !== null && daysBetween(latest, todayKey) >= STALE_AFTER_DAYS,
     fxRate: fx.date === null ? null : fx.rate,
     fxDate: fx.date === null ? null : recordedAtDateKey(fx.date),
     byType: [...byType.entries()]
@@ -1917,7 +2018,7 @@ If `hasCurrentPrice` or `recordedAtDateKey` has a different signature in the cur
 import type { ReactNode } from "react";
 
 export const DOC_LINK =
-  "font-medium text-action underline underline-offset-2 hover:text-action-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-action";
+  "font-medium text-action underline underline-offset-2 hover:text-action-strong focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-action";
 
 /** Prose page for /about, /terms and /privacy: one 720 px column, WP23 type scale. */
 export default function DocPage({
@@ -1977,7 +2078,8 @@ export const metadata: Metadata = {
 function operatorSentence(): string {
   const place = [OPERATOR.city, OPERATOR.province].filter(Boolean).join(", ");
   if (OPERATOR.name) return `Pokéfin is built and run by ${OPERATOR.name}${place ? `, ${place}` : ""}.`;
-  return `Pokéfin is a one-person project run from ${place || "Canada"}.`;
+  // D2 open: claim only what the current privacy page already states.
+  return `Pokéfin is an independent, personal project run from ${place || "Canada"}.`;
 }
 
 export default async function AboutPage() {
@@ -1995,14 +2097,15 @@ export default async function AboutPage() {
         <DocSection id="what" title="What Pokéfin is">
           <p>
             Pokéfin tracks daily TCGplayer Market Prices, returns and supply for {formatInteger(products.length)}{" "}
-            sealed Pokémon TCG products, in US and Canadian dollars. It is free and has no paid tier.
+            sealed Pokémon TCG products, in US and Canadian dollars, for collectors who buy, hold and sell
+            sealed product.
           </p>
         </DocSection>
         <DocSection id="who" title="Who runs it">
           <p>{operatorSentence()}</p>
         </DocSection>
         <DocSection id="disclosures" title="How Pokéfin makes money">
-          <p>Pokéfin is free. It has no ads, no paid tier and sells no data.</p>
+          <p>{DISCLOSURE.revenueSentence}</p>
           <p>
             {DISCLOSURE.relationshipSentence ??
               `Pokéfin shows one link per page to ${STORE_NAME}, a Canadian card shop.`}{" "}
@@ -2105,7 +2208,10 @@ export default function TermsPage() {
       </DocSection>
       <DocSection id="acceptable-use" title="Acceptable use">
         <ul className="ml-5 list-disc space-y-1">
-          <li>Do not scrape, crawl or download the site or its data in bulk, or resell it.</li>
+          <li>
+            Do not scrape or download the site or its data in bulk, or resell it. Search engines indexing public
+            pages under <code>robots.txt</code> are welcome.
+          </li>
           <li>Do not try to break, overload or get around the site&apos;s security or rate limits.</li>
           <li>Do not use another person&apos;s account.</li>
         </ul>
@@ -2292,7 +2398,7 @@ async function findProductName(id: number): Promise<string | null> {
 }
 
 const ROW =
-  "flex min-h-14 items-center justify-between gap-3 border-b border-line py-3 text-body text-ink hover:text-action focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-action";
+  "flex min-h-14 items-center justify-between gap-3 border-b border-line py-3 text-body text-ink hover:text-action focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-action";
 
 export default async function ContactPage({
   searchParams,
@@ -2398,7 +2504,7 @@ export default function PrivacyPage() {
     <DocPage title="Privacy policy" updated={`Last updated ${formatDateOnly(LAST_UPDATED)}`}>
       <DocSection id="who" title="Who is responsible">
         <p>
-          Pokéfin is a one-person project run from Canada. The person responsible for your personal information
+          Pokéfin is an independent, personal project run from Canada. The person responsible for your personal information
           is {controller}. Pokéfin handles personal information under Canada&apos;s Personal Information Protection
           and Electronic Documents Act (PIPEDA). Visitors in the EU and UK also have the rights listed below under
           the GDPR and UK GDPR. Contact: {privacyMail}.
@@ -2495,6 +2601,8 @@ import { METRIC_DEFINITIONS, type MetricKey } from "../lib/metricDefinitions";
 import { compositeTopPercent, formatCompositePercentile } from "../lib/setAnalytics";
 ```
 
+Skip any of these lines the file already has (an earlier package may have imported `Link` or `ProvenanceLine`); a duplicate import fails `tsc`.
+
 16b. The column list of the "All Set Metrics" table, in table order (the definitions list reads it):
 
 ```tsx
@@ -2580,7 +2688,7 @@ function CompositeCell({
 
 Both `<ScoreCell value={set.investScore} />` become `<CompositeCell rank={set.rank} score={set.investScore} rankedCount={rankedCount} />`. The cell is neutral ink (a rank is not a gain or a loss).
 
-16f. Directly after the `<div className="overflow-x-auto">...</div>` of the "Top Sets by Composite Score" section (before `</section>`), add `<DecisionNote anchor="composite-score" className="border-t border-line px-4 py-3" />`. In the "All Set Metrics" section, change the subtitle "Composite score is z-score weighted with drawdown and volatility penalties." to "Composite score is a percentile of a weighted z-score blend; see the methodology." (keep the first sentence as it is).
+16f. Directly after the `<div className="overflow-x-auto">...</div>` of the "Top Sets by Composite Score" section (before `</section>`), add `<DecisionNote anchor="composite-score" className="border-t border-line px-4 py-3" />`. In the "All Set Metrics" section, change the subtitle "Composite score is z-score weighted with drawdown and volatility penalties." to "Composite score is a set's position (Top or Bottom N%) on a weighted z-score blend; see the methodology." (keep the first sentence as it is).
 
 16g. Under the page's `<h1>` block (after the "Deep set analytics..." paragraph), add:
 
@@ -2737,19 +2845,19 @@ List them:
 
 ```bash
 cd /home/user/Pokefin/frontend
-grep -rn -e $'\xe2\x80\x94' -e '&mdash;' app --include=*.tsx
+grep -rn -e $'\xe2\x80\x94' -e '&mdash;' -e '&#8212;' -e '\\u2014' app --include=*.tsx
 ```
 
-Fix every hit by these rules, then re-run the command (expect no output):
+The last pattern finds the escape written as text (`const MISSING = "\u2014";` in WP18's `app/compare/compareColumns.tsx`), which renders an em dash but contains no em dash byte. Fix every hit by these rules, then re-run the command (expect no output):
 
 1. Comments (`//`, `/* */`, `{/* */}`, JSDoc): replace a spaced em dash with ", " (or ": " where it introduces an explanation). Wording otherwise unchanged.
-2. An em dash on its own used as a missing-value placeholder (for example the compare formatters that return a one-character em dash string, and the two `<td>` cells in the box calculator breakdown that contain only an em dash): replace it with `"--"`, the site's missing-value convention.
+2. An em dash on its own used as a missing-value placeholder (for example WP18's `MISSING` constant in `compare/compareColumns.tsx`, which becomes `const MISSING = "--";` with its comment changed to "missing values render as --", and the two `<td>` cells in the box calculator breakdown that contain only an em dash): replace it with `"--"`, the site's missing-value convention.
 3. UI copy: rewrite with a colon, comma or period. Known strings at review time: the box calculator pack option label, which joins the set name and "{price}/pack" (or "No price") with a spaced em dash, uses " · " instead; "NAV unavailable" followed by a spaced em dash and "no current price for X" becomes "NAV unavailable: no current price for X"; in `AllocationChartImpl` "excluded", em dash, "no ..." becomes "excluded: no ..."; in `PortfolioChartImpl` "priced", em dash becomes "priced:" and "portfolio", em dash, "hover" becomes "portfolio. Hover"; in `app/page.tsx` "products", em dash, "updated daily" becomes "products, updated daily".
 
 Then update tests that assert a rewritten string or the em dash placeholder:
 
 ```bash
-grep -rn $'\xe2\x80\x94' app --include=*.test.ts --include=*.test.tsx
+grep -rn -e $'\xe2\x80\x94' -e '\\u2014' app --include=*.test.ts --include=*.test.tsx
 ```
 
 Change each asserted string to the new text. Do not change assertions for strings you did not rewrite.
@@ -2799,18 +2907,24 @@ describe("trust copy (WP24)", () => {
 
   it("uses no em dashes in TSX", () => {
     const found = TSX_SOURCES.flatMap((s) =>
-      [...s.text.matchAll(/\u2014|&mdash;/g)].map((m) => `${s.file}: ${m[0]}`)
+      [...s.text.matchAll(/\u2014|&mdash;|&#8212;|\\u2014/g)].map((m) => `${s.file}: ${m[0]}`)
     );
     expect(found).toEqual([]);
   });
 
-  it("keeps the trust pages server-only and token-only", () => {
+  it("keeps the trust pages server-only and token-only, with forced-colours focus and instant colour", () => {
     for (const file of TRUST_FILES) {
       const source = SOURCES.find((s) => s.file === file);
       expect(source).toBeDefined();
       expect(source!.text).not.toMatch(/^\s*["']use client["']/m);
       expect([...source!.text.matchAll(RAW_PALETTE_RE)].map((m) => `${file}: ${m[0]}`)).toEqual([]);
+      expect(source!.text).not.toMatch(/\boutline-none\b|\btransition-(?:colors|all)\b/);
     }
+  });
+
+  it("keeps content/disclosures.ts import-free (client components import it)", () => {
+    const disclosures = SOURCES.find((s) => s.file === "content/disclosures.ts")!.text;
+    expect(disclosures).not.toMatch(/^\s*import\b/m);
   });
 });
 ```
@@ -2890,7 +3004,12 @@ Fill the limits with the perf build (Verification step 6 runs `pnpm perf:budget 
 - **Do not write banned phrases in comments** ("live price", "real-time", "all-time high", "Invest Score", "TCGPlayer"): the conventions scan reads comments too. Likewise `alert(` and `confirm(` (WP15).
 - **Do not raise `uiConventions.baseline.json`.** Counts may only go down.
 - **Do not edit the Python pipeline, the weekly PDF or any migration** in this package. The weekly report's disclaimer and self-description are a separate follow-up (`01-PRODUCT-DIRECTION.md` §9 item 4); list it in the PR.
-- **Do not fix WP13's product `Offer` JSON-LD here** (`research/trust-seo-brand.md` §3 recommends `AggregateOffer`); WP31 owns the product page's structured data. List it in the PR.
+- **Do not redeclare `DAYS_PER_YEAR`, `PRODUCT_VOLATILITY_LOOKBACK_POINTS` or any other WP18 constant** in `marketMath.ts`; WP18 exports them. Step 1a only swaps two call-site literals.
+- **Do not rename or stop exporting `PROMO_RELATIONSHIP_LABEL`, `STORE_NAME` or `STORE_URL`**, and keep `aria-label={PROMO_RELATIONSHIP_LABEL}` in `CardRinkPromo.tsx`: WP15's conventions test imports the first and matches the attribute text.
+- **Do not add an import to `app/content/disclosures.ts`.** Client components import it; tie numbers to their source with a test instead (`PRICE_HIDDEN_AFTER_DAYS`).
+- **Do not claim "no ads" or "sells no placements" in disclosure copy.** With D1 open the promo may be paid, and with D1 = paid it is a paid placement; `revenueSentence` and `INDEPENDENCE_POLICY` are worded to stay true in every scenario.
+- **Do not describe returns as unbounded.** WP10's 0028 bounds the lookback price; only the catalog cards' and Market table's client fallback is unbounded, and `/methodology#returns` says exactly that.
+- **Do not change the product page's structured data or meta description here.** WP13 already ships `AggregateOffer` from a fresh listings snapshot and "Daily TCGplayer Market Price"; WP31 owns the product page.
 
 ## Tests
 
@@ -2997,24 +3116,36 @@ import fs from "node:fs";
 import path from "node:path";
 import { PRICE_STALENESS_TOLERANCE_DAYS } from "../marketPulse";
 import * as pipeline from "../pipelineConstants";
-import { COMPOSITE_SCORE_WEIGHTS, MOMENTUM_WEIGHTS, SET_METRIC_WINDOWS } from "../setAnalytics";
+import { RETURN_WINDOW_DAYS } from "../marketMath";
+import {
+  COMPOSITE_SCORE_WEIGHTS,
+  MOMENTUM_WEIGHTS,
+  SET_METRIC_WINDOWS,
+  SQL_RETURN_ANCHOR_TOLERANCE_DAYS,
+} from "../setAnalytics";
 
 const ROOT = path.resolve(__dirname, "../../../..");
 const MIGRATIONS = path.join(ROOT, "migrations");
 const MAIN_PY = fs.readFileSync(path.join(ROOT, "main.py"), "utf8");
 
-/** Text of the highest-numbered NNNN_*.sql file that defines `fn`. */
+/**
+ * Text of the highest-numbered NNNN_*.sql file that CREATEs `fn`. Only a
+ * CREATE counts: later files that merely ALTER, GRANT or REVOKE the function
+ * (0007, 0009, WP21's 0031/0032) contain no body and must not be picked.
+ * 0000_baseline.sql (WP21) sorts last, so it is only a fallback.
+ */
 function newestDefinition(fn: string): { file: string; sql: string } {
   const files = fs
     .readdirSync(MIGRATIONS)
     .filter((f) => /^\d{4}_.*\.sql$/.test(f))
     .sort()
     .reverse();
+  const createRe = new RegExp(`CREATE\\s+(?:OR\\s+REPLACE\\s+)?FUNCTION\\s+public\\.${fn}\\s*\\(`, "i");
   for (const file of files) {
     const sql = fs.readFileSync(path.join(MIGRATIONS, file), "utf8");
-    if (new RegExp(`FUNCTION\\s+public\\.${fn}\\s*\\(`, "i").test(sql)) return { file, sql };
+    if (createRe.test(sql)) return { file, sql };
   }
-  throw new Error(`no numbered migration defines ${fn}`);
+  throw new Error(`no numbered migration creates ${fn}`);
 }
 
 function pyNumber(re: RegExp): number {
@@ -3052,6 +3183,16 @@ describe("set analytics mirrors the SQL", () => {
     expect(metrics).toContain(`current_date - ${SET_METRIC_WINDOWS.volatilityDays}`);
     expect(metrics).toContain(`current_date - ${SET_METRIC_WINDOWS.drawdownDays}`);
   });
+
+  it("return anchor tolerances equal get_market_product_metrics (WP10 0028)", () => {
+    const { file: metricsFile, sql: metrics } = newestDefinition("get_market_product_metrics");
+    expect(metricsFile).not.toMatch(/^000[0-9]_/); // a real numbered definition, not the baseline
+    for (const [label, tolerance] of Object.entries(SQL_RETURN_ANCHOR_TOLERANCE_DAYS)) {
+      const days = RETURN_WINDOW_DAYS[label as keyof typeof RETURN_WINDOW_DAYS];
+      // e.g. 7D: "recorded_at < current_date - 6" and "recorded_at >= current_date - 14"
+      expect(metrics).toMatch(new RegExp(`recorded_at < current_date - ${days - 1}\\s+AND h\\.recorded_at >= current_date - ${days + tolerance}\\b`));
+    }
+  });
 });
 
 describe("pipeline constants mirror main.py", () => {
@@ -3080,7 +3221,12 @@ import { ALL_METRIC_DEFINITIONS } from "../../lib/metricDefinitions";
 import { DAYS_PER_YEAR, PRODUCT_VOLATILITY_LOOKBACK_POINTS, RETURN_WINDOW_DAYS } from "../../lib/marketMath";
 import { PRICE_STALENESS_TOLERANCE_DAYS, PRICE_THRESHOLD_PCT, VOLUME_THRESHOLD_PCT } from "../../lib/marketPulse";
 import { PRICE_LARGE_DELTA_RATIO, PRICE_PENDING_MAX_AGE_HOURS } from "../../lib/pipelineConstants";
-import { COMPOSITE_SCORE_WEIGHTS, MOMENTUM_WEIGHTS, SET_METRIC_WINDOWS } from "../../lib/setAnalytics";
+import {
+  COMPOSITE_SCORE_WEIGHTS,
+  MOMENTUM_WEIGHTS,
+  SET_METRIC_WINDOWS,
+  SQL_RETURN_ANCHOR_TOLERANCE_DAYS,
+} from "../../lib/setAnalytics";
 import { PACK_VALUE_BANDS, PACK_VALUE_LABELS } from "../../components/BoxCalculator/nav";
 import { axeViolations } from "@/test-utils/axe";
 
@@ -3090,6 +3236,7 @@ const CURRENT = {
   productsTracked: 306,
   pricedRecently: 301,
   latestPriceDate: "2026-09-29",
+  latestPriceStale: false,
   fxRate: 1.3612,
   fxDate: "2026-09-29",
   byType: [{ label: "Booster Box", count: 61 }],
@@ -3110,13 +3257,14 @@ Cases:
 - The provenance line contains `Version ${METHODOLOGY_VERSION}`.
 - `#composite-score`: for each key of `COMPOSITE_SCORE_WEIGHTS`, the row `tr[data-weight-key="<key>"]` contains `weight.toFixed(2)`.
 - `#momentum` text contains `90D × ${MOMENTUM_WEIGHTS.avg90}`, `30D × ${MOMENTUM_WEIGHTS.avg30}` and `1Y × ${MOMENTUM_WEIGHTS.avg365}`.
-- `#returns`: for each `[label, days]` of `RETURN_WINDOW_DAYS`, `tr[data-window="<label>"]` contains `String(days)`.
+- `#returns`: for each `[label, days]` of `RETURN_WINDOW_DAYS`, `tr[data-window="<label>"]` contains `String(days)`; for each `[label, tolerance]` of `SQL_RETURN_ANCHOR_TOLERANCE_DAYS` the same row contains `${RETURN_WINDOW_DAYS[label] + tolerance} days ago` (7D: "14 days ago", 1Y: "379 days ago"); `tr[data-window="1D"]` contains "any age".
 - `#volatility`: `tr[data-vol="product"]` contains `String(PRODUCT_VOLATILITY_LOOKBACK_POINTS)` and `√${DAYS_PER_YEAR}`; `tr[data-vol="set"]` contains `String(SET_METRIC_WINDOWS.volatilityDays)`; the section contains `Math.sqrt(DAYS_PER_YEAR).toFixed(1)`.
 - `#freshness` contains `${PRICE_STALENESS_TOLERANCE_DAYS} days`.
 - `#market-pulse`: `tr[data-signal="demand_surge"]` contains `+${PRICE_THRESHOLD_PCT}%` and `+${VOLUME_THRESHOLD_PCT}%`; `tr[data-signal="cooling"]` contains `-${PRICE_THRESHOLD_PCT}%` and `-${VOLUME_THRESHOLD_PCT}%`.
 - `#box-nav`: `tr[data-band="buy"]` contains `PACK_VALUE_LABELS.buy` and `-${Math.abs(PACK_VALUE_BANDS.belowMaxPercent)}%`; `tr[data-band="avoid"]` contains `+${PACK_VALUE_BANDS.nearMaxPercent}%`.
 - `#plausibility` contains `${PRICE_LARGE_DELTA_RATIO} times` and `${PRICE_PENDING_MAX_AGE_HOURS} hours`.
-- Current values: "306", "301", "Sep 29, 2026" and "1.3612" appear; with `fxRate: null, fxDate: null` the USD to CAD value is `--` and "Rate unavailable" is shown.
+- Current values: "306", "301", "Sep 29, 2026" and "1.3612" appear, and no "Last priced" text; with `fxRate: null, fxDate: null` the USD to CAD value is `--` and "Rate unavailable" is shown; with `latestPriceDate: "2026-09-25", latestPriceStale: true` a `time[datetime="2026-09-25"]` with visible text "Last priced Sep 25" is shown.
+- `#composite-score` text contains "Top" and "Bottom" and "never"; `#plausibility` contains `1/${PRICE_LARGE_DELTA_RATIO}`.
 - `#coverage` has a link whose `href` starts with `/contact?topic=missing_product`.
 - No text node contains an em dash (U+2014), "Invest Score" or "TCGPlayer".
 - `expect(await axeViolations(container)).toEqual([])` (run it with real timers: call `jest.useRealTimers()` first in that case).
@@ -3124,7 +3272,8 @@ Cases:
 ### 4. `app/lib/__tests__/setAnalytics.test.ts` (new)
 
 - `compositeTopPercent(1, 58)` is 2; `(6, 50)` is 12; `(50, 50)` is 100; `(1, 1000)` is 1 (floor of 1%); `(null, 10)`, `(0, 10)`, `(11, 10)`, `(1.5, 10)`, `(1, 0)` are null.
-- `formatCompositePercentile(6, 50)` is `"Top 12%"`; `(null, 50)` is `"--"`.
+- `formatCompositePercentile(6, 50)` is `"Top 12%"`; `(25, 50)` is `"Top 50%"`; `(26, 50)` is `"Bottom 50%"`; `(50, 50)` is `"Bottom 2%"`; `(58, 58)` is `"Bottom 2%"`; `(1, 2)` is `"Top 50%"`; `(2, 2)` is `"Bottom 50%"`; `(1, 1)` is `"Top 100%"`; `(null, 50)` and `(0, 50)` are `"--"`. No output ever reads `"Top 100%"` when `rankedCount > 1` (loop rank 1 to 60 over `rankedCount` 60).
+- `SQL_RETURN_ANCHOR_TOLERANCE_DAYS` keys are a subset of `Object.keys(RETURN_WINDOW_DAYS)` and exclude `"1D"`.
 - Weights sum check (documents the design, not a rule): the positive weights sum to 1.2 and the negative to -0.35 (`toBeCloseTo`).
 
 ### 5. `app/content/__tests__/disclosures.test.ts` (new, node)
@@ -3133,7 +3282,10 @@ Cases:
 - `"owned"`, `"paid"`, `"unpaid"`: labels "From the team behind Pokéfin", "Sponsored", "A shop we like"; each sentence contains "CardRinkTCG.ca" and "never affects"; only `"paid"` has `rel` containing `sponsored` and suffix " (sponsored)".
 - `inventorySentence(null, null)` contains "may hold"; `(true, "owned")` contains "holds inventory" and "sells many"; `(false, null)` contains "does not hold".
 - Every exported string (`FOOTER_DISCLAIMER`, `DECISION_NOTE`, both trademark notices, `PROVENANCE_SENTENCE`, `INDEPENDENCE_POLICY` lines, all three scenarios' copy) matches none of `/\u2014|TCGPlayer|\blive\b|real[- ]?time/i`, and none contains "recommend" except `DECISION_NOTE`'s "not recommendations".
-- `PROVENANCE_SENTENCE` contains `${PRICE_STALENESS_TOLERANCE_DAYS} days`.
+- `PRICE_HIDDEN_AFTER_DAYS` equals `PRICE_STALENESS_TOLERANCE_DAYS` (import it from `../../lib/marketPulse` in the test only), and `PROVENANCE_SENTENCE` contains `${PRICE_STALENESS_TOLERANCE_DAYS} days`.
+- `PROMO_RELATIONSHIP_LABEL` equals `DISCLOSURE.promoLabel`, and `DISCLOSURE` equals `disclosureCopy(STORE_RELATIONSHIP)`.
+- `revenueSentence`: `null` and every scenario start with "Pokéfin is free."; `null` does not contain "ads"; `"paid"` contains "CardRinkTCG.ca"; `"owned"` and `"unpaid"` contain "no third-party ads".
+- No `INDEPENDENCE_POLICY` line contains "sells no placements" (it would contradict a paid placement).
 
 ### 6. `app/lib/__tests__/contactLink.test.ts` and `app/contact/__tests__/mail.test.ts` (new, node)
 
@@ -3167,14 +3319,14 @@ Mock `../../lib/serverMarketData` (`getCachedMarketProductSummaries` resolving t
 ### 9. `app/components/__tests__/Footer.test.tsx` (new)
 
 Mock `next/navigation` (`usePathname`) and `next/link`.
-- Pathname `/prices`: renders a `contentinfo` landmark containing `FOOTER_DISCLAIMER`, `POKEMON_TRADEMARK_NOTICE`, `TCGPLAYER_TRADEMARK_NOTICE`; links to `/methodology`, `/about`, `/contact`, `/terms`, `/privacy`; the store link has `rel` equal to `DISCLOSURE.storeLinkRel`; the relationship sentence is present exactly when `DISCLOSURE.relationshipSentence` is not null; no text "TCGPlayer" or "hourly".
+- Pathname `/prices`: renders a `contentinfo` landmark containing `FOOTER_DISCLAIMER`, `POKEMON_TRADEMARK_NOTICE`, `TCGPLAYER_TRADEMARK_NOTICE`; links to `/methodology`, `/about`, `/contact`, `/terms`, `/privacy`; the store link has `rel` equal to `DISCLOSURE.storeLinkRel`; the relationship sentence is present exactly when `DISCLOSURE.relationshipSentence` is not null; no text "TCGPlayer" or "hourly"; the column headings are `h2` ("Explore", "Account", "Pokéfin"); every `next/link` link carries `data-prefetch="false"` (extend the preamble mock to render `data-prefetch={String(prefetch)}`; WP27 asserts the same attribute); the copyright line contains the current UTC year; `expect(await axeViolations(container)).toEqual([])`.
 - Pathname `/auth/login`: the container is empty.
 
 ### 10. `app/stats/__tests__/page.test.tsx` (new)
 
 Mock `../../lib/serverMarketData` (`getCachedSetAnalytics` resolving to three rows: ranks 1 and 2 with `investScore` 1.87 and -0.4, one with `rank: null, investScore: null`; fill the other numeric fields with small numbers or null) and `next/link`. `render(await StatsPage())`:
 - No text "Invest Score"; at least one header link to `/methodology#composite-score`.
-- The rank-1 row shows "Top 50%" with `title` containing "Composite z-score 1.87" and "rank 1 of 2"; the rank-2 row "Top 100%"; the unranked row "--".
+- The rank-1 row shows "Top 50%" with `title` containing "Composite z-score 1.87" and "rank 1 of 2"; the rank-2 row "Bottom 50%"; the unranked row "--"; no cell reads "Top 100%".
 - The decision note text and its link to `/methodology#composite-score` are present.
 - The provenance line contains "TCGplayer Market Price in USD".
 
@@ -3214,50 +3366,57 @@ pnpm test --ci                                       # full suite passes; suite 
 
 # 2. Static checks, each expected to print nothing
 grep -rn "TCGPlayer" app --include=*.ts --include=*.tsx
-grep -rn -e $'\xe2\x80\x94' -e '&mdash;' app --include=*.tsx
+grep -rn -e $'\xe2\x80\x94' -e '&mdash;' -e '&#8212;' -e '\\u2014' app --include=*.tsx | grep -v __tests__
 grep -rniE "invest score|live price|real-time|all-time high" app --include=*.ts --include=*.tsx | grep -v __tests__
 grep -rn "Good Deal\|Fair Price\|Overpriced" app --include=*.ts --include=*.tsx
 grep -rn "STAT_TOOLTIPS\|StatHeader\|<MetricTile label=" app --include=*.tsx
 grep -n "\* 0\.[0-9]" app/lib/serverMarketData.ts
-grep -ln '"use client"' app/methodology app/about app/terms app/contact app/privacy app/components/Footer.tsx \
-  app/components/ui/MetricLabel.tsx app/components/ui/ReportLink.tsx app/components/ui/DecisionNote.tsx -r
+grep -rn "outline-none" app/methodology app/about app/terms app/contact app/privacy app/components/Footer.tsx \
+  app/components/trust app/components/ui/MetricLabel.tsx app/components/ui/ReportLink.tsx app/components/ui/DecisionNote.tsx
+grep -rln '"use client"' app/methodology app/about app/terms app/contact app/privacy app/components/Footer.tsx \
+  app/components/trust app/components/ui/MetricLabel.tsx app/components/ui/ReportLink.tsx app/components/ui/DecisionNote.tsx
+grep -n "^import" app/content/disclosures.ts
 
-# 3. Stub build
+# 3. Stub build (empty catalog): proves the pages build without data
 pnpm build:stub                                      # "[build:stub] next build exited with 0"
-# Route table: /methodology, /about, /terms show as static or ISR (○ or ●, revalidate 1d where it applies);
-# /contact is dynamic (ƒ).
+# Route table: /methodology, /about, /terms, /privacy show as static or ISR (○, revalidate 1d where it
+# applies); /contact is dynamic (ƒ).
 
-# 4. Built HTML (paths are Next 16's server output; adjust if the stub build writes elsewhere)
-grep -c 'id="composite-score"' .next/server/app/methodology.html          # 1
-grep -c 'application/ld+json' .next/server/app/methodology.html           # 2
-grep -c '"@type":"Article"' .next/server/app/methodology.html             # 1
-grep -c 'application/ld+json' .next/server/app/about.html                 # 2
-grep -c 'Market data for information only' .next/server/app/privacy.html  # 1 (footer is server HTML)
-grep -o 'href="/methodology#[a-z-]*"' .next/server/app/analytics.html | sort -u | wc -l   # >= 10
-
-# 5. Sitemap and robots
-pnpm start &                                          # or the stub server WP00 documents
-curl -s localhost:3000/sitemap.xml | grep -c "/methodology\|/about\|/terms"   # 3
-curl -s localhost:3000/sitemap.xml | grep -c "/contact"                        # 0
-curl -s "localhost:3000/contact?topic=wrong_price&product=42&from=/product/42" | grep -c 'name="robots" content="noindex'   # 1
-curl -s "localhost:3000/contact?topic=wrong_price&from=//evil.com" | grep -c "evil.com"                                  # 0
-# stop the server
-
-# 6. Performance budgets (WP22)
+# 4. Perf build (WP22's realistic fixture: 306 products, 55 sets, FX row). Every check below runs on it,
+#    because the plain stub has no set analytics (/analytics shows its "unavailable" notice) and no FX row.
 SUPABASE_STUB_FIXTURE=perf pnpm build:stub
-node scripts/perf-serve.mjs &                         # note the PID
-pnpm perf:budget --write-limits                       # fills the four new routes' limits
+# Prerendered HTML is often one long line, so count matches with grep -o, not lines with grep -c.
+grep -o 'id="composite-score"' .next/server/app/methodology.html | wc -l               # 1
+grep -o 'data-window="1Y"' .next/server/app/methodology.html | wc -l                   # 1
+grep -o 'type="application/ld+json"' .next/server/app/methodology.html | wc -l         # 2
+grep -o '"@type":"Article"' .next/server/app/methodology.html | wc -l                  # 1
+grep -o 'type="application/ld+json"' .next/server/app/about.html | wc -l               # 2
+grep -o 'Market data for information only' .next/server/app/privacy.html | wc -l       # >= 1 (footer is server HTML)
+grep -o 'href="/methodology#[a-z-]*"' .next/server/app/analytics.html | sort -u | wc -l   # >= 10
+grep -oE '(Top|Bottom) [0-9]+%' .next/server/app/analytics.html | wc -l                # >= 1
+# If a path differs, list .next/server/app/*.html and use the route's file.
+
+# 5. Sitemap, robots and /contact, through WP22's front door (port 3100 proxies to next start)
+node scripts/perf-serve.mjs &                         # note the PID; wait for "ready"
+curl -s http://127.0.0.1:3100/sitemap.xml | grep -oE "/(methodology|about|terms)</loc>" | wc -l   # 3
+curl -s http://127.0.0.1:3100/sitemap.xml | grep -o "/contact" | wc -l                               # 0
+curl -s "http://127.0.0.1:3100/contact?topic=wrong_price&product=900001&from=/product/900001" | grep -c 'name="robots" content="noindex'   # 1
+curl -s "http://127.0.0.1:3100/contact?topic=wrong_price&product=900001&from=/product/900001" | grep -c 'mailto:reports@pokefin.ca'      # >= 1
+curl -s "http://127.0.0.1:3100/contact?topic=wrong_price&from=//evil.com" | grep -c "evil.com"                                          # 0
+
+# 6. Performance budgets (WP22), same server
+pnpm perf:budget --write-limits                       # fills the four new routes' limits only
 pnpm perf:budget | tee /tmp/wp24-budget-after.txt     # exit 0
 kill <PID>
 diff /tmp/wp24-budget-before.txt /tmp/wp24-budget-after.txt
 ```
 
-Expected in the budget comparison: every existing route within its limit; shared JS equal or lower (the footer copy left the client bundle); `/methodology`, `/about`, `/terms` and `/contact` `jsGzKb` within 0.3 kB of `/privacy` (no route-specific client JS); `/methodology` document under 30 kB br; CSS within 1 kB of before. Commit the updated `perf-budgets.json`.
+Expected in the budget comparison: shared JS lower (the footer's code and copy left the client bundle); `/methodology`, `/about`, `/terms` and `/contact` `jsGzKb` within 0.3 kB of `/privacy` (no route-specific client JS); `/methodology` document under 30 kB br; CSS within 1 kB of before; every existing route's `documentBrKb` up by at most 1.5 kB br (the footer tree now in the inline RSC payload) and `jsGzKb` equal or lower. If an existing route's `documentBrKb` fails only by that footer growth, raise that one limit by the measured delta and add `Perf budget raise: routes.<route>.documentBrKb footer server-rendered (WP24), shared JS down <n> kB` to the PR body (WP22's raise rule). Any other breach, or a growth above 1.5 kB br, is a bug in this PR: find the cause, do not raise. Commit the updated `perf-budgets.json`.
 
 Manual checks (`pnpm dev` against the stub, or the Vercel preview), at 390x844 and 1440x900:
 
 1. `/methodology`: current values box shows four figures; the "On this page" `<details>` is closed on the phone and the sticky list shows on desktop; clicking "Composite score" lands with the heading below the sticky header; tables fit at 390 px without horizontal page scroll; no em dash on the page.
-2. `/stats` (served at `/analytics`): every header has a "?" that opens `/methodology#<anchor>`; hovering shows the short definition; the composite column shows "Top N%" with the z-score in the tooltip; the decision note sits under the top table.
+2. `/stats` (served at `/analytics`): every header has a "?" that opens `/methodology#<anchor>`; hovering shows the short definition; the composite column shows "Top N%" in the upper half and "Bottom N%" below, with the z-score in the tooltip; the decision note sits under the top table.
 3. A product page: every tile label has a "?"; "Price look wrong? Report it" under the price opens `/contact` with the product named and the mailto button working (it opens the mail app with subject and body filled).
 4. `/box-calculator`: build a recipe; the result reads "Below pack value", "Near pack value" or "Above pack value" with the bands line and the decision note, on a neutral background.
 5. `/prices` with a search that matches nothing: "Missing a product? Tell us" appears under "Clear filters".
@@ -3269,39 +3428,39 @@ Manual checks (`pnpm dev` against the stub, or the Vercel preview), at 390x844 a
 
 Before merge (the PR stays in draft until these are answered in the PR thread; the executor then sets the constants in `app/content/disclosures.ts` and pushes):
 
-1. **D1**: which is true: A (you own or co-own CardRinkTCG.ca), B (it pays Pokéfin for the placement or a commission) or C (a personal connection, no payment)? And do you, or the store, hold inventory of products Pokéfin tracks (yes, no)? If you do not answer, the PR merges with the neutral fallback and this stays open.
-2. **D2**: the name or named pseudonym to show on `/about`, plus city and province. The province also sets the governing law in `/terms`.
-3. **D5**: confirm the renamed labels ("Composite score" as a percentile; "Below / Near / Above pack value").
-4. **Email forwarding** (free): make `hello@pokefin.ca`, `reports@pokefin.ca` and `privacy@pokefin.ca` deliver to your inbox (registrar forwarding, ImprovMX free tier, or Cloudflare Email Routing). Send one test email to each before merge; the contact page and the privacy policy point at them.
+1. **D1**: which is true: A (you own or co-own CardRinkTCG.ca), B (it pays Pokéfin for the placement or a commission) or C (a personal connection, no payment)? And do you, or the store, hold inventory of products Pokéfin tracks (yes, no)? If WP15 already recorded your answer, step 2 carries it over and you only confirm it. If you do not answer, the PR merges with the neutral fallback ("Partner store", no relationship sentence, no "no ads" claim, "may hold inventory") and this stays open.
+2. **D2**: the name or named pseudonym to show on `/about`, plus city and province. The province also sets the governing law in `/terms`. Default if unanswered: no name ("an independent, personal project run from Canada"), an `Organization` author in the JSON-LD, and the generic governing-law clause; the PR says D2 is open.
+3. **D5**: confirm the renamed labels ("Composite score" shown as Top or Bottom N% of ranked sets; "Below / Near / Above pack value"). Default if unanswered: ship the renames (they remove advice-sounding labels, `01-PRODUCT-DIRECTION.md` §6.2); the Rollback section reverts only the strings if you later reject them.
+4. **Email forwarding** (free): make `hello@pokefin.ca`, `reports@pokefin.ca` and `privacy@pokefin.ca` deliver to your inbox (registrar forwarding, ImprovMX free tier, or Cloudflare Email Routing). Send one test email to each before merge; the contact page and the privacy policy point at them. No default: the PR does not merge until all three deliver, because unanswered reports and privacy requests would bounce.
 
 After merge:
 
 5. Have `/terms` and `/privacy` read once by a Canadian lawyer (`research/trust-seo-brand.md` §8, §9).
-6. Check TCGplayer's "TCGplayer Market Price" help article and confirm the `#market-price` paragraph; if you want the article's exact description (recency weighting, outlier handling), ask for a follow-up that bumps the methodology to 1.1.
+6. Check TCGplayer's "TCGplayer Market Price" help article and confirm the `#market-price` paragraph; if you want the article's exact description (recency weighting, outlier handling), ask for a follow-up that bumps the methodology's minor version.
 7. Confirm `LISTINGS_HISTORY_START` with `SELECT min(snapshot_date) FROM public.product_listings_history;` in the Supabase SQL editor; if it differs from 2026-07-07, report the date for a one-line fix.
 8. Optional: in Google Search Console, request indexing for `/methodology` and `/about`.
 
 ## Acceptance criteria
 
 - [ ] `/methodology` exists, is server-rendered with no route-specific client JS, shows "Version 1.0" with an effective date and a change log, has every anchor listed in Design (21 sections and 5 sub-sections), a current values box, and `Article` plus `BreadcrumbList` JSON-LD through `serializeJsonLd`.
-- [ ] Every window, threshold and weight on `/methodology` is interpolated from an exported constant; `MethodologyArticle.test.tsx` and `methodologyConstants.test.ts` pass (composite and momentum weights equal the newest SQL definition, the 14-day gate and series windows match the SQL, the collector constants match `main.py`).
+- [ ] Every window, threshold and weight on `/methodology` is interpolated from an exported constant; `MethodologyArticle.test.tsx` and `methodologyConstants.test.ts` pass (composite and momentum weights equal the newest SQL `CREATE` of `get_set_analytics`, the 14-day gate, series windows and the five return anchor tolerances match the newest `CREATE` of `get_market_product_metrics` (0028), the collector constants match `main.py`). `#returns` states the bound and the catalog and Market table fallback that lacks it.
 - [ ] `/about` (with `AboutPage` and `Organization` JSON-LD), `/terms` and a rewritten `/privacy` (PIPEDA, Vercel Web Analytics and Speed Insights, Brevo, `privacy@pokefin.ca`) exist; `/contact` is `noindex`, validates `topic`, `product`, `from`, `q`, `digest`, and renders `mailto:` links to `reports@` and `hello@` with prefilled subject and body; there is no form.
 - [ ] `app/lib/metricDefinitions.ts` holds `{ key, label, unitLabel, window, short, anchor }` for every `/stats` column and product tile; `STAT_TOOLTIPS`, `StatHeader` and WP14's local array are gone; the test proves every `MetricTile`, `MetricLabel` and `/stats` header resolves to a defined key and anchor.
 - [ ] `MetricLabel`, `ReportLink` and `DecisionNote` exist in `components/ui/`, token-only, no `"use client"`, with axe-clean tests.
-- [ ] `/stats` shows "Composite score" as "Top N%" with the z-score in `title`, and the decision note under the composite table; the box calculator shows "Below / Near / Above pack value" with the band text and the decision note on a neutral surface; internal names unchanged.
+- [ ] `/stats` shows "Composite score" as "Top N%" for the better half and "Bottom N%" for the rest (never "Top 100%" with more than one ranked set) with the z-score in `title`, and the decision note under the composite table; the box calculator shows "Below / Near / Above pack value" with the band text and the decision note on a neutral surface; internal names unchanged.
 - [ ] `ReportLink` appears in the product hero, `NoResults`, `error.tsx` (with pathname and digest) and `global-error.tsx` (with digest).
 - [ ] The footer is a server component (only `FooterGate` is client), shows the disclaimer, both trademark notices, the D1 sentence when set, and links to Methodology, About, Contact, Terms, Privacy with `prefetch={false}`.
-- [ ] The promo label, footer sentence, `/about#disclosures` and store link `rel` all come from `disclosureCopy(STORE_RELATIONSHIP)`; with D1 open the promo says "Partner store" and no sentence renders.
-- [ ] No "TCGPlayer", "Invest Score", "live price", "real-time" or "all-time high" under `app/`, no em dash in `app/**/*.tsx`, enforced by `uiConventions.test.ts`; the WP23 baseline only went down.
+- [ ] The promo label (through WP15's `PROMO_RELATIONSHIP_LABEL`, still exported and still the promo's `aria-label`), footer sentence, `/about#disclosures` revenue and relationship sentences and store link `rel` all come from `disclosureCopy(STORE_RELATIONSHIP)`; with D1 open the promo says "Partner store", no relationship sentence renders and no copy claims "no ads". `app/content/disclosures.ts` has no imports; WP15's conventions tests pass unchanged.
+- [ ] No "TCGPlayer", "Invest Score", "live price", "real-time" or "all-time high" under `app/`, no em dash in `app/**/*.tsx` (character, entity or `\u2014` escape), no `outline-none` or `transition-colors` in the trust files, enforced by `uiConventions.test.ts`; the WP23 baseline only went down.
 - [ ] `sitemap.xml` lists `/methodology`, `/about`, `/terms` and not `/contact`.
-- [ ] `tsc`, lint, the full Jest suite and `pnpm build:stub` pass; `pnpm perf:budget` exits 0 with the four new routes budgeted and within 0.3 kB of `/privacy` JS.
+- [ ] `tsc`, lint, the full Jest suite and `pnpm build:stub` pass; `pnpm perf:budget` exits 0 with the four new routes budgeted and within 0.3 kB of `/privacy` JS, shared JS lower than before, and no existing route's document up by more than 1.5 kB br.
 
 ## Rollback
 
 `git revert <merge commit>` and redeploy. No migration, environment variable or data change. Partial rollbacks, each in a new commit:
 
 - Label renames only (the owner rejects D5 after merge): restore the old strings in `PACK_VALUE_LABELS` and the `compositeScore` definition's label, and remove "invest score" from the conventions ban; the percentile display can stay or revert with `CompositeCell`.
-- Footer only: `git checkout <merge>~1 -- app/components/Footer.tsx`, delete `FooterGate.tsx`, and remove `components/Footer.tsx` from `TRUST_FILES` in the conventions test; regenerate the WP23 baseline if counts change (they return to their old values).
+- Footer only: `git checkout <merge>~1 -- app/components/Footer.tsx`, delete `FooterGate.tsx`, and remove `components/Footer.tsx` from `TRUST_FILES` in the conventions test; regenerate the WP23 baseline: the old footer's `--pf-pokeball` hovers raise `Footer.tsx`'s `brandRed` count back to its pre-WP24 value, which is a raise, so state it in the PR body. Delete `app/components/__tests__/Footer.test.tsx` in the same commit (it asserts the WP24 footer).
 - A trust page with a legal problem: delete that page directory and its sitemap entry; the footer link then 404s until removed from `TRUST_LINKS` in the same commit.
 
 ## Commit and PR
@@ -3343,4 +3502,4 @@ PR body:
 - The `uiConventions.baseline.json` diff (counts down only).
 - Lists: every file changed by the TCGplayer sweep and the em dash sweep; any `TCGPlayer` line deliberately kept and why; any test assertion changed and why; any dependency artifact that was missing and what was done.
 - Owner actions 1 to 8 copied from the spec.
-- "Noticed, out of scope": the weekly PDF's self-description and disclaimer (`generate_weekly_report.py`, `01-PRODUCT-DIRECTION.md` §9 item 4); WP13's product JSON-LD still publishes an `Offer` with Pokéfin's URL (`research/trust-seo-brand.md` §3, for WP31); return anchors have no maximum age (documented on `/methodology#returns`, fixed by WP25 with a version bump); the Market table's "Vol 30D (ann.)" header is not yet a `MetricLabel` (WP33 replaces the table).
+- "Noticed, out of scope": the weekly PDF's self-description and disclaimer (`generate_weekly_report.py`, `01-PRODUCT-DIRECTION.md` §9 item 4); the catalog cards (`ReturnMetrics`) and the Market table (`buildRows`) fill a NULL database return from loaded history with no anchor-age bound, so they can show a return the product page and Set Analytics withhold (documented on `/methodology#returns`; WP30 and WP33 move those views to WP25's bounded `product_daily_stats`); the Market table's "Vol 30D (ann.)" header is not yet a `MetricLabel` (WP33 replaces the table).

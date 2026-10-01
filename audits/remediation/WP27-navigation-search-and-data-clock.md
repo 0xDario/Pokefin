@@ -11,7 +11,7 @@
 
 ## Why
 
-Today a visitor who knows exactly which box they want has no search outside the home hero and the `/prices` filter, and the header offers five tool names ("Market View" and "Prices" look like the same data) while Portfolio, the feature that brings people back, is missing for logged-out visitors (research/ui-audit.md "Navigation and information architecture", top-10 item 10). Nothing on the site says when prices were last collected, so when the scraper on the owner's machine stops, visitors see day-old or week-old numbers with no warning until the 14-day gate blanks them (research/trust-seo-brand.md §1 item 3, §5.1, §10.2). The currency is chosen separately on `/prices`, `/market` and `/portfolio`, and the logo, favicon and promo use a Poké Ball (trust-seo-brand.md §14.1). After this PR the header is organised by task (01-PRODUCT-DIRECTION.md §4.1), a global search over a 15 kB CDN-cached catalog opens with `/` or Ctrl-K and reaches any product with Enter (competitive-landscape.md §4, ui-audit.md "Also worth doing"), a data clock in the header states the newest price time and turns amber after 30 hours (trust-seo-brand.md §5.1 rules, §5.2 `DataStatusChip`), the header owns the one USD/CAD choice, and an original interim mark replaces the Poké Ball everywhere, with a real multi-size favicon, an apple icon and a web app manifest (performance-excellence.md §12 PX09a, trust-seo-brand.md §14.2). Collectors on phones get a one-thumb menu sheet with a backdrop; the prefetch policy follows performance-excellence.md §8.
+Today a visitor who knows exactly which box they want has no search outside the home hero and the `/prices` filter, and the header offers five tool names ("Market View" and "Prices" look like the same data) while Portfolio, the feature that brings people back, is missing for logged-out visitors (research/ui-audit.md "Navigation and information architecture", top-10 item 10). Nothing on the site says when prices were last collected, so when the scraper on the owner's machine stops, visitors see day-old or week-old numbers with no warning until the 14-day gate blanks them (research/trust-seo-brand.md §1 item 3, §5.1, §10.2). The currency is chosen separately on `/prices`, `/market` and `/portfolio`, and the logo, favicon and promo use a Poké Ball (trust-seo-brand.md §14.1). After this PR the header is organised by task (01-PRODUCT-DIRECTION.md §4.1), a global search over a CDN-cached catalog of under 16 kB brotli opens with `/` or Ctrl-K and reaches any product with Enter (competitive-landscape.md §4, ui-audit.md "Also worth doing"), a data clock in the header states the newest price time and turns amber after 30 hours (trust-seo-brand.md §5.1 rules, §5.2 `DataStatusChip`), the header owns the one USD/CAD choice, and an original interim mark replaces the Poké Ball everywhere, with a real multi-size favicon, an apple icon and a web app manifest (performance-excellence.md §12 PX09a, trust-seo-brand.md §14.2). Collectors on phones get a one-thumb menu sheet with a backdrop; the prefetch policy follows performance-excellence.md §8.
 
 ## Design
 
@@ -32,7 +32,7 @@ Today a visitor who knows exactly which box they want has no search outside the 
 32-unit grid, used by `PokefinMark.tsx`, `app/icon.svg` and `scripts/brand/make-icons.py`:
 
 - Tile: `rect` 32 x 32, corner radius 8, fill `--pf-accent` (#dc2626).
-- Glyph: one polygon, fill white: `(8,26) (8,6) (24,6) (24,10) (20,10) (20,14) (16,14) (16,18) (12,18) (12,26)`, SVG path `M8 26V6h16v4h-4v4h-4v4h-4v8z`. Every vertex is even, so it is pixel-aligned at 16 px.
+- Glyph: a "P" whose bowl's outer edge is a rising three-step line, fill white. Outline polygon `(8,26) (8,6) (24,6) (24,10) (20,10) (20,14) (16,14) (16,18) (12,18) (12,26)` with a square counter `(12,10) (16,10) (16,14) (12,14)` cut out of it (the hole is what makes it read as a P and not a staircase). SVG path `M8 26V6h16v4h-4v4h-4v4h-4v8zM12 10v4h4v-4z` with `fill-rule="evenodd"`. Every vertex is even, so it is pixel-aligned at 16 px (the counter is a 2 x 2 px hole).
 
 ```
 16 px render (# = white glyph, . = red tile)
@@ -41,8 +41,8 @@ Today a visitor who knows exactly which box they want has no search outside the 
 ................
 ....########....
 ....########....
-....######......
-....######......
+....##..##......
+....##..##......
 ....####........
 ....####........
 ....##..........
@@ -58,19 +58,19 @@ Lockups: mark only (favicon, app icons), mark plus wordmark "Pok**é**fin" (head
 
 ### Header, desktop 1440 px (signed out, prices fresh)
 
-One 64 px row, `max-w-7xl`, white surface, 1 px `border-line` bottom. The data clock sits directly after the nav on the left, so when its text changes length after hydration only the flexible gap moves (no layout shift of any other control).
+One 64 px row, `max-w-7xl`, white surface, 1 px `border-line` bottom. Left: logo and nav. Right (01-PRODUCT-DIRECTION.md §4.1): data clock, search, USD/CAD, account. The right-hand cluster is anchored to the right edge and the clock is its first item, so when the clock's text changes length after hydration only the flexible gap to its left moves (no layout shift of any control). The clock is the only shrinkable item: on a tight row it truncates (full text in its `title` and accessible name) instead of pushing the row into horizontal scroll.
 
 ```
-+------------------------------------------------------------------------------------------------------------------------+
-| [P] Pokéfin   Prices  Screener  Sets  Portfolio  Tools v   (o) Prices as of Sep 30, 6:10 AM EDT                        |
-|                ======                                                          [Q Search    /] [USD|#CAD#] Sign in [Create account] |
-+------------------------------------------------------------------------------------------------------------------------+
++--------------------------------------------------------------------------------------------------------------------------------+
+| [P] Pokéfin   Prices  Screener  Sets  Portfolio  Tools v      (o) Prices as of Sep 30, 6:10 AM EDT [Q Search /] [USD|#CAD#] Sign in [Create account] |
+|               ======                                                                                                           |
++--------------------------------------------------------------------------------------------------------------------------------+
   ====== = 2 px action-blue bar under the active item (here /prices), text ink; inactive items ink-soft
-  (o) = clock icon; the chip is a link to /methodology#cadence, title "301 of 306 products priced within 48 hours of the newest price."
+  (o) = clock icon; the chip is a link to /methodology#cadence, title "Prices as of Sep 30, 6:10 AM EDT. 301 of 306 products priced within 48 hours of the newest price."
   [#CAD#] = selected segment, action blue; "Create account" is the only primary (blue) button
 ```
 
-Signed in, the right end is `[A ash v]` (initial plus username, max 8rem, truncated). Its menu: name and email, "Account settings", "Sign out". Tools menu (click "Tools v"):
+Signed in, the right end is `[A ash v]` (initial plus username, max 7rem, truncated). Its menu: name and email, "Account settings", "Sign out". Tools menu (click "Tools v"):
 
 ```
                  Tools v
@@ -86,17 +86,17 @@ Breakpoints:
 
 | Width | Left | Right |
 |---|---|---|
-| < 1024 px | mark + wordmark, clock icon only | search icon, menu button |
-| 1024 to 1279 px | logo, nav, clock icon only | search icon, USD/CAD, "Sign in" (or account menu) |
-| >= 1280 px | logo, nav, clock icon + text | search button with `/` hint, USD/CAD, "Sign in", "Create account" (or account menu) |
+| < 1024 px | mark + wordmark | clock icon, search icon, menu button |
+| 1024 to 1279 px | logo, nav | clock icon, search icon, USD/CAD, "Sign in" and "Create account" (or account menu) |
+| >= 1280 px | logo, nav | clock icon + text (truncates if the row is tight), search button with `/` hint, USD/CAD, "Sign in" and "Create account" (or account menu) |
 
-The account slot reserves `min-w-[11rem]` at 1024 px and up, so the switch from signed-out to signed-in after hydration moves nothing.
+The account slot is a fixed `w-[12.5rem]` at 1024 px and up (the signed-out pair is about 12.2rem, the signed-in button at most about 11.4rem with the name capped at 7rem), so the switch from signed-out to signed-in after hydration moves nothing. Row budget at 1024 px: about 490 px left plus about 410 px right inside 960 px of content width.
 
 ### Header and menu sheet, phone 390 px
 
 ```
 +--------------------------------------+
-| [P] Pokéfin (o)            [Q]  [=]  |   64 px; (o), [Q], [=] are 44 px targets on touch
+| [P] Pokéfin            (o) [Q]  [=]  |   64 px; (o), [Q], [=] are 44 px targets on touch
 +--------------------------------------+
 
 tap [=]: side sheet on WP14's Dialog, backdrop, focus trapped, Esc / backdrop / X close
@@ -144,7 +144,7 @@ Rules (trust-seo-brand.md §5.1, ages measured from the newest `price_recorded_a
 - Coverage line (title attribute and sheet): `{n} of {m} products priced within 48 hours of the newest price.` Anchored on the newest price, not on the render time, so cached HTML never states a stale "last 48 hours".
 - The chip is a link to `/methodology#cadence`; that section gains one paragraph explaining the chip and its 30-hour rule.
 - The `<a>` carries `data-clock-tier` and `data-newest-priced-at` (ISO, UTC). WP22's daily production smoke test reads the second one and fails when it is more than 30 hours old.
-- Width: icon only below 1280 px (full text in `sr-only`, so the accessible name is always complete); text at 1280 px and up, capped at `17rem` with truncation.
+- Width: icon only below 1280 px (full text in `sr-only`, so the accessible name is always complete); text at 1280 px and up, capped at `17rem`, truncated with an ellipsis when the row is tighter (the `title` keeps the full sentence).
 
 ### Global search
 
@@ -182,12 +182,12 @@ States:
 | Catalog loading | Page matches still show; a caption row "Loading products…" |
 | Catalog error | "Products could not be loaded." plus a ghost "Try again" button; page matches still work |
 | No matches | "No matches for “xyz”." and the option "Missing a product? Tell us" (`/contact?topic=missing_product&q=xyz`) |
-| Stale price (2 to 13 days) | Price with WP23's `AsOf variant="table"` clock icon ("Last priced Sep 25") |
+| Stale price (2 to 13 days) | Price and change as usual, plus WP23's `AsOf variant="inline"` on the second line: clock icon and "Last priced Sep 25" in warn text (visible on touch, unlike the table variant's tooltip) |
 | Withheld price (14 days or more, or null) | "No current price", no change chip |
 
 Results: up to 8 products, then "Show all matches on Prices" (`/prices?q=<query>`), up to 4 sets (link `/prices?q=<set name>` until WP37), up to 4 pages. With a non-empty query the first option is active, so Enter opens it. Arrow Up/Down move with wrap, Enter opens, Escape clears a non-empty query, Escape on an empty query closes, Tab leaves the input for the close button. Hovering an option makes it active, clicking opens it. The active option is prefetched once after it has been active for 150 ms.
 
-Matching (one matcher for `/prices` and search, `app/lib/productSearch.ts`): case-insensitive and accent-insensitive (NFD, combining marks removed); the query splits on whitespace into at most 6 tokens; every token must be a substring of the set name, set code, type label, type name or variant; aliases `etb` = "elite trainer box", `bb` = "booster box", `upc` = "ultra premium collection". A one-word query matches exactly what `/prices` matched before, plus accent folding.
+Matching (one matcher for `/prices` and search, `app/lib/productSearch.ts`): case-insensitive and accent-insensitive (NFD, combining marks removed); the query splits on whitespace into at most 6 tokens; every token must be a substring of the set name, set code, type label, type name or variant; aliases `etb` = "elite trainer box", `bb` = "booster box", `upc` = "ultra premium collection". A one-word query matches everything `/prices` matched before, plus accent folding and the three aliases (`etb` now also finds "Elite Trainer Box").
 
 Ranking (products): +100 when a token equals the set code, +50 when the set name starts with the whole query, +20 per token that starts a word of the product name, +10 when the product has a current price; ties by newer set release, then name A to Z. Sets: +100 exact code, +50 name starts with the query; ties by newer release. Pages: label and keyword substring match, config order.
 
@@ -223,7 +223,7 @@ ISR (`dynamic = "force-static"`, `revalidate = 86400`) reading `getCachedMarketP
 - `recorded_on` is the UTC date key of `price_recorded_at` (kept for withheld products, so a future offline view can say when they were last priced). The client re-applies the 14-day rule with `isPriceFresh(recorded_on)` at display time, because a cached catalog can be a day old.
 - `img` is the image URL with the common `img_base` prefix removed; a URL outside that prefix is kept whole. The client shows the 32 px `_thumb.webp` derivative (same rule as `ProductImage`).
 - `as_of` is the newest `recorded_on` among priced items. Items are sorted by `id`.
-- Size budget: at most 70 kB raw and 16 kB brotli for 306 products (a test enforces it on synthetic data; Verification measures the real route).
+- Size budget: at most 96 kB raw and 16 kB brotli for 306 products (a test enforces it on synthetic data; Verification measures the real route). A synthetic 306-item payload measured 80 kB raw and 6.6 kB brotli at quality 11 during review: raw size is dominated by repeated keys and costs only parse time, the transfer is the brotli figure.
 
 ### Footer (WP24's server footer, reorganised)
 
@@ -268,13 +268,13 @@ The static HTML carries the default sentence (Suspense fallback); the reader swa
 - Search: APG combobox with a listbox popup (`role="combobox"`, `aria-autocomplete="list"`, `aria-controls`, `aria-expanded`, `aria-activedescendant`); options grouped with `role="group"` labelled by their heading; a polite `role="status"` line announces "8 products, 1 set, 2 pages", "Loading products" or "No matches". The trigger has `aria-haspopup="dialog"` and `aria-keyshortcuts="/ Control+K Meta+K"`; its accessible name "Search products, sets and pages" contains its visible text.
 - Data clock: text plus icon, never colour alone; icon-only variant keeps the full text in `sr-only`.
 - Every interactive control is at least 44 px on coarse pointers (`pointer-coarse:min-h-11`). Inputs are 16 px on phones (no iOS focus zoom).
-- Motion: colour transitions only, 150 ms, none under `prefers-reduced-motion`. The sheet and dialog appear without animation.
+- Motion (01-PRODUCT-DIRECTION.md §3.5): colour changes are instant, so no `transition-colors` anywhere in this package; the only transition is the 150 ms rotation of the Tools and account chevrons (`transition-transform`, off under `motion-reduce`). The sheet and dialog appear without animation. Focus styles use `focus-visible:outline-hidden` plus a ring, never `outline-none` (Tailwind 4's `outline-none` removes the outline in forced-colours mode, where the box-shadow ring is not drawn either).
 
 ### Performance
 
 - Shared JS grows by at most 6.0 kB gz (acceptance): header markup, `Dialog` (moves into the shared chunk), `SegmentedControl` (moves from `/prices` into shared), `HeaderMenu`, `SearchLauncher` and `DataClock`. `GlobalSearch`, the search index, `marketPulse.isPriceFresh`, `Delta`, `AsOf` usage and the catalog client are one lazy chunk loaded on first open or on hover and focus of the search button.
 - No catalog request before the first open; one request per tab per hour after that (module memory).
-- The layout adds one cached read per ISR render (the summaries it already reads for `/`); every page already carries the `market-products` and `exchange-rate` tags through WP20's layout, so invalidation does not change.
+- The layout adds one cached read per render (the summaries entry `/` already reads, deduplicated by React `cache()` across the two chips). Every page gains the `market-products` tag; WP20's layout already gave every page the `exchange-rate` tag, and WP11's scraper hook revalidates both tags together, so how often pages regenerate does not change. The cost is one data-cache read of the summaries entry per regeneration, and per request on the few dynamic routes (`/account`); it never reaches Supabase between scrapes.
 - The favicon drops from a 31 kB PNG to a 3-frame ICO of about 2 kB.
 - `/prices` route JS goes down slightly (its `CurrencySelector` leaves, `SegmentedControl` moves to shared).
 
@@ -307,7 +307,7 @@ git log --oneline -1
 # WP13: redirects, login form, icons copied from the old favicon, theme colour
 grep -cE "export function (safeReturnToPath|loginPathWithNext)" app/lib/redirects.ts        # 2
 ls app/auth/login/LoginForm.tsx app/lib/site.ts app/opengraph-image.tsx
-ls app/icon.png app/apple-icon.png 2>&1                     # both listed (WP13 step 6b); "No such file" for one: skip its deletion in step 21
+ls app/icon.png app/apple-icon.png 2>&1                     # both listed (WP13 step 6b); "No such file" for icon.png: skip its deletion in step 22d
 grep -n 'themeColor: "#ffffff"' app/layout.tsx              # 1 line
 
 # WP14: Dialog and scroll lock
@@ -358,7 +358,8 @@ Record the starting state (paste into the PR):
 
 ```bash
 grep -rnE "PokeballGlyph|PokeballMark|pf-pokeball-top|A15 15 0 0 1 31 16" app | grep -v __tests__
-# expect hits in Header.tsx, Footer.tsx, CardRinkPromo.tsx and the four auth files
+# expect hits in Header.tsx, Footer.tsx and the four auth files (WP15 already removed
+# CardRinkPromo's glyph; that file still has red CTA classes, which step 25a replaces)
 sha256sum app/favicon.ico app/icon.png app/apple-icon.png
 # the old 512 px Poké Ball PNG hashes to d527e3db4cb3f2aea081a71e2f253384760c1baeb4dc047de54671fbc34a2a89
 pnpm exec jest app/components/__tests__/Header.test.tsx app/components/__tests__/Header.auth.test.tsx \
@@ -374,7 +375,7 @@ pnpm perf:budget | tee /tmp/wp27-budget-before.txt
 kill <PID>
 ```
 
-Tools: `python3 -c "import PIL; print(PIL.__version__)"` must print a version for step 20. If it fails, `python3 -m venv /tmp/wp27-venv && /tmp/wp27-venv/bin/pip install Pillow==12.3.0` (the version in the repo's `requirements.txt`) and use `/tmp/wp27-venv/bin/python`.
+Tools: `python3 -c "import PIL; print(PIL.__version__)"` must print a version for step 22. If it fails, `python3 -m venv /tmp/wp27-venv && /tmp/wp27-venv/bin/pip install Pillow==12.3.0` (the version in the repo's `requirements.txt`) and use `/tmp/wp27-venv/bin/python`.
 
 ## Implementation steps
 
@@ -394,8 +395,8 @@ Conventions for every file this package creates: token utilities only (`text-ink
  * Case- and accent-insensitive ("pokemon" finds "Pokémon Center"). The query
  * splits on whitespace into at most MAX_TOKENS tokens; every token must be a
  * substring of at least one field. Common abbreviations expand: a token "etb"
- * also matches "elite trainer box". A one-word query matches exactly what the
- * /prices filter matched before WP27, plus accent folding.
+ * also matches "elite trainer box". A one-word query matches everything the
+ * /prices filter matched before WP27, plus accent folding and the aliases.
  */
 export interface ProductSearchFields {
   setName?: string | null;
@@ -413,7 +414,9 @@ export const TOKEN_ALIASES: Readonly<Record<string, readonly string[]>> = {
   upc: ["ultra premium collection"],
 };
 
-const COMBINING_MARKS_RE = /[̀-ͯ]/g;
+// Escapes, never the literal combining characters: an editor or a copy step
+// can normalise those away and silently disable accent folding.
+const COMBINING_MARKS_RE = /[\u0300-\u036f]/g;
 
 /** Lower case, accents removed: "Pokémon" -> "pokemon". */
 export function foldForSearch(value: string): string {
@@ -936,7 +939,8 @@ If `Product` still lives in `app/components/ProductPrices/types` (WP20 not appli
 ```ts
 /**
  * GET /api/public/catalog: the compact catalog for global search (WP27) and,
- * later, the offline shell. About 15 kB br for 306 products.
+ * later, the offline shell. Under 16 kB brotli for 306 products (about 7 kB
+ * measured on synthetic data).
  *
  * ISR: rendered at build (the same summaries read every static page makes;
  * it degrades instead of throwing) and again on the first request after the
@@ -966,6 +970,15 @@ export async function GET() {
 ```
 
 No new perf fixture route is needed: the route reads only the summaries RPC, which WP22's fixture already answers.
+
+7c. If WP26 landed (`ls scripts/check-public-cache.mjs`), prove the catalog is served from the ISR cache like the sparkline route: in that script's `main()`, directly after the `problems.push(...isrProblems("/api/public/sparklines/3M", ...))` line, add
+
+```js
+  const catalog = await twice(origin, "/api/public/catalog", headers);
+  problems.push(...isrProblems("/api/public/catalog", catalog.first, catalog.second, { requireVercelHit }));
+```
+
+and add `/api/public/catalog` to any route list in that script's test (`scripts/check-public-cache.test.mjs`) that enumerates the ISR routes. If WP26 has not landed, skip 7c and say in the PR that `/api/public/catalog` must be added to `check-public-cache.mjs` when WP26 lands (the WP26 implementer reads this PR's list of public routes).
 
 ### Step 8. `app/lib/publicCatalog.ts` (new): the browser side, fetched on first open only
 
@@ -1395,7 +1408,7 @@ Rendered inside the launcher's `Dialog`. The launcher owns `query` so text typed
 
 import { useEffect, useId, useMemo, useState, type KeyboardEvent, type RefObject } from "react";
 import { useRouter } from "next/navigation";
-import AsOf from "../ui/AsOf";
+import AsOf, { STALE_AFTER_DAYS, daysBetween } from "../ui/AsOf";
 import Button from "../ui/Button";
 import Delta from "../ui/Delta";
 import { useCurrency } from "../../context/CurrencyContext";
@@ -1423,6 +1436,11 @@ type CatalogState =
 
 const PREFETCH_DWELL_MS = 150;
 const prefetched = new Set<string>();
+
+/** Today's UTC date key. A module function keeps render lint-pure (WP23's AsOf does the same). */
+function todayUtcKey(): string {
+  return new Date().toISOString().slice(0, 10);
+}
 
 function initialCatalogState(): CatalogState {
   const cached = peekPublicCatalog();
@@ -1644,6 +1662,10 @@ function OptionContent({
       // The catalog can be a day old: re-apply migration 0023's 14-day rule
       // at display time, like the server does.
       const fresh = item.usd_price !== null && isPriceFresh(item.recorded_on);
+      // 2 to 13 days old: shown, but flagged in text on the second line. AsOf's
+      // inline variant, not "table": a title tooltip never shows on touch (WP23).
+      const stale =
+        fresh && item.recorded_on !== null && daysBetween(item.recorded_on, todayUtcKey()) >= STALE_AFTER_DAYS;
       const source = catalogImageUrl(imgBase, item);
       const thumb = source ? (toThumbnailUrl(source) ?? source) : null;
       return (
@@ -1667,15 +1689,15 @@ function OptionContent({
           </span>
           <span className="min-w-0 flex-1">
             <span className="block truncate text-body font-medium text-ink">{item.name}</span>
-            <span className="block truncate text-caption text-ink-soft">{item.set_code ?? item.type ?? ""}</span>
+            <span className="flex min-w-0 items-center gap-1.5 text-caption text-ink-soft">
+              <span className="truncate">{item.set_code ?? item.type ?? ""}</span>
+              {stale && <AsOf date={item.recorded_on} variant="inline" className="shrink-0" />}
+            </span>
           </span>
           <span className="shrink-0 text-right tabular-nums">
             {fresh ? (
               <>
-                <span className="flex items-center justify-end gap-1 text-body font-medium text-ink">
-                  {formatPrice(item.usd_price)}
-                  <AsOf date={item.recorded_on} variant="table" />
-                </span>
+                <span className="block text-body font-medium text-ink">{formatPrice(item.usd_price)}</span>
                 <Delta value={item.ret_30d} period="30D" missingReason="30-day change not available" className="text-caption" />
               </>
             ) : (
@@ -1818,7 +1840,7 @@ export default function SearchLauncher() {
         aria-haspopup="dialog"
         aria-keyshortcuts="/ Control+K Meta+K"
         aria-label="Search products, sets and pages"
-        className="inline-flex h-9 min-w-9 items-center justify-center gap-2 rounded-control text-ink-soft transition-colors duration-150 hover:bg-surface-alt hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-action motion-reduce:transition-none pointer-coarse:min-h-11 pointer-coarse:min-w-11 xl:w-44 xl:justify-start xl:border xl:border-line xl:px-3"
+        className="inline-flex h-9 min-w-9 shrink-0 items-center justify-center gap-2 rounded-control text-ink-soft hover:bg-surface-alt hover:text-ink focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-action pointer-coarse:min-h-11 pointer-coarse:min-w-11 xl:w-40 xl:justify-start xl:border xl:border-line xl:px-3"
       >
         <SearchIcon className="size-4 shrink-0" />
         <span className="hidden text-body xl:inline">Search</span>
@@ -2063,7 +2085,7 @@ export interface DataClockProps {
 }
 
 export default function DataClock({ variant, newestPricedAt, absolute, detail, renderedAtMs }: DataClockProps) {
-  const clientMinute = useSyncExternalStore(subscribe, readMinute, readServerMinute);
+  const clientMinute = useSyncExternalStore<number | null>(subscribe, readMinute, readServerMinute);
   const mounted = clientMinute !== null;
   const nowMs = mounted ? clientMinute * MINUTE_MS : renderedAtMs;
   const tier = dataClockTier(newestPricedAt, nowMs);
@@ -2081,7 +2103,7 @@ export default function DataClock({ variant, newestPricedAt, absolute, detail, r
         href={DATA_CLOCK_HREF}
         prefetch={false}
         data-clock-tier={tier}
-        className={`flex min-h-14 items-start gap-2 rounded-control px-3 py-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-action ${toneClass}`}
+        className={`flex min-h-14 items-start gap-2 rounded-control px-3 py-2 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-action ${toneClass}`}
       >
         <Icon className="mt-0.5 size-4 shrink-0" />
         <span>
@@ -2099,10 +2121,13 @@ export default function DataClock({ variant, newestPricedAt, absolute, detail, r
       data-clock-tier={tier}
       data-newest-priced-at={newestPricedAt ?? ""}
       title={`${text}. ${detail}`}
-      className={`inline-flex h-9 min-w-9 items-center justify-center gap-1.5 rounded-control px-2 text-caption font-medium transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-action motion-reduce:transition-none pointer-coarse:min-h-11 pointer-coarse:min-w-11 xl:justify-start ${toneClass}`}
+      className={`inline-flex h-9 min-w-9 max-w-full items-center justify-center gap-1.5 rounded-control px-2 text-caption font-medium focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-action pointer-coarse:min-h-11 pointer-coarse:min-w-11 xl:justify-start ${toneClass}`}
     >
       <Icon className="size-4 shrink-0" />
-      <span className="sr-only xl:not-sr-only xl:max-w-[17rem] xl:truncate xl:whitespace-nowrap">{text}</span>
+      {/* Truncates instead of overflowing when the header is tight (1280 px with
+          the long "delayed" text); the title and the accessible name keep the
+          full sentence. */}
+      <span className="sr-only xl:not-sr-only xl:min-w-0 xl:max-w-[17rem] xl:truncate xl:whitespace-nowrap">{text}</span>
     </Link>
   );
 }
@@ -2155,7 +2180,9 @@ WP24's `/methodology#cadence` gains the matching explanation in step 31.
  * Server-compatible. Brand red appears only here (uiConventions BRAND_FILES).
  */
 export const MARK_TILE_RADIUS = 8;
-export const MARK_GLYPH_PATH = "M8 26V6h16v4h-4v4h-4v4h-4v8z";
+// Outline plus the square counter; drawn with fill-rule evenodd so the
+// counter is a hole.
+export const MARK_GLYPH_PATH = "M8 26V6h16v4h-4v4h-4v4h-4v8zM12 10v4h4v-4z";
 
 export function PokefinMark({ className = "h-7 w-7", title }: { className?: string; title?: string }) {
   return (
@@ -2168,7 +2195,7 @@ export function PokefinMark({ className = "h-7 w-7", title }: { className?: stri
       focusable="false"
     >
       <rect width="32" height="32" rx={MARK_TILE_RADIUS} className="fill-accent" />
-      <path d={MARK_GLYPH_PATH} className="fill-white" />
+      <path d={MARK_GLYPH_PATH} fillRule="evenodd" className="fill-white" />
     </svg>
   );
 }
@@ -2242,7 +2269,8 @@ export default function HeaderMenu({ id, label, buttonClassName, align = "start"
       if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
     }
     function onKeyDown(event: KeyboardEvent) {
-      if (event.key !== "Escape") return;
+      // A dialog opened on top (search via "/") claims its own Escape.
+      if (event.key !== "Escape" || event.defaultPrevented) return;
       setOpen(false);
       buttonRef.current?.focus();
     }
@@ -2363,7 +2391,7 @@ export interface MobileNavSheetProps {
 }
 
 const ROW =
-  "flex min-h-11 items-center rounded-control px-3 text-body font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-action";
+  "flex min-h-11 items-center rounded-control px-3 text-body font-medium focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-action";
 
 function SheetLink({ link, current, onClose }: { link: NavLink; current: boolean; onClose: () => void }) {
   return (
@@ -2477,8 +2505,9 @@ export interface HeaderProps {
   dataStatusSheet?: ReactNode;
 }
 
+// No colour transition: colour changes are instant (01-PRODUCT-DIRECTION.md §3.5).
 const NAV_ITEM =
-  "relative inline-flex h-9 items-center gap-1 rounded-control px-2.5 text-body font-medium transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-action motion-reduce:transition-none";
+  "relative inline-flex h-9 items-center gap-1 rounded-control px-2.5 text-body font-medium focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-action";
 
 // Active: ink text and a 2 px action-blue bar resting on the header border.
 // Brand red is the logo only (01-PRODUCT-DIRECTION.md §3.2).
@@ -2530,12 +2559,12 @@ export default function Header({ dataStatus, dataStatusSheet }: HeaderProps) {
           href={MARKET_HOME.href}
           aria-label="Pokéfin, market home"
           aria-current={pathname === "/" ? "page" : undefined}
-          className="flex shrink-0 items-center rounded-control focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-action"
+          className="flex shrink-0 items-center rounded-control focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-action"
         >
           <PokefinLogo />
         </Link>
 
-        <nav aria-label="Main" className="ml-4 hidden items-center gap-0.5 lg:flex">
+        <nav aria-label="Main" className="ml-4 hidden shrink-0 items-center gap-0.5 lg:flex">
           {PRIMARY_NAV.map((link) => {
             const active = isNavActive(link, pathname);
             return (
@@ -2559,7 +2588,7 @@ export default function Header({ dataStatus, dataStatusSheet }: HeaderProps) {
                       href={link.href}
                       onClick={close}
                       aria-current={isNavActive(link, pathname) ? "page" : undefined}
-                      className="flex flex-col rounded-control px-3 py-2 hover:bg-surface-alt focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-action"
+                      className="flex flex-col rounded-control px-3 py-2 hover:bg-surface-alt focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-action"
                     >
                       <span className="text-body font-medium text-ink">{link.label}</span>
                       <span className="text-caption text-ink-soft">{link.description}</span>
@@ -2571,27 +2600,33 @@ export default function Header({ dataStatus, dataStatusSheet }: HeaderProps) {
           </HeaderMenu>
         </nav>
 
-        {/* Left of the flexible gap: its text length can change after
-            hydration without moving any other control (CLS). */}
-        {dataStatus ? <div className="shrink-0 lg:ml-2">{dataStatus}</div> : null}
-
-        <div className="ml-auto flex items-center gap-1 sm:gap-2">
+        <div className="ml-auto flex min-w-0 items-center gap-1 sm:gap-2">
+          {/* The data clock is the FIRST item of the right-hand cluster
+              (01-PRODUCT-DIRECTION.md §4.1 puts it on the right). The cluster
+              is anchored to the right edge, so when the chip's text changes
+              length after hydration only the flexible gap on its left moves
+              (no layout shift of search, currency or account). min-w-0 lets
+              it truncate instead of overflowing on a tight 1280 px row. */}
+          {dataStatus ? <div className="flex min-w-0 justify-end">{dataStatus}</div> : null}
           <SearchLauncher />
-          <div className="hidden lg:block">
+          <div className="hidden shrink-0 lg:block">
             <HeaderCurrencyToggle />
           </div>
-          <div className="hidden min-w-[11rem] items-center justify-end gap-2 lg:flex">
+          {/* Fixed width at lg and up: the signed-out pair and the signed-in
+              account button (name capped at 7rem) both fit in 12.5rem, so the
+              switch after hydration moves nothing to its left. */}
+          <div className="hidden w-[12.5rem] shrink-0 items-center justify-end gap-2 lg:flex">
             {signedIn && user ? (
               <HeaderMenu
                 id="account-menu"
                 align="end"
-                buttonClassName="inline-flex h-9 items-center gap-2 rounded-control px-1.5 text-body font-medium text-ink hover:bg-surface-alt focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-action"
+                buttonClassName="inline-flex h-9 items-center gap-2 rounded-control px-1.5 text-body font-medium text-ink hover:bg-surface-alt focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-action"
                 label={
                   <>
                     <span aria-hidden="true" className="flex size-7 items-center justify-center rounded-full bg-surface-alt text-small font-semibold text-ink">
                       {displayName.charAt(0).toUpperCase()}
                     </span>
-                    <span className="max-w-[8rem] truncate">{displayName}</span>
+                    <span className="max-w-[7rem] truncate">{displayName}</span>
                   </>
                 }
               >
@@ -2605,7 +2640,7 @@ export default function Header({ dataStatus, dataStatusSheet }: HeaderProps) {
                       href={ACCOUNT_NAV.settings.href}
                       prefetch={false}
                       onClick={close}
-                      className="flex min-h-9 items-center rounded-control px-3 text-body text-ink hover:bg-surface-alt focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-action"
+                      className="flex min-h-9 items-center rounded-control px-3 text-body text-ink hover:bg-surface-alt focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-action"
                     >
                       {ACCOUNT_NAV.settings.label}
                     </Link>
@@ -2615,7 +2650,7 @@ export default function Header({ dataStatus, dataStatusSheet }: HeaderProps) {
                         close();
                         void handleSignOut();
                       }}
-                      className="flex min-h-9 w-full items-center rounded-control px-3 text-left text-body text-ink hover:bg-surface-alt focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-action"
+                      className="flex min-h-9 w-full items-center rounded-control px-3 text-left text-body text-ink hover:bg-surface-alt focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-action"
                     >
                       Sign out
                     </button>
@@ -2627,11 +2662,9 @@ export default function Header({ dataStatus, dataStatusSheet }: HeaderProps) {
                 <Link href={signInHref} prefetch={false} className={buttonClasses({ variant: "ghost", size: "sm" })}>
                   {ACCOUNT_NAV.signIn.label}
                 </Link>
-                <span className="hidden xl:inline-flex">
-                  <Link href={ACCOUNT_NAV.signUp.href} prefetch={false} className={buttonClasses({ size: "sm" })}>
-                    {ACCOUNT_NAV.signUp.label}
-                  </Link>
-                </span>
+                <Link href={ACCOUNT_NAV.signUp.href} prefetch={false} className={buttonClasses({ size: "sm" })}>
+                  {ACCOUNT_NAV.signUp.label}
+                </Link>
               </>
             )}
           </div>
@@ -2641,7 +2674,7 @@ export default function Header({ dataStatus, dataStatusSheet }: HeaderProps) {
             aria-haspopup="dialog"
             aria-expanded={menuOpen}
             aria-label="Open menu"
-            className="inline-flex size-10 items-center justify-center rounded-control text-ink hover:bg-surface-alt focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-action pointer-coarse:size-11 lg:hidden"
+            className="inline-flex size-10 shrink-0 items-center justify-center rounded-control text-ink hover:bg-surface-alt focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-action pointer-coarse:size-11 lg:hidden"
           >
             <MenuIcon />
           </button>
@@ -2697,7 +2730,7 @@ Change nothing else in the layout (WP13 metadata and `viewport`, WP20 `CurrencyP
     }
   </style>
   <rect class="tile" width="32" height="32" rx="8"/>
-  <path class="glyph" d="M8 26V6h16v4h-4v4h-4v4h-4v8z"/>
+  <path class="glyph" fill-rule="evenodd" d="M8 26V6h16v4h-4v4h-4v4h-4v8zM12 10v4h4v-4z"/>
 </svg>
 ```
 
@@ -2708,7 +2741,8 @@ Change nothing else in the layout (WP13 metadata and `viewport`, WP20 `CurrencyP
 
 Run once from frontend/:  python3 scripts/brand/make-icons.py
 Geometry mirrors app/icon.svg and app/components/brand/PokefinMark.tsx on a
-32-unit grid: a rounded tile (radius 8) and the stepped-P glyph. Change all
+32-unit grid: a rounded tile (radius 8) and the stepped-P glyph with its
+square counter. Change all
 three together when the owner supplies the final mark, then rerun.
 
 Writes:
@@ -2726,6 +2760,7 @@ FRONTEND = Path(__file__).resolve().parents[2]
 ACCENT = (220, 38, 38, 255)  # --pf-accent #dc2626
 WHITE = (255, 255, 255, 255)
 GLYPH = [(8, 26), (8, 6), (24, 6), (24, 10), (20, 10), (20, 14), (16, 14), (16, 18), (12, 18), (12, 26)]
+COUNTER = [(12, 10), (16, 10), (16, 14), (12, 14)]  # the P's hole, painted back in tile colour
 TILE_RADIUS = 8
 SUPERSAMPLE = 8
 
@@ -2738,8 +2773,12 @@ def render(size, *, full_bleed=False, glyph_scale=1.0):
     if not full_bleed:
         draw.rounded_rectangle([0, 0, big - 1, big - 1], radius=TILE_RADIUS * unit, fill=ACCENT)
     # The glyph's bounding box is centred on (16, 16); scale it about that point.
-    points = [((16 + (x - 16) * glyph_scale) * unit, (16 + (y - 16) * glyph_scale) * unit) for x, y in GLYPH]
-    draw.polygon(points, fill=WHITE)
+    def scaled(polygon):
+        return [((16 + (x - 16) * glyph_scale) * unit, (16 + (y - 16) * glyph_scale) * unit) for x, y in polygon]
+
+    draw.polygon(scaled(GLYPH), fill=WHITE)
+    # The counter always sits inside the tile, so the tile colour restores it.
+    draw.polygon(scaled(COUNTER), fill=ACCENT)
     return img.resize((size, size), Image.Resampling.LANCZOS)
 
 
@@ -2791,7 +2830,7 @@ file app/favicon.ico app/apple-icon.png public/brand/*.png
 ls -l app/favicon.ico      # under 8,192 bytes (was 31,682)
 ```
 
-If `append_images` is rejected by the installed Pillow, drop that argument (Pillow then downsamples the 48 px frame) and say so in the PR. Open the five files in an image viewer and confirm the glyph is centred and crisp at 16 px.
+If `append_images` is rejected by the installed Pillow, drop that argument (Pillow then downsamples the 48 px frame) and say so in the PR. Open the five files in an image viewer and confirm the glyph is centred, crisp at 16 px, and shows the square counter (a P, not a staircase).
 
 22d. Delete WP13's copy of the old PNG: `git rm app/icon.png` (skip if "Before you start" showed it missing). `app/icon.svg` replaces it; keeping both would emit two icon links, one of them the Poké Ball. `app/apple-icon.png` and `app/favicon.ico` are overwritten in place by 22c. Commit the script and the five generated images.
 
@@ -2884,7 +2923,7 @@ replacing the three `LinkColumn`s and the brand block's `PokeballGlyph` plus wor
 
 ### Step 25. No Poké Ball anywhere: promo, sign-in pages, JSON-LD logo
 
-25a. `app/components/CardRinkPromo.tsx` (WP15, WP24 version): delete the `PokeballGlyph` function and the line `<PokeballGlyph className="w-10 h-10" />` (inside the centred heading block). Nothing replaces it: the store's name and WP24's relationship label carry the block, and brand red never goes on the promo (01-PRODUCT-DIRECTION.md §3.2). WP24 left the promo's CTA styling to this package: on the store `<Link>`, replace the class list (`inline-flex items-center bg-[var(--pf-pokeball)] hover:bg-[var(--pf-pokeball-strong)] text-white px-8 py-3 rounded-lg font-semibold transition-colors shadow-sm`, or whatever red classes WP15 and WP24 left) with `className={buttonClasses({ variant: "secondary" })}` and add `import { buttonClasses } from "./ui/Button";`. A neutral secondary button keeps the promo from competing with the page's one primary action. Keep its `href`, `target`, `rel={DISCLOSURE.storeLinkRel}` and text. Change nothing else.
+25a. `app/components/CardRinkPromo.tsx` (WP15, WP24 version). WP15 step 3b already replaced the glyph with the store's name as text, so there is nothing to delete: confirm with `grep -c "PokeballGlyph" app/components/CardRinkPromo.tsx` (prints 0; if it prints more, delete the function and its uses, and nothing replaces them). Do not add the Pokéfin mark either: the store's name and WP24's relationship label carry the block, and brand red never goes on the promo (01-PRODUCT-DIRECTION.md §3.2). WP24 left the promo's CTA styling to this package: on the store `<Link>`, replace the class list (`inline-flex items-center bg-[var(--pf-pokeball)] hover:bg-[var(--pf-pokeball-strong)] text-white px-8 py-3 rounded-lg font-semibold transition-colors shadow-sm`, or whatever red classes WP15 and WP24 left) with `className={buttonClasses({ variant: "secondary" })}` and add `import { buttonClasses } from "./ui/Button";`. A neutral secondary button keeps the promo from competing with the page's one primary action. Keep its `href`, `target`, `rel={DISCLOSURE.storeLinkRel}` and text. Change nothing else.
 
 25b. The four sign-in pages. Find them with `grep -rln "function PokeballGlyph" app/auth` (expect `app/auth/login/LoginForm.tsx`, `app/auth/signup/page.tsx`, `app/auth/forgot-password/page.tsx`, `app/auth/reset-password/page.tsx`; WP13 may have split the signup page into a form file too; use whatever the grep lists). In each: delete the local `PokeballGlyph` function, add `import { PokefinMark } from "<relative path>/components/brand/PokefinMark";`, and replace every `<PokeballGlyph className="..." />` with `<PokefinMark className="h-10 w-10" />`. Do not repaint their red submit buttons (not this package's pages; the brand-red ratchet keeps them from growing).
 
@@ -3096,7 +3135,7 @@ and add `min-h-10` to that `<p>`'s class list (two lines reserved, so the client
             </p>
 ```
 
-`PRICE_STALENESS_TOLERANCE_DAYS` and `LINK` are already in that file (WP24 uses them in `#freshness` and the tables); if `LINK` has another name there, use it. This documents a display rule, not a formula, window or gate, so `METHODOLOGY_VERSION` does not change and no change-log row is added.
+`PRICE_STALENESS_TOLERANCE_DAYS` and `LINK` are already in that file (WP24 uses them in `#freshness` and the tables); if `LINK` has another name there, use it. `METHODOLOGY_VERSION` does not change and no change-log row is added: the clock is a status indicator for the collector, it changes how no published number is computed, withheld or flagged, so it is none of the formula, window, threshold, weight or gate changes the versioning rule in `app/content/methodology.ts` covers. (Practical reason too: WP25, which runs in parallel, replaces `METHODOLOGY_CHANGES` wholesale, so a WP27 row would be lost in the merge.)
 
 ### Step 32. Production smoke: fail when the clock would be amber
 
@@ -3140,7 +3179,7 @@ export function judgeDataClock(html, nowMs) {
     );
 ```
 
-The `/` HTML is ISR: it is regenerated after each scrape (tag revalidation), so a stale `data-newest-priced-at` there means no scrape has written prices since. In `renderSummary`'s "Likely causes" sentence, add "the collector stopped (data clock older than 30 h)," before "an RPC failing".
+The `/` HTML is ISR: it is regenerated after each scrape (tag revalidation), so a stale `data-newest-priced-at` there means no scrape has written prices since. WP11 revalidates with the `"max"` profile (stale while revalidate), so the first request after a scrape can still receive the previous render; `withRetry` waits 30 s and asks again, which then gets the regenerated page, so a quiet night cannot raise a false alarm unless the previous render itself is over 30 h old. In `renderSummary`'s "Likely causes" sentence, add "the collector stopped (data clock older than 30 h)," before "an RPC failing".
 
 ### Step 33. Docs
 
@@ -3199,6 +3238,18 @@ describe("navigation, search and brand (WP27)", () => {
     expect(staticImports).toEqual([]);
   });
 
+  it("keeps colour instant and focus visible in forced colours", () => {
+    // 01-PRODUCT-DIRECTION.md §3.5; Tailwind 4's outline-none also hides the
+    // outline in forced-colours mode, so focus uses outline-hidden plus a ring.
+    for (const file of WP27_TOKEN_ONLY) {
+      const source = SOURCES.find((s) => s.file === file);
+      const found = [...source!.text.matchAll(/\btransition-(?:colors|all)\b|\boutline-none\b/g)].map(
+        (m) => `${file}: ${m[0]}`
+      );
+      expect(found).toEqual([]);
+    }
+  });
+
   it("hard-codes no primary nav href outside the nav config", () => {
     const navFiles = ["components/Header.tsx", "components/nav/MobileNavSheet.tsx", "components/Footer.tsx"];
     const found = SOURCES.filter((s) => navFiles.includes(s.file)).flatMap((s) =>
@@ -3211,7 +3262,7 @@ describe("navigation, search and brand (WP27)", () => {
 });
 ```
 
-Do not write any of the matched strings in a comment under `app/` (the scan reads comments). `searchEvents.ts` uses `import("./GlobalSearch")`, a dynamic import, which the third rule does not match.
+Do not write any of the matched strings in a comment under `app/` (the scan reads comments): that includes the two class names the fifth rule bans, so a comment says "colour transition", never the utility name. `searchEvents.ts` uses `import("./GlobalSearch")`, a dynamic import, which the third rule does not match.
 
 34c. Refresh the ratchet baseline (the hex and brand-red counts of `Header.tsx`, `Footer.tsx`, `CardRinkPromo.tsx` and the four sign-in files went down):
 
@@ -3249,7 +3300,7 @@ Compare `Shared JS (gz)` in the two files: the increase must be 6.0 kB or less. 
 - **Do not read `cookies()` or `headers()` in the layout or the chip.** It would make every page dynamic. The chip reads a tagged cache only.
 - **Do not call `getCachedMarketProductSummaries` from inside another `unstable_cache` callback** (WP11: Next skips the inner cache). `getCachedPipelineStatus` is a React `cache()` over a plain async function, which is allowed.
 - **Do not let the chip break a page.** `getCachedPipelineStatus` must catch and return `EMPTY_PIPELINE_STATUS`; the root layout renders it on every route, including error pages.
-- **Do not put the chip in the right-hand cluster.** Its text changes length after hydration; on the right it would push the search button and the currency toggle sideways (layout shift). It sits left of the flexible gap.
+- **Do not put the chip after the search button, the currency toggle or the account slot.** Its text changes length after hydration; anything to its left in the right-anchored cluster would move (layout shift). It is the first item of the right-hand cluster, and the only one allowed to shrink (`min-w-0`).
 - **Do not use `role="menu"` for Tools or the account.** They are disclosure panels of links; `role="menu"` promises arrow-key menu behaviour the component does not have.
 - **Do not colour anything but the mark tile and the wordmark "é" brand red.** The active nav bar, the selected currency segment, buttons and focus rings are action blue. The promo gets no mark and a neutral secondary button.
 - **Do not add a service worker, offline page or push.** Out of scope (01-PRODUCT-DIRECTION.md §7). The manifest is for installability only. Do not change `theme_color` or `viewport.themeColor` from `#ffffff`.
@@ -3303,7 +3354,7 @@ Mock `server-only` (`jest.mock("server-only", () => ({}))`), `../../../../lib/se
 
 ### 5. `app/api/public/catalog/__tests__/catalogSize.test.ts` (new, node)
 
-Build 306 synthetic products with a seeded generator (set names of 1 to 3 words, 55 sets, codes like `SV08`, labels from 12 production-style types, 15 % variants, 10 % without an image, prices $5 to $2,000), `buildCatalogPayload(products, new Date("2026-09-30T10:00:00Z"))`, `JSON.stringify` it: raw length at most 70 × 1024 bytes, `zlib.brotliCompressSync` (quality 11) at most 16 × 1024 bytes, and `isCatalogPayload` of the parsed JSON is true.
+Build 306 synthetic products with a seeded generator (set names of 1 to 3 words, 55 sets, codes like `SV08`, labels from 12 production-style types, 15 % variants, 10 % without an image, prices $5 to $2,000), `buildCatalogPayload(products, new Date("2026-09-30T10:00:00Z"))`, `JSON.stringify` it: raw length at most 96 × 1024 bytes, `zlib.brotliCompressSync` (quality 11) at most 16 × 1024 bytes, and `isCatalogPayload` of the parsed JSON is true.
 
 ### 6. `app/lib/__tests__/catalogPayload.test.ts` (new, node)
 
@@ -3328,10 +3379,11 @@ Mock `next/navigation` (`mockPush`, `mockPrefetch`), `global.fetch` resolving th
 5. Back on the first option, `Enter` calls `mockPush("/product/42")` and the dialog is gone.
 6. Reopen with `fireEvent.keyDown(document.body, { key: "k", ctrlKey: true })`, then close with Escape; reopen with `{ key: "k", metaKey: true }`. `fetch` is still called once in total.
 7. Focus the "Other field" input and press "/": no dialog opens. Press Ctrl-K there: the dialog opens.
-8. Open by clicking the button, type "abc", press Escape: the query is cleared and the dialog stays; press Escape again: the dialog closes and the button has focus.
+8. Focus the search button (`button.focus()`; jsdom's `fireEvent.click` does not move focus, and WP14's `Dialog` returns focus to whatever had it at open), click it, type "abc", press Escape: the query is cleared and the dialog stays; press Escape again: the dialog closes and the button has focus.
 9. `openGlobalSearch("151")` (from `searchEvents`) inside `act`: the dialog opens with the combobox value "151".
 10. Error path (fresh module state, `fetch` rejects): "Products could not be loaded." shows; typing "methodology" still lists the Methodology page option; clicking "Try again" calls `fetch` a second time.
 11. With the dialog open and results shown, `expect(await axeViolations(dialog)).toEqual([])`.
+12. Stale and withheld rows: a payload whose item 43 has `recorded_on` 5 UTC days before today (computed from `new Date()` in the test) and a price, and item 44 has `usd_price: null`. Typing a query that matches both shows "Last priced" plus the month and day in item 43's option (visible text, not only a `title`) and "No current price" in item 44's option, with no `data-direction` element in item 44's option.
 
 ### 9. `app/components/search/__tests__/searchEvents.test.ts` (new, jsdom)
 
@@ -3379,7 +3431,7 @@ Copy the `server-only`, `@supabase/supabase-js`, `next/cache` (`unstable_cache: 
 - Active state: `/prices` marks Prices `aria-current="page"` only; `/market` marks Screener; `/stats` marks Sets; `/` marks the logo; `/compare` sets no `aria-current` on the primary links.
 - Prefetch: Prices `data-prefetch="default"`; Portfolio, "Sign in" and "Create account" `data-prefetch="false"`. With `mockPathname = "/market"` the "Sign in" href is `/auth/login?next=%2Fmarket`.
 - Tools (desktop): `tap` the Tools button: `aria-expanded="true"`, `#tools-menu` lists "Box NAV calculator" `/box-calculator` and "Seller margin check" `/compare`; Escape closes it and focuses the button; `tap` outside closes it; `tap` the button twice: open, then closed (the WP03 mousedown-then-click regression).
-- Sheet: the button "Open menu" has `aria-haspopup="dialog"` and `aria-expanded="false"`; clicking it opens a dialog named "Menu" containing links Market, Prices, Screener, Sets, Portfolio, Box NAV calculator, Seller margin check, a radiogroup named "Display currency", "Sign in" and "Create account", and the `dataStatusSheet` element passed as a prop; Escape closes it and focus returns to "Open menu"; clicking "Prices" in it closes it; changing `mockPathname` and rerendering while it is open closes it.
+- Sheet: the button "Open menu" has `aria-haspopup="dialog"` and `aria-expanded="false"`; focusing it (`button.focus()`, because `fireEvent.click` does not move focus in jsdom) and clicking it opens a dialog named "Menu" containing links Market, Prices, Screener, Sets, Portfolio, Box NAV calculator, Seller margin check, a radiogroup named "Display currency", "Sign in" and "Create account", and the `dataStatusSheet` element passed as a prop; Escape closes it and focus returns to "Open menu"; clicking "Prices" in it closes it; changing `mockPathname` and rerendering while it is open closes it.
 - Signed in (`sessionStatus: "authenticated"`, `user`, `profile.username "ash"`): a button whose name matches `/ash/`; `tap` opens `#account-menu` with "Account settings" (`data-prefetch="false"`) and "Sign out"; clicking "Sign out" calls `signOut` and then `mockPush("/")`. No "Sign in" link is rendered.
 - Currency: render inside `CurrencyProvider` (`initialRate { rate: 1.36, date: "2026-09-29" }`, `_resetCurrencyPreferenceForTests()` and `localStorage.clear()` in `beforeEach`); the desktop radiogroup "Display currency" has CAD checked; clicking the USD radio checks it and `localStorage.getItem(CURRENCY_STORAGE_KEY)` is `"USD"`.
 - The search button named "Search products, sets and pages" is present with `aria-keyshortcuts="/ Control+K Meta+K"`.
@@ -3389,9 +3441,9 @@ Copy the `server-only`, `@supabase/supabase-js`, `next/cache` (`unstable_cache: 
 
 Change the expected labels "Sign In" to "Sign in" and "Sign Up" to "Create account". Keep all four cases (unknown and anonymous show the sign-in links and no `.animate-pulse`; authenticated shows the `/ash/` button and no "Sign in" link; unknown with a non-null user still shows "Sign in").
 
-### 17. `app/components/__tests__/Footer.test.tsx` (new, or extend WP24's footer test if it exists)
+### 17. `app/components/__tests__/Footer.test.tsx` (WP24 test 9, update)
 
-Mock `next/navigation` (`usePathname`) and `next/link` as above. `render(<Footer />)` at `/prices`: headings Browse, Tools, Account and Pokéfin (no "Explore"); Browse links Prices `/prices`, Screener `/market`, Sets `/analytics`, Methodology `/methodology`; Tools links `/box-calculator` and `/compare`; Account links `/portfolio`, `/auth/login`, `/auth/signup`; every internal link `data-prefetch="false"`; an `svg` with `aria-hidden="true"` precedes the wordmark. At `/auth/login` the footer renders nothing.
+WP24 created this file. Keep its mocks and every assertion except the headings, which change from ("Explore", "Account", "Pokéfin") to the four below. Add: `render(<Footer />)` at `/prices`: `h2` headings Browse, Tools, Account and Pokéfin (no "Explore"); Browse links Prices `/prices`, Screener `/market`, Sets `/analytics`, Methodology `/methodology`; Tools links `/box-calculator` and `/compare`; Account links `/portfolio`, `/auth/login`, `/auth/signup`; every internal link `data-prefetch="false"`; an `svg` with `aria-hidden="true"` precedes the wordmark. At `/auth/login` the footer renders nothing.
 
 ### 18. `app/components/ui/__tests__/Dialog.test.tsx` (WP14, add 3 cases)
 
@@ -3446,7 +3498,7 @@ The organization node has `logo` ending in `/brand/pokefin-icon-512.png`. Update
 
 ### 30. `app/__tests__/uiConventions.test.ts` (step 34)
 
-The WP27 block's four rules pass; WP23's and WP24's rules pass with the refreshed baseline.
+The WP27 block's five rules pass; WP23's and WP24's rules pass with the refreshed baseline.
 
 ### Must pass unchanged
 
@@ -3486,8 +3538,9 @@ pnpm build:stub
 
 grep -o '<link rel="manifest"[^>]*>\|<link rel="icon"[^>]*>\|<link rel="apple-touch-icon"[^>]*>' .next/server/app/index.html
 # expect: /manifest.webmanifest, /favicon.ico (sizes="48x48" or "any"), /icon.svg (type image/svg+xml), /apple-icon.png
-grep -c 'data-clock-tier="' .next/server/app/index.html
-# expect: 1 (the header chip; the sheet is not in the DOM until opened)
+grep -o 'data-clock-tier="' .next/server/app/index.html | wc -l
+# expect: 1 (the header chip; the sheet is not in the DOM until opened). grep -c would count
+# lines, and the HTML is one line.
 grep -c '/api/public/catalog' .next/server/app/index.html .next/server/app/prices.html
 # expect: 0 for both (no catalog reference or preload in page HTML)
 
@@ -3521,7 +3574,7 @@ Performance (step 35), with the perf build served:
 ```bash
 diff <(grep -E "Shared JS|/prices JS|/ JS|/product" /tmp/wp27-budget-before.txt) <(grep -E "Shared JS|/prices JS|/ JS|/product" /tmp/wp27-budget-after.txt)
 # expect: Shared JS (gz) up by 6.0 kB or less; no row with status FAIL, unset or missing in /tmp/wp27-budget-after.txt
-# expect: /api/public/catalog "raw" at most 71680 and "br" at most 16384 (the fixture's 306 products)
+# expect: /api/public/catalog "raw" at most 98304 and "br" at most 16384 (the fixture's 306 products)
 ```
 
 CI runs WP22's Lighthouse assertions: CLS and bf-cache must stay green on `/`, `/prices`, `/product/900001` and `/market`.
@@ -3529,19 +3582,20 @@ CI runs WP22's Lighthouse assertions: CLS and bf-cache must stay green on `/`, `
 Manual checks (`pnpm build:stub` with `SUPABASE_STUB_FIXTURE=perf`, `node scripts/perf-serve.mjs`, open `http://127.0.0.1:3100`):
 
 1440 px:
-1. Header matches the desktop wireframe: logo, Prices, Screener, Sets, Portfolio, Tools, the clock text "Prices as of ...", search button with `/`, USD/CAD, Sign in, Create account. No red except the mark and the "é".
+1. Header matches the desktop wireframe: logo, Prices, Screener, Sets, Portfolio, Tools on the left; the clock text "Prices as of ...", search button with `/`, USD/CAD, Sign in, Create account on the right. No red except the mark and the "é". The mark shows a P with a square counter.
+1b. Resize to 1024 px and 1280 px, signed out and then signed in (an account with a 20-character username): no horizontal scrollbar at either width; at 1280 px the clock text may end in an ellipsis but its tooltip shows the full sentence; take screenshots before and after signing in and confirm the clock, search button and currency toggle did not move.
 2. `/prices`: Prices has the blue bar. `/market`: Screener; the page H1 reads "Screener". `/analytics`: Sets; H1 "Sets". `/compare`: the Tools button reads as current and the menu marks Seller margin check.
 3. Tools opens on click, Escape closes and returns focus, clicking outside closes.
 4. Click USD in the header on `/prices`: every card price switches to USD without a reload, the pressed segment paints at once. Go to `/market`, `/portfolio` (signed in) and home: all USD, no page-level toggle. Reload: still USD. `/box-calculator`: the "Recipe currency" control shows USD; switch it to CAD, then check the header still says USD.
 5. Open `/prices?currency=CAD` with USD chosen: the header switches to CAD and the address bar loses `currency=CAD` (other keys kept).
-6. DevTools Network, filter `catalog`: load pages, hover the search button: no request. Press `/`: one `/api/public/catalog` request (about 15 kB transferred). Close, press Ctrl-K: no second request.
+6. DevTools Network, filter `catalog`: load pages, hover the search button: no request. Press `/`: one `/api/public/catalog` request (under 16 kB transferred). Close, press Ctrl-K: no second request.
 7. Type `151 etb`, `prism`, `sv8.5`, `pokemon center`, `zzzz`: sensible first results; Enter opens the first; arrows move with wrap; `zzzz` shows "No matches" and "Missing a product? Tell us". Keyboard only, from page load to a product page: `/`, type, Enter.
 8. Performance panel, CPU 4x slowdown, "Disable cache": record pressing `/` on `/prices`, then typing `prism`. The Interactions track shows each interaction at 100 ms or less (the first open included: the dialog paints with the loading field before the chunk arrives).
 9. Hover the clock: the title shows the coverage line. Click it: `/methodology#cadence`, heading visible below the sticky header, the new paragraph says 30 hours.
 10. `/favicon.ico`, `/icon.svg` (DevTools Rendering, emulate `prefers-color-scheme: dark`: the tile turns light red with a dark glyph), `/apple-icon.png`, `/manifest.webmanifest`. Application panel, Manifest: no errors, three icons, three shortcuts, installable.
 
 390 px (DevTools device toolbar, touch emulation on):
-1. One 64 px row: mark, wordmark, clock icon, search icon, menu button; nothing overflows horizontally.
+1. One 64 px row: mark and wordmark on the left; clock icon, search icon and menu button on the right; nothing overflows horizontally.
 2. Menu: the sheet slides in at the right with a dimmed backdrop; the page behind does not scroll when the sheet is scrolled to its end (overscroll contained); focus is inside; Escape, backdrop tap and X close it; focus returns to the menu button. Rows and segments are 44 px.
 3. The sheet's clock row shows the full text and the coverage line; the currency block shows the rate with its Bank of Canada date.
 4. Search opens full screen; the input text is 16 px (no zoom on focus in iOS Safari, if a device is available); the keyboard's action key reads "Go"; results scroll under the sticky input.
@@ -3550,7 +3604,7 @@ Manual checks (`pnpm build:stub` with `SUPABASE_STUB_FIXTURE=perf`, `node script
 
 ## Owner actions
 
-1. **D6, the mark.** Look at the interim monogram (header, favicon, `/apple-icon.png`, `/brand/pokefin-icon-512.png`) and either approve it or supply a final mark (an SVG on a square grid, legible at 16 px, one colour on the brand red). Replacing it later is a 30-minute follow-up: update `MARK_GLYPH_PATH` in `app/components/brand/PokefinMark.tsx`, the `<path>` in `app/icon.svg` and `GLYPH` in `scripts/brand/make-icons.py`, rerun the script, commit.
+1. **D6, the mark.** Look at the interim monogram (header, favicon, `/apple-icon.png`, `/brand/pokefin-icon-512.png`) and either approve it or supply a final mark (an SVG on a square grid, legible at 16 px, one colour on the brand red). Replacing it later is a 30-minute follow-up: update `MARK_GLYPH_PATH` in `app/components/brand/PokefinMark.tsx`, the `<path>` in `app/icon.svg` and `GLYPH` and `COUNTER` in `scripts/brand/make-icons.py`, rerun the script, commit.
 2. **After the deploy:** hard-refresh the site in Chrome, Firefox and Safari and confirm the new tab icon (browsers cache favicons for days; an old icon for a while is expected). On a phone, "Add to Home Screen" (iOS) and "Install app" (Android Chrome) show the new icon and open `/?source=pwa` standalone.
 3. **Watch the first production smoke run** after merge (Actions, "Production smoke"): the new "Data clock" row should read "newest price N h old". If the collector happens to be offline, the issue it opens is correct; restart the collector.
 4. Nothing to configure: no migration, environment variable, secret or third-party service.
@@ -3563,7 +3617,7 @@ Manual checks (`pnpm build:stub` with `SUPABASE_STUB_FIXTURE=perf`, `node script
 - [ ] Search results list products (price in the header currency plus 30D change), sets and pages; Enter opens the active option; keyboard-only search is covered end to end by `SearchLauncher.keyboard.test.tsx`.
 - [ ] No request to `/api/public/catalog` before the first open (test 8 case 1 and manual check 6); one per tab per hour after it.
 - [ ] Opening search measures 100 ms or less INP (manual check 8), including the first open.
-- [ ] `/api/public/catalog` is static ISR (Revalidate 1d, tag `market-products`), excluded from `proxy.ts`, at most 16 kB br for 306 products, and never contains a price or 30D change that migration 0023 withheld.
+- [ ] `/api/public/catalog` is static ISR (Revalidate 1d, tag `market-products`), excluded from `proxy.ts`, at most 96 kB raw and 16 kB br for 306 products, and never contains a price or 30D change that migration 0023 withheld.
 - [ ] The header chip shows "Prices as of …" up to 12 h, "Last update … h ago" (after mount) up to 30 h, and turns amber "Updates delayed since …" beyond 30 h; `DataStatusChip.test.tsx` proves amber with a 31 h-old fixture, and `DataClock.test.tsx` proves the server HTML is absolute and hydration is clean.
 - [ ] `/methodology#cadence` explains the clock with the 30-hour constant; WP22's smoke test fails when `data-newest-priced-at` on `/` is older than 30 h.
 - [ ] The USD/CAD choice lives in the header (and the sheet); `/prices`, `/market` and `/portfolio` have no currency toggle; `/box-calculator` has "Recipe currency" only; a legacy `?currency=` link sets the choice once and leaves the URL.
@@ -3571,7 +3625,7 @@ Manual checks (`pnpm build:stub` with `SUPABASE_STUB_FIXTURE=perf`, `node script
 - [ ] No Poké Ball remains: the Verification grep prints nothing, `app/icon.png` is gone, the old PNG hash appears nowhere; `app/icon.svg` has the dark-scheme rule; `favicon.ico` has 16, 32 and 48 px frames; `apple-icon.png` is 180 px.
 - [ ] `app/manifest.ts` serves name, short name, `start_url` `/?source=pwa`, `standalone`, theme `#ffffff`, background `#f8fafc`, icons 192, 512 and 512 maskable, and shortcuts Prices, Portfolio and Screener. No service worker.
 - [ ] The footer has Browse (Prices, Screener, Sets, Methodology), Tools, Account and Pokéfin columns and the new mark; every footer, auth and account link has `prefetch={false}`; primary nav links keep the default except Portfolio.
-- [ ] Shared JS grows by 6.0 kB gz or less; no WP22 route limit is raised; Lighthouse CLS and bf-cache assertions stay green.
+- [ ] Shared JS grows by 6.0 kB gz or less; no WP22 limit is raised except, if needed, the shared JS limit within that allowance with the `Perf budget raise:` line in the PR; Lighthouse CLS and bf-cache assertions stay green.
 - [ ] `uiConventions.baseline.json` only decreases, except the one documented `manifest.ts: 2` hex entry; the WP27 conventions block passes.
 - [ ] `tsc`, lint, the full jest suite, `test:scripts` and `pnpm build:stub` pass.
 
@@ -3611,7 +3665,7 @@ PR title: `WP27: Task-based navigation, global search, data clock and new mark`
 
 PR body:
 - Summary: link `audits/remediation/WP27-navigation-search-and-data-clock.md`; the goal in two sentences; screenshots of the header at 1440 px (signed out, signed in, Tools open), at 390 px (bar and open sheet), the search dialog at both widths (results, no matches), and the chip in each tier (from the tests' rendered markup or a temporary local stub).
-- Decisions and why: the chip left of the flexible gap (no layout shift); search panel as a lazy chunk; catalog on first open only; box calculator keeps a recipe currency; legacy `?currency=` adoption; interim mark pending D6; promo without a mark and with a neutral button; `manifest.ts: 2` hex ratchet entry; methodology paragraph without a version bump (a display rule, not a formula).
+- Decisions and why: the chip first in the right-hand cluster, the only shrinkable item, and the fixed-width account slot (no layout shift, no overflow at 1280 px); the mark's square counter; search panel as a lazy chunk; catalog on first open only; box calculator keeps a recipe currency; legacy `?currency=` adoption; interim mark pending D6; promo without a mark and with a neutral button; `manifest.ts: 2` hex ratchet entry; methodology paragraph without a version bump (a display rule, not a formula).
 - Measurements: `perf:budget` before and after (shared JS delta), catalog raw and br bytes, the INP recordings (manual check 8), favicon bytes before and after.
 - Tests added and edited (list every file from the Tests section).
 - Whether WP25 and WP26 were present, and what was done in step 5 as a result.

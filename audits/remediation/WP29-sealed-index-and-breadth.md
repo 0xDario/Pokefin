@@ -2,12 +2,12 @@
 
 - **Goal**: a collector-investor can answer "is sealed up?" in one glance: a daily, published, rules-based Pokéfin Sealed Index (level, 1D/7D/30D/1Y change, constituents, coverage, provisional flag) on `/indices/sealed`, with product-type, generation and set sub-indices and market breadth (advancers, decliners, new 52-week highs and lows) that shows whether a move is broad or three chase boxes. Every product, set and portfolio chart gets a benchmark to compare against (consumed by WP31, WP32, WP36, WP37).
 - **Why now / value**: the index is signature feature 3 in `01-PRODUCT-DIRECTION.md` §5: the home header (WP32), the benchmark toggle on product and portfolio charts (WP31, WP36) and the set charts (WP37) all read it. No sealed competitor publishes one (`research/competitive-landscape.md` §4 item 4). WP25 already computes the only input it needs (`product_daily_stats`), so the whole index is one migration and a cheap nightly job.
-- **Effort**: L, 14 to 16 hours (one migration validated twice on PostgreSQL 16 with a 22-case SQL fixture module, a backfill script, a scraper hook, two library modules, two cached reads, one server page with three components, two route handlers, methodology v-next, perf fixture and budgets, tests).
+- **Effort**: L, 14 to 16 hours (one migration validated twice on PostgreSQL 16 with a 23-case SQL fixture module, a backfill script, a scraper hook, two library modules, two cached reads, one server page with three components, two route handlers, methodology v-next, perf fixture and budgets, tests).
 - **Depends on**: WP21 (`pokefin_scraper` role, `scraper_db.py`, `scripts/db/replay_migrations.sh`, CI job "Database replay and Python tests"), WP22 (`frontend/perf-budgets.json`, `scripts/fixtures/perf.mjs`, `pnpm perf:budget`), WP23 (`Stat`, `Delta`, `Badge`, `DataList`, `EmptyState`, `Skeleton`, `PageHeader`, `ProvenanceLine`, `buttonClasses`, `WarnIcon`, chart tokens, `test-utils/axe.ts`), WP24 (`/methodology` with the `#index` placeholder, `app/content/methodology.ts`, `app/lib/metricDefinitions.ts`, `MetricLabel`, `app/lib/jsonLd.ts`), WP25 (`product_daily_stats`, `refresh_market_analytics(p_day)`, the 00:30 UTC pg_cron finalisation, `market_analytics.py`, `fetchAllRows` in `serverMarketData.ts`, methodology `#range-52w`). Through them: WP07 (`app/lib/format.ts`), WP11 (`cacheTags.ts`, `DAILY_BACKSTOP_SECONDS`, the scrape revalidation hook), WP13 (`app/sitemap.ts`, `app/lib/site.ts`), WP20 (`pnpm types:db`). Soft: WP26 (`app/lib/publicRoute.ts`, `publicMarketApi.ts`, `forbiddenChunks`, the public-route ESLint list) and WP27 (`navConfig.ts`); each step that touches them says what to do when they are absent.
 - **Unblocks**: WP31 (benchmark overlay via `/api/public/index/[code]`), WP32 (home header: `getCachedIndexSummary`, `currentSummaries`, breadth), WP36 (money-matched portfolio benchmark on the headline series), WP37 (set index charts: `set-<sets.id>` codes, `IndexChart`).
 - **Placement**: after WP25 (reads `product_daily_stats`; its nightly job follows WP25's 00:30 UTC finalisation and finalises the day itself if that job has not run). Parallel with WP28. Reserves migration **0037** and keeps it if it merges out of order. Must precede WP31, WP32, WP36 and WP37.
 - **Suggested branch name**: `remediation/wp29-sealed-index-and-breadth`
-- **Risk level**: medium. It adds a SECURITY DEFINER function the scraper and pg_cron call daily; the schema is additive (no existing object changes), writes happen only inside that function, published days are never rewritten, and a 22-case database test proves the arithmetic, the gates and reproducibility.
+- **Risk level**: medium. It adds a SECURITY DEFINER function the scraper and pg_cron call daily; the schema is additive (no existing object changes), writes happen only inside that function, published days are never rewritten, and a 23-case database test proves the arithmetic, the gates and reproducibility.
 
 ## Why
 
@@ -23,7 +23,7 @@ Today nobody can tell whether sealed Pokémon is up or down as a market: the hom
             v
  refresh_market_index(p_day [, p_start])   SECURITY DEFINER, advisory lock
    1. refuses today, returns not_initialised / already_published / behind without writing
-   2. for each missing day up to p_day (at most 31):
+   2. for each missing day up to p_day (at most 31, unless p_start: the backfill):
         a. finalises that day's stats if any row was written before the day ended
            (calls refresh_market_analytics(day)), so the order of the two nightly jobs cannot matter
         b. freeze_market_index_month(month)   first call of a month only: writes index_constituents
@@ -44,7 +44,7 @@ Today nobody can tell whether sealed Pokémon is up or down as a market: the hom
                                          WP31, WP36, WP37 overlays        CC BY 4.0, derived levels only
 ```
 
-The level for D-1 appears on the site after the next scraper run's revalidation (at most 4 hours after 00:45 UTC), or at the daily backstop when the scraper host is off.
+The level for D-1 appears on the site within an hour of the 00:45 UTC job (the two index reads refresh hourly, `INDEX_REFRESH_SECONDS`), or sooner when a scraper run's revalidation lands first. Without pg_cron, the first scraper run after midnight UTC publishes it (at most 4 hours). The page's overdue note therefore waits until 06:00 UTC (`INDEX_PUBLISH_GRACE_HOURS`) before it calls a day late.
 
 ### Rules and formulas (the numbers are mirrored in `app/lib/marketIndex.ts` and drift-tested)
 
@@ -53,9 +53,9 @@ Notation: `s(p, t)` is product `p`'s `product_daily_stats` row for UTC day `t`. 
 | Item | Definition | Edge cases |
 |---|---|---|
 | Selection day `sel(M)` | Newest `product_daily_stats.day` in `[M - 7, M - 1]` for the month starting `M` | None found: the month gets no list and no index publishes that month. The first month of history is usually skipped this way (no look-ahead) |
-| Headline universe `U(M)` | Products with `s(p, sel).is_price_fresh`, `usd_price >= 15` (USD), `distinct_prices_365d >= 3`, `sets.release_date <= M - 90`, and a product type whose text (name and label, lower case, `_` and `-` as spaces) contains neither `booster pack` nor `sleeved booster` | Fewer than 3: no list. A product without a set or with a NULL release date never qualifies. `products.active` today is not consulted: a product counts when it has a stats row that day, so history is never rebuilt with today's list |
+| Headline universe `U(M)` | Products with `s(p, sel).is_price_fresh`, `usd_price >= 15` (USD), `distinct_prices_365d >= 3`, `sets.release_date <= M - 90`, and a product type whose text (name and label, lower case, `_` and `-` as spaces) contains neither `booster pack` nor `sleeved booster` | Fewer than 3: no list. A product without a set or with a NULL release date never qualifies. `products.active` is not consulted by the index: a product counts when it has a stats row that day. WP25 writes stats rows for the products active when a day is computed, so live days keep a product that is deactivated later, while months rebuilt by the one-off backfill miss products removed before it ran (disclosed on `/methodology#index-constituents`) |
 | Sub-index list `C(I, M)` | `U(M)` filtered by the definition: `type` by `filter.type_patterns` (substring of the type text), `generation` by `sets.generation_id`, `set` by `products.set_id` | Fewer than 3 matches: no list, no level that month; the chain resumes from its last level when the index qualifies again |
-| Freeze | The first refresh of a month writes every list for the month in one transaction; once the headline has a list for `M`, nothing for `M` changes | Generation and set definitions are created the first month they reach 3 constituents (`gen-<generations.id>`, `set-<sets.id>`); a renamed set or generation renames its index |
+| Freeze | The first refresh of a month writes every list for the month in one transaction; once the headline has a list for `M`, nothing for `M` changes | Generation and set definitions are created the first month they reach 3 constituents (`gen-<generations.id>`, `set-<sets.id>`); a renamed set or generation renames its index. Their `sort_order` is `2100-01-01 - release_date` in days (the generation's newest constituent set), so the newest set and generation list first |
 | Carried price `q(p, t)` | `s(p, t).usd_price` when `is_price_fresh` and `price_day >= t - k`, else NULL. `k = 3` (daily), `6` (weekly) | A stale price (withheld under 0023, or the cached price disagrees with the newest row) is NULL: it never contributes |
 | Return `r(p, t)` | `clip(q(p, t) / q(p, t - d) - 1, -0.5, 0.5)`, `d = 1` day (daily) or `7` days (weekly), only when both prices exist | A gap up to 3 days is carried (returns of 0, then the whole move on the repricing day). A longer gap drops the constituent out; on the day it is priced again `q(t - d)` is NULL, so there is no catch-up jump; it contributes from the next day |
 | Mean return `R(I, t)` | Average of `r` over `C(I, month(t))` members with a return; `0` when none | Numeric arithmetic (exact sums), so a replay reproduces every digit |
@@ -68,7 +68,7 @@ Notation: `s(p, t)` is product `p`'s `product_daily_stats` row for UTC day `t`. 
 | New 52-week high / low | Fresh members tracked since `t - 364` or earlier (`first_tracked_day`) whose `high_52w(t) > high_52w(t - 7)` (low: `low_52w(t) < low_52w(t - 7)`) | Exact: a rolling maximum only rises when a new value enters, so a rise means a new (3-day robust, WP25) high inside the last 7 days |
 | Changes (view) | 1D: previous row is exactly `t - 1`. 7D and 30D: newest level in `[t - N - 7, t - N]`. 1Y: newest in `[t - 379, t - 365]` | Missing anchor: NULL, shown as `--` with a reason, never 0 |
 | Publication | Only finished UTC days (`p_day < today`), so the site always shows D-1 | |
-| Catch-up | The nightly call fills at most 31 missing days; further behind, it writes nothing and returns `behind` (run the backfill) | A collection outage longer than 3 days shows as provisional days with flat levels: moves during the stop are not captured (documented) |
+| Catch-up | The nightly call fills at most 31 missing days; further behind, it writes nothing and returns `behind` (run the backfill). The backfill passes `p_start`, which may cross any gap, including a month that got no list and so wrote no level | A collection outage longer than 3 days shows as provisional days with flat levels: moves during the stop are not captured (documented). Re-running a published day returns `already_published` and writes nothing |
 
 Index family and codes (seeded by 0037 unless noted):
 
@@ -90,7 +90,7 @@ It is never called cap-weighted, market-cap or value-weighted anywhere (copy, co
 - `market_index_daily` for one index: primary-key range scan, about 365 rows a year.
 - `refresh_market_index`: 9 ms per day on that database, 80 ms on the first day of a month (the freeze). The backfill of about 400 days takes seconds plus one round trip per day.
 - Storage: about 70 indices x 365 rows = 26k rows a year, under 3 MB.
-- Frontend: `/indices/sealed` has zero client components of its own and no charting library (the chart is SVG strings built on the server; labels are HTML). Its JS is the shared bundle. Reading `searchParams` (range and sort) makes the route dynamic, which is acceptable because both reads are `unstable_cache` entries (tag `market-products`, daily backstop): a request costs one render and no database query. Budget: `/indices/sealed` joins `perf-budgets.json` with the targets of the current sets route (`/analytics`: JS 150 kB gz) and a 40 kB br document target; the recharts and supabase-js chunks are forbidden on it.
+- Frontend: `/indices/sealed` has zero client components of its own and no charting library (the chart is SVG strings built on the server; labels are HTML). Its JS is the shared bundle. Reading `searchParams` (range and sort) makes the route dynamic, which is acceptable because both reads are `unstable_cache` entries (tag `market-products`, refreshed hourly by `INDEX_REFRESH_SECONDS` because pg_cron publishes after the scraper's last revalidation of the day): a request costs one render and no database query, and the database sees at most one 1.2 ms view read and one range read per hour. Budget: `/indices/sealed` joins `perf-budgets.json` with the targets of the current sets route (`/analytics`: JS 150 kB gz) and a 40 kB br document target; the recharts and supabase-js chunks are forbidden on it.
 
 ### UI: `/indices/sealed`
 
@@ -186,22 +186,22 @@ States:
 - **Not published** (no headline row yet, before the owner runs the backfill): `EmptyState` h2 "The Sealed Index is not published yet", description "Levels appear after the first nightly run. The rules are on the methodology page." with a link to `/methodology#index`.
 - **Error** (a read failed; both readers return `null` uncached): `EmptyState` h2 "The index could not be loaded", description "This is usually temporary. Reload the page in a minute.", a secondary "Reload" link to the same URL.
 - **Provisional day**: a `role="note"` block in the warn role under the stats: "Provisional: {n} of {N} constituents ({x}%) were priced on {date}, under the 80% a full day needs. The level is published as computed and is not revised. How provisional days work" (link to `/methodology#index-calculation`). Sub-index rows show a warn `Badge` "Provisional" (desktop) or ", provisional" in the meta line (phone).
-- **Stale data** (the newest headline day is 2 or more days before today UTC: the nightly job did not run): a second warn note "Not updated since {date}. The index is published each night for the previous day, and the latest run has not completed."
+- **Stale data** (the next day should be on the site and is not: from 06:00 UTC two days after the newest headline day, `isIndexOverdue(day)` with the request time; no false alarm in the hours after midnight while D-1 is being published): a second warn note "Not updated since {date}. The index is published each night for the previous day, and the latest run has not completed."
 - **Short history**: a change without an anchor shows `--` with an sr-only reason ("Less than a year of levels"); a chart with fewer than 2 points shows the flat "No history" box.
 - **Empty sub-index list**: `EmptyState` "No sub-index has a level for this day".
 
 Interactions (all links, no client JavaScript):
 - Range: `1Y` (default, the 365 days ending on the newest level) and `All`, as `?range=all`; the control is a `nav` "Chart range" of two links, the current one `aria-current="page"`, `scroll={false}` so the page does not jump. The x-domain is clamped to the data; the weekly segment is dashed and footnoted only when it is in range.
-- Sort: desktop column headers are links (`?sort=level|1d|7d|30d|1y|constituents|name&dir=asc|desc`); clicking the sorted column flips it, another column starts descending (name ascending); `aria-sort` on the `th`, a visible ▲/▼ on the sorted column and a faint ↕ on the others, bold sorted header (WP23 table rules). Default order: product types, then generations, then sets, each by catalog order then name. Phones get chip links (Grouped, 7D, 30D, 1Y, Name) and the row's change follows the sorted window (7D by default). Missing values sort last in both directions.
+- Sort: desktop column headers are links (`?sort=level|1d|7d|30d|1y|constituents|name&dir=asc|desc`); clicking the sorted column flips it, another column starts descending (name ascending); `aria-sort` on the `th`, a visible ▲/▼ on the sorted column and a faint ↕ on the others, bold sorted header (WP23 table rules). Default order: product types in catalog order, then generations, then sets, each newest release first (`sort_order`), then name. Phones get chip links (Grouped, 7D, 30D, 1Y, Name) and the row's change follows the sorted window (7D by default). Missing values sort last in both directions.
 - The canonical URL is `/indices/sealed` for every parameter combination.
 
-Accessibility: one `h1`; sections labelled by their `h2` (Level and changes is sr-only); the SVG is `aria-hidden` and the `figcaption` carries an sr-only sentence with the range, first and last level, low and high; the CSV is the data alternative. Colour is never the only cue: `Delta` glyphs plus sr-only direction words, breadth counts in text beside the decorative bar. Touch targets 44 px on coarse pointers. No motion beyond 150 ms colour transitions.
+Accessibility: one `h1`; sections labelled by their `h2` (Level and changes is sr-only); the SVG is `aria-hidden` and the `figcaption` carries an sr-only sentence with the range, first and last level, low and high; the CSV is the data alternative. Colour is never the only cue: `Delta` glyphs plus sr-only direction words, breadth counts in text beside the decorative bar. Touch targets 44 px on coarse pointers. No motion: the range and sort links change colour instantly (`01-PRODUCT-DIRECTION.md` §3.5 allows only opacity and transform transitions). The sub-index table scrolls inside its own box between 768 and 1024 px (the Group column is hidden below 1024 px), so the page never scrolls sideways.
 
 Copy rules: "as of the close of {date} (UTC)", "Market Price", "TCGplayer", "Equal-weighted", never "live", "real-time", "all-time", "cap-weighted" or an em dash.
 
 ### Public contracts for later packages
 
-- `getCachedIndexSummary(): Promise<IndexSummary[] | null>`, `getCachedIndexSeries(code): Promise<IndexPoint[] | null>` (`app/lib/serverMarketData.ts`); `currentSummaries`, `HEADLINE_INDEX_CODE`, `sliceIndexRange`, `INDEX_RULES` (`app/lib/marketIndex.ts`); `buildIndexChart` (`app/lib/indexChart.ts`); `IndexChart` (`app/indices/sealed/IndexChart.tsx`, takes `points` and `title`).
+- `getCachedIndexSummary(): Promise<IndexSummary[] | null>`, `getCachedIndexSeries(code): Promise<IndexPoint[] | null>` (`app/lib/serverMarketData.ts`); `currentSummaries`, `HEADLINE_INDEX_CODE`, `sliceIndexRange`, `INDEX_RULES`, `isIndexOverdue(day, now?)` (`app/lib/marketIndex.ts`; pass nothing or a `Date` for a request-time render, which waits for `INDEX_PUBLISH_GRACE_HOURS`; a `YYYY-MM-DD` key, as WP32 passes `utcTodayKey()`, keeps the day-granular rule: 2 or more days old); `buildIndexChart` (`app/lib/indexChart.ts`); `IndexChart` (`app/indices/sealed/IndexChart.tsx`, takes `points` and `title`).
 - `GET /api/public/index/[code]`: ISR (`force-static`, `revalidate = 86400`, empty `generateStaticParams`), 200 `{ code, name, asOf, base: 100, weeklyUntil, d: ["YYYY-MM-DD"...], l: [level to 4 decimals...], p: [positions of provisional points] }` oldest first with `x-pokefin-generated-at`; 404 for a malformed or unknown code; 500 (never cached) when a read fails. Browser helper `fetchPublicIndexSeries(code)` in `app/lib/publicMarketApi.ts` (when WP26 has landed).
 - `GET /indices/sealed/levels.csv`: headline levels and breadth, two leading `#` lines (licence, credit, as-of), header `date,level,resolution,provisional,constituents,contributing,coverage_pct,advancers_7d,decliners_7d,unchanged_7d,new_highs_52w,new_lows_52w`; `Content-Disposition: attachment; filename="pokefin-sealed-index.csv"`, `Link: <https://creativecommons.org/licenses/by/4.0/>; rel="license"`, CDN `s-maxage=3600`; 503 `no-store` when the read fails.
 
@@ -261,7 +261,7 @@ If a hard-dependency check fails, stop and report which package is missing; this
 - `forbiddenChunks` or `PUBLIC_ROUTE_CLIENT_FILES` missing: skip steps 21c and 20; the page test's source guard (Tests, frontend item 6) is then the only zero-chart-JS gate, and the PR asks WP26 to add `/indices/sealed` to its rules.
 - `navConfig.ts` missing (WP27 not merged): skip steps 23b and 23c and list the footer link (step 23b's code) in the PR's "Noticed, out of scope" line for the next package that edits `navConfig.ts` (WP32 or WP37).
 
-Tooling: PostgreSQL 16 or 17 for the database tests (Docker `postgres:17` or `/usr/lib/postgresql/16/bin`), a Python venv with `requirements.txt` plus `pytest` and `psycopg[binary]` (WP21). The SQL in step 1 was applied twice in a row to a scratch database built from WP25's 0033 and 0034 on PostgreSQL 16.13, `verify_migration.py` reported 113 OK rows, and the 22 database tests in Tests item 1 passed twice in a row on the same database.
+Tooling: PostgreSQL 16 or 17 for the database tests (Docker `postgres:17` or `/usr/lib/postgresql/16/bin`), a Python venv with `requirements.txt` plus `pytest` and `psycopg[binary]` (WP21). The SQL in step 1 was applied twice in a row to a scratch database built from WP25's 0033 and 0034 on PostgreSQL 16.13, `verify_migration.py` reported 113 OK rows, and the 23 database tests in Tests item 1 passed twice in a row on the same database (re-validated by the review on a fresh PostgreSQL 16.13 cluster after the `already_published`, catch-up and sort-order changes; `verify_migration.py` hashes in step 2 are from that run).
 
 Baseline (record the counts for the PR): from `frontend/`: `pnpm exec tsc --noEmit` (exit 0), `pnpm lint` (0 errors), `pnpm test --ci` (all pass), `pnpm run test:scripts`. From the repo root: `python -m pytest tests/ -q`.
 
@@ -298,6 +298,9 @@ Create the file with exactly this content.
 --   * Survivorship: published days are never recomputed. A month's list
 --     never changes once written. Products are not filtered by today's
 --     products.active; a product counts on a day when it has a stats row.
+--     product_daily_stats only holds products active when the day was
+--     computed, so months rebuilt by the backfill miss products removed
+--     before it ran (disclosed on /methodology#index-constituents).
 --   * Breadth over the constituents with a fresh price on the day: 7-day
 --     return above +0.5% (advancers), below -0.5% (decliners), within the
 --     band (unchanged); 52-week highs and lows set in the last 7 days by
@@ -597,9 +600,11 @@ BEGIN
   END IF;
 
   -- Generation and set indices, created the first month they qualify.
+  -- sort_order puts the newest first within each kind: days from the
+  -- (newest) set release to 2100-01-01, so a later release sorts earlier.
   INSERT INTO public.index_definitions (code, name, kind, filter, sort_order)
   SELECT 'gen-' || g.id, g.name || ' Index', 'generation',
-         jsonb_build_object('generation_id', g.id), 20
+         jsonb_build_object('generation_id', g.id), DATE '2100-01-01' - max(st.release_date)
     FROM public.index_constituents c
     JOIN public.products p ON p.id = c.product_id
     JOIN public.sets st ON st.id = p.set_id
@@ -608,18 +613,18 @@ BEGIN
      AND g.name IS NOT NULL
    GROUP BY g.id, g.name
   HAVING count(*) >= 3
-  ON CONFLICT (code) DO UPDATE SET name = EXCLUDED.name;
+  ON CONFLICT (code) DO UPDATE SET name = EXCLUDED.name, sort_order = EXCLUDED.sort_order;
 
   INSERT INTO public.index_definitions (code, name, kind, filter, sort_order)
   SELECT 'set-' || st.id, st.name || ' Index', 'set',
-         jsonb_build_object('set_id', st.id), 30
+         jsonb_build_object('set_id', st.id), DATE '2100-01-01' - st.release_date
     FROM public.index_constituents c
     JOIN public.products p ON p.id = c.product_id
     JOIN public.sets st ON st.id = p.set_id
    WHERE c.index_code = 'sealed' AND c.month = p_month
-   GROUP BY st.id, st.name
+   GROUP BY st.id, st.name, st.release_date
   HAVING count(*) >= 3
-  ON CONFLICT (code) DO UPDATE SET name = EXCLUDED.name;
+  ON CONFLICT (code) DO UPDATE SET name = EXCLUDED.name, sort_order = EXCLUDED.sort_order;
 
   -- Sub-index lists: the headline's constituents that match each filter,
   -- for indices with at least 3 matches.
@@ -800,14 +805,18 @@ REVOKE ALL ON FUNCTION public.refresh_market_index_day(date, date) FROM PUBLIC, 
 -- ============================================================
 
 -- Publish p_day (a finished UTC day) and any missing days before it, at most
--- 31. Status in the result:
---   ok                 the days from 'from' to 'day' were written
+-- 31 unless p_start. Status in the result:
+--   ok                 the days from 'from' to 'day' were processed
 --   not_initialised    no level exists yet and p_start is false: run
 --                      scripts/backfill_market_index.py
---   behind             the newest level is more than 31 days before p_day:
---                      nothing written, run the backfill
---   already_published  p_day is older than the newest level: nothing written
---                      (published days are never recomputed)
+--   behind             the newest level is more than 31 days before p_day
+--                      and p_start is false: nothing written, run the backfill
+--   already_published  p_day is on or before the newest level: nothing
+--                      written (published days are never recomputed)
+-- p_start is for scripts/backfill_market_index.py only: it may start the
+-- chain, and it may cross a gap longer than 31 days (a month without a
+-- constituent list writes no level, so a later month would otherwise stay
+-- 'behind' for ever). pg_cron and the scraper never pass it.
 CREATE OR REPLACE FUNCTION public.refresh_market_index(p_day date, p_start boolean DEFAULT false)
 RETURNS jsonb
 LANGUAGE plpgsql
@@ -836,15 +845,15 @@ BEGIN
   IF v_last IS NULL AND NOT COALESCE(p_start, false) THEN
     RETURN jsonb_build_object('status', 'not_initialised', 'day', p_day);
   END IF;
-  IF v_last IS NOT NULL AND p_day < v_last THEN
+  IF v_last IS NOT NULL AND p_day <= v_last THEN
     RETURN jsonb_build_object('status', 'already_published', 'day', p_day, 'last_day', v_last);
   END IF;
   -- 31 = INDEX_RULES.maxCatchUpDays.
-  IF v_last IS NOT NULL AND v_last < p_day - 31 THEN
+  IF v_last IS NOT NULL AND NOT COALESCE(p_start, false) AND v_last < p_day - 31 THEN
     RETURN jsonb_build_object('status', 'behind', 'day', p_day, 'last_day', v_last);
   END IF;
 
-  v_from := CASE WHEN v_last IS NULL OR v_last = p_day THEN p_day ELSE v_last + 1 END;
+  v_from := CASE WHEN v_last IS NULL THEN p_day ELSE v_last + 1 END;
   v_daily_from := public.market_index_daily_from();
 
   FOR v_day IN SELECT v_from + i FROM generate_series(0, p_day - v_from) AS i LOOP
@@ -1001,9 +1010,9 @@ python3 verify_migration.py migrations/0037_market_index.sql > /tmp/wp29_0037.sq
 #     market_index_type_text 4c3d27288d08fbe1d6b9b0b6450e4c23 (sql, immutable, invoker)
 #     market_index_detect_daily_from b3ab4c85766b77c846f523d3a03de7c5 (plpgsql, stable, invoker)
 #     market_index_daily_from ee989e75349d536052da945ef331f378 (invoker)
-#     freeze_market_index_month 6673a90c62f5f1b1b3f4342052819fa0 (invoker)
+#     freeze_market_index_month 1124df902cf7a8aaad72b19a54a390ca (invoker)
 #     refresh_market_index_day 5dde64d32156a6d9c36243e67230b41a (invoker)
-#     refresh_market_index 9d7e73f49a45605d297d20ad814081d1 (security definer)
+#     refresh_market_index 34c5c01d18fb769cbda054fd653c3201 (security definer)
 #     market_index_backfill_range 5b8f2847cd07bc678bd696b745d5f5e0 (sql, stable, security definer)
 #     reset_market_index e4cf650f2018745d16fae70ffd0f0eb5 (security definer)
 #     every one with "config search_path=public,pg_temp"
@@ -1124,6 +1133,9 @@ def refresh_index_after_run(day: date | None = None, *, pg_db=None, supabase=Non
         logger.warning(
             f"Sealed Index not published for {day} ({status}): run scripts/backfill_market_index.py."
         )
+    elif status == "already_published":
+        # The normal case for every run after the first one of the UTC day.
+        logger.info(f"Sealed Index already published through {result.get('last_day')}.")
     else:
         logger.info(f"Sealed Index refreshed for {day}: {result}")
     return result
@@ -1173,9 +1185,11 @@ per day, oldest first (WP29, migration 0037).
 
 Run it once after applying 0037, after WP25's scripts/backfill_daily_stats.py
 has filled product_daily_stats. Every call passes p_start = true, which lets
-the first day that has a constituent list start the chain (base 100); the
-function ignores it once a level exists. pg_cron and the scraper never pass
-it, so they only extend a chain this script started.
+the first day that has a constituent list start the chain (base 100) and lets
+a call cross a gap longer than 31 days (a month that got no constituent list
+writes no level, and the nightly call then reports 'behind' until this script
+runs). pg_cron and the scraper never pass it, so they only extend a chain
+this script started, at most 31 days at a time.
 
   python scripts/backfill_market_index.py                 # from the first stats day (or the day after the newest level) to yesterday (UTC)
   python scripts/backfill_market_index.py --end 2026-03-31
@@ -1598,11 +1612,25 @@ export function utcTodayKey(now: Date = new Date()): string {
 }
 
 /**
- * The index publishes D-1. A headline day older than yesterday means the
- * nightly job has not run: the page says so in the warning role.
+ * Hours after 00:00 UTC by which D-1 is normally on the site: pg_cron
+ * publishes at 00:45 UTC and the index reads refresh hourly
+ * (INDEX_REFRESH_SECONDS in serverMarketData.ts); without pg_cron, the first
+ * scraper run after midnight publishes it, at most 4 hours later.
  */
-export function isIndexOverdue(day: string, today: string = utcTodayKey()): boolean {
-  return daysBetweenKeys(day, today) >= 2;
+export const INDEX_PUBLISH_GRACE_HOURS = 6;
+const HOUR_MS = 3_600_000;
+
+/**
+ * The index publishes D-1 each night. With a Date (the default: request-time
+ * renders such as /indices/sealed), a day is overdue from 06:00 UTC two days
+ * after it, when the next day should already be on the site; so the hours
+ * after midnight, while D-1 is being published, never raise a false alarm.
+ * With a YYYY-MM-DD key (WP32's ISR header passes utcTodayKey()), the rule is
+ * day-granular: overdue when the day is 2 or more days before the key.
+ */
+export function isIndexOverdue(day: string, now: string | Date = new Date()): boolean {
+  if (typeof now === "string") return daysBetweenKeys(day, now) >= 2;
+  return now.getTime() >= dayKeyToMs(day) + 2 * DAY_MS + INDEX_PUBLISH_GRACE_HOURS * HOUR_MS;
 }
 
 // ------------------------------------------------------------------ page state
@@ -2047,11 +2075,19 @@ async function fetchIndexSeries(code: string): Promise<IndexPoint[]> {
 10c. At the end of the cached exports block (after WP25's `getCachedFxDaily`), add:
 
 ```ts
+/**
+ * The index reads also refresh hourly, not only on the scrape hook's tag:
+ * pg_cron publishes D-1 at 00:45 UTC, after the scraper's last revalidation
+ * of the day, and the scraper host may be off. Cost: at most one 1.2 ms view
+ * read and one primary-key range read per entry per hour.
+ */
+const INDEX_REFRESH_SECONDS = 3600;
+
 const getCachedIndexSummaryList = unstable_cache(
   fetchIndexSummaries,
   ["market-index-summary"],
   {
-    revalidate: DAILY_BACKSTOP_SECONDS,
+    revalidate: INDEX_REFRESH_SECONDS,
     tags: [CACHE_TAGS.marketProducts],
   }
 );
@@ -2074,7 +2110,7 @@ const getCachedIndexSeriesPoints = unstable_cache(
   fetchIndexSeries,
   ["market-index-series"],
   {
-    revalidate: DAILY_BACKSTOP_SECONDS,
+    revalidate: INDEX_REFRESH_SECONDS,
     tags: [CACHE_TAGS.marketProducts],
   }
 );
@@ -2533,8 +2569,8 @@ function phoneChange(row: IndexSummary, sort: IndexSort): { value: number | null
 }
 
 /**
- * Sub-indices (WP29): a dense sortable table from 768 px, a DataList on
- * phones (01-PRODUCT-DIRECTION.md §3.3). Sorting is a link (?sort=, ?dir=),
+ * Sub-indices (WP29): a dense sortable table from 768 px (the Group column
+ * from 1024 px), a DataList on phones (01-PRODUCT-DIRECTION.md §3.3). Sorting is a link (?sort=, ?dir=),
  * so the component ships no JavaScript.
  */
 export default function SubIndexTable({
@@ -2550,53 +2586,56 @@ export default function SubIndexTable({
 }) {
   return (
     <div className={className}>
-      <table className="hidden w-full border-collapse bg-surface text-body md:table">
-        <caption className="sr-only">Sub-indices with level and changes. Column headers sort the table.</caption>
-        <thead>
-          <tr className="h-10 border-b border-line text-small">
-            <th scope="col" aria-sort={ariaSort(sort, "name")} className="px-3 text-left">
-              <SortLink label="Index" sortKey="name" sort={sort} range={range} />
-            </th>
-            <th scope="col" className="px-3 text-left font-semibold text-ink-soft">
-              Group
-            </th>
-            {NUMERIC_COLUMNS.map((column) => (
-              <th key={column.key} scope="col" aria-sort={ariaSort(sort, column.key)} className="px-3 text-right">
-                <SortLink label={column.label} sortKey={column.key} sort={sort} range={range} alignRight />
+      {/* Scrolls inside its own box if 768 to 1023 px is too narrow; the page never scrolls sideways. */}
+      <div className="hidden overflow-x-auto md:block">
+        <table className="w-full min-w-[40rem] border-collapse bg-surface text-body">
+          <caption className="sr-only">Sub-indices with level and changes. Column headers sort the table.</caption>
+          <thead>
+            <tr className="h-10 border-b border-line text-small">
+              <th scope="col" aria-sort={ariaSort(sort, "name")} className="px-3 text-left">
+                <SortLink label="Index" sortKey="name" sort={sort} range={range} />
               </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((row) => (
-            <tr key={row.code} data-code={row.code} className="h-11 border-b border-line">
-              <th scope="row" className="px-3 text-left font-medium text-ink">
-                {row.name}
-                {row.provisional && (
-                  <Badge variant="warn" className="ml-2">
-                    Provisional
-                  </Badge>
-                )}
+              <th scope="col" className="hidden px-3 text-left font-semibold text-ink-soft lg:table-cell">
+                Group
               </th>
-              <td className="px-3 text-small text-ink-soft">{INDEX_KIND_LABELS[row.kind]}</td>
-              <td className="px-3 text-right font-semibold tabular-nums text-ink">{formatDecimal(row.level)}</td>
-              <td className="px-3 text-right">
-                <Delta value={row.chg1d} missingReason="No level the day before" />
-              </td>
-              <td className="px-3 text-right">
-                <Delta value={row.chg7d} missingReason="No level 7 days earlier" />
-              </td>
-              <td className="px-3 text-right">
-                <Delta value={row.chg30d} missingReason="No level 30 days earlier" />
-              </td>
-              <td className="px-3 text-right">
-                <Delta value={row.chg365d} missingReason="Less than a year of levels" />
-              </td>
-              <td className="px-3 text-right tabular-nums text-ink-soft">{formatInteger(row.nConstituents)}</td>
+              {NUMERIC_COLUMNS.map((column) => (
+                <th key={column.key} scope="col" aria-sort={ariaSort(sort, column.key)} className="px-3 text-right">
+                  <SortLink label={column.label} sortKey={column.key} sort={sort} range={range} alignRight />
+                </th>
+              ))}
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {rows.map((row) => (
+              <tr key={row.code} data-code={row.code} className="h-11 border-b border-line">
+                <th scope="row" className="px-3 text-left font-medium text-ink">
+                  {row.name}
+                  {row.provisional && (
+                    <Badge variant="warn" className="ml-2">
+                      Provisional
+                    </Badge>
+                  )}
+                </th>
+                <td className="hidden px-3 text-small text-ink-soft lg:table-cell">{INDEX_KIND_LABELS[row.kind]}</td>
+                <td className="px-3 text-right font-semibold tabular-nums text-ink">{formatDecimal(row.level)}</td>
+                <td className="px-3 text-right">
+                  <Delta value={row.chg1d} missingReason="No level the day before" />
+                </td>
+                <td className="px-3 text-right">
+                  <Delta value={row.chg7d} missingReason="No level 7 days earlier" />
+                </td>
+                <td className="px-3 text-right">
+                  <Delta value={row.chg30d} missingReason="No level 30 days earlier" />
+                </td>
+                <td className="px-3 text-right">
+                  <Delta value={row.chg365d} missingReason="Less than a year of levels" />
+                </td>
+                <td className="px-3 text-right tabular-nums text-ink-soft">{formatInteger(row.nConstituents)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
 
       <div className="md:hidden">
         <nav aria-label="Sort sub-indices" className="mb-3 flex flex-wrap gap-2">
@@ -2737,7 +2776,7 @@ function RangeControl({ range, sort }: { range: IndexRange; sort: IndexSort }) {
             scroll={false}
             prefetch={false}
             aria-current={selected ? "page" : undefined}
-            className={`inline-flex min-w-11 items-center justify-center rounded-control px-3 py-1 text-caption font-semibold transition-colors duration-150 motion-reduce:transition-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-action pointer-coarse:min-h-11 ${
+            className={`inline-flex min-w-11 items-center justify-center rounded-control px-3 py-1 text-caption font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-action pointer-coarse:min-h-11 ${
               selected ? "bg-action text-white" : "text-ink-soft hover:bg-surface-alt"
             }`}
           >
@@ -3173,6 +3212,8 @@ The marker is the one `reachabilityControl` already proves reachable from `/prod
 
 21d. Fill the limits with the perf build (Verification step 7).
 
+21e. `frontend/scripts/prod-smoke-lib.mjs` (WP22): append `{ path: "/indices/sealed", minPrices: 0 },` to `PUBLIC_CHECKS` (the page shows index levels, not money, so the check is the status, the absence of WP22's error markers and no redirect). In `frontend/scripts/prod-smoke-lib.test.mjs`, add `assert.ok(PUBLIC_CHECKS.some((check) => check.path === "/indices/sealed"));` to the test that already imports `PUBLIC_CHECKS`, or to a new `test("WP29: the index page is smoke-checked", ...)` importing it. If WP22's file is missing, skip this step and say so in the PR.
+
 ### Step 22. Methodology and metric definitions
 
 22a. `frontend/app/content/methodology.ts`:
@@ -3255,8 +3296,8 @@ import {
               <p>
                 A month&apos;s list is never rewritten and published levels are never recomputed, so a product that
                 later leaves the catalog keeps its past contribution. The months before the index was first published
-                were rebuilt from the daily statistics of the products tracked at that time, so products removed
-                before then are missing from those months.
+                were rebuilt in one run from the products still in the catalog on that day, so products removed
+                earlier are missing from those months, which can flatter that history slightly.
               </p>
             </Sub>
             <Sub id="index-calculation">
@@ -3278,7 +3319,8 @@ import {
               <p>
                 History from before daily collection began is weekly: returns run Monday to Monday, a price is carried
                 for up to {INDEX_RULES.weeklyCarryMaxDays} days, and the chart draws those points dashed. Those prices
-                were backfilled from TCGplayer&apos;s weekly buckets, where daily steps would be artefacts.
+                were backfilled from TCGplayer&apos;s price history, which for most of that year gives one price per
+                week spread over its seven days, so daily steps there would be artefacts.
               </p>
               <table className="w-full border-collapse">
                 <thead>
@@ -3326,7 +3368,7 @@ import {
           </Section>
 ```
 
-`LINK`, `TH`, `TD`, `Sub` and `PRICE_STALENESS_TOLERANCE_DAYS` already exist in the file (WP24). Check: `grep -cP '\x{2014}' app/methodology/MethodologyArticle.tsx` prints 0.
+`LINK`, `TH`, `TD`, `Sub` and `PRICE_STALENESS_TOLERANCE_DAYS` already exist in the file (WP24). Check: `LC_ALL=C.UTF-8 grep -cP '\x{2014}' app/methodology/MethodologyArticle.tsx` prints 0.
 
 22c. `frontend/app/lib/metricDefinitions.ts`:
 - Add the import `import { INDEX_BASE_LEVEL, INDEX_RULES } from "./marketIndex";`
@@ -3412,7 +3454,7 @@ python scripts/backfill_market_index.py    # Sealed Index levels from the start 
 
 ## Pitfalls: do not do this
 
-- **Do not recompute published days.** `refresh_market_index` returns `already_published` for a day older than the newest level; do not add a "force" parameter, a cascade, or a trigger that rewrites later levels. A rule change is a reset plus a backfill (Owner action 6), documented as a methodology version.
+- **Do not recompute published days.** `refresh_market_index` returns `already_published` for the newest published day and any older one, and writes nothing; do not add a "force" parameter, a cascade, or a trigger that rewrites later levels. A rule change is a reset plus a backfill (Owner action 6), documented as a methodology version.
 - **Do not select constituents with today's `products.active` or today's price.** The list comes from `product_daily_stats` on the selection day before the month, and a product counts on a day when it has a stats row. Filtering history by the current catalog is survivorship bias.
 - **Do not read `product_price_history` in the index.** Every input is a `product_daily_stats` row, which already applies the 0023 freshness gate and the agreement check. Only `market_index_detect_daily_from` reads price timestamps, once.
 - **Do not let a stale price contribute.** `q` needs `is_price_fresh` and a `price_day` inside the carry window on both days of a return; keep the `CASE` exactly as written.
@@ -3425,7 +3467,9 @@ python scripts/backfill_market_index.py    # Sealed Index levels from the start 
 - **Do not put GRANT or REVOKE on several tables in one statement**: `verify_migration.py` refuses to parse it.
 - **Do not add `"use client"`, Recharts, `useEffect` or a client fetch under `app/indices/`.** The page test and (with WP26) the forbidden-chunk gate fail. Range and sort are links.
 - **Do not add `export const dynamic = "force-static"` to the page**: Next then passes empty `searchParams` and the range and sort links stop working. Do not add `generateStaticParams` to the CSV route (a param-less static route queries Supabase at build).
-- **Do not call `getCachedIndexSummary` or `getCachedIndexSeries` inside another `unstable_cache` callback** (WP11's nested-cache rule), and do not return an empty list from a failed read: `null` is the error signal.
+- **Do not call `getCachedIndexSummary` or `getCachedIndexSeries` inside another `unstable_cache` callback** (WP11's nested-cache rule), and do not return an empty list from a failed read: `null` is the error signal. Keep `INDEX_REFRESH_SECONDS` at 3600: with the daily backstop, a night when the scraper host is off leaves D-2 on the page all day.
+- **Do not pass `p_start` from the scraper or pg_cron.** It lets a call start a chain and cross more than 31 days; only `scripts/backfill_market_index.py` may use it.
+- **Do not add `transition-colors` to the range or sort links.** `01-PRODUCT-DIRECTION.md` §3.5 allows opacity and transform transitions only.
 - **Do not include product prices in the CSV or the API.** Levels and breadth counts only (`research/trust-seo-brand.md` §9).
 - **Do not retype a number in `/methodology` copy.** Every threshold is interpolated from `INDEX_RULES`, `INDEX_CHANGE_WINDOWS` or `INDEX_TYPE_FAMILY`, and `marketIndexConstants.test.ts` ties them to the SQL.
 - **Do not raise a perf `target`**, and do not raise a `limit` without a `Perf budget raise:` line (WP22 rule). This page should measure at the shared-bundle size.
@@ -3436,7 +3480,7 @@ python scripts/backfill_market_index.py    # Sealed Index levels from the start 
 
 ### Database and Python
 
-1. `tests/test_wp29_market_index_db.py` (new; needs the replayed database; skipped without `POKEFIN_TEST_DATABASE_URL`; CI's "Database replay and Python tests" job runs it). One fixed history (2024-01-01 to 2025-02-28), one set per scenario, the live path run day by day, then assertions. It passed 22 of 22, twice in a row on the same database (it cleans up after itself), against 0033 and 0034 from WP25 and this 0037.
+1. `tests/test_wp29_market_index_db.py` (new; needs the replayed database; skipped without `POKEFIN_TEST_DATABASE_URL`; CI's "Database replay and Python tests" job runs it). One fixed history (2024-01-01 to 2025-02-28), one set per scenario, the live path run day by day, then assertions. It passed 23 of 23, twice in a row on the same database (it cleans up after itself; the gap test runs inside a rolled-back transaction), against 0033 and 0034 from WP25 and this 0037.
 
 ```python
 """
@@ -3458,6 +3502,8 @@ once; every scenario lives in its own set, so each set index isolates one rule:
   F  constituent rules and the monthly freeze
   G  a set younger than 90 days joins later, at base 100
   H  52-week highs and lows, breadth
+  plus call semantics: already_published for the newest day, 'behind' for the
+  nightly call after a month without a list, and the backfill crossing it
 
   POKEFIN_TEST_DATABASE_URL=postgresql://postgres:postgres@localhost:5432/replay_once \
     python -m pytest tests/test_wp29_market_index_db.py -v
@@ -3849,6 +3895,13 @@ def test_a_young_set_joins_after_90_days_at_base_100(admin, world):
 def test_generation_index_exists_and_names_follow_the_catalog(admin, world):
     name = scalar(admin, "SELECT name FROM public.index_definitions WHERE code = %s", (f"gen-{world['gen']}",))
     assert name == f"{TAG} gen Index"
+    # Newest first within a kind: sort_order counts days to 2100-01-01 from the release.
+    order = dict(admin.execute(
+        "SELECT code, sort_order FROM public.index_definitions WHERE code = ANY(%s)",
+        ([code(world, "A"), code(world, "G"), f"gen-{world['gen']}"],)).fetchall())
+    assert order[code(world, "G")] == (D("2100-01-01") - D("2024-10-15")).days
+    assert order[code(world, "G")] < order[code(world, "A")]
+    assert order[f"gen-{world['gen']}"] == order[code(world, "G")]
 
 
 def test_new_52_week_highs_and_lows_and_breadth(admin, world):
@@ -3884,7 +3937,8 @@ def test_summary_view_changes(admin, world):
 
 def test_rerunning_the_newest_day_changes_nothing(admin, world):
     before = level_rows(admin)
-    assert refresh_index(admin, LAST_DAY)["status"] == "ok"
+    result = refresh_index(admin, LAST_DAY)
+    assert result["status"] == "already_published" and result["last_day"] == str(LAST_DAY)
     assert level_rows(admin) == before
 
 
@@ -3898,6 +3952,23 @@ def test_published_days_are_never_recomputed(admin, world):
 def test_a_long_gap_is_reported_not_skipped(admin, world):
     result = refresh_index(admin, LAST_DAY + timedelta(days=40))
     assert result["status"] == "behind"
+
+
+def test_the_backfill_crosses_a_month_without_a_list(admin, world):
+    # No price after Feb 28: March keeps its list (selected on Feb 28), April
+    # gets none (every price is older than 14 days on its selection day), so
+    # the newest level stops at Mar 31. The nightly call stays 'behind'; the
+    # backfill (p_start) crosses the gap. Rolled back: later tests see Feb 28.
+    target = LAST_DAY + timedelta(days=40)
+    with admin.transaction(force_rollback=True):
+        assert refresh_index(admin, target)["status"] == "behind"
+        result = refresh_index(admin, target, True)
+        assert result["status"] == "ok" and result["from"] == str(LAST_DAY + timedelta(days=1))
+        a = code(world, "A")
+        assert scalar(admin, "SELECT max(day) FROM public.market_index_daily WHERE index_code = 'sealed'") == D("2025-03-31")
+        assert row(admin, a, D("2025-03-04"))["provisional"] is True      # carried 3 days, then out
+        assert row(admin, a, D("2025-03-31"))["level"] == row(admin, a, LAST_DAY)["level"]
+    assert scalar(admin, "SELECT max(day) FROM public.market_index_daily") == LAST_DAY
 
 
 def test_input_validation(admin, world):
@@ -3974,7 +4045,8 @@ def test_api_roles_read_only(admin, world):
 
 
 def test_scraper_role_can_publish_but_not_reset(scraper, world):
-    assert scraper.execute("SELECT public.refresh_market_index(%s)", (LAST_DAY,)).fetchone()[0]["status"] == "ok"
+    # EXECUTE works (the day is already published, so nothing is written).
+    assert scraper.execute("SELECT public.refresh_market_index(%s)", (LAST_DAY,)).fetchone()[0]["status"] == "already_published"
     assert "last_index_day" in scraper.execute("SELECT public.market_index_backfill_range()").fetchone()[0]
     with pytest.raises(errors.InsufficientPrivilege):
         scraper.execute("SELECT public.reset_market_index()")
@@ -4316,9 +4388,15 @@ it("sliceIndexRange keeps the 365 days ending on the newest point; lastWeeklyDay
   expect(lastWeeklyDay(points.slice(2))).toBeNull();
 });
 
-it("isIndexOverdue flags a headline day two or more days old", () => {
+it("isIndexOverdue: day-granular for a date key, hour-aware for a Date", () => {
+  // WP32's ISR header passes utcTodayKey().
   expect(isIndexOverdue("2026-10-13", "2026-10-14")).toBe(false);
   expect(isIndexOverdue("2026-10-12", "2026-10-14")).toBe(true);
+  // Request time: D-1 normally lands by 06:00 UTC, so no false alarm after midnight.
+  expect(isIndexOverdue("2026-10-12", new Date("2026-10-14T05:59:00Z"))).toBe(false);
+  expect(isIndexOverdue("2026-10-12", new Date("2026-10-14T06:00:00Z"))).toBe(true);
+  expect(isIndexOverdue("2026-10-13", new Date("2026-10-14T23:59:00Z"))).toBe(false);
+  expect(isIndexOverdue("2026-10-10", new Date("2026-10-14T00:30:00Z"))).toBe(true);
 });
 
 it("compact series: columns, 4-decimal levels, provisional positions, validator", () => {
@@ -4507,7 +4585,8 @@ it("month ticks inside the domain, every other one minor", () => {
 });
 ```
 
-4. `frontend/app/lib/__tests__/serverMarketData.index.test.ts` (new, node). Same `server-only`, `@supabase/supabase-js`, `../logger` and `next/cache` mocks as WP25's `serverMarketData.stats.test.ts` (`unstable_cache: (fn) => fn`), with WP25's `tableMock` extended by `eq(...args) { calls.eq.push(args); return chain; }`. Cases:
+4. `frontend/app/lib/__tests__/serverMarketData.index.test.ts` (new, node). Same `server-only`, `@supabase/supabase-js`, `../logger` and `next/cache` mocks as WP25's serverMarketData test (`serverMarketData.stats.test.ts`; WP25 may have named it after `serverMarketData.freshness.test.ts`: `ls app/lib/__tests__/serverMarketData.*.test.ts`), except that the `unstable_cache` mock also records its arguments: `const mockCacheEntries: Array<{ keys: string[]; options: { revalidate?: number; tags?: string[] } }> = [];` above the mocks and `unstable_cache: (fn: unknown, keys: string[], options: { revalidate?: number; tags?: string[] }) => { mockCacheEntries.push({ keys, options }); return fn; }` (the `mock` prefix lets Jest's hoisted factory reference it). WP25's `tableMock` is extended by `eq(...args) { calls.eq.push(args); return chain; }`. Cases:
+- The entries keyed `["market-index-summary"]` and `["market-index-series"]` both have `revalidate: 3600` and `tags: ["market-products"]` (the hourly refresh; a daily value fails this case).
 - `getCachedIndexSummary()` reads `market_index_summary` (assert the `from` mock got that name), the select string contains `chg_365d` and `coverage_pct` and no `*`, `calls.order` equals `[["sort_order", { ascending: true }], ["code", { ascending: true }]]`, and two valid rows plus one with `code: "BAD"` return two `IndexSummary` objects.
 - An error page (`{ data: null, error: { message: "down" } }`) returns `null` and calls `logCaughtError` with `"server_index_summary_failed"`.
 - `getCachedIndexSeries("sealed")`: `calls.eq[0]` equals `["index_code", "sealed"]`, `calls.order[0]` equals `["day", { ascending: true }]`, and the result is oldest first with numeric levels.
@@ -4697,6 +4776,13 @@ it("warns when the nightly run is overdue", async () => {
   expect(screen.getByRole("note")).toHaveTextContent("Not updated since Oct 10, 2026");
 });
 
+it("does not warn in the hours after midnight while D-1 is being published", async () => {
+  jest.setSystemTime(new Date("2026-10-14T03:00:00Z"));
+  mockSummary.mockResolvedValue([summary({ provisional: false, day: "2026-10-12" })]);
+  await renderPage();
+  expect(screen.queryByRole("note")).toBeNull();
+});
+
 it("draws the chart as server SVG: 1Y is all daily, All adds the dashed weekly segment and footnote", async () => {
   const oneYear = await renderPage();
   expect(oneYear.container.querySelector('path[data-segment="daily"]')).not.toBeNull();
@@ -4852,14 +4938,14 @@ psql postgresql://postgres:postgres@localhost:55432/replay_twice -At -f /tmp/wp2
 
 # 3. Database tests (twice: the module cleans up after itself)
 export POKEFIN_TEST_DATABASE_URL=postgresql://postgres:postgres@localhost:55432/replay_once
-python -m pytest tests/test_wp29_market_index_db.py -v      # 22 passed
-python -m pytest tests/test_wp29_market_index_db.py -q      # 22 passed again
+python -m pytest tests/test_wp29_market_index_db.py -v      # 23 passed
+python -m pytest tests/test_wp29_market_index_db.py -q      # 23 passed again
 python -m pytest tests/ -q                                  # all pass (WP21, WP25, WP26, WP28 modules included)
 unset POKEFIN_TEST_DATABASE_URL
 python -m pytest tests/test_wp29_scripts.py tests/test_main.py -q   # all pass; the DB modules skip
 
 # 4. Timing on production-size data (optional, recommended): on a scratch database with 306 products and
-#    about 480 days of prices, after WP25's backfill of 60 days of stats:
+#    about 480 days of prices, after WP25's stats backfill (scripts/backfill_daily_stats.py):
 #    SELECT refresh_market_index(<first day>, true); then one call per day. Expect under 50 ms per day
 #    (9 ms measured) and about 80 ms on the first day of a month.
 ```
@@ -4876,9 +4962,9 @@ pnpm exec jest app/lib/__tests__/marketIndex.test.ts app/lib/__tests__/marketInd
   app/lib/__tests__/format.test.ts app/lib/__tests__/jsonLd.test.ts app/methodology app/lib/__tests__/metricDefinitions.test.ts \
   app/__tests__/sitemap.test.ts                             # all pass
 pnpm test --ci                                              # all pass
-pnpm run test:scripts                                       # all pass (perf fixture test included)
+pnpm run test:scripts                                       # all pass (perf fixture and prod-smoke tests included)
 grep -rn "use client\|recharts" app/indices app/lib/indexChart.ts app/lib/marketIndex.ts   # no output
-grep -rnP '\x{2014}' app/indices app/lib/marketIndex.ts app/lib/indexChart.ts app/methodology   # no output
+LC_ALL=C.UTF-8 grep -rnP '\x{2014}' app/indices app/lib/marketIndex.ts app/lib/indexChart.ts app/methodology   # no output
 
 # 6. Stub build
 pnpm build:stub                                             # exit 0
@@ -4917,18 +5003,19 @@ Manual checks (`pnpm dev` against the perf stub, or the Vercel preview), at 390x
 4. **Run the backfill**, once, with the same environment as WP25's backfills (`POKEFIN_SCRAPER_DATABASE_URL`, or the service key for the one run): first confirm WP25's stats backfill ran (`SELECT public.market_index_backfill_range();` shows `first_stats_day` about 400 days back), then `python scripts/backfill_market_index.py`. Expect "Building the chain from the first stats day ..." and "Done in N s (ok M)". Then: `SELECT index_code, min(day), max(day), count(*) FROM public.market_index_daily GROUP BY 1 ORDER BY 1;` (the headline's `max` is yesterday) and `SELECT count(*) FILTER (WHERE provisional), count(*) FROM public.market_index_daily WHERE index_code = 'sealed';` (a few provisional days around the scrape-drift gaps are expected; more than 10% means collection gaps worth a look).
 5. **Generate the database types** for phase B: `pnpm types:db` in `frontend/` with your `SUPABASE_ACCESS_TOKEN`, or give the executor a token for one run; push `app/types/database.ts` to the PR branch.
 6. **Rebuilding later** (a rule change, a corrected `daily_from`): `SELECT public.reset_market_index();` in the SQL editor, then step 4 again. Published history is otherwise never recomputed.
+   **When the scraper log says "Sealed Index not published ... (behind)"** (pg_cron and the scraper were both off for more than 31 days, or a month got no constituent list after a long collection stop): run `python scripts/backfill_market_index.py` with no arguments. It extends the chain from the day after the newest level and crosses the gap; no reset is needed.
 7. After deploy, open `/indices/sealed` at phone and desktop width, download the CSV, and check `/methodology#index`.
 
 ## Acceptance criteria
 
 - [ ] `migrations/0037_market_index.sql` exists, `verify_migration.py` exits 3 with no REFUSED line, and the verification query returns 113 OK rows on `replay_twice`.
-- [ ] WP21's replay harness passes with 0037 applied twice; `tests/test_wp29_market_index_db.py` passes 22 of 22, twice in a row on the same database.
+- [ ] WP21's replay harness passes with 0037 applied twice; `tests/test_wp29_market_index_db.py` passes 23 of 23, twice in a row on the same database.
 - [ ] Levels are reproducible from a clean backfill: after `reset_market_index()`, the backfill script reproduces every row of `market_index_daily` (all columns but `computed_at`) and every `index_constituents` row exactly (DB test `test_levels_are_reproducible_from_a_clean_backfill`).
 - [ ] A stale constituent never contributes a return (DB test `test_a_stale_constituent_never_contributes`); returns are clipped at 50%; a 3-day gap is carried; a longer gap drops out and re-enters without a catch-up jump; a day under 80% coverage is provisional; points before `daily_from` are Mondays only with Monday-to-Monday returns.
-- [ ] Published days are never recomputed (`already_published`), the live path never starts a chain (`not_initialised`), and a gap over 31 days writes nothing (`behind`).
+- [ ] Published days, the newest included, are never recomputed (`already_published`); the live path never starts a chain (`not_initialised`); a nightly call more than 31 days behind writes nothing (`behind`), and the backfill (`p_start`) crosses such a gap, including a month without a list (DB test `test_the_backfill_crosses_a_month_without_a_list`).
 - [ ] `anon` and `authenticated` can SELECT the four tables and the view and cannot write, truncate, refresh or reset; `pokefin_scraper` can EXECUTE `refresh_market_index` and `market_index_backfill_range` and nothing else new.
 - [ ] The scraper calls `refresh_index_after_run` after the analytics refresh and before revalidation; the hook never raises (`tests/test_main.py`, `tests/test_wp29_scripts.py`).
-- [ ] `/indices/sealed` renders the level, 1D/7D/30D/1Y changes, constituents, coverage, the "as of the close of" D-1 stamp, a methodology link, the server SVG chart with 1Y and All via `?range=`, the dashed weekly segment with its footnote, breadth, and the sortable sub-index table (table from 768 px, DataList below); the provisional and overdue notes use the warn role.
+- [ ] `/indices/sealed` renders the level, 1D/7D/30D/1Y changes, constituents, coverage, the "as of the close of" D-1 stamp, a methodology link, the server SVG chart with 1Y and All via `?range=`, the dashed weekly segment with its footnote, breadth, and the sortable sub-index table (table from 768 px, DataList below); the provisional and overdue notes use the warn role, and the overdue note never shows before 06:00 UTC on the day after D-1 was due (Jest `isIndexOverdue` and page cases); the index reads refresh hourly (`serverMarketData.index.test.ts`); at 768 px the page has no horizontal scroll.
 - [ ] The page has zero client charting JS and no client component of its own: the page test's source guard passes, the built route loads no Recharts or supabase-js chunk (WP26 gate when present), and `perf-budgets.json` has `/indices/sealed` with filled limits; `pnpm perf:budget` exits 0 and its `jsGzKb` is within 0.5 kB of `/privacy`.
 - [ ] `/indices/sealed/levels.csv` serves derived levels only with the CC BY 4.0 lines and `Link` header; `/api/public/index/[code]` serves the compact series under ISR and 404s unknown codes.
 - [ ] Dataset and BreadcrumbList JSON-LD on the page; `/indices/sealed` in the sitemap; the footer Browse column links to it (with WP27).
@@ -5004,4 +5091,4 @@ PR body:
 - Screenshots of `/indices/sealed` at 390 and 1440 px (1Y and All, a provisional day if the fixture clock allows) and `/methodology#index`.
 - Owner actions 1 to 7 copied from this spec.
 - Soft dependencies found missing (Before you start) and what was done: WP26's `publicRoute.ts`, `publicMarketApi.ts`, `forbiddenChunks`, ESLint list; WP27's `navConfig.ts`.
-- "Noticed, out of scope": the weekly PDF report still has no benchmark line (a WP16 follow-up can read `market_index_daily`); a traded-value-weighted secondary index (`research/data-opportunities.md` §3.7) and age-bucket sub-indices are deferred; the backfilled history of `product_daily_stats` only covers products active when WP25's backfill ran, so the index's pre-launch months inherit that survivorship (documented on `/methodology#index`).
+- "Noticed, out of scope": the weekly PDF report still has no benchmark line (a WP16 follow-up can read `market_index_daily`); a traded-value-weighted secondary index (`research/data-opportunities.md` §3.7) and age-bucket sub-indices are deferred; the backfilled history of `product_daily_stats` only covers products active when WP25's backfill ran, so the index's pre-launch months inherit that survivorship (documented on `/methodology#index-constituents`); sub-index rows link nowhere yet (WP37 links set rows to their set pages; a per-index chart for type and generation indices is a follow-up); WP32's home header passes `utcTodayKey()` to `isIndexOverdue`, which keeps the day-granular rule and can show "Not updated" between 00:00 UTC and the next regeneration, so WP32 should pass `new Date()` at render time instead.

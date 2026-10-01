@@ -27,7 +27,8 @@ Today the site has tokens but no system: red is the logo, the primary CTA, the l
 - Badge budget: at most one badge per row. Badge variants are text (no pill): `neutral`, `info`, `warn`.
 - Precision: returns and changes 1 decimal; shares and consistency integers (`formatPercent(v, { decimals: 0 })`). Money stays WP07 `formatMoney`.
 - Touch targets: every new interactive control gets `pointer-coarse:min-h-11` (44 px on touch screens, unchanged density with a mouse).
-- Motion: colour and opacity transitions only, 150 ms, `motion-reduce:transition-none`. No pulsing skeletons, no count-ups.
+- Motion (`01-PRODUCT-DIRECTION.md` §3.5): only opacity and transform are animated, at most 150 ms, with `motion-reduce:transition-none`. Colour changes (hover, pressed, selected segment, sorted header) are instant, with no `transition-colors`, so a pressed control reaches its final colour on the next frame. No pulsing skeletons, no count-ups.
+- Focus: `focus-visible:outline-hidden` plus `focus-visible:ring-2 focus-visible:ring-action`. In Tailwind 4, `outline-none` sets `outline-style: none`, which removes the only focus cue in Windows forced-colours mode (box-shadow rings are not painted there). `outline-hidden` keeps a transparent outline that forced-colours mode paints.
 - Existing red CTAs are not repainted in this PR (no visual change outside the migrated controls). `--pf-pokeball` becomes a deprecated alias of `--pf-accent`, and the conventions test ratchets its use per file so it can only go down. Page packages (WP27, WP30 to WP37) repaint their own CTAs with `Button`.
 
 ### Tokens (`frontend/app/globals.css`)
@@ -67,7 +68,7 @@ All are server-compatible (no `"use client"`) except `SegmentedControl`, which m
 | `DataList`, `DataListRow` | list: `label`, `children`; row: `href?`, `title`, `subtitle?`, `meta?`, `value?`, `delta?`, `sparkline?`, `leading?`, `prefetch?` (default false) | `<ul aria-label>` with divided `<li>` rows, each `min-h-14` and one link (`next/link`, `prefetch={false}` by default). Line 1: title (medium, truncated; the subtitle truncates first) and subtitle (small, ink-soft), with the optional sparkline slot fixed at 64x24 (`h-6 w-16`, `aria-hidden`) flush right. Line 2: meta left, value and delta flush right, tabular, so price and trend share the row's right edge. Optional 40x40 leading slot |
 | `EmptyState` | `title`, `description?`, `action?`, `headingLevel?: 2 \| 3` | Dashed-border card, centred. Title is a `<p>` unless `headingLevel` is given |
 | `Skeleton` | `className?` | `aria-hidden` flat bar, `bg-line rounded-control` (slate-200: visible on white cards and on the `--pf-bg` page, where slate-100 disappears at a 4 px sparkline bar). No animation, no shape |
-| `RangeBar` | `low`, `high`, `value`, `lowLabel`, `highLabel`, `windowLabel?` (default "52-week"), `showSummary?` | Track (`bg-chart-grid`) with an ink marker at the clamped position; low and high labels under it; a summary sentence ("38% below 52-week high", "At 52-week high", "At 52-week low", "Less than 1% below 52-week high", "No 52-week range yet"), `sr-only` unless `showSummary`. Non-finite input renders nothing |
+| `RangeBar` | `low`, `high`, `value`, `lowLabel`, `highLabel`, `windowLabel?` (default "52-week"), `showSummary?` | Track (`bg-chart-grid`) with an ink marker at the clamped position (no marker while low equals high, so one observation never draws a fake midpoint); low and high labels under it; a summary sentence ("38% below 52-week high", "At 52-week high", "At 52-week low", "Less than 1% below 52-week high", "No 52-week range yet"), `sr-only` unless `showSummary`. Non-finite input renders nothing |
 | `Button` + `buttonClasses()` | `variant?: "primary" \| "secondary" \| "ghost"`, `size?: "sm" \| "md"`, native button props | primary `bg-action` white text; secondary bordered surface; ghost action text. `type="button"` default. Never red. `buttonClasses()` styles a `Link` the same way |
 | `AsOf` | `date` (YYYY-MM-DD or `recorded_at`), `variant?: "inline" \| "hero" \| "table"`, `referenceDate?`, `prefix?` (default "as of") | Always a `<time dateTime="YYYY-MM-DD">`. Age = UTC days from `date` to `referenceDate` (default today UTC). Fresh (0 to 1 day): inline "as of Sep 29" (caption, ink-soft), hero "as of Sep 29, 2026" (small). Stale (2 days or more): clock icon plus "Last priced Sep 25" in warn-text. Table variant: nothing when fresh; when stale, only the clock icon with `title` and `sr-only` text. Year shown when it differs from the reference year. Missing or unparseable date renders nothing. Withholding at 14 days stays upstream (migration 0023). Age is computed at render time: on an ISR page the warning can lag by up to WP11's 24-hour backstop, which is acceptable because the date itself is always printed and WP27's header chip is the live clock. The table variant is for desktop tables only (a `title` tooltip never shows on touch); phone rows use `inline` |
 | `ProvenanceLine` | `children`, `methodologyHref?`, `methodologyLabel?` | One `<p>` in small ink-soft text, optional trailing link in action colour. WP24 supplies the copy |
@@ -86,7 +87,7 @@ All are server-compatible (no `"use client"`) except `SegmentedControl`, which m
 +-------------------------------------------------------------------------------------------+
 SORT BY [Release Date v][Price]                                  VIEW [ By Type |#By Set#| Flat ]
 Found 306 products
-(card grid, dimmed to 70% opacity while a toggle's re-render is pending)
+(card grid, dimmed to 70% opacity if a toggle's re-render is still pending after 100 ms)
 ```
 
 `/prices` at 390 px, filter drawer open. Segments fill the width and are 44 px tall on touch screens:
@@ -163,7 +164,7 @@ Stale product in a dense table (WP33): `C$81.30 (clock)` where the clock has the
 
 ### Copy
 
-"as of Sep 29", "Last priced Sep 25", "No history", "Up", "Down", "Unchanged", "Not available", "38% below 52-week high", "At 52-week high", "At 52-week low", "Less than 1% below 52-week high", "No 52-week range yet". No "live", "real-time" or "all-time" anywhere. No em dashes.
+"as of Sep 29", "Last priced Sep 25", "No history", "Up", "Down", "Unchanged", "Not available", "USD" / "CAD" (segment text, named "US dollars" / "Canadian dollars"), "38% below 52-week high", "At 52-week high", "At 52-week low", "Less than 1% below 52-week high", "No 52-week range yet". No "live", "real-time" or "all-time" anywhere. No em dashes.
 
 ### Accessibility
 
@@ -171,14 +172,14 @@ Stale product in a dense table (WP33): `C$81.30 (clock)` where the clock has the
 - Direction is never colour-only: glyph plus `sr-only` word in `Delta`, icon plus text in `AsOf` and warn `Badge`.
 - `RangeBar` gives a sentence, not a picture, to screen readers.
 - `DataListRow` is one link per row (no nested interactive elements); the sparkline slot is `aria-hidden`.
-- Focus: `focus-visible:ring-2 ring-action` on every interactive component.
+- Focus: `focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-action` on every interactive component (visible in forced-colours mode, see Decisions).
 - Every component test runs axe-core (color-contrast is disabled in jsdom; token contrast is fixed: action 5.2:1, action-strong 6.7:1, gain-text 5.5:1, loss-text 6.3:1, warn-text 5.0:1, ink-soft 7.6:1 on white).
 
 ### Performance
 
 - One font file on first view (Geist Sans latin). Geist Mono's `@font-face` rules and its late request on four routes (`/`, `/prices`, `/analytics`, `/product/[id]`) disappear.
 - New CSS is a few dozen utilities; the WP22 CSS budget (14 kB gz) holds. New client JS is `SegmentedControl` (about 1 kB); every other component is server-compatible and unused by pages in this PR.
-- Toggles on `/prices` re-render the card list at transition priority with the list dimmed, so the pressed segment paints on the next frame (INP target 100 ms on `/prices` filters).
+- Toggles on `/prices` re-render the card list at transition priority, so the pressed segment paints its final colour on the next frame (no colour transition); the list dims only if the re-render is still pending after 100 ms (INP target 100 ms on `/prices` filters).
 
 ## Before you start
 
@@ -306,7 +307,8 @@ PERF_PID=$!
 cd /home/user/Pokefin/audits/remediation/research/tools
 npm install --no-save playwright-core@1.56
 sed 's#http://localhost:3099#http://127.0.0.1:3100#' shoot.js > shoot.local.js
-mkdir -p shots/seg2
+grep -c "127.0.0.1:3100" shoot.local.js   # 1: the sed matched; 0 means shoot.js changed, fix the pattern
+rm -rf shots
 # Product id: 900001 in WP22's perf fixture, 110 in the research fixture.
 PRODUCT_ID=900001
 PAGES="home:/,prices:/prices,market:/market,compare:/compare,analytics:/analytics,boxcalc:/box-calculator,product:/product/${PRODUCT_ID},notfound:/product/999999" node shoot.local.js
@@ -316,6 +318,39 @@ rm -rf /tmp/wp23-shots-before && mv shots /tmp/wp23-shots-before
 Set `CHROME_PATH` if Playwright cannot find a browser (see `research/tools/README.md`).
 
 Stop the servers (`kill $PERF_PID`, and `kill $STUB_PID` if you used the research fixture). Do not commit anything from `research/tools/` (`shoot.local.js`, `shots/`, `node_modules/`).
+
+0d. Snapshot the per-file counts the step 24 ratchets will baseline, on the untouched tree. Step 24 compares against this file, so the baseline can only record counts that already existed (the same regexes and the same file walk as the conventions test):
+
+```bash
+cd /home/user/Pokefin/frontend
+cat > /tmp/wp23-ratchet-count.js <<'EOF'
+const fs = require("fs");
+const path = require("path");
+const APP = path.resolve("app");
+const HEX = /(?<![&\w])#(?:[0-9a-fA-F]{8}|[0-9a-fA-F]{6}|[0-9a-fA-F]{3,4})\b/g;
+const BRAND_RED =
+  /--pf-pokeball(?:-strong)?\b|\b(?:[a-z-]+:)*(?:text|bg|border|ring|outline|fill|stroke|from|via|to|divide|decoration|accent|shadow)-pokeball(?:-strong)?\b/g;
+const out = { hex: {}, brandRed: {} };
+(function walk(dir) {
+  for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+    const full = path.join(dir, e.name);
+    if (e.isDirectory()) {
+      if (e.name !== "__tests__") walk(full);
+    } else if (/\.(tsx|ts)$/.test(e.name)) {
+      const text = fs.readFileSync(full, "utf8");
+      const rel = path.relative(APP, full).split(path.sep).join("/");
+      const hex = (text.match(HEX) || []).length;
+      const red = (text.match(BRAND_RED) || []).length;
+      if (hex) out.hex[rel] = hex;
+      if (red) out.brandRed[rel] = red;
+    }
+  }
+})(APP);
+process.stdout.write(`${JSON.stringify(out, null, 2)}\n`);
+EOF
+node /tmp/wp23-ratchet-count.js > /tmp/wp23-ratchet-before.json
+cat /tmp/wp23-ratchet-before.json
+```
 
 ### Step 1. Add `axe-core` as a direct dev dependency
 
@@ -453,16 +488,21 @@ Keep the `@custom-variant dark` line, every other token, WP14's rules and WP09's
 - Import line: `import { Geist, Geist_Mono } from "next/font/google";` becomes `import { Geist } from "next/font/google";`.
 - Delete the `geistMono` constant and the comment block above it (the `// preload: false - next/font would otherwise emit ...` lines).
 - The body class `` `${geistSans.variable} ${geistMono.variable} antialiased` `` becomes `` `${geistSans.variable} antialiased` ``.
-- In WP13's `export const viewport: Viewport = { themeColor: "#ffffff", };` add one property after `themeColor` and extend WP13's comment above it by one line:
+- In WP13's `export const viewport: Viewport = { themeColor: "#ffffff", };` add one property after `themeColor`, keep WP13's three comment lines above it unchanged and append two lines to that comment. The result:
 
 ```ts
-// Light only (WP23): the meta tag reaches the browser before globals.css,
-// so form controls, scrollbars and the 404 never render dark.
+// Browser UI colour (mobile address bar). White matches the sticky white
+// header; the site has no dark theme (globals.css is light only). Not red:
+// a red browser bar reads as an error state and clashes with the loss colour.
+// Light only (WP23): the color-scheme meta reaches the browser before
+// globals.css, so form controls, scrollbars and the 404 never render dark.
 export const viewport: Viewport = {
   themeColor: "#ffffff",
   colorScheme: "light",
 };
 ```
+
+(If WP13's comment wording differs, keep WP13's lines as they are and append only the two WP23 lines.)
 
 Next 16 types `colorScheme` as `"normal" | "light" | "dark" | "light dark" | "dark light" | "only light"` and emits `<meta name="color-scheme" content="light"/>`. Do not use `"only light"`: it also opts the page out of browser auto-dark modes (Chrome on Android), which are a setting the user chose. If the file has no `viewport` export (WP13 missing), add `Viewport` to the `import type { Metadata } from "next";` line and create the export with `colorScheme: "light"` only.
 
@@ -898,7 +938,7 @@ export default function SegmentedControl<T extends string>({
                 onKeyDown={(event) => handleKeyDown(event, index)}
                 className={`${
                   fullWidthOnPhone ? "flex-1 sm:flex-initial" : ""
-                } inline-flex items-center justify-center rounded-control px-3 py-1.5 text-xs font-semibold tabular-nums transition-colors duration-150 motion-reduce:transition-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-action focus-visible:ring-offset-1 pointer-coarse:min-h-11 pointer-coarse:min-w-11 ${
+                } inline-flex items-center justify-center rounded-control px-3 py-1.5 text-xs font-semibold tabular-nums focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-action focus-visible:ring-offset-1 pointer-coarse:min-h-11 pointer-coarse:min-w-11 ${
                   checked
                     ? "bg-action text-white"
                     : "text-ink-soft hover:bg-surface-alt hover:text-ink"
@@ -916,7 +956,7 @@ export default function SegmentedControl<T extends string>({
 }
 ```
 
-Notes: `aria-checked` and the tab stop read `shown` (the optimistic value), never `value` directly. If the parent rejects the change (does not update `value`), the optimistic state falls back to `value` when the transition ends, so the control stays controlled. Focus moves through the DOM (`parentElement.querySelectorAll`) instead of refs, which keeps the React Compiler lint rules (`react-hooks/refs`) quiet.
+Notes: no `transition-colors` on the segments: the selected fill must be complete on the first frame after the press (Decisions, Motion). `aria-checked` and the tab stop read `shown` (the optimistic value), never `value` directly. If the parent rejects the change (does not update `value`), the optimistic state falls back to `value` when the transition ends, so the control stays controlled. Focus moves through the DOM (`parentElement.querySelectorAll`) instead of refs, which keeps the React Compiler lint rules (`react-hooks/refs`) quiet.
 
 ### Step 12. `frontend/app/components/ui/PageHeader.tsx` (new)
 
@@ -994,8 +1034,7 @@ export interface DataListRowProps {
   prefetch?: boolean;
 }
 
-const ROW =
-  "flex min-h-14 items-center gap-3 px-4 py-2 transition-colors duration-150 motion-reduce:transition-none";
+const ROW = "flex min-h-14 items-center gap-3 px-4 py-2";
 
 export function DataListRow({
   href,
@@ -1046,7 +1085,7 @@ export function DataListRow({
         <Link
           href={href}
           prefetch={prefetch}
-          className={`${ROW} hover:bg-surface-alt active:bg-surface-alt focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-action`}
+          className={`${ROW} hover:bg-surface-alt active:bg-surface-alt focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-action`}
         >
           {body}
         </Link>
@@ -1164,15 +1203,19 @@ export default function RangeBar({
   className = "",
 }: RangeBarProps) {
   if (![low, high, value].every(Number.isFinite)) return null;
+  // One observation (low == high): no marker, which would sit at a fake 50%.
+  const hasRange = high > low;
   const position = rangePosition(low, high, value);
   return (
     <div className={className}>
       <div className="relative h-1.5 rounded-control bg-chart-grid" aria-hidden="true">
-        <span
-          data-testid="range-marker"
-          className="absolute top-1/2 h-3 w-0.5 -translate-x-1/2 -translate-y-1/2 rounded-control bg-ink"
-          style={{ left: `${position}%` }}
-        />
+        {hasRange && (
+          <span
+            data-testid="range-marker"
+            className="absolute top-1/2 h-3 w-0.5 -translate-x-1/2 -translate-y-1/2 rounded-control bg-ink"
+            style={{ left: `${position}%` }}
+          />
+        )}
       </div>
       <div className="mt-1 flex justify-between gap-2 text-caption tabular-nums text-ink-soft">
         <span>
@@ -1201,7 +1244,7 @@ export type ButtonVariant = "primary" | "secondary" | "ghost";
 export type ButtonSize = "sm" | "md";
 
 const BASE =
-  "inline-flex items-center justify-center gap-2 rounded-control font-semibold transition-colors duration-150 motion-reduce:transition-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-action focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 pointer-coarse:min-h-11";
+  "inline-flex items-center justify-center gap-2 rounded-control font-semibold focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-action focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 pointer-coarse:min-h-11";
 
 const VARIANT: Record<ButtonVariant, string> = {
   primary: "bg-action text-white hover:bg-action-strong active:bg-action-strong",
@@ -1288,8 +1331,9 @@ export interface AsOfProps {
 /**
  * The as-of stamp for a price (01-PRODUCT-DIRECTION.md §6.2). Says which
  * TCGplayer day the number describes, not when the page rendered. Prices are
- * withheld upstream at 14 days (migration 0023); this component only flags
- * the 2 to 13 day window. Age is measured at render time, so on an ISR page
+ * withheld upstream once older than 14 days (migration 0023 keeps
+ * `recorded_at >= current_date - 14`); this component flags what is still
+ * shown from 2 days old. Age is measured at render time, so on an ISR page
  * the flag can lag by up to the 24-hour backstop (WP11); the printed date is
  * always right. The table variant is for desktop tables: its title tooltip
  * never shows on touch, so phone rows use the inline variant.
@@ -1370,7 +1414,7 @@ export default function ProvenanceLine({
           <Link
             href={methodologyHref}
             prefetch={false}
-            className="font-medium text-action underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-action"
+            className="font-medium text-action underline-offset-2 hover:underline focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-action"
           >
             {methodologyLabel}
           </Link>
@@ -1415,9 +1459,11 @@ export default function ChartTimeframeButtons({ selected, onChange }: ChartTimef
 import SegmentedControl, { type SegmentedOption } from "../../ui/SegmentedControl";
 // keep the file's existing `Currency` type import and props interface
 
+// Same labels as WP27's header toggle. No flag emoji: Windows has no flag
+// glyphs and renders them as the letters "US" and "CA" ("US USD").
 const CURRENCY_OPTIONS: readonly SegmentedOption<Currency>[] = [
-  { value: "USD", label: "🇺🇸 USD" },
-  { value: "CAD", label: "🇨🇦 CAD" },
+  { value: "USD", label: "USD", ariaLabel: "US dollars" },
+  { value: "CAD", label: "CAD", ariaLabel: "Canadian dollars" },
 ];
 
 export default function CurrencySelector({
@@ -1443,7 +1489,7 @@ export default function CurrencySelector({
 }
 ```
 
-The same component renders on `/prices` and `/market` (through `ControlBar`), `/box-calculator` and `/portfolio` (WP20). All four get the new control; their `onChange` handlers are unchanged.
+The same component renders on `/prices` and `/market` (through `ControlBar`), `/box-calculator` and `/portfolio` (WP20). All four get the new control; their `onChange` handlers are unchanged. The segments read "USD" and "CAD" (the flag emoji go) and are named "US dollars" and "Canadian dollars" for screen readers, matching WP27's header toggle.
 
 19c. `SortControls.tsx`: leave the "Sort by" block exactly as it is (sort keys toggle direction, which is not a one-of-N choice). Replace the whole `{/* View */}` block with the control below, and derive the options from the existing `VIEW_MODES` array so WP08's keys and labels are kept. Remove the `${baseId}-view` id WP14 added; keep `baseId` for "Sort by".
 
@@ -1506,7 +1552,7 @@ If WP20's `rememberCurrency` line is absent, wrap only `updateUrlState({ currenc
           <div
             aria-busy={isTogglePending || undefined}
             className={`transition-opacity duration-150 motion-reduce:transition-none ${
-              isTogglePending ? "opacity-70" : ""
+              isTogglePending ? "opacity-70 delay-100" : ""
             }`}
           >
             {cardList}
@@ -1514,7 +1560,7 @@ If WP20's `rememberCurrency` line is absent, wrap only `updateUrlState({ currenc
         )}
 ```
 
-The wrapper is a plain block inside the existing `space-y-*` column, so spacing is unchanged. Do not put `isTogglePending` into the `cardList` `useMemo` dependencies; the memo must stay keyed on data only.
+The wrapper is a plain block inside the existing `space-y-*` column, so spacing is unchanged. `delay-100` sits only on the pending state: a re-render that finishes within 100 ms never dims (no flicker on a fast phone), a slower one fades to 70% after 100 ms, and the list returns to full opacity with no delay as soon as the render commits. Do not put `isTogglePending` into the `cardList` `useMemo` dependencies; the memo must stay keyed on data only.
 
 ### Step 21. `MiniSparkline`: flat skeleton bar and "No history"
 
@@ -1542,7 +1588,7 @@ function SparklineSkeleton({ className = "" }: { className?: string }) {
 // Loaded, but fewer than two daily points: say so instead of drawing nothing.
 function SparklineEmpty({ className = "" }: { className?: string }) {
   return (
-    <div className={`flex h-10 w-24 items-center justify-center text-xs text-ink-soft ${className}`}>
+    <div className={`flex h-10 w-24 items-center justify-center text-caption text-ink-soft ${className}`}>
       No history
     </div>
   );
@@ -1570,7 +1616,7 @@ with
   }
 ```
 
-Leave `buildSparklinePath`, the stroke constants, the polyline and the `memo` export unchanged (the stroke colours are WP26's to revisit).
+Leave `buildSparklinePath`, the stroke constants, the polyline and the `memo` export unchanged (the stroke colours are WP26's to revisit). Write the words "No history" exactly once in the file (the `SparklineEmpty` text, not in a comment): WP26's precheck counts them with `grep -c "No history" MiniSparkline.tsx` and expects 1.
 
 21d. Check the call sites: `grep -rn "<MiniSparkline" app --include=*.tsx | grep -v __tests__`. Each must pass `history={...}` straight from the history map (`priceHistory[product.id]` in `ProductCard`'s parent, `row.history` in `MarketView/columns.tsx`), which is `undefined` until loaded. `MarketRow.history` is typed `PriceHistoryEntry[] | undefined` in `MarketView/buildRows.ts` (WP17); confirm with `grep -n "history: PriceHistoryEntry\[\] | undefined" app/components/MarketView/buildRows.ts`. If any call site or row builder coalesces with `?? []` or `|| []`, remove that coalescing for the value passed to `MiniSparkline` only (keep it for the maths); otherwise every unloaded card would say "No history".
 
@@ -1598,7 +1644,7 @@ Leave `buildSparklinePath`, the stroke constants, the polyline and the `memo` ex
     <button
       type="button"
       onClick={handleClick}
-      className={`flex h-10 w-full items-center gap-1 text-xs uppercase tracking-wide transition-colors duration-150 motion-reduce:transition-none hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-action pointer-coarse:min-h-11 ${
+      className={`flex h-10 w-full items-center gap-1 text-xs uppercase tracking-wide hover:text-ink focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-action pointer-coarse:min-h-11 ${
         isActive ? "font-bold text-ink" : "font-semibold text-ink-soft"
       } ${alignment}`}
     >
@@ -1618,7 +1664,7 @@ Leave `buildSparklinePath`, the stroke constants, the polyline and the `memo` ex
 - The header `<tr>` gets `className="border-b border-line"`.
 - Each header `<th>`: `className={`px-3 pb-2 ${...}`}` becomes `` className={`h-10 px-3 align-middle ${align === "right" ? "text-right" : "text-left"}`} `` and add `data-sorted={isActive ? "true" : undefined}`.
 - The unsortable header `<span>`: `text-slate-600` becomes `text-ink-soft`.
-- Each body `<tr>`: `className="rounded-xl bg-slate-50/80 shadow-sm ring-1 ring-slate-200/60 transition hover:bg-white"` becomes `className="h-11 border-b border-line bg-surface transition-colors duration-150 motion-reduce:transition-none hover:bg-surface-alt"`.
+- Each body `<tr>`: this element is in `SortableTableRowImpl` (the memoised row component above `SortableTableImpl`), not in `SortableTableImpl`. `className="rounded-xl bg-slate-50/80 shadow-sm ring-1 ring-slate-200/60 transition hover:bg-white"` becomes `className="h-11 border-b border-line bg-surface hover:bg-surface-alt"` (instant hover, no transition: Decisions, Motion). Leave the empty-message `<tr>` in `SortableTableImpl` without a class.
 - The empty-message `<td>`: `text-slate-500` becomes `text-ink-soft`.
 
 22c. `frontend/app/compare/compareColumns.tsx`: one line per row, so long SKUs and titles truncate instead of wrapping the row past 44 px.
@@ -1743,6 +1789,16 @@ describe("design system (WP23)", () => {
     );
     expect(found).toEqual([]);
   });
+
+  it("keeps components/ui on the motion rule", () => {
+    // 01-PRODUCT-DIRECTION.md §3.5: opacity and transform only, colour
+    // changes are instant, nothing pulses.
+    const MOTION_RE = /\btransition-(?:colors|all)\b|\banimate-[a-z-]+/g;
+    const found = SOURCES.filter(
+      (s) => s.file.startsWith(UI_DIR) && !UI_LEGACY.includes(s.file)
+    ).flatMap((s) => [...s.text.matchAll(MOTION_RE)].map((m) => `${s.file}: ${m[0]}`));
+    expect(found).toEqual([]);
+  });
 });
 ```
 
@@ -1755,7 +1811,25 @@ pnpm exec jest app/__tests__/uiConventions.test.ts      # passes without the var
 cat app/__tests__/uiConventions.baseline.json
 ```
 
-Review the file before committing: `hex` lists only files that had hex colours before this PR (at review time `PriceChart.tsx`, `charts/PortfolioChartImpl.tsx`, `charts/AllocationChartImpl.tsx`, `Header.tsx`, `Footer.tsx`, `CardRinkPromo.tsx`, the four auth pages, `MarketView/MiniSparkline.tsx` with 2 after step 21, plus WP15's `global-error.tsx`); `brandRed` lists today's `--pf-pokeball` users. No `components/ui/` path may appear in either list. If one does, fix the component, do not keep the entry.
+Review the file before committing, against the step 0d snapshot:
+
+```bash
+node -e '
+const before = require("/tmp/wp23-ratchet-before.json");
+const after = require("./app/__tests__/uiConventions.baseline.json");
+const bad = [];
+for (const kind of ["hex", "brandRed"]) {
+  for (const [file, n] of Object.entries(after[kind])) {
+    const was = before[kind][file] ?? 0;
+    if (n > was) bad.push(`${kind} ${file}: ${n} > ${was} before this PR`);
+  }
+}
+console.log(bad.length ? bad.join("\n") : "OK: no count above the pre-PR tree");
+process.exit(bad.length ? 1 : 0);'
+# expect: "OK: no count above the pre-PR tree"
+```
+
+Every entry must be at or below its pre-PR count. Expected shape (informative; the snapshot is authoritative): `hex` holds the files that already had hex colours, for example `PriceChart.tsx`, `charts/PortfolioChartImpl.tsx`, `charts/AllocationChartImpl.tsx`, `Header.tsx`, `Footer.tsx`, `CardRinkPromo.tsx`, the four auth pages, WP15's `global-error.tsx`, WP13's `layout.tsx` (`themeColor`) and `opengraph-image.tsx`, and `MarketView/MiniSparkline.tsx` at 2 (3 before: step 21 removes the skeleton's `#cbd5e1`); `brandRed` holds today's `--pf-pokeball` users. No file this PR creates may appear in either list: if one does, fix that file. `Dialog.tsx` or `ConfirmDialog.tsx` may appear only if they were in the snapshot (WP14 and WP15 code; leave them).
 
 ### Step 25. `frontend/app/components/ui/README.md` (new): usage rules
 
@@ -1777,7 +1851,8 @@ The shared vocabulary for every page (WP23, `audits/remediation/01-PRODUCT-DIREC
 - **Badges.** At most one per row. Text variants only: neutral, info, warn. Group-level facts go in the group header once.
 - **Precision.** `formatPercent` and `formatSignedPercent` from `app/lib/format.ts`: returns and changes 1 decimal, shares and consistency `decimals: 0`. Money: `formatMoney`, with the currency code on headline prices. Changes inside ±0.05% are flat (`FLAT_BAND_PERCENT`).
 - **Touch.** Every interactive control is at least 44 px on coarse pointers (`pointer-coarse:min-h-11`).
-- **Motion.** Colour and opacity only, 150 ms, disabled under reduced motion. Skeletons are flat bars. No pulsing, shimmer or count-up numbers.
+- **Motion.** Animate opacity and transform only, at most 150 ms, disabled under reduced motion. Colour changes (hover, pressed, selected) are instant: no `transition-colors` or `transition-all`. Skeletons are flat bars. No pulsing, shimmer or count-up numbers.
+- **Focus.** `focus-visible:outline-hidden` with `focus-visible:ring-2 focus-visible:ring-action`. Never `outline-none` (Tailwind 4: it hides focus in Windows forced-colours mode).
 - **Honesty.** Every headline price carries an `AsOf`. Missing values show `--` with a screen-reader reason. Never write "live", "real-time" or "all-time".
 
 ## Components
@@ -1817,7 +1892,7 @@ If the file does not exist, skip this step and say so in the PR.
 
 27a. `app/components/ProductPrices/__tests__/controls.a11y.test.tsx` (WP14):
 
-- `CurrencySelector` case: `getByRole("group", { name: "Currency" })` becomes `getByRole("radiogroup", { name: "Currency" })`; inside it expect `getAllByRole("radio")` to have length 2 and `getByRole("radio", { name: /USD/ })`, `getByRole("radio", { name: /CAD/ })` to exist.
+- `CurrencySelector` case: `getByRole("group", { name: "Currency" })` becomes `getByRole("radiogroup", { name: "Currency" })`; inside it expect `getAllByRole("radio")` to have length 2 and `getByRole("radio", { name: "US dollars" })`, `getByRole("radio", { name: "Canadian dollars" })` to exist, with visible text "USD" and "CAD" (`toHaveTextContent`).
 - `SortControls` case: the "Sort by" group assertion stays; the "View" assertion becomes `getByRole("radiogroup", { name: "View" })`.
 - `ChartTimeframeButtons` case: unchanged (radiogroup named "Chart timeframe", no `<label>` element). It must pass as is.
 - `SearchInput` case: unchanged.
@@ -1827,14 +1902,15 @@ If the file does not exist, skip this step and say so in the PR.
 27c. Other tests that clicked the migrated toggles as buttons:
 
 ```bash
-grep -rnE 'aria-pressed|name: /?(🇺🇸 )?USD|name: /?(🇨🇦 )?CAD|By Type|By Set|"Flat"|name: "(7D|1M|3M|6M|1Y)"' app --include=*.test.tsx --include=*.test.ts
+grep -rniE 'aria-pressed|USD|CAD|By Type|By Set|"Flat"|"(7D|1M|3M|6M|1Y)"' app --include=*.test.tsx --include=*.test.ts \
+  | grep -iE 'button|pressed|getByText|click'
 ```
 
-For each hit that targets a currency, timeframe or view toggle, change `getByRole("button", ...)` to `getByRole("radio", ...)` and `aria-pressed` to `aria-checked`. Leave sort-key buttons (`Release Date`, `Price`) and every other `aria-pressed` (HoldingsTable's `SortButton`) unchanged. List every edited test in the PR.
+For each hit that targets a currency, timeframe or view toggle, change `getByRole("button", ...)` to `getByRole("radio", ...)` and `aria-pressed` to `aria-checked`. A currency segment's accessible name is now "US dollars" or "Canadian dollars" (its visible text is still "USD" or "CAD", so `getByText("USD")` keeps working; any query on the old "🇺🇸 USD" text changes to `getByRole("radio", { name: "US dollars" })`). Leave sort-key buttons (`Release Date`, `Price`) and every other `aria-pressed` (HoldingsTable's `SortButton`) unchanged. The grep is a starting list; the full `pnpm test --ci` run in Verification is authoritative, so fix any other test that fails on these three controls the same way. List every edited test in the PR.
 
 ### Step 28. Performance budget file
 
-WP22 already caps preloaded fonts at one file per route, and Geist Mono was loaded with `preload: false`, so the preload count is 1 before and after this PR; the gain is that the mono `@font-face` rules leave the CSS and the late mono request on `/prices`, `/`, `/stats` and `/product/[id]` disappears. Do not edit `frontend/perf-budgets.json`: this PR adds no route and must not raise any limit. If `pnpm perf:budget` reports a limit breach, reduce the cost (for example a component accidentally marked `"use client"`) instead of raising the limit.
+WP22 already caps preloaded fonts at one file per route, and Geist Mono was loaded with `preload: false`, so the preload count is 1 before and after this PR; the gain is that the mono `@font-face` rules leave the CSS and the late mono request on `/`, `/prices`, `/analytics` and `/product/[id]` disappears. Do not edit `frontend/perf-budgets.json`: this PR adds no route and must not raise any limit. If `pnpm perf:budget` reports a limit breach, reduce the cost (for example a component accidentally marked `"use client"`) instead of raising the limit.
 
 ## Pitfalls: do not do this
 
@@ -1843,6 +1919,7 @@ WP22 already caps preloaded fonts at one file per route, and Geist Mono was load
 - **Do not use raw palette classes or hex in `components/ui/`.** Only token utilities. The conventions test fails otherwise.
 - **Do not write the monospace utility name anywhere under `app/`, comments included.** The conventions test is a text scan. If a monospace face is ever needed, use the system stack `ui-monospace, SFMono-Regular, Menlo, Consolas, monospace` through a token, not Geist Mono.
 - **Do not animate `Skeleton`** or keep `animate-pulse` in the sparkline skeleton. No shape, no pulse.
+- **Do not add `transition-colors`, `transition-all` or `focus-visible:outline-none` to any WP23 component.** Colour changes are instant (direction §3.5 allows opacity and transform only), and Tailwind 4's `outline-none` hides focus in forced-colours mode; use `focus-visible:outline-hidden`. The conventions test enforces the motion part for `components/ui/`.
 - **Do not show "No history" for `history === undefined`.** Undefined means "not loaded yet".
 - **Do not call `onChange` outside `startTransition`, and do not derive `aria-checked` from `value`.** Use the optimistic `shown` value, or the pressed state lags the list render.
 - **Do not add `"use client"` to components that do not need it.** Only `SegmentedControl` uses hooks. The rest must stay usable from server components.
@@ -2125,8 +2202,14 @@ describe("<SegmentedControl>", () => {
   it("has 44 px targets on coarse pointers and never uses brand red", () => {
     render(<Harness />);
     for (const element of screen.getAllByRole("radio")) {
-      expect(element).toHaveClass("pointer-coarse:min-h-11", "pointer-coarse:min-w-11");
+      expect(element).toHaveClass(
+        "pointer-coarse:min-h-11",
+        "pointer-coarse:min-w-11",
+        "focus-visible:outline-hidden"
+      );
       expect(element.className).not.toMatch(/\bred-\d|pokeball|-accent\b/);
+      // Selection colour is instant (no colour transition) and focus survives forced colours.
+      expect(element.className).not.toMatch(/\btransition-|\boutline-none\b/);
     }
     expect(radio("7D")).toHaveClass("bg-action");
   });
@@ -2257,9 +2340,16 @@ describe("<AsOf>", () => {
     expect(screen.getByText("as of Sep 29, 2026")).toBeInTheDocument();
   });
 
-  it("shows the year when it differs from the reference year", () => {
-    render(<AsOf date="2025-12-30" referenceDate="2025-12-31" />);
-    expect(screen.getByText("as of Dec 30, 2025")).toBeInTheDocument();
+  it("shows the year only when it differs from the reference year", () => {
+    const { rerender } = render(<AsOf date="2025-12-31" referenceDate="2026-01-01" />);
+    expect(screen.getByText("as of Dec 31, 2025")).toBeInTheDocument();
+    rerender(<AsOf date="2025-12-30" referenceDate="2025-12-31" />);
+    expect(screen.getByText("as of Dec 30")).toBeInTheDocument();
+  });
+
+  it("counts the 2-day threshold across a year boundary", () => {
+    render(<AsOf date="2025-12-30" referenceDate="2026-01-01" />);
+    expect(screen.getByText(/Last priced Dec 30, 2025/)).toBeInTheDocument();
   });
 
   it("table: nothing when fresh, a clock with a name when stale", () => {
@@ -2340,6 +2430,12 @@ describe("<RangeBar>", () => {
       <RangeBar low={1} high={2} value={2} lowLabel="$1.00" highLabel="$2.00" showSummary />
     );
     expect(screen.getByText("At 52-week high")).not.toHaveClass("sr-only");
+  });
+
+  it("draws no marker when there is no range yet", () => {
+    render(<RangeBar low={150} high={150} value={150} lowLabel="$150.00" highLabel="$150.00" />);
+    expect(screen.queryByTestId("range-marker")).toBeNull();
+    expect(screen.getByText("No 52-week range yet")).toHaveClass("sr-only");
   });
 
   it("renders nothing for non-finite input", () => {
@@ -2592,7 +2688,8 @@ Must pass on the finished tree without `UPDATE_UI_BASELINE`. Sanity-check the gu
 - add the monospace utility class to `ui/Badge.tsx`: the font rule fails;
 - add `bg-red-500` to `ui/Button.tsx`: the red rule and the token-only rule fail;
 - add the string `"#123456"` to `ui/Stat.tsx`: the hex ratchet and the token-only rule fail;
-- add `bg-[var(--pf-pokeball)]` to `ui/Delta.tsx`: the brandRed ratchet and the token-only rule fail.
+- add `bg-[var(--pf-pokeball)]` to `ui/Delta.tsx`: the brandRed ratchet and the token-only rule fail;
+- add `transition-colors` to `ui/Button.tsx`: the motion rule fails.
 
 ## Verification
 
@@ -2663,13 +2760,13 @@ grep -c 'data-testid="sparkline-skeleton"' /tmp/wp23-prices.html
 
 If WP22 is missing: run `pnpm build:stub` (WP00) instead, skip `perf:budget`, take the CSS and font numbers from the same commands against `.next/` (use `.next/server/app/prices.html` in place of the curl output), and state in the PR that the WP22 gate was not available.
 
-Screenshots (after): repeat step 0b with the finished tree and move the output to `/tmp/wp23-shots-after`. Compare each pair at 390 and 1440. The only differences allowed:
+Screenshots (after): repeat step 0c (not 0b: sizes are already measured above) with the finished tree and move the output to `/tmp/wp23-shots-after`. Compare each pair at 390 and 1440. The only differences allowed:
 
-1. `/prices`, `/market`, `/box-calculator`: the timeframe, currency and view toggles (8 px segment radius, no shadow on the selected segment, ink-soft labels; 44 px tall in the 390 px shots because `shoot.js` sets `hasTouch`).
-2. `/prices`, `/market`: sparkline slots of unloaded cards show a flat bar instead of the grey zigzag; loaded cards with under two days show "No history".
-3. `/prices` group headers, `/stats`, `/product/[id]`: set codes in Geist Sans uppercase instead of Geist Mono.
-4. `/prices` search input at 390 px: 16 px text.
-5. `/compare` tables (only if the page has data in the fixture): hairline rows instead of floating cards, bold sorted header.
+1. `/prices`, `/market`, `/box-calculator`: the timeframe, currency and view toggles (8 px segment radius, `border-line` instead of the slate-300 border, no shadow on the selected segment, ink-soft labels, "USD" and "CAD" without flag emoji, a 12 px rate line; 44 px tall in the 390 px shots because `shoot.js` sets `hasTouch`).
+2. `/` (Recently released strip) and `/prices`: sparkline slots of cards whose history is not loaded show a flat bar instead of the grey zigzag; loaded cards with under two days show "No history". On `/market`, a row whose loaded history has two entries on the same day shows "No history" where it showed the zigzag (rows without history keep "Loading..." or "Open chart").
+3. `/` and `/prices` group headers, `/analytics`, `/product/[id]`: set codes in Geist Sans uppercase instead of Geist Mono.
+4. 390 px only: the `/` hero search input, the `/prices` search input and the 404 search input render 16 px text (at 1440 they are unchanged); `/compare`'s search input likewise if the page renders it in the fixture.
+5. `/compare` tables (only if the page has data in the fixture): hairline rows instead of floating cards, bold sorted header with a visible arrow, one-line SKU and title cells.
 
 Anything else that moved is a regression: find the token or class that changed and fix it. Attach the `/prices` before and after pairs (both widths) to the PR.
 
@@ -2692,21 +2789,23 @@ None required: no migration, environment variable or dashboard change. Optional,
 - [ ] `format.ts` exports `formatPercent`, `formatSignedPercent`, `FLAT_BAND_PERCENT` (0.05) and `changeDirection`, with tests.
 - [ ] `app/components/ui/` contains `Delta`, `Stat`, `Badge`, `SegmentedControl`, `PageHeader`, `DataList` (with `DataListRow`), `EmptyState`, `Skeleton`, `RangeBar`, `Button`, `AsOf`, `ProvenanceLine`, `icons.tsx` and `README.md`; each component has a Jest test with an axe case, and all pass.
 - [ ] Only `SegmentedControl` has `"use client"`; no `components/ui/index.ts`.
+- [ ] No WP23 component uses `transition-colors`, `transition-all`, an `animate-*` class or `outline-none`; every interactive one has `focus-visible:outline-hidden` and `focus-visible:ring-2 focus-visible:ring-action`.
+- [ ] The currency segments read "USD" and "CAD" (no flag emoji) and are named "US dollars" and "Canadian dollars".
 - [ ] `/prices` timeframe, currency and view toggles are `SegmentedControl` radiogroups (server-rendered, arrow keys, `onChange` in a transition, 44 px on coarse pointers); the card list dims while a toggle is pending.
 - [ ] `MiniSparkline` shows a flat, non-animated bar when history is not loaded and "No history" when loaded history has fewer than two days.
 - [ ] `SortableTable` renders 40 px headers, 44 px collapsed rows, a bold sorted header with a visible ▲/▼ and `aria-sort`; WP18's table tests pass unchanged.
 - [ ] The four search inputs use `text-base sm:text-sm`.
-- [ ] `uiConventions.test.ts` fails on `red-*` utilities outside Header/Footer, on `--pf-accent` outside Header/Footer, on `font-mono`, on new hex or `--pf-pokeball` uses beyond `uiConventions.baseline.json`, and on raw palette or hex in `components/ui/`; it passes on this tree; the baseline has no `components/ui/` entry.
+- [ ] `uiConventions.test.ts` fails on `red-*` utilities outside Header/Footer, on `--pf-accent` outside Header/Footer, on `font-mono`, on new hex or `--pf-pokeball` uses beyond `uiConventions.baseline.json`, on raw palette or hex in `components/ui/`, and on colour transitions or `animate-*` in `components/ui/`; it passes on this tree; the baseline has no entry for a file this PR creates, and the step 24 check against `/tmp/wp23-ratchet-before.json` prints "OK".
 - [ ] `tsc`, `lint` and the full Jest suite pass; `pnpm build:stub` succeeds.
 - [ ] WP22 budgets hold (`pnpm perf:budget` exit 0), CSS is at most 14 kB gz, and `/prices` preloads exactly one font file.
-- [ ] Before and after screenshots of `/prices` at 390 and 1440 px show no change beyond the five allowed differences listed in Verification.
+- [ ] Every before and after screenshot pair (step 0c pages, 390 and 1440 px) shows no change beyond the five allowed differences listed in Verification.
 
 ## Rollback
 
 `git revert <merge commit>` and redeploy. There is no migration, data or configuration change. Partial rollbacks:
 
 - Control migration only (a toggle misbehaves in a browser): `git checkout <merge>~1 -- app/components/ProductPrices/controls app/components/ProductPrices/index.tsx app/components/ProductPrices/__tests__/controls.a11y.test.tsx` in a new commit. The components, tokens and conventions test stay.
-- Font change only: restore `layout.tsx` and the `--font-mono` line from `<merge>~1`, and remove the font rule from `uiConventions.test.ts` in the same commit, otherwise the test fails on the restored call sites.
+- Font change only: restore `layout.tsx`, the `--font-mono` line and the five step 5 files from `<merge>~1`, and remove the font rule from `uiConventions.test.ts` in the same commit, otherwise the test fails on the restored call sites.
 - Reverting the conventions block alone is safe; nothing else depends on it.
 
 ## Commit and PR
@@ -2733,7 +2832,8 @@ loaded on four routes for set codes.
 - /prices timeframe, currency and view toggles use SegmentedControl
   (radiogroup, arrow keys, transition, 44 px touch targets); the card
   list dims while a toggle renders.
-- MiniSparkline: flat skeleton bar, "No history" when history is absent.
+- MiniSparkline: flat skeleton bar while history loads, "No history"
+  when loaded history has fewer than two days.
 - SortableTable: 44 px rows, bold sorted header, visible arrow.
 - Search inputs are 16 px on phones.
 - uiConventions: ban red-* outside the logo and font-mono; ratchet
@@ -2742,4 +2842,4 @@ loaded on four routes for set codes.
 
 PR title: `feat(ui): design system foundation, finance components, phone list pattern (WP23)`
 
-PR body: the goal in two sentences; the token table; the component list with one line each; the five allowed visual differences with the `/prices` before and after screenshots at 390 and 1440 px; `perf:budget` before and after, CSS gz before and after, font preload count; the generated `uiConventions.baseline.json` (hex and brandRed counts per file) and a note that counts may only go down; every existing test edited in step 27 and why; whether the transition test used the `react` mock or the console fallback; whether WP22, WP13 or WP19 were missing and what was done instead; "Noticed, out of scope": red CTAs, eyebrow labels and promo still use `--pf-pokeball` (page packages), the currency rate text is 11 px (below the 12 px floor; WP30), the product and stats set-code lines keep their 11 to 12 px sizes, `compareColumns.tsx` has its own `formatPercent` (later package), `CompareTabs` keeps its own style.
+PR body: the goal in two sentences; the token table; the component list with one line each; the five allowed visual differences with the `/prices` before and after screenshots at 390 and 1440 px; `perf:budget` before and after, CSS gz before and after, font preload count; the generated `uiConventions.baseline.json` (hex and brandRed counts per file) and a note that counts may only go down; every existing test edited in step 27 and why; whether the transition test used the `react` mock or the console fallback; whether WP22, WP13 or WP19 were missing and what was done instead; "Noticed, out of scope": red CTAs, eyebrow labels and promo still use `--pf-pokeball` (page packages), the `/prices` group-header set code keeps its 11 px size (below the 12 px floor; WP30), other `text-sm` form inputs (auth forms, portfolio modals, box calculator) still trigger iOS focus zoom (their page packages), pulsing loading placeholders remain outside `components/ui` (`loading.tsx`, chart fallbacks; their page packages), WP24's `components/ui` additions should use `focus-visible:outline-hidden` rather than `outline-none`, `DataListRow` links use `prefetch={false}` rather than WP11's `IntentLink` (a later package can switch it once every caller's tests mock `next/navigation`), `compareColumns.tsx` has its own `formatPercent` (later package), `CompareTabs` keeps its own style.
