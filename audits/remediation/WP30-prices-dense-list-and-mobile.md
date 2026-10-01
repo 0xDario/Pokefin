@@ -68,10 +68,10 @@ Starting direction when a sort is picked: release date descending (newest first)
 | 212 sold 30D   C$612.40 ^ 4.2% /\/\_ |  line 2 (24): meta | price | Delta | 64x24 trend
 +--------------------------------------+  56 per row, 1 px divider
 | Evolving Skies · Elite Trainer Box P.|
-| (c) Last priced Sep 25  C$81.30 v 1.1% __/ |  priced 2+ days ago: warn-colour note replaces the meta
+| (c)Last priced Sep 25 C$81.30 v1.1% _/|  priced 2+ days ago: warn note replaces the meta
 +--------------------------------------+
 | Silver Tempest · Booster Bundle      |
-| (c) Last priced Aug 1    --  --  No history|  withheld price: "--", sr-only reason
+| (c)Last priced Aug 1  --  -- No hist.|  withheld: "--", sr-only reason, "No history"
 +--------------------------------------+
   ... 8 rows fully visible at 390 x 844 (measured, D10)
 ```
@@ -98,7 +98,7 @@ SORT BY [3M change v] [v]    [#List#| Cards ]    [ ] Group by set               
 
 Columns from 768 px: 40 px thumbnail, "Set · Type" with the variant as secondary text (fills the rest), price 112 px right-aligned tabular, Period change 96 px (`Delta`), trend 96 x 28 sparkline, units sold 30D 80 px. From 1024 px: days of supply 96 px, and x MSRP 72 px when WP28 data exists. The sorted column header is bold ink with an arrow (up for ascending, down for descending); other sortable headers are semibold ink-soft with a faint double arrow. "Product" and "Trend" are not sortable.
 
-Grouped (checkbox on), both breakpoints: each set starts with a one-line header, then its rows (list) or its cards (cards view). Group-level facts appear once, in the header:
+Grouped (checkbox on), both breakpoints: each set starts with a one-line header, then its rows (list) or its cards (cards view). Sets appear in the order of their first product under the current sort (newest set first by default; the set holding the biggest riser first when sorted by change), and rows inside a set keep the sort. Group-level facts appear once, in the header:
 
 ```
 Evolving Skies   SWSH07 · Sword & Shield · Released Aug 27, 2021   Special Expansion
@@ -117,7 +117,7 @@ Evolving Skies   SWSH07 · Sword & Shield · Released Aug 27, 2021
 +--------------------------------------------+ +--------------------------------------------+ +---------...
 ```
 
-Card anatomy, top to bottom inside a 12 px padded bordered box: (ungrouped only) caption line "Set · CODE · Aug 27, 2021" (16 px); title = product type (`h3`, 16/24, truncates with a `title` attribute, never wraps); detail line (13/18): variant, units sold 30D and x MSRP joined by " · ", or the withheld-price note; price row: a 112 px right-aligned column holding the price (20/28) with the change directly under it (`Delta` with the Period label), then the 96 x 40 sparkline beside it; actions row, a fixed 44 px: "Show full chart" (WP26) and "View on TCGplayer". The chart panel opens under the card body (WP26 states unchanged). Ungrouped cards are 186 px because of the caption line.
+Card anatomy, top to bottom inside a 12 px padded bordered box: (ungrouped only) caption line "Set · CODE · Aug 27, 2021" (16 px); title = product type (`h3`, 16/24, truncates with a `title` attribute, never wraps); detail line (13/18): variant, units sold 30D and x MSRP joined by " · ", led by "Last priced Sep 25" (clock, warn colour) when the price is 2 or more days old, or replaced by the withheld-price note; price row: a 112 px right-aligned column holding only the price (20/28) with the change directly under it (`Delta` with the Period label), then the 96 x 40 sparkline beside it (no glyph sits on the price line, so a four-digit CAD price such as "C$1,649.99" fits the column); actions row, a fixed 44 px: "Show full chart" (WP26) and "View on TCGplayer". The chart panel opens under the card body (WP26 states unchanged). Ungrouped cards are 186 px because of the caption line. The text column needs 220 px (112 + 12 + 96), so a card is at least 322 px wide: true for every grid track from a 360 px phone up (the narrowest track, 2 columns at 768 px, leaves 250 px). 320 px phones are out of scope; the sparkline clips there rather than wrapping.
 
 `/prices` at 390, cards view: one column, the same card anatomy and heights.
 
