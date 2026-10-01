@@ -2,20 +2,20 @@
 
 - **Findings covered**
   - F005 (full; cluster members F005, F036, F040): return, volatility, drawdown, CAGR and release-date math is implemented in four TypeScript places (`serverMarketData.ts`, `MarketView/returns.ts`, `ReturnMetrics.tsx`, `PriceChart.tsx`) plus four `getReleaseMs` copies, and the copies disagree on volatility units (annualised on `/market` and `/product`, raw daily on `/stats`) with nothing on screen saying which.
-  - F073 (full): `PriceChart` re-parses and re-buckets the whole history on every USD/CAD toggle, defines its tooltip and dot inside render, and renders at 200 px then 150 px on phones because its height comes from a JS media check.
+  - F073 (full; low severity, confirmed by the full-effort re-verification): `PriceChart` re-parses, re-buckets and re-labels the whole history on every USD/CAD toggle (about 730 per-day `toLocaleDateString` calls for a 1Y chart, 40 to 55 ms on desktop, an estimated 80 to 200 ms on a mid-range phone, multiplied by every open chart), defines its tooltip and dot inside render (they remount only when a prop changes, because PriceChart is `memo`'d; cosmetic), and on phones renders at 200 px then 150 px because its height comes from a JS media check (only on a chart opened after the chart chunk is already loaded; the first open shows the CSS skeleton and does not shift).
   - F043 (full; cluster members F004, F035, F043): the Seller Tools client component (`app/compare/CompareDashboard.tsx` after WP11, formerly `page.tsx`) is a 1,000+ line file holding a CSV parser, the margin and threshold rules, a private null-sinking comparator, a `SortButton` and three hand-written tables, with zero tests.
-  - F074 (full): `/compare` filters, sorts and lays out three `table-auto` tables from the same rows on every keystroke.
+  - F074 (full; low severity, confirmed by the full-effort re-verification): `/compare` re-renders and lays out three `table-auto` tables from the same rows on every keystroke. Rows are bounded by the ~306-SKU market catalog (a Shopify item is kept only if the catalog prices it), so the ceiling is ~306 rows per table, ~918 in all; filtering plus the three sorts cost about 0.25 ms, and the real cost is React reconciling every row plus auto table layout (an estimated 100 ms or more per keystroke on a mid-range phone). Fixes, in order of value: deferred search, memoised rows, `table-fixed` with `<colgroup>`; virtualization is not warranted at this size.
   - F003 (full): the Collectr import (`lib/import.ts`) has its own naive CSV parser that splits on newlines before handling quotes, so a multi-line or quoted note is truncated and loses its quote characters.
 - **Priority rationale**: pure maintainability and consistency debt with one user-visible inconsistency (volatility units), scheduled after the caching and lint gates so the refactor lands under blocking lint and on settled code.
 - **Effort**: L, about 12 hours (3 h market math and its five consumers, 1.5 h PriceChart, 4 h compare split with tabs, 1 h import parser, 2.5 h tests and verification).
 - **Depends on**: WP17 (hard: step 4 edits `app/components/MarketView/buildRows.ts`, which WP17 step 13 creates; step 8 expects `PriceTooltip`/`PriceDot` already at module scope from WP17 step 8), WP07 (`app/lib/format.ts`: `parseRecordedAt`, `formatMoney`, `formatDateOnly`, `formatMonthDay`; offset-less `recorded_at` already parsed as UTC in the files this package edits), WP11 (`app/compare/page.tsx` is a server component rendering `app/compare/CompareDashboard.tsx`; `app/compare/marketProducts.ts` exports `MarketProduct` and `buildMarketProductMap`). Also assumes the packages that run before it in plan order have merged: WP14 (compare search `aria-label`, file input `sr-only`, gain/loss tokens), WP15 (compare error copy `MARKET_DATA_UNAVAILABLE`), WP17 (lint blocks CI; `MarketView/buildRows.ts` exists; `PriceTooltip` and `PriceDot` are already module-scope exports of `PriceChart.tsx`).
-- **Unblocks**: WP19 (MarketView decomposition builds on `lib/marketMath.ts`, `lib/sorting.ts` and `components/SortableTable`), WP20 (types move and currency context; the compare page's local `DEFAULT_EXCHANGE_RATE = 1.35` is left for it).
+- **Unblocks**: WP19 (MarketView decomposition builds on `lib/marketMath.ts`, `lib/sorting.ts` and `components/SortableTable`), WP24, WP31 and WP33 (Track 2: `/methodology`, `metricDefinitions.ts` and the screener import `DAYS_PER_YEAR`, `ANNUALISATION_FACTOR`, `PRODUCT_VOLATILITY_LOOKBACK_POINTS`, `RETURN_WINDOW_DAYS` and the `SET_FALLBACK_*` windows from `lib/marketMath.ts` instead of retyping them), WP20 (types move and currency context; the compare page's local `DEFAULT_EXCHANGE_RATE = 1.35` is left for it).
 - **Suggested branch name**: `remediation/wp18-market-math-and-compare`
 - **Risk level**: medium. It touches the numbers shown on `/market`, `/product/[id]`, `/stats` (fallback path), the catalog cards, every price chart and `/compare`; the new code was proven number-for-number equal to the old on randomised histories, and the tests below pin that.
 
 ## Why
 
-The same finance formulas live in four files and have already needed a hand back-port (PR #70 added the same freshness bail to four copies; `ReturnMetrics.tsx:46-47` says so). The one live inconsistency is volatility: `/market` ("Vol 30D") and the product page ("Volatility 30D") show an annualised figure, `/stats` ("Volatility 90D") shows the raw daily standard deviation, a roughly 19x gap under the same word, and only `/stats` says what its number is. PriceChart also redoes all its date parsing when a visitor toggles USD/CAD, and on phones every chart paints at 200 px and then jumps to 150 px. The Seller Tools page holds the margin, profit-per-day and above/below-threshold rules sellers rely on inside one untestable component, renders three full tables at once and re-sorts all of them on every keystroke, and the Collectr import truncates multi-line notes because it uses a second, weaker CSV parser. After this PR there is one isomorphic `lib/marketMath.ts` with an explicit volatility unit that every page labels, PriceChart converts currency in one cheap pass and sizes itself with CSS, `/compare` is a thin component over tested modules showing one table at a time with deferred search, and both CSV consumers share one RFC 4180 parser.
+The same finance formulas live in four files and have already needed a hand back-port (PR #70 added the same freshness bail to four copies; `ReturnMetrics.tsx:46-47` says so). The one live inconsistency is volatility: `/market` ("Vol 30D") and the product page ("Volatility 30D") show an annualised figure, `/stats` ("Volatility 90D") shows the raw daily standard deviation, a roughly 19x gap under the same word, and only `/stats` says what its number is. PriceChart also redoes all its date parsing and day labelling when a visitor toggles USD/CAD, and on phones a chart opened after the chart code has loaded paints at 200 px and then re-renders at 150 px. The Seller Tools page holds the margin, profit-per-day and above/below-threshold rules sellers rely on inside one untestable component, renders three full tables at once (up to ~918 rows) and re-renders and re-lays out all of them on every keystroke, and the Collectr import truncates multi-line notes because it uses a second, weaker CSV parser. After this PR there is one isomorphic `lib/marketMath.ts` with an explicit volatility unit that every page labels, PriceChart converts currency in one cheap pass and sizes itself with CSS, `/compare` is a thin component over tested modules showing one table at a time with deferred search, and both CSV consumers share one RFC 4180 parser.
 
 ## Before you start
 
@@ -85,7 +85,7 @@ Do the steps in order. Steps 1 to 3 add new modules and their tests and change n
 4. **Day keys come from the string** (`recorded_at.split("T")[0].split(" ")[0]`), as `returns.ts:13` and `marketPulse.ts` `toRecordedDateKey` do, not from `new Date(...)` (F005 verifier: unify on the string slice).
 5. **PriceChart's chips stay on the charted (downsampled) series** and are labelled as range figures with a `title` (F005 verifier correction 1). Moving them to daily points would change the displayed drawdown and ROI.
 6. **The zero-peak guard in drawdown is kept but is not a bug fix** (F005 verifier correction 4: the old server copy produced `NaN`, which never won the `<` comparison). Do not describe it as one in the PR.
-7. **PriceChart height is CSS-driven** via a new `heightClassName` prop; `useResponsive` is deleted, not seeded from `matchMedia` (F073 verifier correction).
+7. **PriceChart height is CSS-driven** via a new `heightClassName` prop on the wrapper directly around `ResponsiveContainer` (not on the PriceChart root: the chip row sits above the plot inside that root); `useResponsive` is deleted, not seeded from `matchMedia` (F073 verifier correction). `ResponsivePriceChart` is its only importer and mounts only on the client, so a `matchMedia` initializer would work today; CSS is still chosen because it needs no effect, no listener and stays correct if a server-rendered consumer is ever added.
 8. **Compare modules live in `app/compare/`, not `app/lib/`.** The plan said `lib/compareMath.ts`; `compareMath.ts` needs WP11's `MarketProduct` type from `app/compare/marketProducts.ts`, and a `lib/` module importing from a route folder would recreate the inverted dependency F048 complains about. Only the shared parser goes to `app/lib/csv.ts`.
 9. **The generic comparator moves to `app/lib/sorting.ts`** (F043 recommendation) and gains an optional string comparator, so `/compare` keeps its case- and accent-insensitive title sort (F043 verifier correction 2). `components/MarketView/sorting.ts` re-exports it, so MarketView and its test are unchanged. NaN now sorts as missing on `/compare` too; no compare value can be NaN.
 10. **The CSV parser is RFC 4180 with one leniency**: a quote opens a quoted field only at the start of a field; a quote in the middle of an unquoted field is literal. The old Collectr parser toggled on every quote per line, so a stray inch mark (`12" shelf`) in a note stayed on its own line; a strict parser would swallow the rest of the file into that note. This keeps that case safe (F043 verifier correction 3). Shopify exports are RFC-compliant, so `/compare` sees no change.
@@ -114,7 +114,37 @@ import { parseRecordedAt } from "./format";
 import { utcMidnightMs } from "./marketPulse";
 
 export const DAY_MS = 24 * 60 * 60 * 1000;
-const DAYS_PER_YEAR = 365;
+
+/*
+ * Windows and factors. Exported so /methodology and metricDefinitions.ts
+ * (WP24) import the numbers instead of retyping them. Changing one changes a
+ * number shown on the site: do it only with a methodology version bump.
+ */
+
+/** Days in a year, for CAGR and for annualising volatility. */
+export const DAYS_PER_YEAR = 365;
+
+/** Daily volatility times this is annualised volatility (sqrt(365), about 19.1). */
+export const ANNUALISATION_FACTOR = Math.sqrt(DAYS_PER_YEAR);
+
+/**
+ * Product pages and the Market table: volatility over the newest 30 daily
+ * prices (points, not calendar days), annualised.
+ */
+export const PRODUCT_VOLATILITY_LOOKBACK_POINTS = 30;
+
+/**
+ * Set Analytics fallback (serverMarketData, used only when the SQL
+ * get_set_analytics read fails). The short window feeds volatility and the
+ * short trend, the long window feeds max drawdown and the long trend, each
+ * over the newest N daily prices. They stand in for the SQL windows
+ * `current_date - 90` (changes_90, trend_90_source) and `current_date - 365`
+ * (drawdown_365_source, trend_365_source) in
+ * migrations/20260506_market_performance_functions.sql, which count calendar
+ * days; marketMath.test.ts pins the numbers to that file.
+ */
+export const SET_FALLBACK_SHORT_WINDOW_POINTS = 90;
+export const SET_FALLBACK_LONG_WINDOW_POINTS = 365;
 
 /** Return windows used across the site, in calendar days. */
 export const RETURN_WINDOW_DAYS = {
@@ -331,8 +361,6 @@ export function getMaxDrawdownPercent(
  */
 export type VolatilityUnit = "daily" | "annualised";
 
-const ANNUALISATION_FACTOR = Math.sqrt(DAYS_PER_YEAR);
-
 /**
  * Volatility of a daily price series in the given unit. There is no default
  * unit on purpose: every caller states which one it shows. Null for fewer
@@ -372,6 +400,8 @@ export function getVolatilityPercent(
   return volatilityPercent(prices.slice(-Math.max(lookbackPoints, 3)), unit);
 }
 ```
+
+The named constants are not a behaviour change: each one holds the number the code already used. Use them where this package writes the number inside `marketMath.ts` and `serverMarketData.ts` (step 6c). Do NOT replace the literal `30` in `lookbackPoints: 30` in `buildRows.ts` (step 4c) or `app/product/[id]/page.tsx` (step 5b): WP19's preflight greps and its step 1b match that literal text, and WP24 step 1a swaps those two literals for `PRODUCT_VOLATILITY_LOOKBACK_POINTS` after WP19. WP24 step 1a was written to add `PRODUCT_VOLATILITY_LOOKBACK_POINTS` and to export `DAYS_PER_YEAR` itself; after this package both already exist under those names, so WP24 must only do the literal swap (adding the constant a second time is a TypeScript redeclaration error). There is deliberately no separate `ANNUALISATION_DAYS`: the year length used for annualising volatility and for CAGR is the same 365, so it has one name, `DAYS_PER_YEAR`. The set-level windows that `/stats` normally shows come from SQL and are mirrored by WP24's `SET_METRIC_WINDOWS` in `app/lib/setAnalytics.ts`; the `SET_FALLBACK_*` constants here only govern the TypeScript fallback and end in `_POINTS` because they count priced days, not calendar days (decision 3). The strategist's suggested names (`VOLATILITY_WINDOW_DAYS`, `ANNUALISATION_DAYS`, `SET_VOLATILITY_WINDOW_DAYS`) are not used: `_DAYS` would misstate the unit, and WP24, WP31 and WP33 already reference `DAYS_PER_YEAR` and `PRODUCT_VOLATILITY_LOOKBACK_POINTS`.
 
 Then create the test by moving the old one, so git keeps its history (do it here, not in step 7: `git mv` refuses to overwrite an existing destination):
 
@@ -715,6 +745,8 @@ import {
 ```ts
 import {
   DAY_MS,
+  SET_FALLBACK_LONG_WINDOW_POINTS,
+  SET_FALLBACK_SHORT_WINDOW_POINTS,
   daysSinceUtcMs,
   getReturnPercent,
   maxDrawdownPercent,
@@ -730,8 +762,8 @@ import {
 6c. In `fetchSetAnalyticsFallback`'s per-product loop, replace the four series lines with:
 
 ```ts
-    const series90 = toDailyPoints(history, 90);
-    const series365 = toDailyPoints(history, 365);
+    const series90 = toDailyPoints(history, SET_FALLBACK_SHORT_WINDOW_POINTS);
+    const series365 = toDailyPoints(history, SET_FALLBACK_LONG_WINDOW_POINTS);
     // Daily, not annualised: this stands in for get_set_analytics, whose SQL
     // is stddev_pop of daily percent changes, and /stats labels it "daily".
     const volatility90 = volatilityPercent(
@@ -829,7 +861,7 @@ import {
 - `priceStats`: `const prices = chartDataWithTrend` becomes `const prices = displayData`, and its dependency array `[chartDataWithTrend]` becomes `[displayData]` (the Y axis is in the display currency; its `minSpan` of 1 is not linear, so it must see converted values).
 - `<ComposedChart data={chartDataWithTrend}` becomes `<ComposedChart data={displayData}`.
 
-`slicedData`, `slicedDataWithVolume`, `chartData`, `chartDataWithTrend`, `dataAvailability` and `releaseDateInfo` stay on the USD series (only dates and null-ness matter there). `resolvePrice` in `slicedData` judges null-ness and freshness only, never the amount.
+`slicedData`, `slicedDataWithVolume`, `chartData`, `chartDataWithTrend`, `dataAvailability` and `releaseDateInfo` stay on the USD series (only dates and null-ness matter there). This goes further than the re-verification's suggested split of `groupedDaily` into a `[data]` bucketing memo plus a `[buckets, currency, exchangeRate]` price map: with currency removed from every memo above `displayData`, a toggle re-runs no bucketing, no `slicedData` loop and no date labelling at all, only one linear pass over the charted points. Do not also add the split. `resolvePrice` in `slicedData` judges null-ness and freshness only, never the amount.
 
 8d. `investorStats`: replace the whole useMemo with:
 
@@ -879,7 +911,7 @@ This is equivalent to the old loop: `timestamp` is a `YYYY-MM-DD` key and `new D
 
 8e. Tooltip and dot. WP17 already made them module-scope `export function PriceTooltip` / `export function PriceDot`, used as `content={<PriceTooltip currency={currency} hasVolume={hasVolume} />}` and `dot={range === "7D" ? <PriceDot /> : false}`, and `app/components/charts/__tests__/chartTooltips.test.tsx` imports them. Verify with `grep -n "const CustomTooltip\|const CustomDot\|export function PriceTooltip\|export function PriceDot" app/components/PriceChart.tsx` (expect only the two `export function` lines) and change nothing. Only if the grep still shows `CustomTooltip`/`CustomDot`: do WP17 step 8c exactly as written there (it is the same fix), keeping the exports.
 
-8f. Formatters (F073 "hoist Intl formatters"): WP07 replaced both per-day `toLocaleDateString` calls with `formatMonthDay` (string split, no Intl) and the tooltip and axis with `formatMoney` (module-level `Intl.NumberFormat`). Verify: `grep -n "toLocale\|toFixed(0)\|currencySymbol" app/components/PriceChart.tsx` prints nothing (the `toFixed(6)` tick keys and the chips' `toFixed(2)` percentages are expected and are not matched). If it prints a hit, apply WP07 steps 6l and 8a to this file.
+8f. Formatters (F073 "hoist Intl formatters"): WP07 replaced both per-day `toLocaleDateString` calls (`groupedDaily` and the `slicedData` loop, about 730 calls and 40 to 55 ms for a 1Y chart before WP07) with `formatMonthDay` (string split, no Intl) and the tooltip and axis with `formatMoney` (module-level `Intl.NumberFormat`). That is cheaper than the re-verification's suggested module-level `Intl.DateTimeFormat`, so do not add one, and do not change `slicedData` to reuse `existing.date` (with no Intl call per day there is nothing left to save). Verify: `grep -n "toLocale\|toFixed(0)\|currencySymbol" app/components/PriceChart.tsx` prints nothing (the `toFixed(6)` tick keys and the chips' `toFixed(2)` percentages are expected and are not matched). If it prints a hit, apply WP07 steps 6l and 8a to this file.
 
 8g. `releaseDateInfo`: replace the body with the shared date helpers (same behaviour):
 
@@ -912,7 +944,9 @@ This is equivalent to the old loop: `timestamp` is a `YYYY-MM-DD` key and `new D
   }, [releaseDate, chartDataWithTrend]);
 ```
 
-8h. CSS height. The no-data box:
+8h. CSS height. Put the height classes only on the two elements below: the no-data box and a new wrapper directly around `ResponsiveContainer`. Do not put them on PriceChart's root `<div>`, on the `w-full ...` chart container that also holds the chip row, or on `ResponsivePriceChart`'s outer `<div className={className}>`: the ROI/CAGR/Max DD chip row (and the incomplete-data banner) render above the plot inside the same root, so a fixed height there with `height="100%"` on `ResponsiveContainer` would squash the plot by the chip row's height (F073 re-verification). With the wrapper below, the plot is exactly 150 or 200 px, as today, and the chips add their own height on top, as today.
+
+The no-data box:
 
 ```tsx
       <div
@@ -1256,7 +1290,7 @@ export function summarizeComparison(
 
 ### Step 12. The table: `app/components/SortableTable/SortableTable.tsx`, `app/compare/compareColumns.tsx`, `app/compare/CompareTabs.tsx` (new)
 
-12a. `app/components/SortableTable/SortableTable.tsx`. Generic, `table-fixed`, memoised; its `SortButton` is the compare page's button (same markup, indicator hidden from screen readers, `aria-sort` on the header cell). Row and cell classes are the ones the compare page used, so the tables look the same.
+12a. `app/components/SortableTable/SortableTable.tsx`. Generic, `table-fixed`, memoised at the table and at the row (F074 re-verification: a memoised row component is the second most valuable fix after the deferred search, because the filter keeps row object identity); its `SortButton` is the compare page's button (same markup, indicator hidden from screen readers, `aria-sort` on the header cell). Row and cell classes are the ones the compare page used, so the tables look the same.
 
 ```tsx
 "use client";
@@ -1354,6 +1388,34 @@ export function SortButton<K extends string>({
   );
 }
 
+type SortableTableRowProps<Row, K extends string> = {
+  row: Row;
+  columns: readonly SortableColumn<Row, K>[];
+};
+
+function SortableTableRowImpl<Row, K extends string>({
+  row,
+  columns,
+}: SortableTableRowProps<Row, K>) {
+  return (
+    <tr className="rounded-xl bg-slate-50/80 shadow-sm ring-1 ring-slate-200/60 transition hover:bg-white">
+      {columns.map((column) => (
+        <td key={column.id} className={column.cellClassName} title={column.cellTitle?.(row)}>
+          {column.cell(row)}
+        </td>
+      ))}
+    </tr>
+  );
+}
+
+/**
+ * One body row, memoised (F074). When the search narrows or widens, rows that
+ * stay keep the same object (filterComparisonRows uses Array.filter) and the
+ * same memoised `columns`, so React skips them and only adds or removes the
+ * rows that changed. Re-sorting moves rows without re-rendering them.
+ */
+const SortableTableRow = memo(SortableTableRowImpl) as typeof SortableTableRowImpl;
+
 function SortableTableImpl<Row, K extends string>({
   caption,
   rows,
@@ -1428,20 +1490,7 @@ function SortableTableImpl<Row, K extends string>({
         </thead>
         <tbody>
           {sortedRows.map((row) => (
-            <tr
-              key={rowKey(row)}
-              className="rounded-xl bg-slate-50/80 shadow-sm ring-1 ring-slate-200/60 transition hover:bg-white"
-            >
-              {columns.map((column) => (
-                <td
-                  key={column.id}
-                  className={column.cellClassName}
-                  title={column.cellTitle?.(row)}
-                >
-                  {column.cell(row)}
-                </td>
-              ))}
-            </tr>
+            <SortableTableRow key={rowKey(row)} row={row} columns={columns} />
           ))}
           {sortedRows.length === 0 && (
             <tr>
@@ -2246,7 +2295,10 @@ A path that no longer exists makes jest exit 1 with "No tests found", which is w
 - **Do not change the maths to make the volatility numbers agree** (F005 verifier correction 3). `/stats` comes from SQL `stddev_pop` (raw daily); de-annualising `/market` would silently shrink a column users sort by, and annualising `/stats` needs a migration. Label the units, as specified.
 - **Do not give `volatilityPercent` a default unit.** The missing unit is the original bug.
 - **Do not call the drawdown zero-peak guard a bug fix** (F005 verifier correction 4). The old code's `NaN` never won the comparison; the result is identical.
-- **Do not seed `useResponsive` (or any state) from `window.matchMedia` in a `useState` initializer** (F073 verifier correction). It causes React 19 hydration mismatches in server-rendered trees. Use the CSS height classes.
+- **Do not seed `useResponsive` (or any state) from `window.matchMedia` in a `useState` initializer, and do not keep `useResponsive` with a changed default** (F073 verifier correction). Its only consumer, `ResponsivePriceChart`, mounts only on the client today, so it would work now, but a shared hook with window-dependent initial state causes a React 19 hydration mismatch the day a server-rendered component imports it. Use the CSS height classes.
+- **Do not put the height classes on PriceChart's root or on `ResponsivePriceChart`'s outer `<div>`** (F073 re-verification). The chip row sits above the plot inside PriceChart's root; a fixed outer height with `ResponsiveContainer height="100%"` squashes the plot. Only the wrapper directly around `ResponsiveContainer` (and the no-data box) get them, per step 8h.
+- **Do not add a module-level `Intl.DateTimeFormat`, a `[data]`/currency memo split or `existing.date` reuse to PriceChart** (F073 re-verification suggestions). WP07's `formatMonthDay` and step 8c's `displayData` already remove all per-day Intl work and all re-bucketing from the toggle; the extra changes would only add code.
+- **Do not replace the literal `30` in `lookbackPoints: 30` in `buildRows.ts` or the product page** (Track 2). WP19 matches that text; WP24 step 1a swaps it for `PRODUCT_VOLATILITY_LOOKBACK_POINTS`.
 - **Do not re-hoist or rename `PriceTooltip`/`PriceDot`.** WP17 did it and its tests import those names.
 - **Do not pass Recharts `content` or `dot` as an inline arrow function** (WP17 pitfall): Recharts calls it as a component, so each render remounts.
 - **Do not drop the per-field `.trim()` or the `CSV_MAX_ROWS` slice in `parseCollectrCSV`** (F003 verifier correction). `import.test.ts:31` asserts the trimmed `"Destined Rivals Booster Box"`, and the exact-match filter on `portfolioName`/`category` in `processCollectrImport` breaks on padded values.
@@ -2262,6 +2314,8 @@ A path that no longer exists makes jest exit 1 with "No tests found", which is w
 - **Do not drop `matchProduct` from the `import.test.ts` import line** (WP17 added it and its cases); only add `CSV_MAX_ROWS`.
 - **Do not paste a literal byte order mark into test sources.** Write `"\uFEFF..."`; an invisible character is lost or doubled by editors and the test then checks nothing.
 - **Do not render all three tables and hide two with CSS.** Hidden tables still lay out on every update; only the active tab's table is mounted.
+- **Do not create new row objects between `buildComparisonRows` and `SortableTable`** (F074 re-verification). `filterComparisonRows` must stay an `Array.filter` over the same objects (no `.map`, no spread), and `columns` must stay module-level or memoised; otherwise `SortableTableRow`'s `memo` never skips and every keystroke re-renders every row again.
+- **Do not add virtualization (`@tanstack/react-virtual` or similar) to `/compare`** (F074 re-verification). It is not a dependency, rows are capped at the ~306-SKU catalog, and virtualizing `border-separate` tables with rounded ring rows breaks their layout.
 - **Do not move MarketView's sort switch, columns or JSX** beyond the two volatility edits. That is WP19.
 - **Do not edit the SQL migrations.** `get_set_analytics` stays the source of truth for `/stats`.
 - **Do not write em dashes in new UI copy or comments** (house style; the plan forbids them).
@@ -2272,10 +2326,18 @@ All paths relative to `frontend/`. Default environment is jsdom; none of these n
 
 ### 1. `app/lib/__tests__/marketMath.test.ts` (moved from `app/components/MarketView/__tests__/returns.test.ts`, rewritten)
 
-Keeps the three original `getReturnPercent` cases and WP07's three F122 cases with the new signatures, and adds CAGR, drawdown, volatility units, daily points and date helpers. It must pass under `TZ=UTC`, `TZ=America/Vancouver` and `TZ=Asia/Tokyo`.
+Keeps the three original `getReturnPercent` cases and WP07's three F122 cases with the new signatures, and adds CAGR, drawdown, volatility units, daily points, date helpers and the exported windows and factors (Track 2: pinned to their values and to the SQL windows). It must pass under `TZ=UTC`, `TZ=America/Vancouver` and `TZ=Asia/Tokyo`.
 
 ```ts
+import { readFileSync } from "fs";
+import { join } from "path";
 import {
+  ANNUALISATION_FACTOR,
+  DAYS_PER_YEAR,
+  PRODUCT_VOLATILITY_LOOKBACK_POINTS,
+  RETURN_WINDOW_DAYS,
+  SET_FALLBACK_LONG_WINDOW_POINTS,
+  SET_FALLBACK_SHORT_WINDOW_POINTS,
   cagrPercent,
   dateKeyUtcMs,
   daysSinceUtcMs,
@@ -2507,7 +2569,47 @@ describe("dates", () => {
     expect(daysSinceUtcMs(null, today)).toBeNull();
   });
 });
+
+// /methodology and metricDefinitions.ts (WP24) print these. A change here is
+// a change to numbers on the site and needs a methodology version bump.
+describe("exported windows and factors", () => {
+  it("hold the numbers the site has always used", () => {
+    expect(DAYS_PER_YEAR).toBe(365);
+    expect(ANNUALISATION_FACTOR).toBe(Math.sqrt(365));
+    expect(PRODUCT_VOLATILITY_LOOKBACK_POINTS).toBe(30);
+    expect(SET_FALLBACK_SHORT_WINDOW_POINTS).toBe(90);
+    expect(SET_FALLBACK_LONG_WINDOW_POINTS).toBe(365);
+    expect(RETURN_WINDOW_DAYS).toEqual({ "1D": 1, "7D": 7, "1M": 30, "3M": 90, "6M": 180, "1Y": 365 });
+  });
+
+  it("annualised volatility is daily volatility times ANNUALISATION_FACTOR", () => {
+    const prices = [100, 110, 99, 108.9];
+    expect(volatilityPercent(prices, "annualised")).toBeCloseTo(
+      volatilityPercent(prices, "daily")! * ANNUALISATION_FACTOR,
+      10
+    );
+  });
+
+  it("the set fallback windows equal the SQL windows they stand in for", () => {
+    // From frontend/app/lib/__tests__ up four levels is the repo root.
+    const sql = readFileSync(
+      join(__dirname, "../../../../migrations/20260506_market_performance_functions.sql"),
+      "utf8"
+    );
+    const windowOf = (cte: string): number => {
+      const match = new RegExp(`${cte} AS \\([\\s\\S]*?current_date - (\\d+)`).exec(sql);
+      expect(match).not.toBeNull();
+      return Number(match![1]);
+    };
+    expect(windowOf("changes_90")).toBe(SET_FALLBACK_SHORT_WINDOW_POINTS);
+    expect(windowOf("trend_90_source")).toBe(SET_FALLBACK_SHORT_WINDOW_POINTS);
+    expect(windowOf("drawdown_365_source")).toBe(SET_FALLBACK_LONG_WINDOW_POINTS);
+    expect(windowOf("trend_365_source")).toBe(SET_FALLBACK_LONG_WINDOW_POINTS);
+  });
+});
 ```
+
+The SQL test reads the migration that defines `get_market_product_metrics` today. If a later migration redefines that function with other windows, point the test at that file (`grep -ln "changes_90" ../migrations/*.sql`, take the newest) and change the constants with a methodology version bump; never edit the old migration.
 
 ### 2. `app/lib/__tests__/csv.test.ts` (new)
 
@@ -2990,6 +3092,33 @@ describe("SortableTable", () => {
     const cell = screen.getByText("Nothing here.");
     expect(cell).toHaveAttribute("colspan", "3");
   });
+
+  it("does not re-render rows that survive a narrower filter (F074)", () => {
+    const cell = jest.fn((row: Row) => row.name);
+    const columns: SortableColumn<Row, Key>[] = [
+      { id: "name", label: "Name", sortKey: "name", cellClassName: "name-cell", cell },
+    ];
+    const renderTable = (rows: Row[]) => (
+      <SortableTable
+        caption="Memo table"
+        rows={rows}
+        columns={columns}
+        sort={{ key: "name", direction: "asc" }}
+        onSortChange={() => {}}
+        sortValue={sortValue}
+        rowKey={rowKey}
+        emptyMessage="Nothing here."
+      />
+    );
+    const { rerender } = render(renderTable(ROWS));
+    expect(cell).toHaveBeenCalledTimes(ROWS.length);
+    cell.mockClear();
+
+    // Same row objects, fewer of them: what filterComparisonRows produces.
+    rerender(renderTable(ROWS.filter((row) => row.id !== "4")));
+    expect(cell).not.toHaveBeenCalled();
+    expect(columnText("name-cell")).toEqual(["Alpha", "alpha", "beta"]);
+  });
 });
 ```
 
@@ -3103,10 +3232,12 @@ If WP14 did not give the search box an `aria-label`, its placeholder still provi
  * JS height so phones do not render twice.
  */
 jest.mock("recharts", () => {
-  const Passthrough = ({ children }: { children?: React.ReactNode }) => <div>{children}</div>;
   const Empty = () => null;
+  const Container = ({ children }: { children?: React.ReactNode }) => (
+    <div data-testid="responsive-container">{children}</div>
+  );
   return {
-    ResponsiveContainer: Passthrough,
+    ResponsiveContainer: Container,
     ComposedChart: Empty,
     Area: Empty,
     Bar: Empty,
@@ -3178,6 +3309,14 @@ describe("PriceChart memoisation and chips", () => {
     expect(box).toHaveClass("h-[150px]");
     expect(box.style.height).toBe("");
   });
+
+  it("sizes only the plot wrapper, so the chip row does not eat the plot height", () => {
+    render(<PriceChart data={DATA} range="1M" heightClassName="h-[150px] md:h-[200px]" />);
+    const wrapper = screen.getByTestId("responsive-container").parentElement!;
+    expect(wrapper).toHaveClass("h-[150px]");
+    expect(wrapper.style.height).toBe("");
+    expect(wrapper).not.toContainElement(screen.getByText("ROI: -10.00%"));
+  });
 });
 ```
 
@@ -3225,6 +3364,12 @@ grep -rn "const DAY_MS = " app --include=*.ts --include=*.tsx | grep -v __tests_
 # expect exactly two lines: app/lib/marketMath.ts and app/lib/portfolio.ts (WP05's copy;
 # portfolio day arithmetic is out of scope, decision 12). Any other file is a missed copy.
 
+# Track 2 constants exported; call-site literals left for WP19/WP24:
+grep -c "^export const DAYS_PER_YEAR\|^export const ANNUALISATION_FACTOR\|^export const PRODUCT_VOLATILITY_LOOKBACK_POINTS\|^export const SET_FALLBACK_SHORT_WINDOW_POINTS\|^export const SET_FALLBACK_LONG_WINDOW_POINTS" app/lib/marketMath.ts
+# expect 5
+grep -n "lookbackPoints: 30" app/components/MarketView/buildRows.ts "app/product/[id]/page.tsx"
+# expect 2 lines, one per file
+
 # One CSV parser, two consumers:
 grep -rn "parseCsv(" app --include=*.ts --include=*.tsx | grep -v __tests__
 # expect: app/lib/csv.ts (definition), app/lib/import.ts, app/compare/shopifyCsv.ts
@@ -3239,7 +3384,7 @@ Manual checks (on the Vercel preview of the PR, which reads real data; the stub 
 1. `/market`, click "Show all columns" (or the equivalent toggle): the header reads "Vol 30D (ann.)"; hovering it shows the annualised explanation; values have no "+" sign and are neutral grey, not green. Sort by it: ascending puts the calmest products first and "--" rows last. The numbers equal the production site's "Vol 30D" for the same product.
 2. `/product/<any id>`: the tile reads "Volatility 30D (annualised)" with the note under the grid; CAGR, Max Drawdown and Volatility values equal production.
 3. `/stats` (or `/analytics`): headers read "Volatility 90D (daily)"; the definition text mentions "daily, not annualised"; values equal production.
-4. `/prices`: open a card's chart, note ROI, CAGR and Max DD on 1Y, toggle USD/CAD: the chips do not change and the axis switches between `$` and `C$`. Hover a chip: the "charted ... range" title appears. In Chrome DevTools device mode (iPhone 12), reload and open a chart: inspect the element that wraps `.recharts-responsive-container`; it carries `h-[150px]` and its computed height is 150 px from the first frame (no 200 px render followed by a 150 px one). The chip row above the plot still appears when the chart mounts; that pre-existing shift is not in scope.
+4. `/prices`: open a card's chart, note ROI, CAGR and Max DD on 1Y, toggle USD/CAD: the chips do not change and the axis switches between `$` and `C$`. Hover a chip: the "charted ... range" title appears. In Chrome DevTools device mode (iPhone 12), reload, open one chart, close it and open a second card's chart (the old 200 px then 150 px render happened only once the chart chunk was already loaded, so the first open does not show it): on the second open, inspect the element that wraps `.recharts-responsive-container`; it carries `h-[150px]` and its computed height is 150 px from the first frame (no 200 px render followed by a 150 px one). The plot is still 150 px tall below the chip row, not 150 px minus the chips. The chip row above the plot still appears when the chart mounts; that pre-existing shift is not in scope.
 5. `/compare`: upload a real Shopify `products_export.csv`. Only one table is visible; the tabs "Price comparison", "Shopify margin", "Market margin" switch it; Left/Right arrow keys move between tabs when one is focused. Sort the comparison table by Title, switch tabs and back: the Title sort is kept. Type quickly in the search box: every character appears immediately and the table dims briefly while filtering. Summary tiles count all matched rows regardless of the search. On a 390 px wide viewport the table scrolls horizontally instead of squashing columns. Compare margin, profit and profit/day against production for three SKUs: identical.
 6. `/portfolio` import (signed in): paste a Collectr CSV whose last column holds `"line one` newline `line two"` and a note with `""quoted""` text: the preview shows the full two-line note and the quotes; prices and quantities are the same as before.
 
@@ -3251,15 +3396,18 @@ None. No migration, no environment variable, no dashboard change. The SQL behind
 
 - [ ] `app/lib/marketMath.ts` is the only implementation of N-day return, CAGR, max drawdown, volatility, daily bucketing and release-date parsing; `returns.ts`, `getHistoricalReturn`, `buildDailySeries`, `getVolatility`, `getMaxDrawdown` and every `getReleaseMs`/`getReleaseUtcMs` body are gone.
 - [ ] No shared helper takes a currency conversion argument.
+- [ ] `marketMath.ts` exports `DAYS_PER_YEAR`, `ANNUALISATION_FACTOR`, `PRODUCT_VOLATILITY_LOOKBACK_POINTS`, `SET_FALLBACK_SHORT_WINDOW_POINTS`, `SET_FALLBACK_LONG_WINDOW_POINTS` and `RETURN_WINDOW_DAYS`; `volatilityPercent`, `cagrPercent` and `fetchSetAnalyticsFallback` use them; `buildRows.ts` and the product page still write `lookbackPoints: 30` (WP24 swaps it); the "exported windows and factors" tests pass (Track 2).
 - [ ] `volatilityPercent` requires a unit; `/market` and `/product` call it with `"annualised"`, the server fallback with `"daily"`.
 - [ ] `/market` shows "Vol 30D (ann.)" with an explanatory title and unsigned neutral values; `/product` shows "Volatility 30D (annualised)" and the note; `/stats` shows "Volatility 90D (daily)" and the updated definition.
 - [ ] Displayed values on `/market`, `/product`, `/stats` and the catalog cards are unchanged (spot-checked against production).
 - [ ] PriceChart's `groupedDaily` depends on `[data]` only; a currency toggle does not call `parseRecordedAt` (`PriceChart.memo.test.tsx`), and the chips are unchanged by the toggle.
 - [ ] PriceChart chips carry "charted range" titles and their values are unchanged.
-- [ ] `useResponsive.ts` is deleted; `ResponsivePriceChart` passes `heightClassName="h-[150px] md:h-[200px]"` and the skeleton uses the same classes.
+- [ ] `useResponsive.ts` is deleted; `ResponsivePriceChart` passes `heightClassName="h-[150px] md:h-[200px]"` and the skeleton uses the same classes; the classes sit on the wrapper directly around `ResponsiveContainer` (and the no-data box), never on an element that also contains the chip row (`PriceChart.memo.test.tsx`).
+- [ ] PriceChart has no `toLocale*` call and no module-level `Intl.DateTimeFormat` was added (WP07's `formatMonthDay` covers F073's formatter cost).
 - [ ] `app/lib/csv.ts` is the only CSV parser; `import.ts` and `shopifyCsv.ts` use it; `import.test.ts` passes unchanged plus the F003 cases.
 - [ ] `CompareDashboard.tsx` contains no `<table>`, no CSV parsing and no margin maths, and is under 400 lines; the rules live in `compareMath.ts` with tests.
 - [ ] `/compare` mounts exactly one table (`CompareDashboard.tables.test.tsx`), each table is `table-fixed` with a `<colgroup>`, and search uses `useDeferredValue`.
+- [ ] `SortableTable` renders each body row through the memoised `SortableTableRow`; a narrower filter over the same row objects re-renders no surviving row (`SortableTable.test.tsx`, F074).
 - [ ] `/compare` title sort remains case-insensitive; nulls sort last in both directions.
 - [ ] `tsc`, lint (0 errors), the full jest suite (also under Vancouver and Tokyo for the listed files) and `pnpm build:stub` pass.
 
@@ -3277,7 +3425,8 @@ refactor(market): one market-math module; split Seller Tools
 - app/lib/marketMath.ts: USD-only return, CAGR, drawdown, volatility
   (explicit daily/annualised unit), daily points and release-date helpers,
   used by serverMarketData, MarketView buildRows, ReturnMetrics, the
-  product page and PriceChart (F005)
+  product page and PriceChart (F005); windows and factors exported as
+  named constants for /methodology (no behaviour change)
 - label volatility units on /market, /product and /stats; numbers unchanged
 - PriceChart: currency applied once after a USD pipeline, chips labelled as
   charted-range figures, CSS-driven height; delete useResponsive (F073)

@@ -1,19 +1,20 @@
 # WP15: Visual consistency, promo placement, user-facing copy
 
 - **Findings covered**
-  - F091 (full, cluster members F091, F099): design-token drift. `ReturnMetrics` coloured returns with `text-green-600`/`text-red-600` (the brand red) while the same card's stripe uses `--pf-gain`/`--pf-loss` (WP14 step 12b fixed this file; step 5a here only verifies it); `BoxCalculator`, `/privacy`, `error.tsx`, `global-error.tsx`, `ScrollToTop`, `HoldingsTable`, the portfolio spinners and one MarketView link use the raw `gray-*`/`blue-*` palette; `/privacy` spells the brand "Pokefin". The slate-400 contrast part of F091 is **not** in this package: WP14 (F095) owns it.
+  - F091 (full, cluster members F091, F099): design-token drift. `ReturnMetrics` coloured returns with `text-green-600`/`text-red-600` (Tailwind 4 values `#00a63e`/`#e7000b`; the red is close to the brand red `--pf-pokeball` `#dc2626`, not the rose loss token) while the same card's stripe uses `--pf-gain`/`--pf-loss` (WP14 step 12b fixed this file; step 5a here only verifies it); `BoxCalculator`, `/privacy`, `error.tsx`, `global-error.tsx`, `ScrollToTop`, `HoldingsTable`, the portfolio spinners and one MarketView link use the raw `gray-*`/`blue-*` palette; `/privacy` spells the brand "Pokefin". The slate-400 contrast part of F091 is **not** in this package: WP14 (F095) owns it.
   - F097 (full, cluster members F092, F097, F101): two or three CardRinkTCG calls to action per page, the `/market` banner sits above the results table, the promo's "footer" variant is a `<footer>` element inside `<main>`, and its "Powered by pokefin.ca" line reads as if the visitor were on the store's site. The cluster's merged recommendation and its verifier correction cover promo count, placement, semantics and the dead variants only. F092's separate IA suggestion (move "Seller Tools" out of the primary nav in `Header.tsx`) is not part of that recommendation and is a product decision, so this package does not change the nav; list it in the PR under "Noticed, out of scope".
   - F103 (full): developer-facing copy ("Supabase analytics function migration", "Check your Supabase connection"), raw error strings, native `alert()`/`confirm()` for validation and destructive actions, a doubled portfolio heading, "Pokemon"/"Pokefin" spelling drift, a privacy contact line with no link, and mixed `...`/`…` ellipses.
+  - Track 2 (`01-PRODUCT-DIRECTION.md` section 9 item 3; `research/trust-seo-brand.md` section 3 rows "WP15 step 3", "WP15 pitfall" and "WP03 / WP15 copy", sections 7.2, 14.1 and 14.4): the promo label comes from one exported constant, `PROMO_RELATIONSHIP_LABEL` in the new `app/content/disclosures.ts`, so WP24 can reuse one source for the promo, the footer and `/about`; the promo shows the store's name as text instead of the Poké Ball glyph (a third-party trademark); the conventions test bans "TCGPlayer" (the source spells it "TCGplayer"), "live price" and "real-time" in `app/**/*.tsx`, and step 13e fixes the remaining hits. Code identifiers are not renamed.
 - **Priority rationale**: all three are verified low-severity polish items; they come after WP14 because the destructive confirmations need an accessible dialog pattern and the jsdom `<dialog>` polyfill, and after WP04 to WP06 because those packages rewrite the account, portfolio and box-calculator code this package edits.
-- **Effort**: M, about 6 to 8 hours including tests.
+- **Effort**: M, about 7 to 9 hours including tests.
 - **Depends on**: WP14 (hard: the native-`<dialog>` rules, the jsdom `<dialog>` polyfill in `jest.setup.ts`, `app/components/ui/Dialog.tsx`, the `--pf-gain-text`/`--pf-loss-text` tokens and the ReturnMetrics fix, and the slate-400 contrast sweep). The plan runs packages in order, so WP00 to WP13 have also landed; the ones whose output this spec edits are WP02, WP03, WP04, WP05, WP06, WP07, WP08, WP11 and WP13, and each has a stated check or fallback below.
-- **Unblocks**: WP17 (expects the `CardRinkPromo` rewrite with no effect, `deleteLoading` in use in `PortfolioDashboard`, and `SortButton`'s `type="button"`/`aria-pressed`/`bg-blue-50 text-[var(--pf-pokeblue-strong)]`), WP18 (keeps `MARKET_DATA_UNAVAILABLE` and the `logCaughtError("compare_market_data_failed", err)` catch in `CompareDashboard.tsx`, and runs `uiConventions.test.ts`), WP19 (expects no `CardRinkPromo` in `MarketView.tsx` and the tokenised TCGPlayer link). Keep those names exactly.
+- **Unblocks**: WP17 (expects the `CardRinkPromo` rewrite with no effect, `deleteLoading` in use in `PortfolioDashboard`, and `SortButton`'s `type="button"`/`aria-pressed`/`bg-blue-50 text-[var(--pf-pokeblue-strong)]`), WP18 (keeps `MARKET_DATA_UNAVAILABLE` and the `logCaughtError("compare_market_data_failed", err)` catch in `CompareDashboard.tsx`, and runs `uiConventions.test.ts`), WP19 (expects no `CardRinkPromo` in `MarketView.tsx` and the tokenised store link, whose text this PR changes to "View on TCGplayer &gt;"; WP19 must keep that spelling or the conventions test fails), WP24 (extends `app/content/disclosures.ts` instead of creating it, and must keep `PROMO_RELATIONSHIP_LABEL`, `STORE_NAME` and `STORE_URL` exported, for example `export const PROMO_RELATIONSHIP_LABEL = DISCLOSURE.promoLabel;`, or update `CardRinkPromo.tsx`'s import in the same PR). Keep those names exactly.
 - **Suggested branch name**: `remediation/wp15-visual-polish-and-copy`
 - **Risk level**: medium. Most changes are class names and strings, but the account-deletion and holding-deletion flows are rewired onto a new dialog; a wiring mistake would block a GDPR erasure path. Both flows get component tests. No migrations.
 
 ## Why
 
-Pokéfin looks like two products today: the catalog, market and stats pages use the slate palette and the `--pf-*` tokens, while the Box Calculator, the privacy page and the error page use Tailwind's default gray and blue, and at review time a losing product card showed two different reds (rose stripe, brand-red percentage; WP14 has since fixed that file). The CardRinkTCG store is pitched up to three times on one screen at the bottom of `/prices` and `/market`, and on `/market` a large store banner sits between the filters and the table, so on a 360x640 phone the visitor sees an ad before a single price. Copy leaks implementation details ("Supabase", "migration"), box-calculator validation interrupts with OS `alert()` popups, account deletion is guarded by a single `window.confirm`, and the portfolio page prints its heading twice. After this PR every page uses one palette, each page shows at most one promo and always after its primary content, all errors are fixed user-facing sentences, and destructive actions use an accessible in-page confirmation (account deletion requires typing DELETE).
+Pokéfin looks like two products today: the catalog, market and stats pages use the slate palette and the `--pf-*` tokens, while the Box Calculator, the privacy page and the error page use Tailwind's default gray and blue, and at review time a losing product card showed two different reds (rose stripe, brand-red percentage; WP14 has since fixed that file). The CardRinkTCG store is pitched up to three times on one screen at the bottom of `/prices` and `/market`, and on `/market` a large store banner sits between the filters and the table, so on a 360x640 phone the visitor sees an ad before a single price. Copy leaks implementation details ("Supabase", "migration"), box-calculator validation interrupts with OS `alert()` popups, account deletion is guarded by a single `window.confirm`, and the portfolio page prints its heading twice. The promo's "Partner store" label does not say whether Pokéfin is owned by, paid by or independent of the store, it carries the Poké Ball (a third-party trademark), and four UI strings still spell the price source "TCGPlayer". After this PR every page uses one palette, each page shows at most one promo and always after its primary content, the promo label lives in one constant that WP24 turns into a full disclosure, the source is spelled "TCGplayer", all errors are fixed user-facing sentences, and destructive actions use an accessible in-page confirmation (account deletion requires typing DELETE).
 
 ## Before you start
 
@@ -33,6 +34,7 @@ Read these files fully (paths relative to `frontend/`):
 - `app/components/Portfolio/hooks/usePortfolioData.ts` and `hooks/useProductSearch.ts` (WP05 rewrote both).
 - `app/lib/logger.ts` (`logCaughtError`), `app/lib/authErrors.ts` (WP02, `AUTH_MESSAGES`), `app/lib/format.ts` (WP07, `formatInteger`), `jest.setup.ts`, `jest.config.js`.
 - WP14's output: `app/components/ui/Dialog.tsx` (read it: `ConfirmDialog` in step 2 copies its Escape, native-close and backdrop handling) and the `HTMLDialogElement` polyfill WP14 step 1 appended to `jest.setup.ts`.
+- Track 2 inputs: `audits/remediation/01-PRODUCT-DIRECTION.md` section 11 (owner decision D1, the CardRinkTCG relationship) and `audits/remediation/research/trust-seo-brand.md` section 7.2 (the label for each D1 answer). Step 3a uses them.
 
 Confirm the starting state (run from `frontend/`):
 
@@ -59,6 +61,16 @@ grep -rn "Supabase analytics" app/stats/page.tsx
 grep -rln "Check your Supabase connection" app
 grep -rn "\bPokefin\b" app --include=*.tsx | grep -v __tests__        # privacy/page.tsx only
 grep -n "Pokemon" app/components/Portfolio/PortfolioDashboard.tsx app/components/Portfolio/cards/ImportHoldingsModal.tsx
+
+# 4b. Track 2 copy (step 13e). After WP03 and WP13, expect "TCGPlayer" in exactly four .tsx lines:
+#     ProductCard.tsx (2, "View on TCGPlayer →"), MarketView.tsx (1, "View on TCGPlayer &gt;"),
+#     product/[id]/page.tsx (1, "View on TCGPlayer →"). The second grep expects only
+#     BoxCalculator.tsx ("today&apos;s live booster pack market prices"); a "Live price" hit in
+#     product/[id]/page.tsx means WP13 step 7 did not land (step 13e handles it). The third
+#     expects no output (app/content is created in step 3a).
+grep -rn "\bTCGPlayer\b" app --include=*.tsx | grep -v __tests__
+grep -rniE "\blive prices?\b|\blive booster|\breal[- ]?time\b" app --include=*.tsx | grep -v __tests__
+ls app/content 2>/dev/null
 
 # 5. Dependencies this spec reads.
 ls app/components/ui/ 2>/dev/null                    # WP14 (expect Dialog.tsx)
@@ -351,37 +363,53 @@ Notes:
 - WP14's `html:has(dialog[open]) { overflow: hidden }` rule in `globals.css` also locks page scrolling behind this dialog; nothing to add.
 - The doc comment deliberately does not contain the text `alert(` or `confirm(` with a parenthesis: the step 16 guard test scans comments too.
 
-### Step 3. `app/components/CardRinkPromo.tsx`: one variant, an `<aside>`, a server component
+### Step 3. `app/content/disclosures.ts` and `app/components/CardRinkPromo.tsx`: one variant, an `<aside>`, a server component
 
-Replace the whole file. The `banner`, `header` and `card` variants go (banner: step 4 removes its two call sites; header/card: zero call sites). With no state and no storage reads it no longer needs `"use client"`, so it renders identically on server and client and cannot shift layout after hydration.
+3a. Create `app/content/disclosures.ts` (new directory `app/content/`). It is the one source for the store name, URL and relationship label (Track 2). WP24 later extends this file with the footer sentence, the `/about` copy and the `rel` value; no component may write the label as a literal.
+
+First decide the label. Owner decision D1 (`01-PRODUCT-DIRECTION.md` section 11) is the true CardRinkTCG relationship. Treat D1 as answered only if the owner's answer is written in this PR's task, issue or review thread. Then set `PROMO_RELATIONSHIP_LABEL` to the matching wording from `research/trust-seo-brand.md` section 7.2 (the same strings WP24's `disclosureCopy()` uses):
+
+| D1 answer | `PROMO_RELATIONSHIP_LABEL` |
+|---|---|
+| owned (the operator owns or co-owns CardRinkTCG) | `"From the team behind Pokéfin"` |
+| paid (placement or commission is paid) | `"Sponsored"` |
+| unpaid (personal connection, no payment) | `"A shop we like"` |
+| not answered (the default) | `"Partner store"` |
+
+If the answer is "paid", also change the promo link's `rel` in step 3b from `"noopener noreferrer"` to `"sponsored noopener noreferrer"` (Google's rule follows payment; see Pitfalls). Write the file:
+
+```ts
+/**
+ * Who Pokéfin promotes and how it is related to them. The CardRinkTCG promo
+ * reads these now; WP24 extends this file for the footer and /about, so the
+ * wording cannot drift. Never write the store label as a literal elsewhere.
+ *
+ * PROMO_RELATIONSHIP_LABEL follows owner decision D1
+ * (research/trust-seo-brand.md section 7.2):
+ *   owned: "From the team behind Pokéfin"
+ *   paid: "Sponsored" (store links then also get rel "sponsored")
+ *   unpaid: "A shop we like"
+ *   not answered yet: "Partner store"
+ */
+export const STORE_NAME = "CardRinkTCG.ca";
+export const STORE_URL = "https://cardrinktcg.ca";
+
+export const PROMO_RELATIONSHIP_LABEL = "Partner store";
+```
+
+(Replace `"Partner store"` with the table's value only when D1 is answered as described above, and update the PR body to say which answer was used.) The file is a plain module with no `"use client"` and no imports, so both server and client components can import it.
+
+3b. Replace the whole `app/components/CardRinkPromo.tsx`. The `banner`, `header` and `card` variants go (banner: step 4 removes its two call sites; header/card: zero call sites). With no state and no storage reads it no longer needs `"use client"`, so it renders identically on server and client and cannot shift layout after hydration.
 
 ```tsx
 import Link from "next/link";
-
-const STORE_URL = "https://cardrinktcg.ca";
+import { PROMO_RELATIONSHIP_LABEL, STORE_NAME, STORE_URL } from "../content/disclosures";
 
 const CATEGORIES = [
   { label: "Sealed Products", sub: "Booster boxes, ETBs, bundles & more" },
   { label: "Single Cards", sub: "Find the exact cards you need" },
   { label: "Graded Slabs", sub: "PSA, CGC, BGS certified cards" },
 ];
-
-function PokeballGlyph({ className = "w-5 h-5" }: { className?: string }) {
-  return (
-    <svg viewBox="0 0 32 32" className={className} aria-hidden="true">
-      <circle cx="16" cy="16" r="15" fill="#fff" stroke="#0f172a" strokeWidth="1.5" />
-      <path
-        d="M1 16 A15 15 0 0 1 31 16 Z"
-        fill="#dc2626"
-        stroke="#0f172a"
-        strokeWidth="1.5"
-      />
-      <rect x="1" y="15" width="30" height="2" fill="#0f172a" />
-      <circle cx="16" cy="16" r="4.5" fill="#fff" stroke="#0f172a" strokeWidth="1.5" />
-      <circle cx="16" cy="16" r="1.8" fill="#0f172a" />
-    </svg>
-  );
-}
 
 /**
  * The one CardRinkTCG promotion a page may show (review F097).
@@ -390,18 +418,24 @@ function PokeballGlyph({ className = "w-5 h-5" }: { className?: string }) {
  * <main>, after the primary content. Never inside a data view (MarketView,
  * ProductPrices) and never above a table or grid.
  *
- * An <aside> labelled "Partner store", not a <footer>: it is related,
- * sponsored content, and the site footer is Footer.tsx.
+ * An <aside> labelled with the store relationship (content/disclosures.ts),
+ * not a <footer>: it is related, promotional content, and the site footer is
+ * Footer.tsx. The store's name as text replaces the old ball glyph, which
+ * was a third-party trademark.
  */
 export default function CardRinkPromo() {
   return (
-    <aside aria-label="Partner store" className="mt-12 pt-8">
+    <aside aria-label={PROMO_RELATIONSHIP_LABEL} className="mt-12 pt-8">
       <div className="rounded-xl border border-slate-200 bg-white p-8 shadow-sm">
         <div className="max-w-4xl mx-auto">
           <div className="flex flex-col items-center text-center gap-3 mb-6">
-            <PokeballGlyph className="w-10 h-10" />
+            {/* Wordmark in place of the old decorative glyph. aria-hidden because the
+                paragraph below names the store, so screen readers hear it once. */}
+            <p aria-hidden="true" className="text-xl font-bold tracking-tight text-slate-900">
+              {STORE_NAME}
+            </p>
             <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
-              Partner store
+              {PROMO_RELATIONSHIP_LABEL}
             </p>
             <h2 className="text-2xl font-bold text-slate-900">Ready to start collecting?</h2>
             <p className="text-slate-600 max-w-xl">
@@ -439,7 +473,9 @@ export default function CardRinkPromo() {
 }
 ```
 
-What changed versus the old footer variant, besides the element: a visible "Partner store" label is added above the heading, and the old tagline "Powered by pokefin.ca, Track prices, shop smart." (`:196-198` at review time, written as if the visitor were on the store's site; WP14 only changed its colour) is removed, and with it the dismiss button WP14 restyled.
+What changed versus the old footer variant, besides the element: the `PokeballGlyph` SVG (the Poké Ball is a third-party trademark) is replaced by the store's name as plain text, a visible relationship label (`PROMO_RELATIONSHIP_LABEL`, "Partner store" while D1 is open) is added above the heading, store name and URL come from `content/disclosures.ts`, and the old tagline "Powered by pokefin.ca, Track prices, shop smart." (`:196-198` at review time, written as if the visitor were on the store's site; WP14 only changed its colour) is removed, and with it the dismiss button WP14 restyled.
+
+Keep the paragraph text "Visit CardRinkTCG.ca for Pokémon sealed products, singles, and graded slabs." and the CTA text "Shop CardRinkTCG.ca →" exactly as written: WP24 step 9 finds the paragraph by that text. Leave the `PokeballGlyph` functions in `Footer.tsx`, `Header.tsx` and the auth pages alone; WP27 replaces the site mark.
 
 ### Step 4. Promo call sites: remove both banners, drop the `variant` prop
 
@@ -468,7 +504,7 @@ Expected: exactly six lines, one each in `app/page.tsx`, `app/prices/page.tsx`, 
 
 ### Step 5. `ReturnMetrics` and the three spinners (manual, before the codemod)
 
-5a. `app/components/ProductPrices/shared/ReturnMetrics.tsx`, the `colorClass` ternary. WP14 step 12b already replaced it with `text-[var(--pf-gain-text)]` / `text-[var(--pf-loss-text)]`, which fixes F091's "two reds on one card" (the loss text is rose-700 from the same rose family as the rose-600 stripe, not the brand red-600). Verify only:
+5a. `app/components/ProductPrices/shared/ReturnMetrics.tsx`, the `colorClass` ternary. WP14 step 12b already replaced it with `text-[var(--pf-gain-text)]` / `text-[var(--pf-loss-text)]`, which fixes F091's "two reds on one card" (the loss text is rose-700 from the same rose family as the rose-600 stripe, not Tailwind 4's `red-600` `#e7000b`, which sits next to the brand red `#dc2626`). Verify only:
 
 ```bash
 grep -n "pf-gain-text\|pf-loss-text" app/components/ProductPrices/shared/ReturnMetrics.tsx   # expect 2 lines
@@ -971,6 +1007,14 @@ with
 
 12d. `app/components/Portfolio/hooks/usePortfolioData.ts`: verify only. `grep -n "err.message\|\.message" app/components/Portfolio/hooks/usePortfolioData.ts` must print nothing (WP05's `loadErrorMessage` returns fixed strings). If it prints a line, WP05 did not land as specified: stop and report.
 
+12e. Modal error announcements (F103 verifier: the AddHoldingModal error `<div className="text-rose-600 text-sm">`, review-time `:219-223`, had no `role="alert"`, so it was not a pattern to copy). WP14 steps 5e (AddHoldingModal), 6 (EditHoldingModal) and 7g (ImportHoldingsModal) added the role. Verify only:
+
+```bash
+grep -n 'role="alert"' app/components/Portfolio/cards/AddHoldingModal.tsx app/components/Portfolio/cards/EditHoldingModal.tsx app/components/Portfolio/cards/ImportHoldingsModal.tsx
+```
+
+Expect at least one line per file. If a file has none, add `role="alert"` to the `<div>` that renders `{error}` in that file and name the file in the PR. Every inline error this PR writes (steps 2, 8, 9 and 11) already carries `role="alert"`.
+
 ### Step 13. Brand spelling: "Pokéfin", "Pokémon"
 
 Only user-visible strings change. Data values, identifiers and comments stay.
@@ -1017,6 +1061,24 @@ const PRIVACY_CONTACT_URL = "https://github.com/0xDario/Pokefin/issues/new";
 13c. `PortfolioDashboard.tsx:128` ("Track your Pokemon TCG sealed product investments") was removed in step 9e.
 
 13d. Leave unchanged: `app/lib/import.ts:394` (`csvRow.category !== "Pokemon"` is the literal Collectr CSV value), product variant data such as "Pokemon Center" (from the database, asserted in `HoldingCard.test.tsx:123-130` and `sorting.test.ts:32`), code comments, and every lowercase `pokefin` identifier (`x-pokefin-request` header, `pokefin-data-*.json`, storage keys, the `pokefin.ca` domain).
+
+13e. Track 2 copy: "TCGplayer", and no "live" or "real-time" price claims (prices update once a day). Only `.tsx` user-facing text changes; code identifiers, `.ts` code comments (`lib/marketPulse.ts`, `lib/marketData.ts`, their tests) and data stay as they are (WP24 sweeps the comments).
+
+- Respell the source in these strings (found by "Before you start" check 4b):
+  - `app/components/ProductPrices/cards/ProductCard.tsx`, both `View on TCGPlayer →` lines: `View on TCGplayer →`.
+  - `app/components/MarketView/MarketView.tsx`, `View on TCGPlayer &gt;`: `View on TCGplayer &gt;`.
+  - `app/product/[id]/page.tsx`, `View on TCGPlayer →`: `View on TCGplayer →`.
+  - Any other `.tsx` line the check printed, the same way. If the hit is an identifier (a variable, prop, type or import name), leave it: the step 16 rule matches `\bTCGPlayer\b`, which skips identifiers such as `TCGPlayerLink`; if a standalone identifier named exactly `TCGPlayer` exists, stop and report instead of renaming it.
+- `app/components/BoxCalculator/BoxCalculator.tsx`, the "How it works" list item: `The calculator uses today&apos;s live booster pack market prices per set,` becomes `The calculator uses the latest daily booster pack market prices per set,`.
+- If "Before you start" check 4b printed `Live price` in `app/product/[id]/page.tsx`, WP13 step 7 did not land: replace that description with WP13's wording, `` `Daily TCGplayer Market Price, returns, volatility and price history for ${setName} ${label}.` ``, and list it in the PR as a WP13 gap.
+- Tests: `grep -rn "TCGPlayer\|live booster" app --include=*.test.tsx --include=*.test.ts`. Update any assertion on a string changed above to the new text; leave comments and test names that describe the scraper's source (for example `marketPulse.test.ts` "dead TCGPlayer SKUs"), because they are `.ts` and outside the rule.
+
+Afterwards both of these print nothing:
+
+```bash
+grep -rn "\bTCGPlayer\b" app --include=*.tsx | grep -v __tests__
+grep -rniE "\blive prices?\b|\breal[- ]?time\b" app --include=*.tsx | grep -v __tests__
+```
 
 ### Step 14. `error.tsx` and `global-error.tsx`
 
@@ -1114,12 +1176,15 @@ Read the diff of every file the script printed: each changed line must differ on
 
 ### Step 16. `app/__tests__/uiConventions.test.ts` (new): keep it this way
 
-A static guard, in lieu of a lint plugin, that fails CI if the palette, the promo rules or the dialog rule regress. Code in "Tests" 1. Run it: it must pass on the tree produced by steps 1 to 15. If it lists a file added by another package (for example a WP13 or WP14 component using `gray-*` or `text-blue-600`), convert that file with the step 6 script rather than allowlisting it, and name the file in the PR. If it lists a comment (the alert/confirm check scans comments too), reword the comment so it no longer contains `alert(` or `confirm(`.
+A static guard, in lieu of a lint plugin, that fails CI if the palette, the promo rules (including the label constant and the absent glyph), the dialog rule, the "Pokéfin" spelling or the Track 2 copy rules ("TCGPlayer", "live price", "real-time" in `.tsx` files) regress. Code in "Tests" 1. WP23 and WP24 append to this file and reuse `APP`, `collect`, `SOURCES` and `violations`, so keep those names and `violations`' `(re, allow)` signature. Run it: it must pass on the tree produced by steps 1 to 15. If it lists a file added by another package (for example a WP13 or WP14 component using `gray-*` or `text-blue-600`), convert that file with the step 6 script rather than allowlisting it, and name the file in the PR. If it lists a comment (the alert/confirm check scans comments too), reword the comment so it no longer contains `alert(` or `confirm(`.
 
 ## Pitfalls: do not do this
 
 - **Do not claim the `<footer>` to `<aside>` change removes a duplicate landmark** (F097 verifier correction). Inside `<main>` the promo's `<footer>` already maps to `role=generic` (HTML-AAM) in Chromium and Firefox; there was only one `contentinfo`. The change is for honest semantics: sponsored content is an aside. Say that in the PR.
-- **Do not add `rel="sponsored"`** (F097 verifier correction on F101): correct only if the placement is paid. Nothing in the repo says so; keep `noopener noreferrer`.
+- **Do not add `rel="sponsored"` unless D1 is answered "paid"** (F097 verifier correction on F101; `research/trust-seo-brand.md` section 3 "WP15 pitfall"): Google's rule follows payment, not ownership. Nothing in the repo says the placement is paid, so keep `noopener noreferrer`. Only when step 3a records D1 as "paid" does the promo link become `rel="sponsored noopener noreferrer"`.
+- **Do not write the promo label as a literal** in `CardRinkPromo.tsx` or anywhere else. Import `PROMO_RELATIONSHIP_LABEL` from `app/content/disclosures.ts`; WP24 builds the footer and `/about` disclosure on the same file.
+- **Do not guess D1.** "Most likely owned" in the research is not an answer. Without the owner's written answer the label stays "Partner store".
+- **Do not rename code identifiers or `.ts` comments for the "TCGplayer" spelling**, and do not touch "TCGPlayer" in Python or SQL. The step 16 rule covers `.tsx` text only.
 - **Do not keep the banner and move it into `localStorage` with a TTL.** The plan chose one promo per page; the footer-style block already exists on all six routes. If the owner later wants the compact banner back, the verifier's rules apply: render it only below the data, read storage inside `useEffect` (never during render, or hydration mismatches), and wrap storage access in `try/catch` (Safari private mode throws).
 - **Do not move the promo inside `MarketView` or `ProductPrices`.** The page file owns it, as the last child of `<main>`, so no data view can ever render an ad above its table.
 - **Do not remove the site Footer's CardRinkTCG text link** (`Footer.tsx:91-98`): it is site chrome, not a promo block, and it is the only store link on pages without the block (auth pages hide the Footer entirely).
@@ -1150,8 +1215,10 @@ All paths relative to `frontend/`. Default environment is jsdom unless a docbloc
 /** @jest-environment node */
 import fs from "node:fs";
 import path from "node:path";
+import { PROMO_RELATIONSHIP_LABEL } from "../content/disclosures";
 
-// Static guard for review findings F091 (tokens), F097 (promo) and F103 (copy).
+// Static guard for review findings F091 (tokens), F097 (promo) and F103 (copy),
+// plus the Track 2 source-name, cadence and disclosure-label rules.
 const APP = path.resolve(__dirname, "..");
 
 function collect(dir: string, out: string[] = []): string[] {
@@ -1213,6 +1280,21 @@ describe("user-facing copy (F103)", () => {
   });
 });
 
+describe("source name and cadence in .tsx copy (Track 2)", () => {
+  // .tsx only: .ts code comments may still name the scraper's source the old
+  // way until WP24 sweeps them. \b skips identifiers such as TCGPlayerLink.
+  const TSX = SOURCES.filter((s) => s.file.endsWith(".tsx")).map((s) => s.file);
+  const NOT_TSX = SOURCES.map((s) => s.file).filter((f) => !TSX.includes(f));
+
+  it('spells the source "TCGplayer"', () => {
+    expect(violations(/\bTCGPlayer\b/g, NOT_TSX)).toEqual([]);
+  });
+
+  it("never claims live or real-time prices (prices update daily)", () => {
+    expect(violations(/\blive prices?\b|\breal[- ]?time\b/gi, NOT_TSX)).toEqual([]);
+  });
+});
+
 describe("CardRinkTCG promo (F097)", () => {
   const PROMO = "components/CardRinkPromo.tsx";
 
@@ -1230,6 +1312,22 @@ describe("CardRinkTCG promo (F097)", () => {
     expect(promo).toMatch(/<aside\b/);
     expect(promo).not.toMatch(/<footer\b/);
     expect(promo).not.toMatch(/sessionStorage|localStorage/);
+  });
+
+  it("takes its label from content/disclosures.ts and shows no ball glyph", () => {
+    const promo = SOURCES.find((s) => s.file === PROMO)!.text;
+    expect(promo).toMatch(/aria-label=\{PROMO_RELATIONSHIP_LABEL\}/);
+    expect(promo).not.toMatch(/"Partner store"|>\s*Partner store\s*</);
+    expect(promo).not.toMatch(/PokeballGlyph|<svg\b/);
+  });
+
+  it("uses one of the research section 7.2 labels", () => {
+    expect([
+      "Partner store",
+      "From the team behind Pokéfin",
+      "Sponsored",
+      "A shop we like",
+    ]).toContain(PROMO_RELATIONSHIP_LABEL);
   });
 });
 ```
@@ -1587,12 +1685,12 @@ pnpm exec tsc --noEmit
 
 # Lint the touched files: the error count must not exceed the baseline recorded in "Before you start"
 # check 6 (same file list plus the new files; pre-existing: HoldingsTable static-components errors,
-# owned by WP17). The new files (app/components/ui, app/lib/userMessages.ts, app/__tests__) must add 0 errors.
+# owned by WP17). The new files (app/components/ui, app/lib/userMessages.ts, app/__tests__, app/content) must add 0 errors.
 # jest.setup.ts is not linted (eslint ignores it) but tsc covers it.
 pnpm exec eslint app/components/ui app/components/CardRinkPromo.tsx app/components/MarketView/MarketView.tsx \
   app/components/ProductPrices/index.tsx app/components/ProductPrices/shared \
   app/components/BoxCalculator app/components/Portfolio app/account app/privacy app/error.tsx \
-  app/global-error.tsx app/stats app/compare app/lib/userMessages.ts app/__tests__ \
+  app/global-error.tsx app/stats app/compare app/lib/userMessages.ts app/__tests__ app/content \
   app/page.tsx app/prices app/market app/product app/box-calculator
 
 # Focused tests: all pass.
@@ -1612,17 +1710,21 @@ grep -rn "<CardRinkPromo" app --include=*.tsx | grep -v __tests__ | wc -l      #
 grep -rn "Pokefin\|Supabase analytics\|Check your Supabase" app --include=*.tsx | grep -v "github.com/0xDario/Pokefin"
 grep -rn "Pokemon TCG\|Pokemon sealed" app --include=*.tsx | grep -v __tests__
 grep -rnE '[A-Za-z]\.\.\.["<]' app --include=*.tsx
+grep -rn "\bTCGPlayer\b" app --include=*.tsx | grep -v __tests__
+grep -rniE "\blive prices?\b|\breal[- ]?time\b" app --include=*.tsx | grep -v __tests__
+grep -rn "Partner store\|PokeballGlyph" app/components/CardRinkPromo.tsx
+grep -rn "PROMO_RELATIONSHIP_LABEL" app --include=*.ts --include=*.tsx | grep -v __tests__   # expect lines only in content/disclosures.ts and CardRinkPromo.tsx
 ```
 
 Python tests are unaffected (no Python changes); skip them.
 
 Manual checks. Run locally against the stub (catalog is empty, which is fine for layout checks): terminal 1 `node scripts/supabase-stub.mjs`; terminal 2 `NEXT_PUBLIC_SUPABASE_URL=http://127.0.0.1:54321 NEXT_PUBLIC_SUPABASE_KEY=stub-anon-key pnpm dev`. Signed-in checks (account, portfolio, sharing) need the PR's Vercel preview with a test account.
 
-1. `/market` at 360x640 (DevTools device toolbar): after the page header and the Filters control comes "Found N products" and the table; no store card appears until below the table. At the bottom there is exactly one "Partner store" block, then the site footer.
-2. `/prices`: no "Ready to buy Pokémon cards?" card anywhere; one "Partner store" block below the grid.
-3. DevTools Elements on any of the six pages: the promo is `<aside aria-label="Partner store">`; no `<footer>` exists inside `<main>`.
+1. `/market` at 360x640 (DevTools device toolbar): after the page header and the Filters control comes "Found N products" and the table; no store card appears until below the table. At the bottom there is exactly one store block (labelled "Partner store" while D1 is open), then the site footer.
+2. `/prices`: no "Ready to buy Pokémon cards?" card anywhere; one store block below the grid. It shows "CardRinkTCG.ca" as text at the top, no Poké Ball.
+3. DevTools Elements on any of the six pages: the promo is `<aside aria-label="Partner store">` (or the step 3a label if D1 was answered) and contains no `<svg>`; no `<footer>` exists inside `<main>`. A product card and the `/market` chart panel say "View on TCGplayer".
 4. `/box-calculator`: primary button, focus rings and NAV figures are the same blue as the rest of the site (#2563eb); no gray-tinted neutrals. Signed in, clear the recipe name and press Save/Update: a red inline message appears under the name row and no browser popup opens.
-5. A product card with a negative return on `/prices` (preview, real data): the percentage is rose-700 (`--pf-loss-text`, #be123c) next to the rose-600 left stripe (`--pf-loss`, #e11d48), both from the loss palette; neither is the brand red #dc2626 used by the Pokéball buttons. (Text uses the darker `-text` shade for contrast; WP14 set that.)
+5. A product card with a negative return on `/prices` (preview, real data): the percentage is rose-700 (`--pf-loss-text`, #be123c) next to the rose-600 left stripe (`--pf-loss`, #e11d48), both from the loss palette; neither is the brand red #dc2626 used by the primary buttons nor Tailwind 4's `red-600` (#e7000b) that the card used before WP14. (Text uses the darker `-text` shade for contrast; WP14 set that.)
 6. `/privacy`: "Pokéfin" everywhere; the Contact paragraph's link opens `https://github.com/0xDario/Pokefin/issues/new` in a new tab; "contact the operator" jumps to the Contact heading.
 7. `/account` (preview, signed in): "Delete Account" opens a centred dialog with focus in the "Type DELETE to confirm" field; the page behind is not clickable and does not scroll; Escape closes it and focus returns to the button; pressing inside the field, dragging and releasing on the dark backdrop does not close it; a plain click on the backdrop does; "Delete account" stays disabled until DELETE is typed. Do not complete the deletion unless it is a throwaway account. In DevTools Network, set "Offline" and press "Export my data": the message reads "We couldn't reach Pokéfin. Check your connection and try again."
 8. `/portfolio` (preview, signed in): one "My Portfolio" heading; Import and Add Holding buttons sit right-aligned under it; the trash icon on a holding opens "Delete this holding?" naming the product.
@@ -1632,6 +1734,8 @@ Manual checks. Run locally against the stub (catalog is empty, which is fine for
 
 None required before merge or deploy. No migrations, environment variables or data changes.
 
+Optional before merge: answer owner decision D1 (the true CardRinkTCG relationship: owned, paid or unpaid; `01-PRODUCT-DIRECTION.md` section 11) in the PR thread. If you do, step 3a sets the matching label (and `rel="sponsored"` for "paid"). If you do not, the promo keeps "Partner store" and WP24 sets the label when D1 is answered.
+
 Recommended after merge:
 1. Privacy contact. The default link opens a new public GitHub issue (`https://github.com/0xDario/Pokefin/issues/new`), which is a working channel but a public one. For GDPR requests a private channel is better: edit `PRIVACY_CONTACT_URL` in `frontend/app/privacy/page.tsx` to `mailto:<your address>`, change the link text to "email the operator" and delete the sentence starting "Issues are public", then bump `LAST_UPDATED` and redeploy. Confirm by opening `/privacy` and clicking the link. If you keep the issue link, keep GitHub issues enabled on the repository.
 2. Promo policy. This PR applies the plan's decision (one CardRinkTCG block per page, below the content; the compact banner is removed). If the store relationship needs more placements, reverting step 4 alone restores the banners; follow the pitfalls on storage and placement if you do.
@@ -1640,10 +1744,12 @@ Recommended after merge:
 ## Acceptance criteria
 
 - [ ] `grep -rn "<CardRinkPromo" frontend/app --include=*.tsx | grep -v __tests__` lists exactly six `page.tsx` files, one line each; `MarketView.tsx` and `ProductPrices/index.tsx` do not import `CardRinkPromo`.
-- [ ] `CardRinkPromo.tsx` renders `<aside aria-label="Partner store">`, has no `"use client"`, no `sessionStorage`, no `variant` prop, and no "Powered by" line.
+- [ ] `CardRinkPromo.tsx` renders `<aside aria-label={PROMO_RELATIONSHIP_LABEL}>`, has no `"use client"`, no `sessionStorage`, no `variant` prop, no "Powered by" line and no `PokeballGlyph`/`<svg>`; it shows `STORE_NAME` as text where the glyph was.
+- [ ] `app/content/disclosures.ts` exports `STORE_NAME`, `STORE_URL` and `PROMO_RELATIONSHIP_LABEL`; the label is "Partner store" unless the owner answered D1 in this PR, in which case it is the matching `research/trust-seo-brand.md` section 7.2 label (and the promo link has `rel="sponsored noopener noreferrer"` only for "paid").
+- [ ] No `.tsx` file under `frontend/app` (outside `__tests__`) contains `\bTCGPlayer\b`, "live price(s)" or "real-time"; the "View on TCGplayer" links and the box-calculator "How it works" text are updated; no code identifier or `.ts` comment was renamed.
 - [ ] On `/market` at 360x640 the results count and table header appear before any store content.
 - [ ] `ReturnMetrics` uses the same gain/loss classes as `stats/page.tsx` `ReturnCell`.
-- [ ] `app/__tests__/uiConventions.test.ts` passes: no `gray-*`, no raw `blue-400..700` outside the two allowlisted files, no `text-green-600`/`text-red-600`, no `alert(`/`confirm(`, no "Pokefin", and the promo rules hold.
+- [ ] `app/__tests__/uiConventions.test.ts` passes: no `gray-*`, no raw `blue-400..700` outside the two allowlisted files, no `text-green-600`/`text-red-600`, no `alert(`/`confirm(`, no "Pokefin", no "TCGPlayer"/"live price"/"real-time" in `.tsx`, and the promo rules (aside, label constant, no glyph) hold.
 - [ ] Account deletion requires typing DELETE in an accessible dialog; failures show fixed text inside the dialog; no raw server or browser error text can appear in the export or delete messages.
 - [ ] Holding deletion and "Stop sharing" confirm through `ConfirmDialog`; a failed holding delete shows an inline message, not `alert()`.
 - [ ] Box Calculator validation errors render inline with `role="alert"`; the Save button's failure label is "Save failed".
@@ -1666,7 +1772,7 @@ Commit message:
 ```
 fix(ui): one palette, one promo per page, user-facing copy and dialogs
 
-- ReturnMetrics uses --pf-gain/--pf-loss; BoxCalculator, privacy, error
+- ReturnMetrics verified on WP14's --pf-gain-text/--pf-loss-text; BoxCalculator, privacy, error
   pages, ScrollToTop, HoldingsTable, import modal and spinners move from
   gray/blue to slate and the --pf-pokeblue tokens (review F091)
 - CardRinkPromo is a single server-rendered <aside>, once per page after
@@ -1676,9 +1782,13 @@ fix(ui): one palette, one promo per page, user-facing copy and dialogs
   validation is inline; account/compare/stats/search errors are fixed
   strings; one portfolio heading; Pokéfin/Pokémon spelling; privacy
   contact link; one ellipsis style (F103)
+- Promo label comes from app/content/disclosures.ts (PROMO_RELATIONSHIP_LABEL,
+  shared with WP24); the store name replaces the Poke Ball glyph; the
+  source is spelled TCGplayer and no copy claims live or real-time prices
+  (Track 2)
 - uiConventions guard test keeps tokens, promo placement and copy rules
 ```
 
 PR title: `WP15: visual consistency, promo placement and user-facing copy`
 
-PR body summary: link `audits/remediation/WP15-visual-polish-and-copy.md`; list F091 (cluster F091, F099; slate-400 contrast is WP14), F097 (cluster F092, F097, F101), F103. Describe the visible changes per page (market table no longer below an ad, one partner block per page, consistent blue and rose, dialogs instead of popups, typed DELETE for account deletion, single portfolio heading). State that the `<footer>` to `<aside>` change is for honest semantics, not landmark de-duplication (F097 verifier), and that `rel="sponsored"` was deliberately not added. Note the deviation: `ConfirmDialog` is self-contained rather than built on WP14's `Dialog` (it blocks dismissal while busy, has no X button and supports typed confirmation), as WP14's spec anticipates, and a follow-up may consolidate them. Paste the Verification output. Under "Noticed, out of scope": "Seller Tools" in the primary nav (F092 IA suggestion), no confirmation on the saved-recipe trash button, "Found N products" pluralisation.
+PR body summary: link `audits/remediation/WP15-visual-polish-and-copy.md`; list F091 (cluster F091, F099; slate-400 contrast is WP14), F097 (cluster F092, F097, F101), F103. Describe the visible changes per page (market table no longer below an ad, one partner block per page, consistent blue and rose, dialogs instead of popups, typed DELETE for account deletion, single portfolio heading). State that the `<footer>` to `<aside>` change is for honest semantics, not landmark de-duplication (F097 verifier), and that `rel="sponsored"` was deliberately not added (unless D1 was answered "paid"). State the D1 status: "D1 open: promo label stays 'Partner store'" or the answer used in step 3a. Note for WP24: `app/content/disclosures.ts` now exists and must be extended, keeping `PROMO_RELATIONSHIP_LABEL`, `STORE_NAME` and `STORE_URL`; note for WP19: the moved chart-panel link must say "View on TCGplayer". Note the deviation: `ConfirmDialog` is self-contained rather than built on WP14's `Dialog` (it blocks dismissal while busy, has no X button and supports typed confirmation), as WP14's spec anticipates, and a follow-up may consolidate them. Paste the Verification output. Under "Noticed, out of scope": "Seller Tools" in the primary nav (F092 IA suggestion), no confirmation on the saved-recipe trash button, "Found N products" pluralisation.

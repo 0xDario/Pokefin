@@ -1,16 +1,17 @@
 # WP16: Scraper and report pipeline hardening
 
 - **Findings covered** (all full coverage, no partials):
-  - F083 (full): a scraped market price has no plausibility bound, so one malformed infinite-api value becomes `products.usd_price` and a permanent `product_price_history` row.
-  - F084 (full): `products.last_updated` is committed per product while price-history rows sit in a 100-row buffer that is never flushed on interruption, so a crash or kill loses up to 99 history rows for the day.
-  - F086 (full): no run lock in `run_scraper.sh` and no Selenium page-load timeout, so a slow TCGPlayer can stretch a run past the 4-hour cron interval and overlap runs.
-  - F082 (full): the service-role key and SMTP password are inherited by chromedriver and headless Chrome, which always runs `--no-sandbox` on third-party pages.
-  - F136 (full): `backfill_thumbnails.py` fetches `products.image_url` with none of `main.py`'s SSRF, redirect, size and magic-byte guards, and `main.py` stores non-allowlisted image URLs as a fallback.
-  - F137 (full): the headless-Chrome PDF render in `generate_weekly_report.py` has no timeout, so a hung Chrome blocks the weekly report forever.
-  - F138 (full): `compare_prices.py` accepts the Shopify Admin API token on the command line.
-  - F141 (full): `main.py` carries dead code, `check_shopify_prices()` importing a module that does not exist, and an unused `uuid` import.
-- **Priority rationale**: these are the only findings in the Python pipeline that writes every price the site shows; two are medium-severity data-integrity bugs (F083, F084) and the rest are cheap defence in depth with no user-visible risk.
-- **Effort**: M (6 to 8 hours for the executor, plus about 30 minutes of owner time: one migration and a scraper-host deploy with a Chrome smoke test).
+  - F083 (full, low): a scraped market price has no plausibility bound, so one glitched TCGplayer API value becomes `products.usd_price` for about a day and a permanent `product_price_history` row (a one-day spike on the chart and in 30D/90D/365D returns anchored on that day) until someone deletes it by hand.
+  - F084 (full, low): `products.last_updated` is committed per product while price-history rows sit in a 100-row buffer that is never flushed on interruption, so a process-level kill (Ctrl-C, SIGTERM, SIGKILL, OOM, reboot) loses up to 99 history rows for the day. Ordinary Python exceptions cannot cause it: every in-loop step, including `driver.get`, is already wrapped. The lost day can be refilled by hand with `backfill_historical_prices.py --gaps-only`.
+  - F086 (full, low): no run lock in `run_scraper.sh` and no Selenium page-load timeout, so a hanging TCGplayer page costs 120 to 300 s per product, can stretch a run past the 4-hour cron interval and overlap runs, and (the sharper symptom) the outer `except` in `get_price_and_image_from_url` throws away the API price already fetched, so prices stop updating while pages hang.
+  - F082 (full, low): the service-role key and SMTP password are inherited by chromedriver and headless Chrome, which always runs `--no-sandbox` on third-party pages. Keeping the sandbox is the required part of the fix; the environment scrub is the complement.
+  - F136 (full, low): `backfill_thumbnails.py` fetches `products.image_url` with none of `main.py`'s SSRF, redirect, size and magic-byte guards; `main.py` stores non-allowlisted image URLs as a fallback; and `build_thumbnail` (used by both paths) decodes any pixel count Pillow allows.
+  - F137 (full, low): the headless-Chrome PDF render in `generate_weekly_report.py` has no timeout, so a hung Chrome blocks the weekly report forever with no PDF, no email and no failure notice.
+  - F138 (full, low): `compare_prices.py` accepts the Shopify Admin API token on the command line.
+  - F141 (full, info): `main.py` carries dead code, `check_shopify_prices()` importing a module that does not exist, and an unused `uuid` import.
+- **Track 2 change** (requested by the product strategist, `01-PRODUCT-DIRECTION.md` §9 item 4; `research/trust-seo-brand.md` §1 item 13, §3, §8, §9, §14.4): the weekly PDF is emailed to readers, so its copy must follow the site's trust rules. The caveat names the source as "TCGplayer Market Price in USD" instead of "likely TCGPlayer market/listing values", the footer drops "internal analytical report" and "invest accordingly" and carries the site's disclaimer and trademark lines, and every `&mdash;` in reader-facing output becomes a comma, a colon or (for an empty cell) `--`. Step 10A.
+- **Priority rationale**: these are the only findings in the Python pipeline that writes every price the site shows. After full re-verification every finding is low severity (F141 is info): F083 and F084 are the two with a visible symptom (a one-day price spike; a chart that skips a day after a killed run), and the rest are cheap defence in depth. The package keeps its place in the plan; the Track 2 copy change rides along because it edits a file this package already changes.
+- **Effort**: M (6 to 8 hours for the executor, plus about 30 minutes of owner time: one migration and a scraper-host deploy with a Chrome smoke test). The Track 2 copy change adds about 30 minutes.
 - **Depends on**: WP00 (plan order only; this package changes no frontend file). It is written against the code after WP11, which adds `revalidate_hook.py`, `run_jobs_once()` and return values to `main.py`; see "Before you start" for how to handle either state.
 - **Unblocks**: WP21 (its least-privilege scraper role must be granted on the new `product_price_pending` table, and its schema baseline must include migration 0030) and WP20 (its generated `Database` types must contain `product_price_pending`, so 0030 must be applied in production before WP20 starts).
 - **Parallel execution**: this package touches no `frontend/` file. It may run on its own branch in parallel with WP12 to WP19, but start it only after WP11 has merged (WP11 step 12 edits `main.py`, `tests/test_main.py` and adds `revalidate_hook.py` and `tests/test_revalidate_hook.py`, which this spec is written against).
@@ -19,15 +20,15 @@
 
 ## Why
 
-The scraper (`main.py`, run by cron through `run_scraper.sh` every 4 hours) writes every price the site shows. Today one malformed TCGPlayer API value (for example `1499999` or `0.01`) is written straight to `products.usd_price` and into that day's price-history row, where it stays on `/prices`, `/market`, `/product`, portfolio valuations and a year of weekly-report returns. Separately, a run that is killed or crashes after updating a product but before its history buffer flushes loses up to 99 history rows for the day, because `last_updated` already moved and the products are not re-read until tomorrow. A slow TCGPlayer can also stretch a run past the next cron slot (no page-load timeout, no run lock), and Chrome runs unsandboxed with the service-role key in its environment. After this PR: implausible prices are dropped, large jumps are written only when two consecutive runs agree, history is written before the product row moves, buffered rows are flushed on every exit path including SIGTERM, overlapping runs skip cleanly, Chrome gets a secret-free environment and keeps its sandbox when not root, the thumbnail backfill uses the same guarded fetch as the scraper, the weekly PDF render cannot hang, and the Shopify token can no longer be passed on argv.
+The scraper (`main.py`, run by cron through `run_scraper.sh` every 4 hours) writes every price the site shows. Today one glitched TCGplayer API value (for example `1499999` or `0.01`) is written straight to `products.usd_price` and into that day's price-history row. The current price self-heals on the next scrape about a day later, but the history row stays: a one-day spike on the product chart, and wrong 30D/90D/365D returns on the days that row is the anchor, until someone deletes it by hand. Separately, a run that is killed at the process level (Ctrl-C, SIGTERM, OOM, reboot) after updating a product but before its history buffer flushes loses up to 99 history rows for the day, because `last_updated` already moved and the products are not re-read until tomorrow. A hanging TCGplayer page can also stretch a run past the next cron slot (no page-load timeout, no run lock) and, worse, throws away the API price already fetched for that product. Chrome runs unsandboxed with the service-role key in its environment. After this PR: implausible prices are dropped, large jumps are written only when two consecutive runs agree, history is written before the product row moves, buffered rows are flushed on every exit path including SIGTERM, overlapping runs skip cleanly, Chrome gets a secret-free environment and keeps its sandbox when not root, the thumbnail backfill uses the same guarded fetch as the scraper and thumbnails refuse decompression bombs, the weekly PDF render cannot hang, and the Shopify token can no longer be passed on argv. The weekly PDF, which is emailed to readers, also stops calling itself an "internal analytical report", names its source correctly and carries the site's disclaimer (Track 2).
 
 ## Before you start
 
 Read these files fully (line numbers are as of commit `a188fea`; WP11 inserts an import near `main.py:25`, changes `update_prices` returns and adds `run_jobs_once()` above `# === Run Script ===`, so locate code by the quoted anchors, not by number):
 
-- `main.py` (1558 lines). Key regions: imports `:1-25`; image hardening constants and helpers `:29-81`, `:183-192`; `create_driver` `:623-674` (`--no-sandbox` at `:657`, `webdriver.Chrome(service=Service(ChromeDriverManager().install()), ...)` at `:669`); `download_and_upload_image` `:693-828`; `get_price_and_image_from_url` `:831-942` (`driver.get(url)` at `:864`, the outer `except` at `:940-942` that throws away the API price); `update_prices` `:1055-1307` (only price gate `:1144-1146`, write `:1161-1170`, raw TCGPlayer URL fallback `:1236-1240`, `products.update` `:1253`, 100-row flushes `:1261-1277`, post-loop flushes `:1281-1294`, `finally` without flushes `:1296-1301`); `_flush_price_history_batch` `:1310-1336`; `_flush_sales_history_batch` `:1351-1397`; `_flush_listings_history_batch` `:1400-1446`; `check_shopify_prices` `:1449-1487`; `__main__` `:1489-1559`.
+- `main.py` (1558 lines). Key regions: imports `:1-25`; image hardening constants and helpers `:29-81`, `:183-192`; thumbnail constants `:97-98` and `build_thumbnail` `:110-144`; `create_driver` `:623-674` (`--no-sandbox` at `:657`, `webdriver.Chrome(service=Service(ChromeDriverManager().install()), ...)` at `:669`); `download_and_upload_image` `:693-828`; `get_price_and_image_from_url` `:831-942` (`driver.get(url)` at `:864`, the outer `except` at `:940-942` that throws away the API price); `update_prices` `:1055-1307` (only price gate `:1144-1146`, write `:1161-1170`, raw TCGPlayer URL fallback `:1236-1240`, `products.update` `:1253`, 100-row flushes `:1261-1277`, post-loop flushes `:1281-1294`, `finally` without flushes `:1296-1301`); `_flush_price_history_batch` `:1310-1336`; `_flush_sales_history_batch` `:1351-1397`; `_flush_listings_history_batch` `:1400-1446`; `check_shopify_prices` `:1449-1487`; `__main__` `:1489-1559`.
 - `backfill_thumbnails.py` (234 lines; the unguarded fetch is `:187-197`).
-- `generate_weekly_report.py:17-35` (imports), `:614-637` (`find_chrome`, `render_pdf`), `:686-758` (`main`, which already returns 1 when `render_pdf` returns False).
+- `generate_weekly_report.py:17-35` (imports), `:410-456` (`pct`, `pct_n`, `fmt_release`), `:460-597` (`build_html`), `:614-637` (`find_chrome`, `render_pdf`), `:686-758` (`main`, which already returns 1 when `render_pdf` returns False), `:760-915` (`TEMPLATE`, the reader-facing copy changed in step 10A).
 - `compare_prices.py:1-60`, `:615-696`.
 - `run_scraper.sh` (89 lines) and `run_weekly_report.sh` (78 lines; not changed, read for context).
 - `secrets_loader.py` (50 lines; not changed).
@@ -48,7 +49,7 @@ python3 -m venv /tmp/wp16-venv
 /tmp/wp16-venv/bin/pip install -q -r requirements.txt pytest pyflakes
 /tmp/wp16-venv/bin/python -m pytest tests/ -q -p no:cacheprovider
 # expect: all pass. At a188fea this is "161 passed"; WP01 and WP11 add tests, so
-# record the number N you see. After this package expect N - 4 + 61.
+# record the number N you see. After this package expect N - 4 + 65.
 ```
 
 Confirm the starting state (repo root):
@@ -69,6 +70,11 @@ grep -n "session.get(image_url" backfill_thumbnails.py        # expect 1 hit
 grep -n 'update_data\["image_url"\] = tcg_image_url' main.py  # expect 1 hit
 # F137: no timeout on the Chrome render.
 grep -n "subprocess.run" generate_weekly_report.py            # expect 1 hit, no "timeout="
+# F136: no decoded-size cap on thumbnails.
+grep -n "THUMBNAIL_MAX_SOURCE_PIXELS" main.py                 # expect no output
+# Track 2: the PDF copy to correct.
+grep -n "likely TCGPlayer\|internal analytical report\|invest accordingly" generate_weekly_report.py   # expect 2 hits (~:848, ~:909)
+grep -c "&mdash;" generate_weekly_report.py                   # expect 15 (lines; :848 holds two)
 # F138: the token flag exists.
 grep -n "shopify-token\|token_arg" compare_prices.py          # expect 4 hits
 # F141: dead code.
@@ -296,6 +302,36 @@ def download_and_upload_image(image_url, product_id):
         return None
 ```
 
+### Step 2A. `main.py`: decoded-size cap in `build_thumbnail` (F136)
+
+The 8 MiB download cap and the magic-byte check bound the bytes fetched, not the decoded image. Pillow only refuses images above about 179 million pixels (twice its default `MAX_IMAGE_PIXELS`), so a small PNG that declares, say, 12000 x 12000 pixels still decodes to about half a gigabyte, doubled again for the RGBA composite. This applies to the scraper's upload path and to the backfill, because both call `build_thumbnail`.
+
+2A-a. Directly below the line `THUMBNAIL_QUALITY = 78` (`:98`), add:
+
+```python
+# A thumbnail source whose header declares more pixels than this is refused
+# before it is decoded (audit 2026-09-25, F136). The download cap and the
+# magic-byte check bound the bytes fetched, not the decoded size. Real
+# TCGplayer product images are about 1000 x 1000.
+THUMBNAIL_MAX_SOURCE_PIXELS = 20_000_000
+```
+
+2A-b. In `build_thumbnail`, directly below the line `        with PILImage.open(io.BytesIO(image_bytes)) as img:` and above its first comment line, insert (12-space indent, inside the `with`):
+
+```python
+            # PILImage.open reads only the header, so the size is known
+            # before any pixel is decoded.
+            width, height = img.size
+            if width * height > THUMBNAIL_MAX_SOURCE_PIXELS:
+                logger.warning(
+                    "Thumbnail source declares %dx%d pixels; refusing to decode",
+                    width, height,
+                )
+                return None
+```
+
+Leave the rest of `build_thumbnail` unchanged. Do not lower `PILImage.MAX_IMAGE_PIXELS` globally instead: it is process-wide state, and the explicit check is testable.
+
 ### Step 3. `main.py`: Chrome environment, sandbox and page-load timeout (F082, F086)
 
 3a. Replace the line `# === Selenium Driver Setup ===` (`:622`, directly above `def create_driver():`) with:
@@ -304,14 +340,20 @@ def download_and_upload_image(image_url, product_id):
 # === Selenium Driver Setup ===
 # A page that has not finished loading after this long is abandoned; the API
 # price is kept and only the image is skipped (audit 2026-09-25, F086).
-# Selenium's default is 300 s, which let a slow TCGPlayer stretch one run
-# past the 4-hour cron interval.
+# Without it chromedriver waits up to its W3C default of 300 s, while
+# Selenium's own HTTP client gives up after 120 s and leaves chromedriver
+# still navigating, so one hung page cost 120 to 300 s and could stall the
+# next product too. Must stay well below 120 s so Selenium raises
+# TimeoutException before its HTTP client times out.
 PAGE_LOAD_TIMEOUT_SECONDS = 30
 
 # Environment variables that never reach chromedriver or Chrome (audit F082).
 # The scraper's env file is exported wholesale by run_scraper.sh, and Chrome
 # renders third-party pages; a renderer compromise must not find the
-# service-role key in /proc/self/environ.
+# service-role key in /proc/self/environ. This is the complement, not the
+# main control: an UNSANDBOXED renderer runs as the same user and can read
+# ~/.config/pokefin/env directly, so keeping the sandbox (below) is what
+# actually contains it.
 _BROWSER_ENV_DENY_PREFIXES = (
     "SUPABASE_", "SMTP_", "SHOPIFY_", "REPORT_EMAIL", "REVALIDATE_",
     "TELEGRAM_", "POKEFIN_", "AWS_", "GITHUB_", "GH_",
@@ -424,7 +466,7 @@ with
         # Allow client-side rendering to hydrate before image extraction
 ```
 
-`result` already holds the API price, sales buckets and `tcgplayer_product_id` at this point. Before this change a `driver.get` failure fell into the outer `except` (`:940-942`) and returned `price: None`, discarding a price the API had already delivered. `TimeoutException` must be caught before `WebDriverException` because it is a subclass. With a 30 s cap the worst case for ~300 products is about 2.5 hours, inside the 4-hour cron interval.
+`result` already holds the API price, sales buckets and `tcgplayer_product_id` at this point. Before this change a `driver.get` failure fell into the outer `except` (`:940-942`) and returned `price: None`, discarding a price the API had already delivered. `TimeoutException` must be caught before `WebDriverException` because it is a subclass. With a 30 s cap the worst case for ~306 products, every page hanging, is about 306 x (30 s + the ~10 s per-product baseline of API call and sleeps), roughly 3.4 hours, inside the 4-hour cron interval; the run lock in step 12 covers anything slower. Returning `result` here (instead of calling `window.stop()` and still trying image extraction) is deliberate: the price is what matters, and the image is retried within 24 hours.
 
 ### Step 5. `main.py`: price plausibility and history-first helpers (F083, F084)
 
@@ -937,8 +979,9 @@ The rest of the loop (`build_thumbnail(original)`, `upload_thumbnail(...)`, byte
 
 ```python
 # Upper bound for one headless-Chrome PDF render (audit 2026-09-25, F137).
-# A normal render takes a few seconds; a Chrome stuck on a profile lock or a
-# first-run dialog previously blocked the weekly job forever.
+# A normal render takes a few seconds, but some Chrome builds never exit
+# after --print-to-pdf; that used to block the weekly job forever with no
+# PDF, no email and no failure notice.
 PDF_RENDER_TIMEOUT_SECONDS = 180
 
 
@@ -967,8 +1010,8 @@ def _kill_process_tree(proc):
     except FileNotFoundError:
         pass
 
-    # Throwaway profile: never contend with an interactive Chrome's profile
-    # lock, never show first-run UI.
+    # Throwaway profile, removed afterwards. Defence in depth only: the
+    # timeout below is what fixes a hang.
     profile_dir = tempfile.mkdtemp(prefix="pokefin_report_chrome_")
     cmd = [chrome, "--headless", "--disable-gpu", "--no-pdf-header-footer",
            "--no-first-run", "--no-default-browser-check",
@@ -1000,6 +1043,59 @@ def _kill_process_tree(proc):
 
 Why `Popen` plus a process group instead of `subprocess.run(timeout=180)`: `run` kills only the direct child, and Chrome's renderer and GPU helpers can outlive it holding the profile. `start_new_session=True` puts Chrome and its helpers in one process group that `os.killpg` removes together. Deleting a stale `pdf_path` first matters because the file name is keyed on the anchor date, so a second run for the same anchor would otherwise report the previous run's PDF as fresh. `main()` (`:734-738`) already prints an error and returns 1 when `render_pdf` returns False, so `run_weekly_report.sh` reports the failure; no change there.
 
+### Step 10A. `generate_weekly_report.py`: reader-facing copy (Track 2)
+
+The PDF is emailed to readers, so it follows the site's trust rules (`research/trust-seo-brand.md` §1 item 13, §3, §8, §9, §14.4): the source is named as "TCGplayer Market Price" (lower-case "p", the company's own spelling), the report does not call itself internal or tell readers to "invest accordingly", the footer carries the same disclaimer and trademark lines as the site footer (WP24's `disclosures.ts`), and there are no em dashes. Make exactly these replacements; each "old" text occurs exactly once unless stated. Change only the strings listed: the literal em dash characters (U+2014) in comments, docstrings and the two `print(...)` log lines in `main()` and `render_pdf` are not reader-facing and stay.
+
+10A-a. Empty cells. In `pct` and in `pct_n`, replace `        return '<td>&mdash;</td>'` (2 occurrences) with `        return '<td>--</td>'`. In `fmt_release`, replace `        return "&mdash;"` with `        return "--"`. In `build_html`, the line that starts `        if best_set_1y else ("n/a", ` ends in a one-character string holding a literal em dash (U+2014); replace that string with `"--"` so the line reads `        if best_set_1y else ("n/a", "--")`. `--` is the site's marker for a missing value (`01-PRODUCT-DIRECTION.md` principle 1); a comma or colon cannot stand alone in a cell.
+
+10A-b. In `build_html`, replace the two lines
+
+```python
+        f"product{'s' if excluded != 1 else ''}</strong> from every ranking "
+        f"&mdash; fewer than {LIQUIDITY_MIN_DISTINCT_PRICES} distinct tracked "
+```
+
+with
+
+```python
+        f"product{'s' if excluded != 1 else ''}</strong> from every ranking: "
+        f"fewer than {LIQUIDITY_MIN_DISTINCT_PRICES} distinct tracked "
+```
+
+10A-c. In `TEMPLATE`, replace each "old" with "new":
+
+| Old | New |
+|---|---|
+| `<span>Vol. {vol} &mdash; No. {issue}</span>` | `<span>Vol. {vol}, No. {issue}</span>` |
+| `Fit to Hold&rdquo; &mdash; A Data Report` | `Fit to Hold&rdquo;: A Data Report` |
+| `Returns by Product Category &mdash; The Master Table` | `Returns by Product Category: The Master Table` |
+| `(per-column sample size in parentheses) &mdash; ranked by 6-month return` | `(per-column sample size in parentheses), ranked by 6-month return` |
+| `Best-Performing Sets &mdash; The Out-of-Print Effect` | `Best-Performing Sets: The Out-of-Print Effect` |
+| `anniversary and special sets &mdash; precisely the products` | `anniversary and special sets, precisely the products` |
+| `The Investor's Verdict &mdash; What To Actually Do` | `The Investor's Verdict: What To Actually Do` |
+| `over the stated window &mdash; a description of what happened` | `over the stated window, a description of what happened` |
+| `Vintage items trade thin &mdash; one listing can move the price.` | `Vintage items trade thin: one listing can move the price.` |
+| `THE POK&Eacute;FIN WEEKLY &mdash; Automated Analytics Edition.` | `THE POK&Eacute;FIN WEEKLY, Automated Analytics Edition.` |
+
+10A-d. In `TEMPLATE`, the "How To Read This" caveat. Replace the text between `<p class="caveat" style="margin-bottom:0;">` and `</p>` that starts `Figures are <strong>unrealized</strong> tracked prices (likely TCGPlayer` with this single line:
+
+```
+Figures are TCGplayer Market Price in USD, <strong>unrealized</strong> and before fees. A median of +47% means the typical product in that category is worth 47% more than at the lookback date, not that every product rose. Each cell states the number of products behind it; windows differ because older windows exclude products whose history does not reach back that far. Cells with fewer than three products are shown as -- rather than a figure.
+```
+
+"TCGplayer Market Price" is accurate for every row: the scraper reads `marketPrice` from TCGplayer's price-history buckets (`main.py:309`), and `backfill_historical_prices.py` reads the same field.
+
+10A-e. In `TEMPLATE`, the footer. Replace the final three sentences of the footer, from `Prices in USD. This document is an internal analytical report` through `invest accordingly.`, with this single line (keep the sentences before it, as edited in 10A-c):
+
+```
+Prices are TCGplayer Market Price in USD. Sealed collectible markets are volatile and illiquid. Market data for information only, not financial advice. Past prices do not predict future prices. Pok&eacute;mon and Pok&eacute;mon character names are trademarks of Nintendo, Creatures Inc. and GAME FREAK inc. Pok&eacute;fin is not affiliated with, endorsed or sponsored by Nintendo, The Pok&eacute;mon Company, Creatures or GAME FREAK. TCGplayer is a trademark of TCGplayer, Inc. Pok&eacute;fin is not affiliated with TCGplayer.
+```
+
+The disclaimer sentence is the site footer's line word for word (`research/trust-seo-brand.md` §8, WP24 `disclosures.ts`); the two trademark sentences are §9's, as WP24 ships them. They are included because `research/trust-seo-brand.md` §3 asks for the non-affiliation line in the PDF footer too.
+
+10A-f. Check: `grep -c "&mdash;" generate_weekly_report.py` prints `0`, and `grep -n "likely TCGPlayer\|internal analytical report\|invest accordingly" generate_weekly_report.py` prints nothing. Do not change the masthead slogan, the section headings' words, `send_weekly_email.py` or `write_summary`: the research leaves the slogan to the owner, and the email body is rewritten by the newsletter work in Track 2.
+
 ### Step 11. `compare_prices.py`: token from the environment only (F138)
 
 11a. Module docstring: replace the usage line
@@ -1015,7 +1111,11 @@ with
 
 The Shopify Admin API token is read from SHOPIFY_ADMIN_API_TOKEN in the
 environment (or the local secretsFile.py), never from the command line: argv
-is visible to every local user via ps and is saved in shell history.
+is visible to every local user via ps and is saved in shell history. To keep
+it out of history too, type it at a prompt:
+  read -rs SHOPIFY_ADMIN_API_TOKEN && export SHOPIFY_ADMIN_API_TOKEN
+This script only reads products, so a custom-app token with read_products
+scope is enough.
 ```
 
 11b. Replace `_get_shopify_credentials` (`:52-57`) with:
@@ -1229,6 +1329,10 @@ Do not write "applied" yourself.
 - **Do not change `price_update_interval_hours = 23` or reformat that line.** `TestNoScrapeTimeDrift` reads it from source, and the value is load-bearing (see the comment above it).
 - **Do not pass `env={}` or build an allowlist of variables to Chrome.** Selenium's `Service` treats a falsy `env` as `os.environ`, and an allowlist drops `HOME`, `DISPLAY`, `XDG_*`, `TMPDIR` and locale variables Chrome needs. Use the denylist; `scrubbed_browser_env` never returns an empty dict.
 - **Do not remove `--no-sandbox` unconditionally.** Chrome refuses to start as root without it. Keep the root check and the `POKEFIN_CHROME_NO_SANDBOX=1` escape hatch.
+- **Do not treat the environment scrub as enough on its own.** An unsandboxed renderer runs as the same user and can open `~/.config/pokefin/env` directly. The conditional sandbox in step 3b is the required part of F082; never add `--no-sandbox` back for non-root users "to be safe".
+- **Do not raise `PAGE_LOAD_TIMEOUT_SECONDS` to 120 or more.** Selenium's HTTP client to chromedriver times out at 120 s; the page-load timeout must fire first so `driver.get` raises `TimeoutException` and the next product's commands are not stalled behind a still-navigating chromedriver.
+- **Do not add an absolute price floor (for example "reject below $0.50").** A legitimately cheap product would never update again and, after 14 days, migration 0023's freshness guard would blank it. A glitch to a near-zero value on a product with a stored price is already caught by the 3x hold; a brand-new product has no stored price to protect.
+- **Do not change copy in `generate_weekly_report.py` beyond step 10A,** and do not spell the source "TCGPlayer" anywhere: the company writes "TCGplayer", and WP15's conventions test bans the other casing in the site.
 - **Do not wrap the Python call as `flock -n lockfile python main.py | ...`.** `PIPESTATUS[0]` would then be flock's status, and Chrome would inherit the lock descriptor, so an orphaned Chrome could hold the lock forever and silently skip every later run. Lock fd 9 in the shell and close it for Python with `9>&-`.
 - **Do not use a pidfile or `flock` without `-n`.** A pidfile goes stale after `kill -9`; a blocking `flock` queues runs behind a slow one instead of skipping.
 - **Do not let the page-load `TimeoutException` fall through to the outer `except`.** That path returns `price: None` and throws away the API price. Catch `TimeoutException` before `WebDriverException` (it is a subclass).
@@ -1237,6 +1341,7 @@ Do not write "applied" yourself.
 - **Do not allow `*.supabase.co` in the backfill.** Only the project's own host from `SUPABASE_URL`.
 - **Do not keep writing the raw TCGPlayer `src` to `products.image_url` for every upload failure.** Only an `https` URL on an allowlisted host may be stored as the fallback.
 - **Do not use `subprocess.run(..., timeout=180)` for the PDF render.** It kills only the direct child; use `Popen(start_new_session=True)` and `os.killpg`.
+- **Do not replace the `build_thumbnail` pixel check with a global `PILImage.MAX_IMAGE_PIXELS = ...`.** It changes Pillow for the whole process and is not what `TestThumbnailPixelCap` checks.
 - **Do not just delete `--shopify-token`.** argparse would then print "unrecognized arguments: --shopify-token shpat_..." to stderr and into `reports/`-style logs. Keep it hidden and fail with `parser.error` without echoing the value.
 - **Do not remove the `secretsFile.py` fallback from `secrets_loader.py`.** Out of scope; it is the local-development path for every credential.
 - **Do not edit `schema.sql`, `verify_migration.py`, existing migrations, or anything under `frontend/`.**
@@ -1253,7 +1358,7 @@ Do not write "applied" yourself.
 
 ### Add `tests/test_pipeline_hardening.py`
 
-61 tests. Coverage by class:
+65 tests. Coverage by class:
 
 - `TestEvaluateScrapedPrice`: ordinary moves accepted; no stored price accepted; `0`, negative, NaN, infinity, `500000` and `1499999` rejected; 3x-or-more moves held without pending; matching pending (within 10%, under 48 h old) confirms; non-matching or stale pending holds again; a wrong stored price is corrected after two runs; `PRICE_ABSOLUTE_MAX_USD < PRICE_DB_MAX_USD == 1000000` and the migration file contains `usd_price < 1000000` and `product_price_pending`.
 - `TestPendingPriceStore`: `load_pending_prices` parses rows, skips incomplete ones, returns `None` when the table is missing.
@@ -1264,12 +1369,14 @@ Do not write "applied" yourself.
 - `TestCreateDriver`: non-root keeps the sandbox; root and `POKEFIN_CHROME_NO_SANDBOX=1` disable it; the Service `env` keeps `PATH`/`HOME` and drops `SUPABASE_SERVICE_ROLE_KEY`, `SMTP_PASS`, `REVALIDATE_SECRET`, `SHOPIFY_ADMIN_API_TOKEN`; `set_page_load_timeout(30)` is called; the scrubbed env is never empty.
 - `TestPageLoadTimeout`: a `TimeoutException` from `driver.get` keeps the API price and skips image extraction.
 - `TestFetchValidatedImage`: metadata IP and foreign hosts refused without a request; private resolution refused; the extra host plus a session works with `allow_redirects=False` and `stream=True`; 302, `text/html`, oversize `Content-Length`, oversize stream, wrong magic bytes and too-small bodies are refused.
+- `TestThumbnailPixelCap`: a source above `THUMBNAIL_MAX_SOURCE_PIXELS` is refused; the same image under the cap still produces a thumbnail.
 - `TestBackfillUsesValidatedFetch`: `backfill_thumbnails.main()` routes every fetch through `fetch_validated_image` with `extra_allowed_hosts` set to the host of `SUPABASE_URL` only (`("test.supabase.co",)` under the mocked `secretsFile`) and uploads nothing when it refuses.
 - `TestRenderPdf`: success with a temp `--user-data-dir` that is removed afterwards and `start_new_session=True`; timeout kills the process group and returns False; non-zero exit and a missing binary return False; a stale PDF from an earlier run is deleted and not reported.
+- `TestWeeklyReportCopy` (Track 2): the rendered edition names "TCGplayer Market Price in USD", carries the site disclaimer and the TCGplayer trademark line, and contains no "TCGPlayer", "internal analytical report", "invest accordingly", `&mdash;` or `\u2014`.
 - `TestComparePricesToken`: the token comes from `SHOPIFY_ADMIN_API_TOKEN`; `--shopify-token` exits 2 before any network call, names the env var, and never prints the token.
 - `TestDeadCodeRemoved`: no `check_shopify_prices`, no `import uuid`, no `price_monitor` in `main.py`.
 
-Full file content (validated against the implementation above: 61 passed; against the unmodified code, 59 of them fail):
+Full file content. The first 61 tests were validated against the implementation above (61 passed; against the unmodified code, 59 of them failed). The four added in the full re-review (`TestThumbnailPixelCap`, `TestWeeklyReportCopy`) fail against the unmodified code by construction (missing constant; old copy), so expect 65 passed after the change and 63 failures before it. The `TestWeeklyReportCopy` assertions were checked against `build_html` with the step 10A replacements applied.
 
 ```python
 #!/usr/bin/env python3
@@ -1277,7 +1384,8 @@ Full file content (validated against the implementation above: 61 passed; agains
 Tests for the scraper and report pipeline hardening (audit 2026-09-25, WP16):
 F083 price plausibility, F084 history-first writes and flush-on-exit,
 F086 page-load timeout, F082 browser env and sandbox, F136 shared image
-fetch, F137 PDF render timeout, F138 no token on argv, F141 dead code.
+fetch and thumbnail pixel cap, F137 PDF render timeout, F138 no token on
+argv, F141 dead code, and the weekly PDF's reader-facing copy (Track 2).
 
 Run with: python -m pytest tests/test_pipeline_hardening.py -v
 """
@@ -1286,7 +1394,7 @@ import os
 import signal
 import subprocess
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -1697,6 +1805,18 @@ class TestFetchValidatedImage:
             assert main.fetch_validated_image("https://product-images.tcgplayer.com/a.png") is None
 
 
+class TestThumbnailPixelCap:
+    def test_oversized_source_is_refused_before_decoding(self):
+        import io
+        import main
+        from PIL import Image
+        buf = io.BytesIO()
+        Image.new("RGB", (40, 40), (255, 0, 0)).save(buf, format="PNG")
+        assert main.build_thumbnail(buf.getvalue()) is not None
+        with patch.object(main, "THUMBNAIL_MAX_SOURCE_PIXELS", 1000):  # 40 x 40 = 1600
+            assert main.build_thumbnail(buf.getvalue()) is None
+
+
 class TestBackfillUsesValidatedFetch:
     def test_backfill_routes_every_fetch_through_the_guard(self):
         import main
@@ -1780,6 +1900,46 @@ class TestRenderPdf:
 
 
 # --------------------------------------------------------------------------- #
+# Track 2: the weekly PDF's reader-facing copy
+# --------------------------------------------------------------------------- #
+class TestWeeklyReportCopy:
+    DISCLAIMER = ("Market data for information only, not financial advice. "
+                  "Past prices do not predict future prices.")
+
+    def _html(self):
+        import generate_weekly_report as gwr
+        # Exercises every changed string: an empty category cell, an empty set
+        # cell, a missing release date, no best set, and the excluded note.
+        cats = [{"category": "Booster Box", "n": 5, "1m": 2.0, "3m": None, "6m": 10.0,
+                 "1y": None, "n_1m": 5, "n_3m": 1, "n_6m": 4, "n_1y": 0}]
+        sets_rows = [{"set_name": "Base Set", "release_date": None,
+                      "avg_3m": None, "avg_6m": 5.0, "avg_1y": None}]
+        meta = {"n_products": 5, "n_sets": 1, "n_obs": 100,
+                "earliest": "Sep 1, 2025", "excluded": 2}
+        return gwr.build_html(date(2026, 9, 25), [], cats, sets_rows,
+                              {"1y": [], "6m": []}, meta)
+
+    def test_caveat_names_the_source(self):
+        doc = self._html()
+        assert "Figures are TCGplayer Market Price in USD" in doc
+        assert "TCGPlayer" not in doc
+        assert "likely" not in doc
+
+    def test_footer_uses_the_site_disclaimer(self):
+        doc = self._html()
+        assert self.DISCLAIMER in doc
+        assert "TCGplayer is a trademark of TCGplayer, Inc." in doc
+        assert "internal analytical report" not in doc
+        assert "invest accordingly" not in doc
+
+    def test_no_em_dashes_in_the_edition(self):
+        doc = self._html()
+        assert "&mdash;" not in doc
+        assert "\u2014" not in doc
+        assert "<td>--</td>" in doc
+
+
+# --------------------------------------------------------------------------- #
 # F138: compare_prices never takes the token from argv
 # --------------------------------------------------------------------------- #
 class TestComparePricesToken:
@@ -1829,10 +1989,10 @@ class TestDeadCodeRemoved:
 Run from the repo root (`/home/user/Pokefin`) with the venv from "Before you start".
 
 ```bash
-# 1. Whole Python suite. Expect: all pass, count = N - 4 + 61 (N from the baseline run).
+# 1. Whole Python suite. Expect: all pass, count = N - 4 + 65 (N from the baseline run).
 /tmp/wp16-venv/bin/python -m pytest tests/ -q -p no:cacheprovider
 
-# 2. The new file alone. Expect: "61 passed".
+# 2. The new file alone. Expect: "65 passed".
 /tmp/wp16-venv/bin/python -m pytest tests/test_pipeline_hardening.py -v -p no:cacheprovider
 
 # 3. No new pyflakes findings. Expect only these pre-existing lines (line numbers may differ):
@@ -1862,6 +2022,10 @@ grep -n "set_page_load_timeout(PAGE_LOAD_TIMEOUT_SECONDS)" main.py   # 1 hit
 grep -n "fetch_validated_image" backfill_thumbnails.py               # 2 hits (import, call)
 grep -n "session.get(image_url" backfill_thumbnails.py               # no output
 grep -n "timeout=PDF_RENDER_TIMEOUT_SECONDS" generate_weekly_report.py   # 1 hit
+grep -c "&mdash;" generate_weekly_report.py                          # 0
+grep -n "likely TCGPlayer\|internal analytical report\|invest accordingly\|TCGPlayer" generate_weekly_report.py   # no output
+grep -n "Market data for information only, not financial advice. Past prices do not predict future prices." generate_weekly_report.py   # 1 hit
+grep -n "width \* height > THUMBNAIL_MAX_SOURCE_PIXELS" main.py       # 1 hit
 grep -n "token_arg\|args.shopify_token," compare_prices.py           # no output
 grep -n "flock -n 9\|9>&-" run_scraper.sh                            # 3 hits (flock line, comment, python line)
 grep -n "price_update_interval_hours = 23" main.py                   # 1 hit
@@ -1924,13 +2088,13 @@ Manual check B, migration replay (optional; needs a local Postgres 16, as in WP1
    ./venv/bin/python -c "import main; d,u=main.create_driver(); d.get('https://www.tcgplayer.com'); print('title:', d.title); main.cleanup_driver(d,u)"
    ```
 
-   Correct: it prints a TCGPlayer title. As a non-root user there must be no "Chrome is running WITHOUT its sandbox" warning. If it fails with "No usable sandbox" (common on Ubuntu 23.10 and later, which restrict unprivileged user namespaces), either make sure `/opt/google/chrome/chrome-sandbox` is owned by root with mode 4755 (`sudo chown root:root /opt/google/chrome/chrome-sandbox && sudo chmod 4755 /opt/google/chrome/chrome-sandbox`) and retry, or add `POKEFIN_CHROME_NO_SANDBOX=1` to `~/.config/pokefin/env` (same exposure as before this PR, but the environment is still scrubbed). If cron runs as root, the code keeps `--no-sandbox` automatically and logs a warning every run; moving the cron job to an unprivileged user is recommended but not required.
+   Correct: it prints a TCGPlayer title. As a non-root user there must be no "Chrome is running WITHOUT its sandbox" warning. If it fails with "No usable sandbox" (common on Ubuntu 23.10 and later, which restrict unprivileged user namespaces), either make sure `/opt/google/chrome/chrome-sandbox` is owned by root with mode 4755 (`sudo chown root:root /opt/google/chrome/chrome-sandbox && sudo chmod 4755 /opt/google/chrome/chrome-sandbox`) and retry, or add `POKEFIN_CHROME_NO_SANDBOX=1` to `~/.config/pokefin/env` (same exposure as before this PR, but the environment is still scrubbed). If cron runs as root, the code keeps `--no-sandbox` automatically and logs a warning every run. Move the cron job to an unprivileged user in that case: the sandbox is the control that contains a renderer exploit. Without it the renderer runs as the cron user and can read `~/.config/pokefin/env` (mode 600 is still owner-readable) and `secretsFile.py` directly, which the environment scrub cannot prevent. The same applies to `POKEFIN_CHROME_NO_SANDBOX=1`: use it only while you fix the host's sandbox.
 
 6. **Watch the first cron run.** `tail -f ~/pokefin/scraper.log`. Correct: "Acquired run lock", per-product lines as before, a closing "Prices held for confirmation: N; rejected as implausible: M" line, and no "product_price_pending could not be read" ERROR. On the following run, any product held earlier shows "Confirmed large price move" or is held again.
 
 7. **Weekly report.** No action needed; the next scheduled run uses the bounded render. Optional: run `./run_weekly_report.sh` once and confirm `reports/weekly_report.log` ends with `OK -> pokefin_weekly_<date>.pdf`.
 
-8. **compare_prices.py users.** If any alias, script or note passes `--shopify-token`, change it to `SHOPIFY_ADMIN_API_TOKEN=... python compare_prices.py ...` (or put the variable in the env file) and clear the old command from shell history (`history -d <n>` or edit `~/.bash_history`). Rotate the Shopify Admin API token if it was ever passed on a shared host.
+8. **compare_prices.py users.** If any alias, script or note passes `--shopify-token`, change it to `SHOPIFY_ADMIN_API_TOKEN=... python compare_prices.py ...` (or put the variable in the env file) and clear the old command from shell history (`history -d <n>` or edit `~/.bash_history`, `~/.zsh_history`). If the token was ever passed with `--shopify-token`, rotate it: it sits in plaintext in shell history and in any backup or dotfile sync of it. `compare_prices.py` only issues `GET .../products.json`, so the replacement can be a custom-app token with `read_products` scope only.
 
 9. **Periodic check for stuck holds** (weekly, or when a price looks stale):
 
@@ -1947,7 +2111,7 @@ Manual check B, migration replay (optional; needs a local Postgres 16, as in WP1
 
 ## Acceptance criteria
 
-- [ ] `python -m pytest tests/ -q` passes in a fresh venv; `tests/test_pipeline_hardening.py` reports 61 passed.
+- [ ] `python -m pytest tests/ -q` passes in a fresh venv; `tests/test_pipeline_hardening.py` reports 65 passed.
 - [ ] `tests/test_new_functions.py` no longer contains `TestFlushPriceHistoryBatch`; no other existing test was edited or skipped.
 - [ ] `main.py` has no `uuid` import, no `check_shopify_prices`, no `price_monitor`, no `_flush_price_history_batch`, no `price_history_batch`.
 - [ ] `main.py` writes `product_price_history` before `products.update` for every accepted price, and never advances `last_updated` for a held, rejected or history-failed price.
@@ -1955,9 +2119,11 @@ Manual check B, migration replay (optional; needs a local Postgres 16, as in WP1
 - [ ] Sales and listings buffers flush at 25 rows and in `update_prices`' `finally`; `install_sigterm_handler()` is called in `__main__`.
 - [ ] `create_driver` passes `env=scrubbed_browser_env()` to `Service`, adds `--no-sandbox` only for root or `POKEFIN_CHROME_NO_SANDBOX=1`, and calls `set_page_load_timeout(30)`.
 - [ ] A `TimeoutException` from `driver.get` returns the API price instead of `None`.
-- [ ] `backfill_thumbnails.py` fetches only through `fetch_validated_image`, allowing just the project's Supabase host in addition to the TCGPlayer allowlist.
+- [ ] `backfill_thumbnails.py` fetches only through `fetch_validated_image`, allowing just the project's Supabase host in addition to the TCGplayer allowlist.
+- [ ] `build_thumbnail` returns None, without decoding, for a source whose header declares more than `THUMBNAIL_MAX_SOURCE_PIXELS` (20,000,000) pixels.
 - [ ] `main.py` stores a TCGPlayer fallback image URL only when it is `https` on an allowlisted host.
 - [ ] `render_pdf` uses a temp `--user-data-dir`, a 180 s timeout that kills the process group, deletes a stale PDF first, and returns False on timeout, non-zero exit or a missing binary.
+- [ ] (Track 2) The rendered weekly edition says "Figures are TCGplayer Market Price in USD", ends its footer with the site disclaimer "Market data for information only, not financial advice. Past prices do not predict future prices." and the Pokémon and TCGplayer trademark lines, and contains no "TCGPlayer", "internal analytical report", "invest accordingly" or em dash; `grep -c "&mdash;" generate_weekly_report.py` prints 0.
 - [ ] `compare_prices.py --shopify-token X` exits 2 with a message naming `SHOPIFY_ADMIN_API_TOKEN` and never prints `X`; the token is read only from the environment or `secretsFile.py`.
 - [ ] `run_scraper.sh` skips with exit 0 when another run holds `.scraper.lock` (manual check A), and `.scraper.lock` is in `.gitignore`.
 - [ ] `migrations/0030_price_plausibility_guard.sql` exists, is idempotent, and `verify_migration.py` on it exits 3 with 26 expectations.
@@ -1997,21 +2163,25 @@ fix(scraper): price plausibility guard, history-first writes, run lock, Chrome h
 - F082: chromedriver/Chrome get a scrubbed environment; --no-sandbox only
   as root or with POKEFIN_CHROME_NO_SANDBOX=1.
 - F136: fetch_validated_image shared by the scraper and
-  backfill_thumbnails.py; never store a non-allowlisted image URL.
+  backfill_thumbnails.py; never store a non-allowlisted image URL;
+  build_thumbnail refuses sources above 20M pixels before decoding.
 - F137: weekly PDF render has a 180 s timeout, kills the process group and
   uses a throwaway profile.
+- Track 2: weekly PDF names its source as TCGplayer Market Price in USD,
+  carries the site's disclaimer and trademark lines, and drops "internal
+  analytical report", "invest accordingly" and em dashes.
 - F138: compare_prices.py reads the Shopify token from the environment only.
 - F141: remove dead check_shopify_prices() and the unused uuid import.
 
 Findings: F082, F083, F084, F086, F136, F137, F138, F141
 ```
 
-PR title: `fix(scraper): harden the price pipeline (F083, F084, F086, F082, F136, F137, F138, F141)`
+PR title: `fix(scraper): harden the price pipeline and correct weekly report copy (F083, F084, F086, F082, F136, F137, F138, F141)`
 
 PR body summary:
 
 - What: `main.py` (price guard, history-first writes, flush on exit, SIGTERM, Chrome env and sandbox, page-load timeout, shared image fetch, dead code), `backfill_thumbnails.py`, `generate_weekly_report.py`, `compare_prices.py`, `run_scraper.sh`, `.gitignore`, `migrations/0030_price_plausibility_guard.sql`, `tests/test_pipeline_hardening.py`, `tests/test_new_functions.py`, `README.md`, `audits/HARDENING_FOLLOWUPS.md`.
-- Why: one malformed API price became a displayed price and a year of history (F083); a killed run lost up to 99 history rows (F084); overlapping runs and hung pages (F086); secrets in an unsandboxed Chrome (F082); unguarded fetch in the backfill (F136); a report render that could hang forever (F137); a token on argv (F138); dead code (F141).
+- Why: one glitched API price became the displayed price for about a day and a permanent one-day spike in history and returns (F083); a run killed at the process level lost up to 99 history rows (F084); overlapping runs, and hung pages that discarded the API price (F086); secrets in an unsandboxed Chrome (F082); unguarded fetch in the backfill and unbounded thumbnail decode (F136); a report render that could hang forever (F137); a token on argv (F138); dead code (F141); a reader-facing PDF that called itself internal, guessed at its source and told readers to "invest accordingly" (Track 2, `research/trust-seo-brand.md` §3).
 - Verification output: paste the results of every command in the Verification section and of manual check A.
 - **Owner actions required before this is done**: run the pre-check, apply 0030 (MCP `apply_migration` preferred), verify (26 rows OK), deploy on the scraper host, run the Chrome sandbox smoke test as the cron user, watch the first run, update HARDENING_FOLLOWUPS. Full steps in `audits/remediation/WP16-python-pipeline-hardening.md`, section "Owner actions".
-- Out of scope, noted for later: WP21 must grant its least-privilege scraper role SELECT, INSERT, UPDATE, DELETE on `product_price_pending` and include 0030 in the schema baseline.
+- Out of scope, noted for later: `run_scraper.sh` still exports the whole env file into the scraper's environment (WP21 narrows the scraper's key); `send_weekly_email.py`'s body still uses em dashes (rewritten by the Track 2 newsletter work). WP21 must grant its least-privilege scraper role SELECT, INSERT, UPDATE, DELETE on `product_price_pending` and include 0030 in the schema baseline.

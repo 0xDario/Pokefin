@@ -2,8 +2,8 @@
 
 - **Findings covered**
   - F045 (item 2 and the verifier's additions, for `/market`): `MarketView.tsx` (862 lines at review) mixes row derivation, a 16-way sort `switch`, a hand-written 16-`<th>` header and a hand-maintained column count; adding one column touches 5 to 7 places and a missing `case` silently sorts as "missing". Item (1) (pure `buildMarketRows` plus tests for the row maths) was done by WP17 step 13 and WP18 (`lib/marketMath.ts` and its tests); this PR adds the column table (item 2), derives the column count from it and types the default sort direction by column (verifier additions). Item (3) (URL state) is resolved for `/prices` by WP08 and is deliberately NOT applied to `/market` (verifier correction). Item (4) (one settings object or context for the 11 `ProductCard` props on `/prices`) is NOT done here and no other package does it (WP20's CurrencyContext removes the `initialExchangeRate` prop plumbing, not the `ProductCard` props); it is listed as a follow-up in the PR body (see "Commit and PR") and under Owner actions.
-  - F125 (full): every history fetch state change rebuilds all ~306 rows and their derived stats and reconciles every inline row; the daily series is built twice per product (once for drawdown, once for volatility). After this PR one product's loading/history change re-renders one `memo` row, and the daily series is built once per product.
-- **Priority rationale**: last structural refactor of the heaviest client table; it lands after WP09 (loading store, SVG sparkline) and WP18 (shared market math) so it does not fight them, and it is low severity with no user-visible defect, so it comes late.
+  - F125 (full; severity low, confirmed by full-effort re-verification): every expand tap, every history arrival and every collapse rebuilds and reconciles all ~306 inline rows, because `expandedProductId`, `loadingProductIds` and `priceHistory` are dependencies of the one `tableBody`/`rows` memo and rows are not components. Measured on the real MarketView with 306 products (production React 19, jsdom, 4-core 2.1 GHz Xeon): expand tap 43 to 58 ms, collapse 47 to 53 ms, history-arrival commit 90 to 120 ms; with a `memo` row the tap drops to about 2 ms. The history-arrival commit only drops too if row objects keep their identity for unchanged products (step 2); a `memo` row alone does not fix it. After this PR one product's expand/loading/history change re-renders one `memo` row (two on expand when another row was open). Step 1 (one daily series per product instead of two) is a harmless cleanup kept from the earlier review; it is NOT part of the F125 fix and has no measurable effect, because the ~300 products without loaded history return early from `toDailyPoints`.
+- **Priority rationale**: last structural refactor of the heaviest client table; it lands after WP09 (loading store, SVG sparkline) and WP18 (shared market math) so it does not fight them. F125 is low severity: no data or correctness impact, one page and one interaction. It is user-visible only as tap latency on `/market`: about 40 to 60 ms per Show/Hide tap on desktop (barely perceptible), roughly 150 to 250 ms on a mid-range phone, at or over the 200 ms INP "poor" threshold, twice per expand (the tap, then again when the history lands). So it comes late.
 - **Effort**: M (5 to 7 hours, including tests).
 - **Depends on**: WP18 (hard: `app/lib/marketMath.ts` with `toDailyPoints`, `maxDrawdownPercent`, `volatilityPercent`; `app/lib/sorting.ts`; `MarketView/returns.ts` deleted; `MarketView/sorting.ts` reduced to a re-export plus `getDefaultSortDirection`; the "Vol 30D (ann.)" header and `renderVolatilityValue` in `MarketView.tsx`), WP17 (hard: `MarketView/buildRows.ts` with `buildMarketRow`/`buildMarketRows` and `buildRows.test.ts`, lint blocking in CI), WP09 (per-product loading store `useLoadingProductIds`, `MiniSparkline` without currency props). Also assumes the in-order landing of WP07 (`lib/format.ts`), WP13 (`NoResults` in MarketView), WP14 (contrast classes) and WP15 (promo removed from MarketView, link colour token).
 - **Unblocks**: nothing directly; WP20 (CurrencyContext) will touch `MarketView.tsx` props that this PR leaves in one place (`MarketTableRow` props).
@@ -12,7 +12,7 @@
 
 ## Why
 
-`/market` renders a ~306-row table from one 862-line component. Sorting is a 16-case `switch` (`MarketView.tsx:366-401`) mirroring a `SortKey` union (`:70-86`), the header repeats the same button markup 16 times (`:695-853`), and the expanded row's `colSpan` comes from a hard-coded `showAllColumns ? 19 : 10` (`:244`), so adding a column means editing five places and a forgotten `case` compiles and silently sorts the column as empty. On the performance side, the whole `<tbody>` is one `useMemo` keyed on `loadingProductIds` and `priceHistory` (`:617-629`) with inline rows, so clicking "Show" on one product rebuilds and reconciles every row twice (loading on, then history plus loading off), and each rebuild recomputes drawdown and volatility with two separate `toDailyPoints` passes per product (`:322-323`, `returns.ts:90`, `:117` at review; after WP18 the same two passes happen inside `getMaxDrawdownPercent` and `getVolatilityPercent` in `lib/marketMath.ts`); phone users feel this as a sluggish expand. After this PR the table is driven by one column descriptor list (header, cells, sort accessor, default direction and column count all derive from it), rows are a `memo` component fed stable row objects, and an expand/collapse or history arrival re-renders only the affected row(s). Nothing visible changes: same columns, labels, order, default sort and behaviour.
+`/market` renders a ~306-row table from one 862-line component. Sorting is a 16-case `switch` (`MarketView.tsx:366-401`) mirroring a `SortKey` union (`:70-86`), the header repeats the same button markup 16 times (`:695-853`), and the expanded row's `colSpan` comes from a hard-coded `showAllColumns ? 19 : 10` (`:244`), so adding a column means editing five places and a forgotten `case` compiles and silently sorts the column as empty. On the performance side, the whole `<tbody>` is one `useMemo` keyed on `loadingProductIds` and `priceHistory` (`:617-629`) with inline rows, and `expandedProductId` is a dependency too, so clicking "Show" on one product rebuilds and reconciles every row twice (commit 1: expansion plus loading on; commit 2: history plus loading off), and "Hide" does it a third time. Commit 2 is the most expensive one because `priceHistory` changes, which re-derives `rows` and `sortedRows` for every product and hands back a new row object per product (measured 90 to 120 ms in jsdom, with or without a `memo` row; the tap itself measured 43 to 58 ms, about 2 ms with a `memo` row). Phone users feel this as a sluggish Show/Hide. The two `toDailyPoints` passes per product (drawdown and volatility, `:322-323` at review; inside `getMaxDrawdownPercent` and `getVolatilityPercent` after WP18) are not a measurable part of this cost: products with no loaded history return `[]` immediately. Step 1 merges them anyway as a cleanup. After this PR the table is driven by one column descriptor list (header, cells, sort accessor, default direction and column count all derive from it), rows are a `memo` component fed stable row objects, and an expand/collapse or history arrival re-renders only the affected row(s). Nothing visible changes except faster Show/Hide taps: same columns, labels, order, default sort and behaviour.
 
 ## Before you start
 
@@ -65,7 +65,9 @@ Assumptions to check, and what to do if one is false:
 
 Order: 1, 2, 3, 4, 5, 6, then tests (7). Steps 1 to 4 keep the build green (step 1 changes only how two `buildMarketRow` values are computed; steps 2 to 4 add code); step 5 switches MarketView over; step 6 deletes the now-dead helper.
 
-### Step 1. Build the daily series once per product (F125)
+### Step 1. Build the daily series once per product (cleanup, not the F125 fix)
+
+This step has no measurable performance effect (full-effort re-verification of F125: products without loaded history return `[]` from `toDailyPoints` at once, and only the few products with loaded history pay for the second pass). It is kept because it is harmless, already proven equivalent by the tests in `buildRows.reuse.test.ts`, and removes a duplicated pass. The F125 fix is steps 2, 4 and 5. If the equivalence tests fail and you cannot make step 1 match WP18's helpers exactly within 30 minutes, revert step 1 (keep `getMaxDrawdownPercent`/`getVolatilityPercent` in `buildRows.ts`), delete the `describe("buildMarketRow drawdown and volatility ...")` block from `buildRows.reuse.test.ts`, drop the two step-1 greps from Verification, and say so in the PR.
 
 File: `app/components/MarketView/buildRows.ts`. No change to `lib/marketMath.ts`: WP18 already exports the series builder `toDailyPoints(history, maxPoints?)` and the series-level functions `maxDrawdownPercent(prices)` and `volatilityPercent(prices, unit)`; the history-level `getMaxDrawdownPercent` and `getVolatilityPercent` each call `toDailyPoints` themselves, which is the double pass.
 
@@ -100,7 +102,7 @@ import {
 with
 
 ```ts
-  // One daily series per product, shared by drawdown and volatility (F125).
+  // One daily series per product, shared by drawdown and volatility.
   // Same numbers as the history-based helpers in lib/marketMath: those build
   // this series themselves, and volatility takes its newest 30 points.
   const dailyPrices = toDailyPoints(history).map((point) => point.price);
@@ -950,14 +952,15 @@ Add the four new test files and the one update listed under Tests, exactly as wr
 - **Do not force MarketView onto WP18's `components/SortableTable`** (F043, used by `/compare`). MarketView's columns need sticky classes, a render context, an expandable second row per product and a key/all split the compare tables do not have. Reuse only `compareSortValues`.
 - **Do not change any maths, rounding, labels, column order, default sort (`release_date` desc) or copy.** This PR is behaviour-preserving; `buildRows.test.ts` (WP17) and `app/lib/__tests__/marketMath.test.ts` (WP18) must pass unchanged. In particular do not annualise or de-annualise volatility here (F005 is WP18's), and do not edit `lib/marketMath.ts` at all.
 - **Do not replace `dailyPrices.slice(-30)` with `toDailyPoints(history, 30)` for both metrics.** `maxPoints` would also cut the drawdown series to 30 days and change every Max DD value; drawdown uses the full series, only volatility uses the newest 30 points.
-- **Do not drop or re-offset the sticky `#` column on phones** (F125 "consider" item). It changes the phone layout, the gain is unmeasured and the plan owner did not ask for it; leave both sticky columns as they are.
+- **Do not drop or re-offset the sticky `#` column on phones** (F125 "consider" item). It is a UX choice, not a proven performance fix: the scroll/compositing cost of the 612 sticky cells was not measured on a device and is speculative. It changes the phone layout and the plan owner did not ask for it; leave both sticky columns as they are.
+- **Do not treat a `memo` row as the whole F125 fix.** Measured: `memo(MarketTableRow)` alone cuts the Show/Hide tap from about 45 ms to 2 ms, but the history-arrival commit stays at 90 to 120 ms unless row objects for unchanged products keep their identity. Steps 2 and 5d (`createMarketRowsBuilder` in `useState`) are mandatory, not an optimisation on top.
 - **Do not use `getDefaultSortDirection(key: string)` with a `SortKey` cast.** The verifier asked for the parameter to be typed as `SortKey`; putting `defaultDirection` on the column descriptor gives the same guarantee without making the shared sorting module depend on a MarketView type.
 - **Do not put shared test fixtures in a non-test file under `__tests__/`.** Jest's default `testMatch` treats every file in `__tests__` as a suite and fails one with no tests. Inline the small `makeProduct`/`makeRow` helpers per file as shown.
 - **Do not use `require()` inside `jest.mock` factories** (`@typescript-eslint/no-require-imports` is an error). Return a named function component that uses JSX, as shown.
 
 ## Tests
 
-All files under `frontend/app/components/MarketView/__tests__/`. Default jsdom environment; no `@jest-environment` docblock needed. Write each new file exactly as below. All four were type-checked and linted clean (`tsc --noEmit`, `eslint app/components/MarketView`) in a copy of review HEAD plus WP17 step 13, WP18's `lib/marketMath.ts`, `lib/sorting.ts` and step 4 `buildRows.ts` edits (with a stand-in `lib/format.ts` exposing WP07's signatures), and steps 1 to 6 of this spec. Earlier versions of these files passed under jest (47 MarketView tests); the WP18-specific cases (the "Vol 30D (ann.)" label, the drawdown/volatility equivalence block) were type-checked but not run. The equivalence block must pass as written: if it fails, step 1 does not match WP18's helpers, so fix step 1, not the test. If the label case fails, the header text in the current `MarketView.tsx` before this PR is the truth: fix the descriptor if it was copied wrong, or the test if the label really changed upstream.
+All files under `frontend/app/components/MarketView/__tests__/`. Default jsdom environment; no `@jest-environment` docblock needed. Write each new file exactly as below. All four were type-checked and linted clean (`tsc --noEmit`, `eslint app/components/MarketView`) in a copy of review HEAD plus WP17 step 13, WP18's `lib/marketMath.ts`, `lib/sorting.ts` and step 4 `buildRows.ts` edits (with a stand-in `lib/format.ts` exposing WP07's signatures), and steps 1 to 6 of this spec. Earlier versions of these files passed under jest (47 MarketView tests); the WP18-specific cases (the "Vol 30D (ann.)" label, the drawdown/volatility equivalence block) were type-checked but not run, and the F125 render-count case in `MarketView.table.test.tsx` was added after that check and has not been run. If the render-count case sees extra calls only from a mount-time update (for example a second settle of volume metrics or the exchange rate), add one more `await act(async () => { await Promise.resolve(); });` before `mockProductImage.mockClear()`; if it sees other products' names after the click, the wiring is wrong (step 5), not the test. The equivalence block must pass as written: if it fails, step 1 does not match WP18's helpers, so fix step 1, not the test. If the label case fails, the header text in the current `MarketView.tsx` before this PR is the truth: fix the descriptor if it was copied wrong, or the test if the label really changed upstream.
 
 ### New: `columns.test.ts`
 
@@ -1395,7 +1398,7 @@ describe("MarketTableRow expanded row", () => {
 
 ### New: `MarketView.table.test.tsx`
 
-Renders the real `MarketView`. Covers: 10 `columnheader`s, 19 after "Show all columns"; default order newest release first; "Price" opens descending with `aria-sort="descending"` and flips to ascending; "Set" opens ascending; "Show" loads history once, shows the chart in a `td` with `colspan="10"`, "Hide" removes it.
+Renders the real `MarketView`. Covers: 10 `columnheader`s, 19 after "Show all columns"; default order newest release first; "Price" opens descending with `aria-sort="descending"` and flips to ascending; "Set" opens ascending; "Show" loads history once, shows the chart in a `td` with `colspan="10"`, "Hide" removes it. F125 integration check: across the expand tap, the history arrival and the collapse, only the toggled row re-renders (counted through the `ProductImage` mock). This is the one test that fails if any `MarketTableRow` prop is unstable in the real wiring (an inline arrow, a new `columns` array, a row builder that returns new objects); if it fails, fix the wiring in step 5, never the assertion.
 
 ```tsx
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
@@ -1413,7 +1416,16 @@ jest.mock("../../../lib/exchangeRate", () => ({
   fetchLatestExchangeRateClient: jest.fn().mockResolvedValue({ rate: 1.36, date: null }),
 }));
 jest.mock("../MiniSparkline", () => ({ __esModule: true, default: () => null }));
-jest.mock("../../ProductPrices/shared/ProductImage", () => ({ __esModule: true, default: () => null }));
+// Every row renders exactly one ProductImage (Product column), so counting
+// its calls counts real MarketTableRow renders (F125 regression check).
+const mockProductImage = jest.fn();
+jest.mock("../../ProductPrices/shared/ProductImage", () => ({
+  __esModule: true,
+  default: function MockProductImage(props: { productName: string }) {
+    mockProductImage(props.productName);
+    return null;
+  },
+}));
 jest.mock("../../CardRinkPromo", () => ({ __esModule: true, default: () => null }));
 jest.mock("../../charts/ChartBundle", () => ({
   PriceChart: function MockPriceChart() {
@@ -1509,6 +1521,34 @@ describe("MarketView table", () => {
     fireEvent.click(screen.getByRole("button", { name: "Hide" }));
     expect(screen.queryByTestId("price-chart")).not.toBeInTheDocument();
   });
+
+  it("re-renders only the toggled row on expand, history arrival and collapse (F125)", async () => {
+    fetchHistoryMock.mockResolvedValue([
+      { usd_price: 90, recorded_at: "2026-09-01T00:00:00Z" },
+      { usd_price: 100, recorded_at: "2026-09-02T00:00:00Z" },
+    ]);
+    renderView();
+    // Let mount effects settle (volume metrics, exchange rate) before counting.
+    await act(async () => {
+      await Promise.resolve();
+    });
+    mockProductImage.mockClear();
+
+    // Default sort is newest release first, so the first "Show" is product 2.
+    const [firstShow] = screen.getAllByRole("button", { name: "Show" });
+    await act(async () => {
+      fireEvent.click(firstShow);
+    });
+    await screen.findByTestId("price-chart");
+    fireEvent.click(screen.getByRole("button", { name: "Hide" }));
+
+    // Before this PR every commit re-rendered all 3 rows ("Set 1 Type 1" and
+    // "Set 3 Type 3" would appear here too).
+    expect(mockProductImage).toHaveBeenCalled();
+    expect(new Set(mockProductImage.mock.calls.map(([name]) => name))).toEqual(
+      new Set(["Set 2 Type 2"])
+    );
+  });
 });
 ```
 
@@ -1559,7 +1599,7 @@ Manual checks (on the Vercel preview for this PR, which has real data; the local
 2. Click every sortable header once and again: first click direction matches production (Product, Set, Days Since, Max DD, Vol 30D (ann.) ascending; the rest descending); "--" values stay at the bottom in both directions; the sorted header shows ` v`/` ^`. Hovering "Vol 30D (ann.)" shows WP18's annualised-volatility tooltip; its cells show an unsigned slate value, not green/red.
 3. Click "Show" on a row: "Loading price history..." then the chart; "Hide" collapses it. Expand a second row: the first collapses. Switch USD/CAD with a row open: prices and the chart update.
 4. Type in the search box quickly: characters never lag; the count updates; clear it. Pick an age filter and a generation: rows filter as before. A search with no match shows the WP13 "No products match" panel.
-5. Render check (the F125 fix): open React DevTools, Profiler, enable "Highlight updates when components render", record, click "Show" on one row, wait for the chart, stop. Correct: the commits for the loading flag and the history arrival each render one or two `MarketTableRow`s (the toggled row, plus the previously expanded row on expansion), not ~306. Before this PR (production), the same recording shows the whole table flashing.
+5. Render check (the F125 fix): open React DevTools, Profiler, enable "Highlight updates when components render", record, click "Show" on one row, wait for the chart, click "Hide", stop. Correct: each of the three commits (tap, history arrival, collapse) renders one or two `MarketTableRow`s (the toggled row, plus the previously expanded row on expansion), not ~306, and each commit is a few ms on desktop. Before this PR (production), the same recording shows the whole table flashing and roughly 40 to 60 ms per tap commit on desktop. Put the before/after commit durations in the PR body.
 6. View source (or `curl -s <preview>/market | grep -c '<tr'`): the server HTML still contains the table rows (the page did not bail out to client rendering).
 
 ## Owner actions
@@ -1574,12 +1614,13 @@ Manual checks (on the Vercel preview for this PR, which has real data; the local
 - [ ] `MarketView.tsx` contains no `switch (key)`, no `visibleColumnCount`, no `19 : 10`, no per-cell JSX, no `Fragment`, no `next/dynamic`, and no `useSearchParams`/`useRouter`.
 - [ ] `MarketTableRow.tsx` default-exports `memo(MarketTableRow)`; MarketView passes it only primitives and stable references.
 - [ ] `createMarketRowsBuilder` exists in `buildRows.ts` and MarketView creates it with `useState(createMarketRowsBuilder)`.
-- [ ] `buildMarketRow` calls `toDailyPoints` exactly once and derives drawdown (`maxDrawdownPercent`) and 30-point annualised volatility (`volatilityPercent`) from that series, with values identical to WP18's `getMaxDrawdownPercent`/`getVolatilityPercent`; `lib/marketMath.ts` and `/product/[id]` are unchanged.
+- [ ] `MarketView.table.test.tsx` includes the F125 render-count test and it passes (only the toggled row re-renders across expand, history arrival and collapse).
+- [ ] `buildMarketRow` calls `toDailyPoints` exactly once (or step 1 was reverted under its documented escape hatch and the PR says so) and derives drawdown (`maxDrawdownPercent`) and 30-point annualised volatility (`volatilityPercent`) from that series, with values identical to WP18's `getMaxDrawdownPercent`/`getVolatilityPercent`; `lib/marketMath.ts` and `/product/[id]` are unchanged.
 - [ ] `getDefaultSortDirection` is removed; `MarketView/sorting.ts` is only the re-export of `lib/sorting.ts`.
 - [ ] The volatility column keeps WP18's label "Vol 30D (ann.)", its `title` and `renderVolatilityValue`.
 - [ ] New tests `columns.test.ts`, `buildRows.reuse.test.ts`, `MarketTableRow.test.tsx`, `MarketView.table.test.tsx` pass (or the last is replaced by the documented manual check); `buildRows.test.ts`, `app/lib/__tests__/marketMath.test.ts` and `sorting.test.ts` (minus the moved block) pass unchanged.
 - [ ] `pnpm exec tsc --noEmit`, `pnpm run lint`, `pnpm test --ci` and `pnpm build:stub` exit 0; `/market` keeps its static/ISR status.
-- [ ] On the preview, `/market` looks and sorts exactly as production, and the Profiler shows one or two row renders per expand/history commit.
+- [ ] On the preview, `/market` looks and sorts exactly as production, and the Profiler shows one or two row renders per expand, history-arrival and collapse commit.
 
 ## Rollback
 
@@ -1597,11 +1638,11 @@ refactor(market): drive the table from a column list; memoise rows
   derived from it. Replaces the 16-case sort switch and 16 hand-written
   <th>s (F045).
 - MarketTableRow: memo() row fed stable row objects from
-  createMarketRowsBuilder, so a history load or expand re-renders one
-  row instead of ~306 (F125).
+  createMarketRowsBuilder, so an expand, history load or collapse
+  re-renders one row instead of ~306 (F125).
 - buildMarketRow builds the daily series once and derives drawdown and
   volatility from it with lib/marketMath's series functions (was two
-  toDailyPoints passes per product); numbers unchanged.
+  toDailyPoints passes per product); cleanup only, numbers unchanged.
 - getDefaultSortDirection folded into the column descriptors.
 - /market stays statically rendered: no URL state added.
 ```

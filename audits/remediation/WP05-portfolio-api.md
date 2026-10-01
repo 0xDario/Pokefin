@@ -3,11 +3,11 @@
 - **Findings covered**
   - F001 (partial, cluster members F001, F018): the browser Supabase client has no session (the session cookie is HttpOnly), so every `portfolios` / `portfolio_holdings` query in `app/lib/portfolio.ts` runs as `anon` and RLS plus migration 0013 reject it. **In scope here (part 2):** every `portfolios`, `portfolio_holdings` and `portfolio_lots` access moves to cookie-backed route handlers under `app/api/portfolio/`. Part 1 (profile, username) is WP04; part 3 (box recipes) is WP06.
   - F144 (full): the portfolio load is a three-stage browser waterfall (portfolio, then holdings plus the market RPC, then paged history) and the whole chain re-runs on every timeframe click and every add/edit/delete.
-  - F053 (full, cluster members F053, F057, F061): `usePortfolioData` has no cancellation, blanks the whole dashboard on every refresh, lets an older slow history response overwrite a newer one, and resets the holdings-table sort.
+  - F053 (full, cluster members F053, F057, F061): `usePortfolioData` has no cancellation, blanks the whole dashboard on every refresh, lets an older slow history response overwrite a newer one, and resets the holdings-table sort. Full-effort re-verification (medium): at HEAD the "click 1Y then 7D" repro cannot happen, because the range buttons live inside the chart, which the full-page spinner unmounts. The reachable race is `handleDelete` calling a `refresh` captured at click time (old timeframe in its closure) while the user picks another range, and the first fetch's `finally` also hides the spinner while the second is still running. This PR keeps the chart mounted during history loads, which makes fast range switching possible, so the abort in step 12 is required, not optional. Step 15c removes the stale-closure path: delete no longer calls `refresh`.
   - F033 (full, cluster members F033, F044): `addHolding` mints its own idempotency key on every call so retries never dedupe, and a duplicate (idempotent success) and a failure both return `null`, so imports and the Add modal report false errors.
   - F110 (full, cluster members F110, F113, F119): `useProductSearch` has no stale-response guard, so a slower earlier search overwrites the results for the current query and clears the spinner early.
   - F060 (full, cluster members F060, F118): purchase-date default and `max` use the UTC calendar day, so evening users west of UTC get tomorrow pre-filled.
-  - F111 (full): the portfolio history date series steps by local days but keys by UTC date, so a DST change skips or repeats a point.
+  - F111 (full): the portfolio history date series steps by local days but keys by UTC date, so a DST change skips or repeats a point (November skips a date, March repeats one; only in the local evening hour where the UTC date flips, for example 19:00-20:00 in Toronto). Not a defect and not changed: the last point is today's UTC date, and a holding appears on the point labelled with its purchase date. Both follow the site-wide UTC day convention (the chart formats dates with `timeZone: "UTC"`).
 - **Priority rationale**: `/portfolio` shows "Failed to load portfolio" to every signed-in user in production today, and this is the largest user-facing feature on the site.
 - **Effort**: L, about 14 to 18 hours including tests.
 - **Depends on**: WP04 (the `ANON_CLIENT_FORBIDDEN_FILES` ESLint guard, `sessionStatus` in `AuthContext`, the `/portfolio` page guards, and `app/lib/authSession.ts` with `isAuthoritativeSignedOut`, which step 6b uses to tell a signed-out caller (401) from an auth outage (503)). WP02 (it added the username rules to `app/lib/validation.ts`, which shifts that file's line numbers). WP00 for `pnpm build:stub` and `scripts/supabase-stub.mjs`. WP01's `portfolio_holdings(portfolio_id)` index (migration 0025) makes the new queries cheaper but is not required.
@@ -2006,6 +2006,8 @@ Keep the empty-state JSX byte-identical to lines 60-71.
 
 `handleEdit` stays. `handleAddSuccess` and `handleEditSuccess` are deleted.
 
+Why 15c must not call `refresh()` after a delete (F053): the old `handleDelete` awaited the delete and then called the `refresh` it captured at click time, whose closure held the timeframe from before any range click made during the delete, so a stale-range fetch could land last. `applyHoldingDeleted` has no timeframe in it, and the new `refresh` only bumps `reloadToken`, so no caller can start a query with an old timeframe.
+
 ### Step 16. `app/components/Portfolio/cards/AddHoldingModal.tsx` (F033, F060)
 
 16a. Imports (lines 3-17):
@@ -2031,7 +2033,7 @@ import {
 
 16b. Props (lines 19-31): remove `portfolioId` from the interface and the destructuring; change `onSuccess: () => void;` to `onSuccess: (holding: HoldingWithProduct) => void;`.
 
-16c. Line 35: `const [purchaseDate, setPurchaseDate] = useState(() => maxPurchaseDateKey());`. This initializer runs in the browser only, because the dashboard mounts the modal after a click (step 15f); that is what keeps the local-date computation out of SSR, as the F060 verifier required.
+16c. Line 35: `const [purchaseDate, setPurchaseDate] = useState(() => maxPurchaseDateKey());`. This initializer runs in the browser only, because the dashboard mounts the modal after a click (step 15f). The full-effort F060 re-verification found no hydration risk even at HEAD (the modal returns `null` while closed and useState initial values are not serialized), so no effect or `useMemo` workaround is needed.
 
 16d. Delete the reset effect (lines 40-50, "Reset form when modal opens"): remounting on every open does its job. This also removes the lint error at line 43. Keep the pre-fill effect (lines 52-66) unchanged.
 
@@ -2203,7 +2205,8 @@ The selector was verified with ESLint 9.39.5 while writing this spec: it flags `
 - **Do not return the same value for "duplicate" and "error".** Duplicate is success: the Add modal closes and the import counts the row as imported.
 - **Do not use `upsert` / `onConflict` / `ignoreDuplicates` for the import.** `portfolio_holdings_idem_uidx` is a partial index and PostgREST cannot pass its `WHERE` predicate, so Postgres answers 42P10. Use the key lookup plus batch insert in step 7.
 - **Do not loosen server date validation or the DB CHECK** (F060 verifier). `isValidPastDate` without a second argument stays UTC on the server. Only the client default and `max` use `maxPurchaseDateKey()` (the earlier of local and UTC today). Using `max(localToday, utcToday)` would let an east-of-UTC morning date through to a raw constraint error.
-- **Do not compute the local date during SSR.** The F060 verifier asked for the local-date computation to happen on the client only (it suggested an effect or `useMemo` instead of a `useState` initializer). Here it runs in a `useState` initializer and in render of a component that mounts only after a click (step 15f), and `/portfolio` never server-renders the dashboard (the page shows its auth spinner during SSR), so the value is always computed in the browser. An effect that calls `setPurchaseDate` would instead trip `react-hooks/set-state-in-effect`. Do not render `AddHoldingModal` unconditionally.
+- **Do not move the date default into an effect.** The first F060 verifier suggested an effect or `useMemo` to keep the local-date computation out of SSR; the full-effort re-verification found that unnecessary (the modal renders nothing until opened on the client). Here it runs in a `useState` initializer of a component that mounts only after a click (step 15f), so it is always computed in the browser. An effect that calls `setPurchaseDate` would trip `react-hooks/set-state-in-effect`. Do not render `AddHoldingModal` unconditionally: step 16d deletes the reset-on-open effect, so the conditional mount is what gives every open a fresh form, date and idempotency key.
+- **Do not refactor `marketPulse.ts:53-58` or `marketData.ts:108-113` onto `localDateKey`** (the F060 verdict suggests it). WP07 consolidates date formatting; touching them here widens this PR.
 - **Do not call setState synchronously in an effect body**, and do not add `eslint-disable` for `react-hooks/set-state-in-effect`. Set state only in promise callbacks or event handlers, and derive `loading` / `historyLoading` during render as shown.
 - **Do not put `setLoading(true)` at the top of a refresh** or gate the whole dashboard on it. Only the chart shows history loading.
 - **Do not answer 401 for every `user: null` from `supabase.auth.getUser()`.** A network failure, 5xx or 429 from GoTrue also yields `user: null`; route it through `requireRouteUser` (step 6b), which answers 503 for those, so an auth outage is never shown as "Your session has expired" (F063, WP04).
@@ -2414,6 +2417,7 @@ Also `localDateKey(new Date("2026-03-08T06:59:00Z"), "America/Toronto") === "202
 - Add a F111 describe. Fake the clock with `jest.useFakeTimers({ now, doNotFake: ["nextTick", "queueMicrotask"] })` and restore with `jest.useRealTimers()` in `afterEach`:
   - "ends on today's UTC date and has days+1 unique, contiguous points": `now = new Date("2026-09-26T00:30:00Z")`, `mockPriceHistoryRows([])`, `getPortfolioHistory(1, 7, [makeHolding({ product_id: 1 })])`; dates are `2026-09-19` .. `2026-09-26`, length 8, each consecutive pair exactly 86 400 000 ms apart.
   - "neither skips nor repeats a date across the November DST change": `now = new Date("2026-11-04T00:30:00Z")` (19:30 EST on Nov 3; DST ended Nov 1), 7 days; dates are exactly `2026-10-28` .. `2026-11-04`, length 8, `2026-11-01` present exactly once. Verified with Node 22 while writing this spec: the old loop under `TZ=America/Toronto` produces `2026-10-27 ... 2026-10-31, 2026-11-02, 2026-11-03, 2026-11-04` (starts a day early and skips `2026-11-01`), so this case fails on the old code in that zone and passes on the new code in any zone.
+  - "neither skips nor repeats a date across the March DST change": `now = new Date("2027-03-15T23:30:00Z")` (19:30 EDT on Mar 15; DST began Mar 14, 2027), 7 days; dates are exactly `2027-03-08` .. `2027-03-15`, length 8, `2027-03-14` present exactly once. Checked with Node while revising this spec: the old loop under `TZ=America/Toronto` produces `2027-03-09 ... 2027-03-15` with `2027-03-14` twice (8 points, 7 unique), so this case also fails on the old code in that zone.
   - "returns [] without logging when aborted": pass an already-aborted `AbortController().signal`; result `[]`, `logSupabaseError` not called, `fromMock` not called.
 
 The DST case is only discriminating when the Jest process runs west of UTC, which is why Verification runs this file a second time with `TZ=America/Toronto`.
@@ -2510,6 +2514,7 @@ Further cases in the same file:
 - An empty result is not cached: 1M resolves `[]`, switch to 7D and resolve `[point("b")]`, switch back to 1M: `getPortfolioHistory` is called again with `days` 30.
 - Error: `fetchPortfolio` rejects with `new PortfolioApiError("x", 401)`: `error` is "Your session has expired. Please sign in again." and `loading` is false; then `act(() => result.current.refresh())` sets `loading` to true and, after a successful second fetch, `error` is null and `portfolio` is set. `new PortfolioApiError("x", 503)` yields "Service temporarily unavailable. Please try again."; a plain `Error("boom")` yields "Failed to load portfolio" (never "boom").
 - `getPortfolioHistory` rejecting (WP10 makes it throw): `history` is `[]`, `historyLoading` is false, `logCaughtError` was called with `"portfolio_history_fetch_failed"`.
+- Delete during a pending history load (the F053 path reachable at HEAD): make `fetchPortfolio` return two holdings (ids 1 and 2) and give each `getPortfolioHistory` call its own `deferred` (push them to an array in `mockImplementation`). With the 1M request pending, call `applyHoldingDeleted(1)`, then `setTimeframe("1Y")`. The first 1M call's signal is aborted; the post-delete 1M call is aborted too when the range changes. Resolve the 1Y call first and the post-delete 1M call last. `timeframe` is `"1Y"`, `history` equals the 1Y result, `historyLoading` is false, and `fetchPortfolio` was called exactly once.
 - Unmounting before `fetchPortfolio` resolves logs nothing and sets no state (no act warning): the signal passed to it is aborted.
 
 ### 7. `app/components/Portfolio/__tests__/useProductSearch.test.tsx` (new)
@@ -2519,6 +2524,7 @@ Mock `../../../lib/portfolio` with `searchProducts: jest.fn()`. Use `jest.useFak
 - Out of order: `"pika"` resolves after `"pikachu"`. Type `"pika"`, advance 300 ms, type `"pikachu"`, advance 300 ms, resolve `pikachu` with `[P2]`, then `pika` with `[P1]`: `results` is `[P2]` and `loading` is false.
 - Early resolution does not clear the spinner: after typing `"pikachu"` and resolving only the `"pika"` request, `loading` is true and `results` is `[]`.
 - A query shorter than 2 characters returns `[]`, `loading` false, and never calls `searchProducts`.
+- Shortened mid-flight (F110 verdict: a naive `ignore` flag that also guards `setLoading(false)` leaves the spinner on forever here): type `"pika"`, advance 300 ms so the request starts, then type `"p"` and resolve the `"pika"` request with `[P1]`. `loading` is false, `results` is `[]`, and `error` is null. Step 13 passes this because `loading` and `results` are derived during render from `searchQuery.length >= 2`; do not replace that with a `setLoading` state.
 - Debounce: typing `"pi"`, `"pik"`, `"pika"` within 300 ms calls `searchProducts` once, with `"pika"`.
 
 ### 8. `app/components/Portfolio/__tests__/AddHoldingModal.test.tsx` (new)
@@ -2705,9 +2711,9 @@ No migration, environment variable or dashboard setting changes.
 - [ ] A retried add with the same values sends the same `client_idempotency_key`; the server answers `duplicate` for an existing key and the UI treats it as success.
 - [ ] The Collectr import sends at most one request per 250 rows, and a retry of the same preview reports already-saved rows as imported without inserting them again.
 - [ ] Changing the timeframe does not call `GET /api/portfolio`, does not unmount the dashboard, and the chart always ends showing the last-selected range (hook test). Returning to a range already loaded for the same holdings makes no request.
-- [ ] A stale product-search response never replaces the results of the current query (hook test).
+- [ ] A stale product-search response never replaces the results of the current query, and shortening the query below 2 characters while a request is in flight leaves `loading` false (hook test).
 - [ ] The Add form's default and `max` date equal `maxPurchaseDateKey()`; server validation is still UTC-only.
-- [ ] Portfolio history dates are contiguous UTC days, `days + 1` points, including across a DST change under `TZ=America/Toronto`.
+- [ ] Portfolio history dates are contiguous UTC days, `days + 1` points, including across the November and March DST changes under `TZ=America/Toronto`.
 - [ ] `usePortfolioData.ts` and `useProductSearch.ts` have 0 lint errors; the repo's total lint error count dropped by 4.
 - [ ] The two ESLint probes in Verification report their errors.
 - [ ] `pnpm exec tsc --noEmit`, `pnpm test --ci` and `pnpm build:stub` pass.

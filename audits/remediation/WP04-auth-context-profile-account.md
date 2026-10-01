@@ -2,10 +2,10 @@
 
 - **Findings covered**
   - F001 (partial, cluster members F001, F018): the browser Supabase client never has a session because session cookies are HttpOnly, so every client-side user-table query runs as `anon` and is rejected by RLS. **In scope here (part 1):** the profile read moves into `GET /api/auth/me`, the username write moves to a new `PATCH /api/profile`, and `AuthContext.tsx` and `account/page.tsx` stop importing `app/lib/supabase`. Portfolio access is WP05, box recipes are WP06.
-  - F058 (full for the auth part, cluster members F058, F062, F106): `AuthContext` replaces `user`/`profile` object identity on every window focus and rebuilds the context value (and every callback) on every render, so the `/account` username field is reset while the user types and every `useAuth()` consumer re-renders. Two parts of this cluster are deliberately NOT done here: F106's exchange-rate TTL note is the same defect as F150, which WP11 step 8a fixes (WP11 also forbids `exchangeRate.ts` importing `clientMarketData.ts`); switching `useBoxRecipes`/`BoxCalculator` from `user` to `user?.id` is WP06. This package removes the identity churn at its source, which is what makes the `/account` bug go away.
-  - F063 (full): any failed `/api/auth/me` call (network error, 429, 5xx) is treated as "signed out", so a transient error on tab focus flips the header to "Sign In" and bounces the user from `/portfolio` or `/account` to the login page.
-  - F124 (full): the header shows a pulsing skeleton in the auth slot on every page until `/api/auth/me` answers, instead of defaulting to the signed-out "Sign In / Sign Up" UI.
-- **Priority rationale**: every signed-in user has had no username in the header and a broken "Update Username" form since 2026-05-27, and this package also builds the session state (`sessionStatus`) that WP05 and WP06 need to restore the portfolio and box recipes.
+  - F058 (full for the auth part, cluster members F058, F062, F106): `AuthContext` replaces `user`/`profile` object identity on every window focus and rebuilds the context value (and every callback) on every render, so the `/account` username field is reset while the user types and every `useAuth()` consumer re-renders. Two parts of this cluster are deliberately NOT done here: F106's exchange-rate TTL note is the same defect as F150, which WP11 step 8a fixes (WP11 also forbids `exchangeRate.ts` importing `clientMarketData.ts`); switching `useBoxRecipes`/`BoxCalculator` from `user` to `user?.id` is WP06. This package removes the identity churn at its source, which is what makes the `/account` bug go away. Severity: low today, because the profile never loads (F001), so the username field is never overwritten. It becomes medium the moment the profile loads, which this package makes happen. That is why the F058 fix must ship in this same PR: do not split F001 and F058 into separate PRs.
+  - F063 (full, medium): any failed `/api/auth/me` call (network error, 429, 5xx) is treated as "signed out", so a transient error on tab focus flips the header to "Sign In" and bounces the user from `/portfolio` or `/account` to the login page. A Supabase Auth outage is worse: the route answers 200 `{ user: null }` today, which no client fix alone can tell apart from a real sign-out, so the route change in step 3 is required.
+  - F124 (full, low): on every full page load (not on client-side navigations) the header shows a pulsing grey circle in the desktop auth slot until `/api/auth/me` answers. On phones it only shows if the menu is opened before the answer. The fix keeps a neutral placeholder of the right width (no pulse) while the first check is pending. It must NOT default to "Sign In / Sign Up" while pending: that would flash the wrong UI to every signed-in user on every hard load (F124 re-verification). The profile half of F124 (email prefix instead of username) is F001 and is fixed by step 3.
+- **Priority rationale**: every signed-in user has had no username in the header and a broken "Update Username" form since 2026-05-27, and this package also builds the session state (`sessionStatus`) that WP05 and WP06 need to restore the portfolio and box recipes. Per finding: F001 high, F063 medium, F058 low today but medium once this PR makes the profile load (so it ships here), F124 low (cosmetic, full page loads only).
 - **Effort**: M, about 6 to 8 hours including tests.
 - **Depends on**:
   - WP02, which must have merged. It provides `USERNAME_RE`, `USERNAME_FORMAT_MESSAGE`, `USERNAME_HINT` and `USERNAME_MAX_LENGTH` in `app/lib/validation.ts` (WP02 step 1). It also creates `POST /api/auth/forgot-password` and makes `AuthContext.resetPassword(email, captchaToken?)` call it, and it changes `AuthContext.updatePassword` to `(newPassword: string, currentPassword?: string)` with body `{ password: newPassword, currentPassword }` (WP02 steps 9 and 11; WP02 lists this signature under "Names later packages rely on", so this package must keep it). It edits the password section of `account/page.tsx` (WP02 step 16): two import lines (`PASSWORD_HINT, PASSWORD_MIN_LENGTH, PASSWORD_TOO_SHORT_MESSAGE` from `../lib/validation` and `AUTH_MESSAGES` from `../lib/authErrors`), a `currentPassword` state line, a "Current Password" input, a hidden `autoComplete="username"` email input, the call `updatePassword(newPassword, currentPassword)`, and `role="alert"` on the four error `<div>`s.
@@ -17,7 +17,7 @@
 
 ## Why
 
-Since commit `fec21dc` (2026-05-27) the session lives only in HttpOnly cookies, which the browser Supabase client (`frontend/app/lib/supabase.ts:23`) cannot read, so its `profiles` SELECT (`AuthContext.tsx:57-70`) and UPDATE (`account/page.tsx:65-68`) go out as `anon` and PostgREST answers 401 with code 42501 (confirmed in production edge logs: zero 2xx responses on user tables from the browser client). Signed-in users therefore see their email prefix instead of their username in the header, and "Update Username" fails with the raw text "permission denied for table profiles". On top of that, `AuthContext` signs the user out locally on any network blip, 429 or 5xx during a tab-focus refresh (`AuthContext.tsx:82-86, 94-97`), which kicks them off `/portfolio` and `/account`; it also replaces its objects on every focus, which wipes an unsaved username edit, and it shows a skeleton in the header of every page for every visitor. After this PR the profile is read and written server-side with the cookie session, the header shows the username, a transient failure never signs anyone out, focus refreshes are rate-limited and cause no re-render when nothing changed, and anonymous visitors see "Sign In / Sign Up" immediately.
+Since commit `fec21dc` (2026-05-27) the session lives only in HttpOnly cookies, which the browser Supabase client (`frontend/app/lib/supabase.ts:23`) cannot read, so its `profiles` SELECT (`AuthContext.tsx:57-70`) and UPDATE (`account/page.tsx:65-68`) go out as `anon` and PostgREST answers 401 with code 42501 (confirmed in production edge logs: zero 2xx responses on user tables from the browser client). Signed-in users therefore see their email prefix instead of their username in the header, and "Update Username" fails with the raw text "permission denied for table profiles". On top of that, `AuthContext` signs the user out locally on any network blip, 429 or 5xx during a tab-focus refresh (`AuthContext.tsx:82-86, 94-97`), which kicks them off `/portfolio` and `/account`; it also replaces its objects on every focus, which wipes an unsaved username edit, and it shows a skeleton in the header of every page for every visitor. After this PR the profile is read and written server-side with the cookie session, the header shows the username, a transient failure never signs anyone out, focus refreshes are rate-limited, skipped while offline, retried when the connection returns, and cause no re-render when nothing changed, and the header auth slot shows no pulsing skeleton (it stays empty at its final width until the first answer, so neither anonymous nor signed-in visitors see the wrong buttons flash).
 
 ## Before you start
 
@@ -191,7 +191,7 @@ export async function GET() {
 }
 ```
 
-Notes: `.eq("id", user.id)` is redundant with RLS but keeps the query plan to one row and documents intent. Do not add `export const revalidate` or any caching; the route reads `cookies()` and is dynamic. F124's optional idea of skipping the proxy's `getUser()` for `/api/auth/*` is deliberately not done: the proxy's call is what rotates the refresh-token cookies (audit F-5), and removing it is a session-lifecycle change outside this package.
+Notes: `.eq("id", user.id)` is redundant with RLS but keeps the query plan to one row and documents intent. Do not add `export const revalidate` or any caching; the route reads `cookies()` and is dynamic. F124's optional idea of skipping the proxy's `getUser()` is deliberately not done here. It would be safe only for `GET /api/auth/me` (this route repeats `getUser()` and writes rotated cookies through `routeSupabase.ts`), never for other routes (the proxy's call is what rotates the refresh-token cookies for them, audit F-5). It saves one GoTrue round trip per call but changes the session lifecycle, so leave `proxy.ts` untouched and list it in the PR as a possible follow-up.
 
 ### Step 4. `PATCH /api/profile` (new)
 
@@ -285,7 +285,7 @@ Replace the whole file with the version below. What changes and why:
 
 - No import of `../lib/supabase` (F001). The profile arrives with `/api/auth/me`; username writes go through `updateUsername` to `PATCH /api/profile`; `resetPassword` keeps calling WP02's `POST /api/auth/forgot-password`.
 - `sessionStatus: "unknown" | "anonymous" | "authenticated"` (F063). Only an authoritative answer changes it: a 200 with `user: null`, or a 401/403. Network errors, 429 and 5xx (including the new 503) keep the previous state.
-- Focus refresh is skipped when the tab is not visible or when the last refresh started less than 30 s ago (F063). Explicit calls (`refreshSession()` from a "Try again" button, the refresh after sign-in) are never debounced. Concurrent calls share one request.
+- Focus refresh is skipped when the tab is not visible, when `navigator.onLine` is `false`, or when the last refresh started less than 30 s ago (F063). An `online` event re-checks the session: at once (at most every 2 s) if the last check failed, otherwise under the same 30 s limit. The "last check failed" flag is an internal ref; it is not exposed on the context because no consumer needs it. Explicit calls (`refreshSession()` from a "Try again" button, the refresh after sign-in) are never debounced. Concurrent calls share one request.
 - Identity stability (F058): an unchanged payload returns the previous state object, so React bails out and no consumer re-renders; all methods are `useCallback`, the context value is `useMemo`.
 - Results of a refresh that started before a sign-in, sign-up or sign-out are dropped (generation counter), so a slow boot request cannot overwrite a fresh sign-in.
 - `loading` is kept with its current meaning (true until the first `/api/auth/me` attempt settles) because WP03's Header test mock and other packages read it.
@@ -339,6 +339,8 @@ interface AuthContextType {
 
 /** A window focus re-checks the session at most this often. */
 export const FOCUS_REFRESH_MIN_INTERVAL_MS = 30_000;
+/** After a failed check, an "online" event retries at most this often (bounds a flapping connection). */
+export const ONLINE_RETRY_MIN_INTERVAL_MS = 2_000;
 
 const USERNAME_UPDATE_FAILED = "Could not update username. Please try again.";
 const RATE_LIMITED = "Too many requests. Please wait a minute and try again.";
@@ -422,6 +424,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [initialCheckDone, setInitialCheckDone] = useState(false);
 
   const lastRefreshStartedAt = useRef(0);
+  // True when the last /api/auth/me attempt ended without an answer
+  // (network error, 429, 5xx, unreadable body). Lets "online" retry at once.
+  const lastRefreshFailed = useRef(false);
   const inFlight = useRef<Promise<void> | null>(null);
   // Bumped by sign-in / sign-up / sign-out so an older in-flight
   // /api/auth/me answer cannot overwrite the new state.
@@ -449,21 +454,28 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           cache: "no-store",
         });
       } catch {
+        lastRefreshFailed.current = true;
         return; // Network error says nothing about the session: keep state.
       }
       if (gen !== generation.current) return;
       if (res.status === 401 || res.status === 403) {
+        lastRefreshFailed.current = false;
         apply({ user: null, profile: null });
         return;
       }
-      if (!res.ok) return; // 429, 5xx, 503 "unavailable": transient, keep state.
+      if (!res.ok) {
+        lastRefreshFailed.current = true;
+        return; // 429, 5xx, 503 "unavailable": transient, keep state.
+      }
       let body: MeResponse;
       try {
         body = (await res.json()) as MeResponse;
       } catch {
+        lastRefreshFailed.current = true;
         return;
       }
       if (gen !== generation.current) return;
+      lastRefreshFailed.current = false;
       apply({
         user: body.user ?? null,
         profile: body.profileError ? undefined : (body.profile ?? null),
@@ -490,16 +502,32 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // Focus catches "my session expired while the tab was in the background"
     // and "I signed out in another tab". Debounced: /api/* shares a 60/min
     // per-IP bucket (app/lib/rateLimit.ts), and a focus burst must not use it up.
+    const isOffline = () => typeof navigator !== "undefined" && navigator.onLine === false;
     const onFocus = () => {
       if (document.visibilityState !== "visible") return;
+      // Offline: the request would fail and use up the 30 s window. "online" retries.
+      if (isOffline()) return;
       if (Date.now() - lastRefreshStartedAt.current < FOCUS_REFRESH_MIN_INTERVAL_MS) return;
       void refreshSession();
     };
+    // Connection back (typical on a phone after the radio reconnects): retry at
+    // once if the last check failed, otherwise the normal 30 s limit applies.
+    const onOnline = () => {
+      if (document.visibilityState !== "visible") return;
+      const elapsed = Date.now() - lastRefreshStartedAt.current;
+      const minInterval = lastRefreshFailed.current
+        ? ONLINE_RETRY_MIN_INTERVAL_MS
+        : FOCUS_REFRESH_MIN_INTERVAL_MS;
+      if (elapsed < minInterval) return;
+      void refreshSession();
+    };
     window.addEventListener("focus", onFocus);
+    window.addEventListener("online", onOnline);
 
     return () => {
       cancelled = true;
       window.removeEventListener("focus", onFocus);
+      window.removeEventListener("online", onOnline);
     };
   }, [refreshSession]);
 
@@ -691,20 +719,22 @@ export function useAuth() {
 
 Server messages from `/api/profile` are fixed strings (step 4a), so `updateUsername` may pass them through. The proxy's 429 is `text/plain`, which is why 429 is handled before `readErrorMessage`.
 
-### Step 6. Header: signed-out UI by default (F124)
+### Step 6. Header: no skeleton, neutral placeholder while the first check is pending (F124)
 
-`frontend/app/components/Header.tsx`:
+`frontend/app/components/Header.tsx`. The rule: while the first `/api/auth/me` check is pending (`loading` is true), render the signed-out "Sign In / Sign Up" block but invisible (`invisible` class plus `aria-hidden`), so the slot already has its final width and nothing pulses. Once the check settles, show the avatar for `"authenticated"` and the visible "Sign In / Sign Up" block otherwise (`"anonymous"`, or `"unknown"` after a failed first check, where we cannot know better). Do not show visible "Sign In / Sign Up" while `loading` is true: most hard loads by signed-in users would then flash "Sign In" for a few hundred ms, and they could click it while already signed in (F124 re-verification). Do not read `cookies()` in `app/layout.tsx` to render the auth state on the server either: that makes every public page dynamic.
 
 6a. The first line of `Header()` (`:45` on HEAD; WP03 kept the same text): replace `const { user, profile, loading, signOut } = useAuth();` with:
 
 ```tsx
-  const { user, profile, sessionStatus, signOut } = useAuth();
-  // Signed-out UI is the default while the session is unknown: most visitors
-  // are anonymous, and a skeleton here flashed on every page (review F124).
+  const { user, profile, loading, sessionStatus, signOut } = useAuth();
+  // No skeleton (review F124). While the first session check is pending the
+  // signed-out buttons render invisible, so the slot keeps its width and a
+  // signed-in user never sees "Sign In" flash.
   const signedIn = sessionStatus === "authenticated" && user !== null;
+  const authPending = loading && !signedIn;
 ```
 
-Keep every line WP03 added after it (the four refs, both effects). `loading` is no longer read anywhere in `Header.tsx` after 6b and 6c; if `grep -n "loading" app/components/Header.tsx` still shows a use, stop and report it.
+Keep every line WP03 added after it (the four refs, both effects).
 
 6b. Desktop auth slot (`:117-119` on HEAD, about 20 lines later after WP03). Replace
 
@@ -719,6 +749,23 @@ with
 ```tsx
             {signedIn && user ? (
 ```
+
+Then, in the signed-out branch of the same slot (the `) : (` branch after the dropdown, `:185` on HEAD), replace its opening line
+
+```tsx
+              <div className="flex items-center gap-3">
+```
+
+with
+
+```tsx
+              <div
+                className={`flex items-center gap-3${authPending ? " invisible" : ""}`}
+                aria-hidden={authPending ? true : undefined}
+              >
+```
+
+(`className="flex items-center gap-3"` occurs exactly once in `Header.tsx`; check with `grep -c` before editing.)
 
 6c. Mobile auth slot (`:250-255` on HEAD, about 20 lines later after WP03). Replace
 
@@ -737,9 +784,26 @@ with
             {signedIn && user ? (
 ```
 
-(`&& user` keeps TypeScript's narrowing of `user` for the two `user.email` reads inside those branches.) Change nothing else in the file. `displayName` at `:73` now shows the username because `profile` is finally populated.
+Then replace the opening line of that slot's signed-out branch (`:288` on HEAD)
 
-6d. `app/components/__tests__/Header.test.tsx` (WP03; skip only if check 5 showed it missing): in its `MockAuth` type add `sessionStatus: "unknown" | "anonymous" | "authenticated";`, in the `beforeEach` default set `sessionStatus: "anonymous"`, and in the "Header user dropdown" `beforeEach` add `sessionStatus: "authenticated"`. If WP03 guessed other literal values (for example `"signed-in"`), replace them with these. Keep `loading` in the mock; it is harmless. Without this step the two "Header user dropdown" cases fail, because the avatar button now renders only for `"authenticated"`.
+```tsx
+              <div className="grid grid-cols-2 gap-3 px-3">
+```
+
+with
+
+```tsx
+              <div
+                className={`grid grid-cols-2 gap-3 px-3${authPending ? " invisible" : ""}`}
+                aria-hidden={authPending ? true : undefined}
+              >
+```
+
+(`&& user` keeps TypeScript's narrowing of `user` for the two `user.email` reads inside those branches. `invisible` is Tailwind's `visibility: hidden`: the links keep their layout box but cannot be seen, clicked or tabbed to.) Change nothing else in the file. `displayName` at `:73` now shows the username because `profile` is finally populated. Afterwards `grep -c "animate-pulse" app/components/Header.tsx` must print `0`.
+
+Optional, not part of this package: a non-HttpOnly, non-secret hint cookie (for example `pf_auth=1`, set at sign-in and cleared at sign-out) could pick the placeholder shape (avatar-sized versus button-sized). Do not add it here; list it in the PR as a possible follow-up.
+
+6d. `app/components/__tests__/Header.test.tsx` (WP03; skip only if check 5 showed it missing): in its `MockAuth` type add `sessionStatus: "unknown" | "anonymous" | "authenticated";`, in the `beforeEach` default set `sessionStatus: "anonymous"`, and in the "Header user dropdown" `beforeEach` add `sessionStatus: "authenticated"`. If WP03 guessed other literal values (for example `"signed-in"`), replace them with these. Keep `loading: false` in the mock: the Header now reads `loading`, and with `loading: true` the signed-out links are `aria-hidden`, so `getByRole("link", { name: "Sign In" })` would fail. Without this step the two "Header user dropdown" cases fail, because the avatar button now renders only for `"authenticated"`.
 
 ### Step 7. Account page: server-side username write, edit-safe field, correct redirect (F001, F058, F063)
 
@@ -1012,11 +1076,12 @@ Do not edit `app/lib/exchangeRate.ts` or `app/lib/clientMarketData.ts`. F106's n
 - **Do not map every `getUser()` error to `{ user: null }` in the routes.** That is today's bug moved server-side: a GoTrue outage would sign everyone out. Use `isAuthoritativeSignedOut` (step 2).
 - **Do not debounce explicit refreshes.** Only the focus handler is rate-limited; the "Try again" button and the refresh after sign-in must always fetch.
 - **Do not skip the visibility check** on the focus handler (F063 verifier): `focus` can fire for a hidden document on some platforms.
+- **Do not refresh on focus while `navigator.onLine` is `false`, and do not drop the `online` listener.** An offline focus refresh fails, keeps the state, and then blocks the next focus refresh for 30 s; the `online` handler is what re-checks the session as soon as the connection returns (F063 re-verification).
 - **Do not seed the username with `useEffect` + `setState`** (current lint error `react-hooks/set-state-in-effect`) or by reading a ref during render (`react-hooks/refs`). Use the `usernameDraft` pattern from step 7c.
 - **Do not echo Supabase or PostgREST `error.message` to the client** (F001 verifier correction c). `/api/profile` returns only the fixed strings in step 4a; the old `setUsernameError(error.message)` at `account/page.tsx:74` goes away.
 - **Do not accept any field but `username` in `PATCH /api/profile`, and do not upsert or insert a `profiles` row there.** Profile rows are created only by the `on_auth_user_created` trigger (migration 0004, audit M-10); WP21 later restricts column updates further.
-- **Do not remove `loading` from the context.** WP03's Header test and the account, portfolio and reset-password pages read it. Its meaning is unchanged.
-- **Do not keep a skeleton in the Header** for the `"unknown"` state. Signed-out UI is the default (F124).
+- **Do not remove `loading` from the context.** The Header (step 6), WP03's Header test and the account, portfolio and reset-password pages read it. Its meaning is unchanged.
+- **Do not keep a pulsing skeleton in the Header, and do not show visible "Sign In / Sign Up" while `loading` is true.** The first flashes on every hard load for everyone; the second flashes the wrong UI to every signed-in user (F124 re-verification). Use the invisible, `aria-hidden` signed-out block from step 6 while `loading`, and do not read `cookies()` in `app/layout.tsx` (it would make every public page dynamic).
 - **Do not delete `app/lib/supabase.ts`** or touch `app/lib/portfolio.ts`, `useBoxRecipes.ts`, `usePortfolioData.ts`, `BoxCalculator.tsx` or `EditHoldingModal.tsx`. Public reads (`clientMarketData.ts`, `exchangeRate.ts`, the `get_shared_recipe` RPC) legitimately stay on the anon client, and portfolio and recipes are WP05 and WP06. Switching those hooks from `user` to `user?.id` dependencies is also theirs; this package already stops the identity churn at the source.
 - **Do not change login redirect URLs or query parameters** (`/auth/login`, `?redirect=/portfolio`). WP13 (F002) reconciles `redirect` and `next`.
 - **Do not touch password reset.** Keep WP02's `POST /api/auth/forgot-password` route and `resetPassword` body exactly (URL, captcha token, fixed `redirectTo`); only wrap it in `useCallback`. Do not create `app/api/auth/reset-password/route.ts` (nothing would call it), and do not add an app-side Turnstile `siteverify` call (F019 verifier: tokens are single use and Supabase is the only verifier).
@@ -1046,6 +1111,7 @@ Remove the `lib/supabase` mock and the `mockFrom`/`mockSelect`/`mockEq`/`mockMay
 - `profileError: true` keeps the previous profile for the same user.
 - Focus debounce: a focus 10 s after boot does not fetch; a focus 31 s after boot fetches once; two focus events in the same tick produce one fetch; a focus while `document.visibilityState` is `"hidden"` does not fetch.
 - `refreshSession()` called directly 1 s after boot does fetch (not debounced).
+- Offline and `online` (F063 re-verification): with `navigator.onLine` `false`, a focus 31 s after boot does not fetch. Boot with a network rejection, then (`now += 5_000`, fetch now returning `ME_SIGNED_IN`) dispatch `new Event("online")` inside `act`: one more `/api/auth/me` call, and after `await flush()` the status is `"authenticated"`. After a successful boot, an `online` event 5 s later does not fetch, and one 31 s later fetches once. An `online` event while `document.visibilityState` is `"hidden"` does not fetch.
 - Identity: after a focus refresh returning an equal but freshly parsed payload, the consumer does not re-render and `user`/`profile` are the same references.
 - signIn: POSTs with CSRF header (find the call by URL, because a `/api/auth/me` refresh now follows), sets `"authenticated"` immediately, then the profile from the follow-up `/api/auth/me` appears.
 - signIn while the boot refresh is still pending and that boot refresh later resolves `{ user: null }`: the state stays `"authenticated"` (generation guard).
@@ -1112,6 +1178,8 @@ beforeEach(() => {
   now = 1_000_000;
   jest.spyOn(Date, "now").mockImplementation(() => now);
   Object.defineProperty(document, "visibilityState", { configurable: true, get: () => "visible" });
+  // Reset every test: restoreAllMocks does not undo defineProperty.
+  Object.defineProperty(window.navigator, "onLine", { configurable: true, get: () => true });
 });
 
 afterEach(() => {
@@ -1255,7 +1323,7 @@ describe("generation guard", () => {
 });
 ```
 
-Write the remaining cases (signUp, signOut, updatePassword, resetPassword, updateUsername, profileError, context surface, "two focus events in one tick produce one fetch", "`refreshSession()` is not debounced") in the same style. For the "two focus events" case, make the `/api/auth/me` mock return a promise you resolve manually, dispatch `focus` twice inside one `act`, then assert `meCalls()` is 2 (boot plus one).
+Write the remaining cases (signUp, signOut, updatePassword, resetPassword, updateUsername, profileError, context surface, "two focus events in one tick produce one fetch", "`refreshSession()` is not debounced", the offline and `online` cases) in the same style. For the offline case set `Object.defineProperty(window.navigator, "onLine", { configurable: true, get: () => false })` before `focusAfter`; dispatch `online` with `await act(async () => { window.dispatchEvent(new Event("online")); })`. For the "two focus events" case, make the `/api/auth/me` mock return a promise you resolve manually, dispatch `focus` twice inside one `act`, then assert `meCalls()` is 2 (boot plus one).
 
 ### 2. `frontend/app/api/auth/me/__tests__/route.test.ts` (new)
 
@@ -1413,12 +1481,14 @@ jsdom (no docblock). Mock `next/navigation` (`useRouter: () => ({ push: mockPush
 
 ### 6. `frontend/app/components/__tests__/Header.auth.test.tsx` (new; separate from WP03's `Header.test.tsx` to avoid merge conflicts)
 
-Copy the `next/navigation` and `next/link` mocks from WP03's `app/components/__tests__/Header.test.tsx` verbatim, and mock `../../context/AuthContext` with `useAuth: () => mockAuth` where `mockAuth` has `user`, `profile`, `sessionStatus`, `loading: false` and `signOut: jest.fn()`. Cases:
+Copy the `next/navigation` and `next/link` mocks from WP03's `app/components/__tests__/Header.test.tsx` verbatim, and mock `../../context/AuthContext` with `useAuth: () => mockAuth` where `mockAuth` has `user`, `profile`, `sessionStatus`, `loading` (default `false`) and `signOut: jest.fn()`. Cases:
 
-- `sessionStatus: "unknown", user: null`: "Sign In" and "Sign Up" links are present, and `container.querySelector(".animate-pulse")` is null (F124).
-- `sessionStatus: "anonymous"`: same.
-- `sessionStatus: "authenticated"`, `user: { id: "u1", email: "ash@example.com" }`, `profile: { id: "u1", username: "ash", email: "ash@example.com" }`: a button with accessible name matching `/ash/` exists and no link named "Sign In" is present.
-- `sessionStatus: "unknown"` with that same non-null `user` (cannot happen in the real provider, but guards the `signedIn` check): "Sign In" is shown, not the avatar button.
+- `sessionStatus: "unknown", user: null, loading: true` (first check pending): `container.querySelector(".animate-pulse")` is null; `screen.queryByRole("link", { name: "Sign In" })` is null (the block is `aria-hidden`); `screen.getByText("Sign In").closest('[aria-hidden="true"]')` is not null and has class `invisible`; no avatar button (F124).
+- `sessionStatus: "unknown", user: null, loading: false` (first check failed): "Sign In" and "Sign Up" links are present via `getByRole("link", ...)`, and no ancestor of them has `aria-hidden="true"` or class `invisible`.
+- `sessionStatus: "anonymous", loading: false`: same as the previous case.
+- `sessionStatus: "authenticated"`, `loading: false`, `user: { id: "u1", email: "ash@example.com" }`, `profile: { id: "u1", username: "ash", email: "ash@example.com" }`: a button with accessible name matching `/ash/` exists and `screen.queryByText("Sign In")` is null.
+- `sessionStatus: "authenticated"` with that user and `loading: true` (sign-in finished before the boot check): the avatar button is shown, not the placeholder.
+- `sessionStatus: "unknown"` with that same non-null `user` and `loading: false` (cannot happen in the real provider, but guards the `signedIn` check): "Sign In" is shown, not the avatar button.
 
 ### 7. (none)
 
@@ -1469,6 +1539,8 @@ grep -n "lib/supabase\|supabase\.from\|supabase\.auth" app/context/AuthContext.t
 # Header has no auth skeleton.
 grep -n "loading ?" app/components/Header.tsx
 # expect: no output
+grep -c "animate-pulse" app/components/Header.tsx
+# expect: 0
 
 # Full lint: E in "✖ N problems (E errors, W warnings)" must be exactly one lower
 # than the baseline you recorded in "Before you start" check 6 (the account/page.tsx
@@ -1492,11 +1564,11 @@ pnpm build:stub
 
 Manual checks (local, needs a real Supabase project in `.env.local`; skip if you have none and list them in the PR for the owner):
 
-1. `pnpm dev`, open `/` in a private window while signed out. The header shows "Sign In" and "Sign Up" on first paint, with no grey pulsing circle at any point (throttle to "Slow 4G" in DevTools to make a flash visible).
+1. `pnpm dev`, open `/` in a private window while signed out, with DevTools throttled to "Slow 4G" so the first check is slow. The desktop auth slot is empty (no grey pulsing circle) until `/api/auth/me` answers, then "Sign In" and "Sign Up" appear without the nav shifting. Sign in, then hard-reload `/` with the same throttling: "Sign In" never flashes before your username appears.
 2. Sign in. The header shows the username (not the email prefix). DevTools Network shows `GET /api/auth/me` returning `{ user, profile }` and no request to `/rest/v1/profiles` from the browser.
 3. On `/account`, type a new username, switch to another window for 35 s, come back. The typed text is still there. Save it: "Username updated successfully!", the header updates without a reload, and the request is `PATCH /api/profile` with status 200.
 4. Save a username another account already uses: the page shows "Username is taken".
-5. On `/portfolio`, set DevTools to Offline, switch windows for 35 s and come back. You stay on `/portfolio`, the header still shows you signed in, and the console shows a failed `/api/auth/me`. Go back online and focus again after 30 s: `/api/auth/me` returns 200.
+5. On `/portfolio`, set DevTools to Offline, switch windows for 35 s and come back. You stay on `/portfolio`, the header still shows you signed in, and no `/api/auth/me` request is sent while offline. Set DevTools back to Online: one `GET /api/auth/me` fires on its own and returns 200.
 6. Focus the window several times within 30 s: at most one `/api/auth/me` request.
 7. Sign out in a second tab, wait 30 s, focus the first tab on `/account`: it redirects to `/auth/login`.
 8. Request a password reset from `/auth/forgot-password`: the request is `POST /api/auth/forgot-password` (unchanged from WP02) and the success message appears.
@@ -1514,10 +1586,10 @@ No migrations and no environment variables. After the deploy that contains this 
 - [ ] `app/context/AuthContext.tsx` and `app/account/page.tsx` contain no import of `app/lib/supabase` and no `supabase.` call; ESLint fails if one is added.
 - [ ] `GET /api/auth/me` returns `{ user, profile }` for a signed-in user, `{ user: null, profile: null }` with 200 for an anonymous one, and 503 for network, 5xx and 429 failures from GoTrue, always with `Cache-Control: no-store`.
 - [ ] `PATCH /api/profile` rejects missing CSRF header or bad Origin with 403, invalid usernames with 400, no session with 401, a taken name with 409 `"Username is taken"`, and never returns a Supabase error message.
-- [ ] The header shows the username for a signed-in user and shows "Sign In / Sign Up" (no skeleton) while the session is unknown or anonymous.
+- [ ] The header shows the username for a signed-in user. While the first check is pending it shows no skeleton and no visible "Sign In / Sign Up" (the signed-out block renders `invisible` and `aria-hidden`); after it settles it shows "Sign In / Sign Up" for `"anonymous"` and for `"unknown"`.
 - [ ] A network error, 429 or 5xx on `/api/auth/me` never changes `user`, `profile` or `sessionStatus`; a 401/403 or `{ user: null }` sets `"anonymous"`.
 - [ ] `/account` and `/portfolio` redirect to login only when `sessionStatus === "anonymous"`, and show a "Try again" panel instead when the first check failed.
-- [ ] A focus refresh happens at most once per 30 s and only when the document is visible; an unchanged answer causes no consumer re-render.
+- [ ] A focus refresh happens at most once per 30 s, only when the document is visible and `navigator.onLine` is not `false`; an `online` event re-checks at once after a failed check; an unchanged answer causes no consumer re-render.
 - [ ] An unsaved username edit survives a focus refresh.
 - [ ] The account username field uses `autoComplete="nickname"`, `maxLength={USERNAME_MAX_LENGTH}` and WP02's `USERNAME_HINT`; the rules message is WP02's `USERNAME_FORMAT_MESSAGE` in both the page and `PATCH /api/profile`.
 - [ ] `updatePassword(newPassword, currentPassword?)` still sends `{ password, currentPassword }` exactly as WP02 left it, and `/account` still passes the current password.
@@ -1547,7 +1619,9 @@ anon and RLS rejected them for every signed-in user (review F001, part 1).
   unknown|anonymous|authenticated changes only on authoritative answers;
   focus refresh debounced to 30 s and skipped when hidden; stable
   identities and a memoized context value (F058, F063).
-- Header defaults to the signed-out UI instead of a skeleton (F124).
+- Header: no skeleton; the signed-out block renders invisible until the
+  first check settles, so signed-in users never see "Sign In" flash (F124).
+- Focus refresh skipped while offline; an "online" event re-checks (F063).
 - /account keeps unsaved username edits across refreshes; /account,
   /portfolio and /auth/reset-password redirect or declare the link invalid
   only on an authoritative "anonymous".
@@ -1556,4 +1630,4 @@ anon and RLS rejected them for every signed-in user (review F001, part 1).
 
 PR title: `fix(auth): restore profile and username for signed-in users; stop transient sign-outs (WP04)`
 
-PR body summary: link this spec; list findings F001 (part 1), F058, F063, F124; state that F106's exchange-rate note is left to WP11 (F150); state that WP02's `resetPassword(email, captchaToken?)` and `updatePassword(newPassword, currentPassword?)` bodies and signatures were kept unchanged (WP02 asks for this sentence); state that profile-read failures are now logged server-side as `profile_fetch_failed` through `logSupabaseError`, which WP17 wires to Sentry (F001 verifier: failures must not stay silent in the browser console); paste the Verification command outputs; list the Owner actions above; note follow-ups for WP05/WP06 (append their files to `ANON_CLIENT_FORBIDDEN_FILES`, key `usePortfolioData`/`useBoxRecipes` on `user?.id`) and WP13 (login return-to parameter). Also note, as an open item for the owner, that the F001 verifiers asked for a signed-in end-to-end smoke test against a real Supabase test project (sign in through `/api/auth/sign-in`, then expect 200 from `/api/auth/me` with a non-null `profile`); no package in the plan adds it because CI has no Supabase test project.
+PR body summary: link this spec; list findings F001 (part 1), F058, F063, F124; state that F106's exchange-rate note is left to WP11 (F150); state that WP02's `resetPassword(email, captchaToken?)` and `updatePassword(newPassword, currentPassword?)` bodies and signatures were kept unchanged (WP02 asks for this sentence); state that profile-read failures are now logged server-side as `profile_fetch_failed` through `logSupabaseError`, which WP17 wires to Sentry (F001 verifier: failures must not stay silent in the browser console); paste the Verification command outputs; list the Owner actions above; note two optional follow-ups not done here (skip the proxy's `getUser()` for `GET /api/auth/me` only; a non-secret `pf_auth=1` hint cookie to shape the header placeholder); note follow-ups for WP05/WP06 (append their files to `ANON_CLIENT_FORBIDDEN_FILES`, key `usePortfolioData`/`useBoxRecipes` on `user?.id`) and WP13 (login return-to parameter). Also note, as an open item for the owner, that the F001 verifiers asked for a signed-in end-to-end smoke test against a real Supabase test project (sign in through `/api/auth/sign-in`, then expect 200 from `/api/auth/me` with a non-null `profile`); no package in the plan adds it because CI has no Supabase test project.

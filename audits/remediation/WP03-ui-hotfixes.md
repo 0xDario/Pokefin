@@ -2,9 +2,9 @@
 
 - **Findings covered**
   - F022 (full, cluster members F008, F022): the mobile header menu cannot be closed with its own X button (the document `mousedown` handler closes it, the button's `click` re-opens it); neither header menu closes on Escape; neither toggle exposes `aria-expanded`; the hamburger's focus ring is removed and its screen-reader label always says "Open main menu".
-  - F032 (full, cluster members F032, F090 toast part only): a fixed blue "Loading price history..." toast paints over the right side of the sticky header on `/prices` and flickers on and off for the whole scroll.
-  - F151 (partial, cluster members F151, F123): only the user-facing copy. Six strings promise "refreshed hourly" while the scraper updates each product about once a day. Revalidation, cache TTLs and the scrape webhook are WP11.
-- **Priority rationale**: these are the three most visible defects on the two busiest surfaces (every page's header on phones, and the `/prices` catalog), each is a small contained edit, and they are independent of the auth and data work.
+  - F032 (full, severity medium, cluster members F032, F090 toast part only): a fixed blue "Loading price history..." toast paints over the right side of the sticky header on `/prices` and reappears each time a batch of history fetches is in flight while scrolling. It has no `pointer-events-none`, so a tap on the covered control hits the toast instead.
+  - F151 (partial, severity low, cluster members F151, F123): only the user-facing copy. Six strings promise "refreshed hourly" while the scraper updates each product about once a day. Revalidation, cache TTLs and the scrape webhook are WP11.
+- **Priority rationale**: these are the three most visible defects on the two busiest surfaces (every page's header on phones, and the `/prices` catalog), each is a small contained edit, and they are independent of the auth and data work. F032 is medium, not high: the toast is intermittent (up only while a fetch batch runs, roughly 0.3 to 1 s per batch on 4G) and on viewports about 1728 px and wider it lands on empty header space. F151 is low as a performance issue (revalidation runs in the background), but its copy half stays mandatory: honest daily wording is a core trust principle of Track 2 (`01-PRODUCT-DIRECTION.md` section 2, principle 3 "Honest about cadence").
 - **Effort**: S, about 2 hours including the new Header test.
 - **Depends on**: WP00 (for `pnpm build:stub` in Verification). If WP00 has not merged, skip the `build:stub` checks and say so in the PR body; nothing else in this package needs WP00.
 - **Unblocks**: WP08 (hard dependency in the plan: it rewrites `ProductPrices/index.tsx` and assumes the toast and the `historyLoading,` destructure line are gone). Soft: WP04 (edits `Header.tsx` on top of this PR's refs and effects and extends this PR's `Header.test.tsx` mock with `sessionStatus`), WP09 (removes the per-card `historyLoading` prop after this PR removed the hook-level one), WP11 and WP13 (keep the "updated daily" strings written here), WP14 (the header items of F030/F094 are done here, so WP14 covers only the Portfolio modals and form labels and does not touch `Header.tsx`).
@@ -13,7 +13,7 @@
 
 ## Why
 
-On every phone the hamburger turns into an X that does nothing when tapped: the menu flickers and stays open, and the only way out is to tap the page behind it or pick a link. Keyboard users get no visible focus on that button, cannot close either header menu with Escape, and screen readers are never told whether a menu is open. On `/prices`, every card that scrolls into view starts a history fetch, and while any fetch is in flight a bright blue box appears at the top right of the screen, covering the Sign Up button or account menu (desktop) and the hamburger (mobile); it pops in and out for the entire scroll even though each card already shows its own sparkline skeleton. Finally, the site tells users and search engines in six places that prices are "refreshed hourly", but the scraper prices each product at most once per 23 hours, so a user comparing against TCGPlayer at 2 pm is looking at a price from early morning. After this PR the X closes the menu, Escape works and returns focus, the toggles announce their state, the toast is gone, and the copy says "updated daily".
+On every phone the hamburger turns into an X that does nothing when tapped: the menu flickers and stays open, and the only way out is to tap the page behind it or pick a link. Keyboard users get no visible focus on that button, cannot close either header menu with Escape, and screen readers are never told whether a menu is open. On `/prices`, every card that scrolls into view starts a history fetch, and while any fetch is in flight a bright blue box appears at the top right of the screen, covering the Sign In / Sign Up buttons or account menu (laptops narrower than about 1728 px) and the hamburger (mobile), and swallowing taps on them; it pops in and out with each batch of fetches during the scroll even though each card already shows its own sparkline skeleton. Finally, the site tells users and search engines in six places that prices are "refreshed hourly", but the scraper prices each product at most once per 23 hours, so a user comparing against TCGplayer at 2 pm is looking at a price from early morning. After this PR the X closes the menu, Escape works and returns focus, the toggles announce their state, the toast is gone, and the copy says "updated daily".
 
 ## Before you start
 
@@ -39,6 +39,7 @@ grep -n 'focus:outline-none p-2' app/components/Header.tsx                  # ex
 grep -rn 'Loading price history' app                                        # expect 2: ProductPrices/index.tsx:242 (the toast) and MarketView/MarketView.tsx:569 (an inline expanded-row placeholder on /market; it stays)
 grep -rn 'historyLoading' app --include=*.ts --include=*.tsx                # expect 10 hits: useProductData.ts:178,184; index.tsx:100,236,256,288,323; ProductCard.tsx:19,60; RecentlyReleased.tsx:55
 grep -rn 'refreshed hourly' app                                             # expect exactly 6: Footer.tsx:89,111; page.tsx:207; prices/page.tsx:27; layout.tsx:29,33
+grep -n 'TCGPlayer' app/layout.tsx app/components/Footer.tsx app/page.tsx app/prices/page.tsx   # expect exactly 6: layout.tsx:29,33; Footer.tsx:89,111; page.tsx:208; prices/page.tsx:27 (the same six strings)
 ls app/components/__tests__/Header.test.tsx 2>&1                            # expect "No such file"
 pnpm exec eslint app/components/Header.tsx app/components/ProductPrices/index.tsx app/components/ProductPrices/hooks/useProductData.ts app/components/Footer.tsx app/layout.tsx app/page.tsx app/prices/page.tsx   # expect no output (clean baseline)
 pnpm test --ci 2>&1 | grep -E '^Test Suites:|^Tests:'                        # write both lines down; Verification compares against them
@@ -239,15 +240,17 @@ Run `grep -n useMemo app/components/ProductPrices/hooks/useProductData.ts` first
 
 ### 5. Correct the refresh-cadence copy (six strings, five files)
 
-The wording is "updated daily" everywhere. Rationale: `main.py:1082` only re-prices a product whose last update is more than 23 hours old, and production runs the scraper every 4 hours (host cron `0 */4 * * *` calling `--run-now`, documented in the comment at `main.py:1069-1073`; the in-process scheduler at `main.py:1528-1538` uses the same 4-hour boundaries), so any given price changes once a day. "Several times a day" would be wrong for any single product.
+The wording is "updated daily" everywhere. Rationale: `main.py:1082` only re-prices a product whose last update is more than 23 hours old, and production runs the scraper every 4 hours (host cron `0 */4 * * *` calling `--run-now`, documented in the comment at `main.py:1069-1073`; the in-process scheduler at `main.py:1528-1538` uses the same 4-hour boundaries), so any given price changes once a day. "Several times a day" would be wrong for any single product (the catalog as a whole changes up to 6 times a day, but a reader applies the sentence to the price in front of them), and Track 2 standardises on daily wording (`01-PRODUCT-DIRECTION.md` section 2, principle 3).
+
+Spell the source "TCGplayer" (lower-case p) in every string this step writes. That is how the company styles its name, and Track 2 bans "TCGPlayer" in UI copy (`01-PRODUCT-DIRECTION.md` section 3.7 "Brand and voice"; `research/trust-seo-brand.md` section 3 "Corrections to the existing plan", row "WP03 / WP15 copy"). Writing it correctly now avoids a second edit of the same six strings later. Change the spelling only inside these six strings: the other `TCGPlayer` occurrences in `frontend/app` ("View on TCGPlayer" links in `ProductCard.tsx`, `MarketView.tsx` and `product/[id]/page.tsx`, and code comments in `marketPulse.ts`, `marketData.ts` and tests) are outside this package.
 
 5a. `frontend/app/layout.tsx:29` and `:33` (the `description` and `openGraph.description` strings, currently identical). Replace both string literals with:
 
 ```ts
-      "Get up-to-date Pokémon sealed product prices, updated daily from TCGPlayer. Track the latest market trends and values for Pokémon TCG sealed items.",
+      "Get up-to-date Pokémon sealed product prices, updated daily from TCGplayer. Track the latest market trends and values for Pokémon TCG sealed items.",
 ```
 
-(Only `refreshed hourly` becomes `updated daily`; keep each line's existing indentation. WP13 owns any wider metadata rewrite.)
+(Two changes per string: `refreshed hourly` becomes `updated daily`, and `TCGPlayer` becomes `TCGplayer`. Keep each line's existing indentation. WP13 owns any wider metadata rewrite.)
 
 5b. `frontend/app/page.tsx:205-209`. Replace the whole `<p className="mt-2 text-slate-600">` element with:
 
@@ -255,7 +258,7 @@ The wording is "updated daily" everywhere. Rationale: `main.py:1082` only re-pri
           <p className="mt-2 text-slate-600">
             Track market prices, returns, and trends across{" "}
             {products.length} sealed Pokémon TCG products, with prices
-            updated daily from TCGPlayer.
+            updated daily from TCGplayer.
           </p>
 ```
 
@@ -264,19 +267,19 @@ The wording is "updated daily" everywhere. Rationale: `main.py:1082` only re-pri
 5c. `frontend/app/prices/page.tsx:27`. Replace the line with:
 
 ```tsx
-          {products.length} products tracked · prices updated daily from TCGPlayer.
+          {products.length} products tracked · prices updated daily from TCGplayer.
 ```
 
 5d. `frontend/app/components/Footer.tsx:89` (inside the About `<p className="text-sm text-slate-600 leading-relaxed">`). Replace the text line with:
 
 ```tsx
-              Sealed Pokémon TCG market data, with prices updated daily from TCGPlayer.
+              Sealed Pokémon TCG market data, with prices updated daily from TCGplayer.
 ```
 
 5e. `frontend/app/components/Footer.tsx:111`. Replace with:
 
 ```tsx
-            <span>Prices updated daily from TCGPlayer</span>
+            <span>Prices updated daily from TCGplayer</span>
 ```
 
 After step 5, `grep -rni 'hourly' app --include=*.ts --include=*.tsx | grep -v __tests__` must show exactly one line: the code comment at `app/components/ProductPrices/hooks/useVolumeMetrics.ts:56` (not user-facing; leave it).
@@ -294,6 +297,7 @@ After step 5, `grep -rni 'hourly' app --include=*.ts --include=*.tsx | grep -v _
 - Do not remove `loadingProductIds`, the per-card `historyLoading` prop on `ProductCard` (`ProductCard.tsx:19,60`) or the `historyLoading={loadingProductIds.includes(product.id)}` props at `index.tsx:256,288,323` and `RecentlyReleased.tsx:55`. The prop is currently unused inside `ProductCard`, but per-card loading state is WP09's (F070) and WP19's (F125) territory; removing it here causes merge conflicts for no user benefit.
 - Do not replace the toast with another global indicator in this PR. The F032 verifier's correction is "remove the global toast; per-card sparkline skeletons already communicate loading". A thin progress bar (below the header, 300 ms show delay) is only acceptable if a later package asks for it.
 - Do not write "several times a day", "every 4 hours" or "real-time" in the copy. Each product is re-priced at most once per 23 hours (`main.py:1082`); only "daily" is true for a given price. Do not change any `revalidate` value, add `revalidateTag`, or touch `serverMarketData.ts` / `clientMarketData.ts`: that is WP11 (rest of F151, F123).
+- Do not write "TCGPlayer" in the six new strings, and do not respell `TCGPlayer` anywhere else (link labels, code comments, identifiers, tests). Only the six strings in step 5 change in this PR.
 - Do not change code comments that mention hours (`useVolumeMetrics.ts:56` "hourly", `PriceChart.tsx:200` "every hour", `clientMarketData.ts:42`); they describe code, not user copy.
 - Do not touch the "Loading price history..." text at `MarketView/MarketView.tsx:569`. It is an inline placeholder inside an expanded table row on `/market`, not a fixed toast, and it is outside F032.
 - Do not use `focus:outline-none` on the two toggles you edit; use `focus:outline-hidden` (see 2b). Do not sweep `outline-none` elsewhere in the app in this PR.
@@ -552,6 +556,8 @@ pnpm test --ci app/components/__tests__/Header.test.tsx 2>&1 | grep -E '^Tests:'
 
 grep -rn 'refreshed hourly' app                         # expect: no output
 grep -rn 'updated daily' app | wc -l                    # expect: 6
+grep -rn 'updated daily from TCGplayer' app | wc -l     # expect: 6
+grep -n 'TCGPlayer' app/layout.tsx app/components/Footer.tsx app/page.tsx app/prices/page.tsx   # expect: no output
 grep -rn 'Loading price history' app/components/ProductPrices   # expect: no output
 grep -rn 'Loading price history' app                    # expect exactly 1 line: MarketView/MarketView.tsx:569 (stays)
 grep -rn 'historyLoading' app --include=*.ts --include=*.tsx
@@ -576,7 +582,7 @@ Manual checks (use `pnpm dev` with a real `.env.local` if you have one, otherwis
 3. Screen reader label: with the panel open, inspect the button in DevTools, Accessibility pane: name "Close main menu", "Expanded: true". Closed: "Open main menu", "Expanded: false".
 4. Desktop dropdown (signed in, so this needs a real `.env.local` or the preview URL; window 1280 px wide): click the avatar with the mouse: the menu opens and the avatar shows no ring. Press Escape: the menu closes. In the DevTools console run `document.activeElement.textContent`: it contains the username, which proves focus is on the avatar. Whether the red ring shows at that moment depends on the browser's `:focus-visible` heuristic (Chrome usually shows it after a key press, Safari may not); either is correct, so do not "fix" it. Then press Tab until the avatar is focused from the keyboard: the red ring must be visible. Pressing Escape with the menu closed does nothing.
 5. `/prices` with real data: scroll the full catalog at desktop and at 390 px. No blue box ever appears at the top right; the Sign Up button or avatar and the hamburger stay visible and clickable the whole time. Cards still show the grey pulsing sparkline skeleton, then their sparkline.
-6. Copy: the footer of any page reads "Sealed Pokémon TCG market data, with prices updated daily from TCGPlayer." and "Prices updated daily from TCGPlayer"; `/` hero and `/prices` subheading say "updated daily"; View Source on `/` shows `updated daily` in both `<meta name="description">` and `<meta property="og:description">`.
+6. Copy: the footer of any page reads "Sealed Pokémon TCG market data, with prices updated daily from TCGplayer." and "Prices updated daily from TCGplayer"; `/` hero and `/prices` subheading say "updated daily"; View Source on `/` shows `updated daily` in both `<meta name="description">` and `<meta property="og:description">`.
 
 ## Owner actions
 
@@ -592,7 +598,7 @@ None.
 - [ ] No `aria-haspopup`, `role="menu"` or `role="menuitem"` was added.
 - [ ] `grep -rn 'Loading price history' frontend/app/components/ProductPrices` returns nothing (the only remaining hit in `frontend/app` is `MarketView.tsx:569`, which stays), and no fixed-position element appears over the header while scrolling `/prices`.
 - [ ] `useProductData` no longer returns `historyLoading`; `useMemo` is no longer imported there; `loadingProductIds` and the per-card `historyLoading` props are unchanged.
-- [ ] `grep -rn 'refreshed hourly' frontend/app` returns nothing and `grep -rn 'updated daily' frontend/app` returns exactly 6 lines.
+- [ ] `grep -rn 'refreshed hourly' frontend/app` returns nothing and `grep -rn 'updated daily' frontend/app` and `grep -rn 'updated daily from TCGplayer' frontend/app` each return exactly 6 lines, and `layout.tsx`, `Footer.tsx`, `page.tsx` and `prices/page.tsx` contain no `TCGPlayer`.
 - [ ] `app/components/__tests__/Header.test.tsx` exists, passes, and its "closes when the X is tapped" case fails if the `mobileMenuButtonRef` guard is removed.
 - [ ] `tsc --noEmit`, eslint on the changed files, the full Jest suite and `pnpm build:stub` all pass.
 - [ ] No changes to AuthContext, the auth-slot skeleton, cache TTLs, `serverMarketData.ts`, `clientMarketData.ts` or `ProductCard.tsx`.
@@ -621,6 +627,7 @@ fix(ui): closable mobile menu, drop /prices loading toast, "updated daily" copy
 - Copy: "refreshed hourly" -> "updated daily" in the meta description,
   OpenGraph description, home hero, /prices subheading and footer (x2).
   main.py re-prices each product at most once per 23 h (F151, copy only).
+  The same strings spell the source "TCGplayer".
 - Add app/components/__tests__/Header.test.tsx.
 ```
 
@@ -629,7 +636,7 @@ PR title: `fix(ui): closable mobile menu, remove /prices loading toast, accurate
 PR body summary:
 
 - What: WP03 of the remediation plan (`audits/remediation/WP03-ui-hotfixes.md`). Fixes F022 (with F008), F032 (with the toast part of F090), and the copy part of F151.
-- User-visible: the mobile X closes the menu; Escape works on both header menus; no blue toast over the header on `/prices`; copy says prices are updated daily.
+- User-visible: the mobile X closes the menu; Escape works on both header menus; no blue toast over the header on `/prices`; copy says prices are updated daily from TCGplayer (correct spelling of the source).
 - Not in this PR: revalidation and cache TTLs (WP11), auth-slot skeleton (WP04), dialog and label accessibility beyond the header (WP14), per-card loading state (WP09/WP19). F090 also mentions a bare "Found 0 products" empty state and native `alert()`/`confirm()` dialogs; those are outside the F032 cluster's verified scope and are not changed here. Say so in the PR body with their owners: the zero-result empty state is WP13 (F093) and the native dialogs are WP15 (F103).
 - Verification: paste the output of every command in the spec's Verification section and tick the manual checks.
 - Owner actions: none.

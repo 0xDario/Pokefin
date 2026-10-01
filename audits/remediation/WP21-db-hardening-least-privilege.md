@@ -1,10 +1,10 @@
 # WP21: Database hardening, least-privilege scraper role, schema baseline
 
 - **Findings covered**
-  - F133 (full): the `FOR ALL` RLS policies let a signed-in user rewrite `profiles.email`, `created_at` and `updated_at` (and insert or delete their own profile row), store multi-megabyte `box_recipes.packs`, write unbounded `portfolio_lots.notes` and `portfolios.name`, and create unlimited rows. One deliberate remainder: the owner of a portfolio, holding or recipe can still rewrite that row's own `created_at` (plan correction 6).
-  - F081 (full, cluster members F081 and F085): the scraper (`main.py`), the read-only weekly report (`generate_weekly_report.py`), the read-only `compare_prices.py` and, through the shared env file, the SMTP emailer all run with the `sb_secret_` key, which bypasses every RLS policy and unlocks the auth admin API, for jobs that need a few reference-table writes or nothing but public reads.
-  - F135 (full): `schema.sql` and `migrations/` cannot rebuild production. `products.active` is defined nowhere, two legacy functions and a backup table exist only in production, `0003` is not re-runnable, and nothing replays the chain.
-- **Priority rationale**: all three are least-privilege and reproducibility gaps with no user-visible symptom today, so they come last, after the code that reads and writes these tables has settled (WP04 to WP06, WP10, WP16).
+  - F133 (full, severity low): the `FOR ALL` RLS policies let a signed-in user rewrite `profiles.email`, `created_at` and `updated_at` and delete their own profile row (self-only hygiene: no other user sees these values, and a profile INSERT is already blocked by the primary key because the 0004 trigger pre-creates the row), and, the part that matters, store multi-megabyte `box_recipes.packs`, write unbounded `portfolio_lots.notes` and `portfolios.name`, and create unlimited rows by calling PostgREST directly, which `proxy.ts` rate limits do not cover. One deliberate remainder: the owner of a portfolio, holding or recipe can still rewrite that row's own `created_at` (plan correction 6).
+  - F081 (full, cluster members F081 and F085, severity low: the full re-verification downgraded it from medium because exploitation first needs the env file or process environment of one of the owner's two machines): the scraper (`main.py`), the read-only weekly report (`generate_weekly_report.py`), the read-only `compare_prices.py` and, through the shared env file, the SMTP emailer all run with the `sb_secret_` key, which bypasses every RLS policy and unlocks the auth admin API, for jobs that need a few reference-table writes and Storage uploads, or nothing but public reads.
+  - F135 (full, severity low): `schema.sql` and `migrations/` cannot rebuild production. README.md:279-297 already discloses that the directory is not a bootstrap, the two prod-only functions and the non-re-runnable `0003`. Not disclosed anywhere: `products.active` (defined nowhere, yet the cause of 10 of the 14 files out of 25 that fail on a fresh replay), the backup table that `0012:29` needs, the columns the old `schema.sql` lacks (`box_recipes.is_public`, `portfolio_holdings.client_idempotency_key`, `auth_events`), and the false "idempotent and safe to re-run" claim in `HARDENING_FOLLOWUPS.md:21-22`. Nothing replays the chain.
+- **Priority rationale**: all three are low severity. F081 and F135 have no user-visible symptom. F133's only user-visible risk is abuse: one signed-up account could fill the database disk until Supabase makes the project read-only and saves fail for everyone. They come last, after the code that reads and writes these tables has settled (WP04 to WP06, WP10, WP16).
 - **Effort**: L, about 16 to 22 hours of executor time (8 h for the scraper backends and tests, 4 h for the two migrations and their tests, 6 h for the replay harness, baseline and CI, 2 h docs), plus about 2 hours of owner time spread over three sittings.
 - **Depends on**: WP06 (box_recipes route handlers, trigger and `currency` column in migration 0026), WP10 (migrations 0027 to 0029), WP16 (`product_price_pending`, migration 0030, and the rewritten `update_prices`). Also relies on WP04 (`PATCH /api/profile` updates only `username`), WP05 (portfolio route handlers) and WP11 (`run_jobs_once` in `main.py`), all of which precede those.
 - **Unblocks**: nothing in this plan. It closes the plan.
@@ -13,7 +13,7 @@
 
 ## Why
 
-A signed-in user can call PostgREST directly with their own session token, and today RLS is the only thing in the way: it checks which rows they touch but not which columns or how much, so a user can overwrite the email that the GDPR export reports as authoritative, park megabytes of JSON in a recipe, and insert rows without limit. Separately, the scraper on the owner's laptop, the weekly report and the emailer all hold the project's most powerful credential; if that laptop or its env file leaks, every account can be read, deleted or taken over through the auth admin API. Finally, nobody can build a copy of the production database from the repository, so every security migration has been tested only by applying it to production. After this PR the database enforces column, size and row limits, the scraper runs as a login role that can touch only the six tables it writes (with a Storage S3 key for images), the report and `compare_prices.py` read with the public key, and CI rebuilds the whole schema from `migrations/` on every pull request and proves each file can be re-run.
+A signed-in user can call PostgREST directly with their own session token, and today RLS is the only thing in the way: it checks which rows they touch but not which columns or how much, so a user can park megabytes of JSON in a recipe and insert rows without limit (enough, repeated, to fill the database disk for everyone), and can overwrite their own profile email and creation date, which only their own GDPR export shows. Separately, the scraper on the owner's laptop, the weekly report and the emailer all hold the project's most powerful credential; if that laptop or its env file leaks, every account can be read, deleted or taken over through the auth admin API. Finally, nobody can build a copy of the production database from the repository, so every security migration has been tested only by applying it to production. After this PR the database enforces column, size and row limits, the scraper runs as a login role that can touch only the six tables it writes (with a Storage S3 key for images), the report and `compare_prices.py` read with the public key, and CI rebuilds the whole schema from `migrations/` on every pull request and proves each file can be re-run.
 
 ## Before you start
 
@@ -22,7 +22,7 @@ Read these files in full first:
 - `audits/2026-09-25-security-performance-ux-review.md` sections on F081/F085 (search "Scraper, weekly report and emailer"), F133 ("Whole-row writes") and F135 ("Migration chain").
 - `migrations/0001_enable_rls_and_policies.sql`, `0003_integrity_constraints.sql`, `0004_handle_new_user_trigger.sql`, `0008_box_recipes_rls_hardening.sql`, `0012_advisor_followups.sql`, `0013_revoke_anon_on_user_tables.sql`, `0014_rls_perf_and_dedupe.sql` (the `profiles_self` policy at `:55-58`), `0015_product_sales_and_listings_history.sql`, and the WP01/WP06/WP10/WP16 files `0024` to `0030`.
 - `README.md:278-297` (Database section) and `:442-457` (ordering constraints), `README.md:106-146` (scraper credentials), `README.md:210-235` (weekly report email config).
-- `audits/HARDENING_FOLLOWUPS.md:19-23` (the "idempotent and safe to re-run" claim) and `:185-200` (key migration history: legacy JWT keys revoked, `sb_secret_` on the laptop).
+- `audits/HARDENING_FOLLOWUPS.md:19-23` (the "idempotent and safe to re-run" claim) and `:185-200` (key migration history: JWT signing moved to asymmetric ECC P-256 with the old HS256 signing key kept as a standby pending revocation, the legacy JWT-based `anon`/`service_role` API keys revoked, `sb_secret_` on the laptop).
 - `secrets_loader.py` (all 50 lines), `main.py` (every `supabase.` call; list below), `generate_weekly_report.py:1-35` and `:160-212`, `run_scraper.sh`, `run_weekly_report.sh`, `verify_migration.py:1-60` (what it refuses), `.github/workflows/ci.yml` (after WP00 it has four jobs and a top-level `permissions:` block).
 - `tests/test_main.py:14-22`, `tests/test_sales_volume.py:535-660` (how tests patch `main.supabase`), and WP16's `tests/test_pipeline_hardening.py`.
 
@@ -96,11 +96,12 @@ Plan corrections (the plan owner's decisions, adjusted where the code proves the
 
 1. `REVOKE UPDATE (email, created_at, updated_at) ON profiles` does nothing while `authenticated` holds table-level UPDATE (Supabase grants it by default). The migration revokes table-level UPDATE and grants `UPDATE (username)` back (step 2).
 2. `box_recipes.name` is already capped at 1 to 200 characters by `0008:72-76`. No new name check; `portfolios.name` gets one instead (it had none).
-3. The scraper also uploads images through Supabase Storage (`main.py:164`, `:777`, `:803`), which a Postgres role cannot reach. Images move to a Storage S3 access key (step 7), behind its own flag.
+3. The scraper also uploads images through Supabase Storage (`main.py:164`, `:777`, `:803`), which a Postgres role cannot reach. Images move to a Storage S3 access key (step 7), behind its own flag. The full re-verification of F081 proposed a different route: a dedicated Supabase Auth user whose `app_metadata.role` is `scraper`, kept on supabase-py, with `authenticated` policies that check that claim on the five tables and on `storage.objects`. Do not switch to it. RLS policies cannot limit columns, so that user could rewrite `products.url` and `products.sku` (the column grant in 0032 forbids this), and it would add a long-lived Auth password or refresh token to protect. The design below already avoids the regression that review warned about (a Postgres role cannot reach Storage) by giving images their own S3 key.
 4. The weekly report reads four tables that `anon` can already read, so it uses the publishable key through the existing supabase-py code (step 9) instead of a new read-only database role: a new role would add a secret without removing any privilege. The verifier's F081 correction asks for SELECT grants "for the weekly report" only on the assumption that the report moves to the scraper role; with the publishable key it needs none. `compare_prices.py` is read-only too (it selects `products` and `exchange_rates`), so it moves to the same loader (step 9d), as F085 recommends. `generate_skus.py` writes `products.sku` and the backfills write history, so they stay on the service key as one-off admin tools.
 5. Use plain `pg_dump`, not `supabase db dump`: the CLI wraps pg_dump with `--quote-all-identifiers` and its own post-processing, and the prune script (step 11d) is written against pg_dump's standard TOC headers.
 6. F133 recommended `REVOKE UPDATE (created_at, user_id)` on `portfolios`/`box_recipes` and `(created_at, portfolio_id)` on `portfolio_holdings`. Those are column REVOKEs under a table-level grant, so they would be no-ops (correction 1), and the table-level alternative means listing every updatable column forever. Reassignment is already impossible (every policy in `0014:60-100` has a `WITH CHECK` that requires the new `user_id`, or the new `portfolio_id`'s owner, to be the caller). What stays writable is the owner's own `created_at` on those three tables, which affects nobody else; it is recorded as a follow-up in the PR, not fixed here. `profiles.created_at`, the one that `export_my_data()` presents as account metadata, is fixed.
 7. F135 also suggested running "the verification queries embedded in the migration headers" in CI. Not done: several headers verify a definition that a later file replaces (README: `delete_my_account` reports MISMATCH after `0010`), so those queries cannot all pass on a full replay. The replay itself, the re-run pass, the drift check and `tests/test_db_roles_integration.py` (which exercises 0031 and 0032) are the CI checks.
+8. F135's full re-verification prefers `supabase start` plus `supabase db reset` over a hand-written scaffold. Not used: `supabase db reset` applies `supabase/migrations/<version>_<name>.sql` in version order, so `create_box_recipes.sql` (no version prefix) would be skipped and `20260506_market_performance_functions.sql` would run after `0023` and fail (README ordering constraints); making it work means renaming applied migrations. It also starts the full local Supabase stack on every CI run. `ci_bootstrap.sql` (step 11a) supplies what the verdict lists as required for a plain server (roles `anon`, `authenticated`, `service_role`, schema `auth` with `users`, `uid()`, `role()`, `jwt()`, and `pgcrypto`), and the drift check against the production dump catches anything it misses. The same verdict's advice not to bake the stale backup table into the baseline is taken (step 1b and Owner action A1).
 
 ### Step 1. `migrations/0003_integrity_constraints.sql`: make it re-runnable (F135)
 
@@ -208,6 +209,42 @@ grep -rn "0003_integrity_constraints.sql:66-68" frontend/app README.md
 ```
 
 Change each hit to `migrations/0003_integrity_constraints.sql:88-92` (the `profiles_username_format` block's new lines; confirm with `grep -n profiles_username_format migrations/0003_integrity_constraints.sql`).
+
+### Step 1b. `migrations/0012_advisor_followups.sql` and `0001` comment (F135, F081)
+
+1b-1. `0012:29` revokes privileges on `product_price_history_backup_20260128`, a stale backup table that exists only in production and that the owner may drop (Owner action A1). Make that one statement skip a missing table so the replay never needs a stand-in for it and the baseline never has to carry a stale table. Replace only the single line
+
+```sql
+REVOKE SELECT, INSERT, UPDATE, DELETE ON public.product_price_history_backup_20260128 FROM anon, authenticated;
+```
+
+with
+
+```sql
+-- WP21 (audit 2026-09-25, F135): the backup table exists only in production
+-- and may be dropped there, so skip the REVOKE where it does not exist.
+DO $$ BEGIN
+  IF to_regclass('public.product_price_history_backup_20260128') IS NOT NULL THEN
+    EXECUTE 'REVOKE SELECT, INSERT, UPDATE, DELETE ON public.product_price_history_backup_20260128 FROM anon, authenticated';
+  END IF;
+END $$;
+```
+
+Leave the comment lines above it unchanged. Where the table exists the effect is identical, and production never re-applies the file. Use `EXECUTE` with a string, not a bare `REVOKE`, so nothing resolves the table name unless the branch runs. Check: `python3 verify_migration.py migrations/0012_advisor_followups.sql > /dev/null; echo "exit=$?"` still prints `exit=0`; the 8 `product_price_history_backup_20260128` privilege lines disappear (12 privilege lines remain, down from 20) and `NOT VERIFIED` gains `1 x DO block`.
+
+1b-2. `migrations/0001_enable_rls_and_policies.sql:58-59` still says the scrapers "must use" `service_role`, which 0032 makes untrue. Comment-only edit (no SQL changes): replace the two lines
+
+```sql
+-- (Only service_role bypasses RLS by default, which is what
+--  the Python scrapers must use to populate prices.)
+```
+
+with
+
+```sql
+-- (service_role bypasses RLS. Since WP21 the scraper writes as the
+--  pokefin_scraper role through its own policies in 0032 instead.)
+```
 
 ### Step 2. `migrations/0031_user_table_write_limits.sql` (new, F133)
 
@@ -379,7 +416,7 @@ Decisions baked into this file:
 - A dedicated role `pokefin_scraper`: `LOGIN`, `NOBYPASSRLS`, not a superuser, no `CREATEROLE`/`CREATEDB`/`REPLICATION`, `NOINHERIT`, no role memberships, `CONNECTION LIMIT 5`, `statement_timeout = 60s` and `idle_in_transaction_session_timeout = 60s`. It is created **without a password**; the owner sets one with `\password` so it never appears in the repo, the SQL editor history or the Postgres log. Roles are cluster-wide, so on a replay server the second database finds the role already there; the `duplicate_object` handler and the attribute check below cover that.
 - Privileges are exactly what `main.py` does: `products` SELECT plus column-level UPDATE of `usd_price, last_updated, image_url, last_image_update` (so a compromised scraper cannot redirect `url` or rewrite the `sku` that the Shopify sync uses); `product_price_history` SELECT, INSERT; `product_sales_history` and `product_listings_history` SELECT, INSERT, UPDATE (upsert needs UPDATE and a SELECT policy); `exchange_rates` SELECT, INSERT; `product_price_pending` all four. No sequence grants are needed as long as the `id` columns are identity columns (`schema.sql` shows `GENERATED ALWAYS AS IDENTITY` on all four insert targets): an identity column's implicit `nextval` skips the sequence privilege check. A `serial`-style `DEFAULT nextval(...)` column would need `GRANT USAGE ON SEQUENCE`; Owner action A1 checks this on production before 0032 is applied, and says what to add if it finds one.
 - One `FOR ALL TO pokefin_scraper USING (true) WITH CHECK (true)` policy per table. The GRANTs are the command gate; the policies only let the role through RLS on those six tables. `ON CONFLICT DO UPDATE` needs the SELECT side of the policy, which `FOR ALL` provides.
-- Not granted to `authenticator`, so PostgREST can never switch to it. Minting a JWT with `role: pokefin_scraper` is impossible anyway: the legacy HS256 keys are revoked (`HARDENING_FOLLOWUPS.md:195`) and the `sb_` keys are not JWTs.
+- Not granted to `authenticator`, so PostgREST can never switch to it. Do not build on minting a JWT with `role: pokefin_scraper` either: the project signs JWTs with an asymmetric ECC P-256 key managed by Supabase, the old HS256 signing key is only a standby slated for revocation (`HARDENING_FOLLOWUPS.md:186-187`, `:197-200`; Owner action B5 retires it), and the `sb_` keys are not JWTs.
 
 Create the file with exactly this content:
 
@@ -1219,7 +1256,57 @@ The line numbers below are master's. WP16 added `import signal` and `import temp
 
 9d. `compare_prices.py` (F085: read-only, so no secret). In the `from secrets_loader import (...)` block (master `:25-28`) replace `load_supabase_credentials,` with `load_supabase_readonly_credentials,`, and change the line `SUPABASE_URL, SUPABASE_KEY = load_supabase_credentials()` (master `:30`) to `SUPABASE_URL, SUPABASE_KEY = load_supabase_readonly_credentials()`. Nothing else changes: it only selects `exchange_rates` (`:143`) and `products` with embedded `sets` and `product_types` (`:207`), all anon-readable. Confirm: `grep -n "load_supabase" compare_prices.py` prints exactly the two `load_supabase_readonly_credentials` lines.
 
-Why this works: `product_types`, `sets`, `products`, `product_price_history` and `exchange_rates` all have `FOR SELECT TO anon, authenticated USING (true)` policies (0001:69-97) and keep anon SELECT (0013 revokes anon only on the five user tables). Each request is one 1000-row page ordered by `id`, well inside anon's 3-second `statement_timeout` (0009:22), and `fetch_page` already retries SQLSTATE class 57 (timeouts) and PostgREST 5xx.
+9e. `generate_weekly_report.py`: keyset pagination (F085 follow-on). Today `fetch_page` pages with `.order(order_col).range(start, start + page - 1)`, which PostgREST turns into `ORDER BY id LIMIT 1000 OFFSET start`. Postgres must walk and discard every skipped row, so the last pages of `product_price_history` (the whole table, every week) cost time proportional to the table size. Under the service key that ran with `service_role`'s 60-second timeout; with the publishable key it runs as `anon`, whose `statement_timeout` is 3 seconds (`0009:22`), and a late page that times out fails the edition after its retries. Switch to keyset pagination, which costs the same for every page. Replace the whole of `fetch_page` and `fetch_all` (from `def fetch_page(` through the `return rows` that ends `fetch_all`) with:
+
+```python
+def fetch_page(sb, table, columns, order_col, after, page):
+    """
+    One page of rows whose order_col is greater than `after` (None for the
+    first page), retried on transient failure with exponential backoff.
+    Keyset pagination: every page costs the same, unlike OFFSET, so the last
+    pages of product_price_history stay inside anon's 3 s statement_timeout
+    (audit 2026-09-25, F081/F085).
+    """
+    for attempt in range(1, FETCH_MAX_ATTEMPTS + 1):
+        try:
+            query = sb.table(table).select(columns).order(order_col).limit(page)
+            if after is not None:
+                query = query.gt(order_col, after)
+            resp = query.execute()
+            return resp.data or []
+        except Exception as exc:  # noqa: BLE001 - re-raised below unless retryable
+            if attempt == FETCH_MAX_ATTEMPTS or not _is_retryable(exc):
+                raise
+            delay = FETCH_BACKOFF_SECONDS * (2 ** (attempt - 1))
+            print(f"    {table} rows after {order_col}={after}: "
+                  f"{type(exc).__name__} ({exc}); retry {attempt}"
+                  f"/{FETCH_MAX_ATTEMPTS - 1} in {delay:.0f}s",
+                  file=sys.stderr, flush=True)
+            time.sleep(delay)
+    return []  # unreachable: the loop either returns or raises
+
+
+def fetch_all(sb, table, columns, order_col="id", page=1000):
+    """
+    Paginate a table fully (Supabase caps each request at ~1000 rows).
+    order_col must be unique (the primary key); it is added to the select
+    list when missing, because the next page starts after the last value.
+    """
+    if order_col not in [c.strip() for c in columns.split(",")]:
+        columns = f"{order_col},{columns}"
+    rows, after = [], None
+    while True:
+        batch = fetch_page(sb, table, columns, order_col, after, page)
+        rows.extend(batch)
+        if len(batch) < page:
+            break
+        after = batch[-1][order_col]
+    return rows
+```
+
+The four `fetch_all` calls in `load_data()` stay as they are. Only the history call lacks `id` in its column list, so its rows now carry one extra `id` key, which `compute_returns` and `main` ignore (they read `product_id`, `usd_price` and `recorded_at` by name). Check: `grep -n "\.range(" generate_weekly_report.py` prints nothing, and `grep -n "\.gt(order_col" generate_weekly_report.py` prints one line.
+
+Why this works: `product_types`, `sets`, `products`, `product_price_history` and `exchange_rates` all have `FOR SELECT TO anon, authenticated USING (true)` policies (0001:69-97) and keep anon SELECT (0013 revokes anon only on the five user tables). With 9e, each request is one 1000-row primary-key range scan (`WHERE id > last ORDER BY id LIMIT 1000`), well inside anon's 3-second `statement_timeout` (0009:22) on every page, and `fetch_page` still retries SQLSTATE class 57 (timeouts) and PostgREST 5xx. `compare_prices.py` needs no such change: it reads `exchange_rates` and `products`, not the history table.
 
 ### Step 10. Shell wrappers
 
@@ -1754,7 +1841,7 @@ db-dumps/
 
 ### Step 13. Tests
 
-Add the three test files from the Tests section, and prepend `"0000_baseline.sql"` to `EARLY_FILES` in `tests/test_migration_volatility.py` (WP01) and `tests/test_wp10_market_rpc_bounds.py` (WP10), so their notion of apply order matches `replay_migrations.sh`:
+Add the four test files from the Tests section, and prepend `"0000_baseline.sql"` to `EARLY_FILES` in `tests/test_migration_volatility.py` (WP01) and `tests/test_wp10_market_rpc_bounds.py` (WP10), so their notion of apply order matches `replay_migrations.sh`:
 
 ```python
 EARLY_FILES = ("0000_baseline.sql", "create_box_recipes.sql", "20260506_market_performance_functions.sql")
@@ -1839,8 +1926,8 @@ from nothing:
   tables (`products`, `sets`, `product_types`, `generations`,
   `product_price_history`, the user tables), the legacy functions
   `get_price_history_deduplicated` and `handle_new_profile_portfolio`, the
-  `product_price_history_backup_20260128` table, and production-only indexes,
-  triggers and policies. It is generated by `scripts/db/prune_baseline.py`
+  `product_price_history_backup_20260128` table while production still has
+  it, and production-only indexes, triggers and policies. It is generated by `scripts/db/prune_baseline.py`
   and refuses to run on a database that already has `public.products`.
   Never apply it to production.
 - `scripts/db/replay_migrations.sh` replays the chain on a throwaway local
@@ -1937,7 +2024,7 @@ Open a **draft** PR titled as in "Commit and PR". In the description, paste Owne
 ```bash
 test -s db-dumps/prod_schema_public.sql && head -12 db-dumps/prod_schema_public.sql
 # expect a pg_dump header ("-- Dumped from database version 17...")
-grep -c "Type: TABLE;" db-dumps/prod_schema_public.sql     # expect 15 or more (16 if the backup table still exists)
+grep -c "Type: TABLE;" db-dumps/prod_schema_public.sql     # expect 15 or more (16 if the owner kept the backup table in A1)
 grep -n "products_scraper\|enforce_owner_row_cap" db-dumps/prod_schema_public.sql | head -3
 # expect hits: the owner applied 0031 and 0032 before dumping. If there are none,
 # the dump predates them; that is fine for the baseline but step 19's diff will
@@ -1949,7 +2036,7 @@ head -1 /tmp/wp21_prune.log      # "kept N entries, dropped M"
 grep "^-- Name:" migrations/0000_baseline.sql
 ```
 
-Expected: exit 0; the kept list contains the TABLE entries for `exchange_rates`, `generations`, `portfolio_holdings`, `portfolio_lots`, `portfolios`, `product_price_history`, `product_price_history_backup_20260128`, `product_types`, `products`, `profiles`, `sets` (plus any other production-only table), their identity SEQUENCE and PRIMARY KEY/UNIQUE entries, the FUNCTION entries for `get_price_history_deduplicated` and `handle_new_profile_portfolio` (and any other function no migration creates), production-only indexes (for example the legacy `portfolio_holdings(portfolio_id)` index that 0025 detects), production-only triggers and policies, and ROW SECURITY entries. It must not contain `box_recipes`, `auth_events`, `product_sales_history`, `product_listings_history`, `product_price_pending`, any `GRANT`, or any function a migration creates (`grep -n "delete_my_account\|export_my_data\|get_market_product" migrations/0000_baseline.sql` prints nothing).
+Expected: exit 0; the kept list contains the TABLE entries for `exchange_rates`, `generations`, `portfolio_holdings`, `portfolio_lots`, `portfolios`, `product_price_history`, `product_types`, `products`, `profiles`, `sets`, `product_price_history_backup_20260128` only if the owner kept it in A1 (plus any other production-only table), their identity SEQUENCE and PRIMARY KEY/UNIQUE entries, the FUNCTION entries for `get_price_history_deduplicated` and `handle_new_profile_portfolio` (and any other function no migration creates), production-only indexes (for example the legacy `portfolio_holdings(portfolio_id)` index that 0025 detects), production-only triggers and policies, and ROW SECURITY entries. It must not contain `box_recipes`, `auth_events`, `product_sales_history`, `product_listings_history`, `product_price_pending`, any `GRANT`, or any function a migration creates (`grep -n "delete_my_account\|export_my_data\|get_market_product" migrations/0000_baseline.sql` prints nothing).
 
 If the script exits 2 ("TRIGGER ... executes public.X(), which a migration creates"): delete that TRIGGER entry from `0000_baseline.sql` by hand and recreate it in a new migration `NNNN_record_production_triggers.sql` (next free number, `DROP TRIGGER IF EXISTS` then `CREATE TRIGGER`, a no-op on production), with a header comment saying so.
 
@@ -2014,7 +2101,7 @@ and use `127.0.0.1:55432` in the pytest command below; stop it afterwards with `
 
 If the replay fails, read the failing file and statement:
 
-- `relation "public.product_price_history_backup_20260128" does not exist` (in 0012), or `function public.handle_new_profile_portfolio() does not exist` (0006), or `function public.get_price_history_deduplicated(bigint[], text) does not exist` (0007/0012): production dropped that object after the migration ran. Add a minimal stand-in to the END of `0000_baseline.sql` under a comment `-- Dropped in production on <date>; stand-in so <file> replays. Removed again by NNNN.` (`CREATE TABLE public.product_price_history_backup_20260128 (id bigint);` or `CREATE FUNCTION public.handle_new_profile_portfolio() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$;` or `CREATE FUNCTION public.get_price_history_deduplicated(bigint[], text) RETURNS void LANGUAGE sql AS $$ SELECT $$;`), and add `migrations/NNNN_record_out_of_band_drops.sql` (next free number) with the matching `DROP ... IF EXISTS`, which is a no-op on production. Owner action A1 tells you in advance which of these applies.
+- `function public.handle_new_profile_portfolio() does not exist` (0006), or `function public.get_price_history_deduplicated(bigint[], text) does not exist` (0007/0012): production dropped that object after the migration ran. (A missing `product_price_history_backup_20260128` cannot fail the replay: step 1b guards 0012's REVOKE.) Add a minimal stand-in to the END of `0000_baseline.sql` under a comment `-- Dropped in production on <date>; stand-in so <file> replays. Removed again by NNNN.` (`CREATE FUNCTION public.handle_new_profile_portfolio() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$;` or `CREATE FUNCTION public.get_price_history_deduplicated(bigint[], text) RETURNS void LANGUAGE sql AS $$ SELECT $$;`), and add `migrations/NNNN_record_out_of_band_drops.sql` (next free number) with the matching `DROP ... IF EXISTS`, which is a no-op on production. Owner action A1 tells you in advance which of these applies.
 - Anything else: stop and report the file, statement and error; do not edit an applied migration beyond what step 1 did.
 
 If the drift check prints a diff, classify every hunk:
@@ -2038,15 +2125,15 @@ docker stop pokefin-replay
 
 ### Step 20. Phase B: finish the PR
 
-In `audits/HARDENING_FOLLOWUPS.md`, change the WP21 bullet's first sentence (step 15e) to "migrations 0031 (...) and 0032 (...) applied <apply date the owner gave you> by the owner via Supabase MCP", keeping "Status: pending" (the cut-over in Owner actions B is still open). Then squash your commits into one with the message in "Commit and PR" (`git reset --soft $(git merge-base HEAD origin/master) && git commit -F <message file>`), push with `git push --force-with-lease`, and mark the PR ready. Paste the outputs of step 19 (replay summary line, the drift line, the pytest summary) and the Verification section into the description. The `db-dumps/` file stays untracked (`git status` must not list it).
+In `audits/HARDENING_FOLLOWUPS.md`, change the WP21 bullet's first sentence (step 15e) to "migrations 0031 (...) and 0032 (...) applied <apply date the owner gave you> by the owner via Supabase MCP", keeping "Status: pending" (the cut-over in Owner actions B is still open). If the owner dropped the backup table in A1, append to the bullet: "`product_price_history_backup_20260128` dropped <date> after a data export." Then squash your commits into one with the message in "Commit and PR" (`git reset --soft $(git merge-base HEAD origin/master) && git commit -F <message file>`), push with `git push --force-with-lease`, and mark the PR ready. Paste the outputs of step 19 (replay summary line, the drift line, the pytest summary) and the Verification section into the description. The `db-dumps/` file stays untracked (`git status` must not list it).
 
 ## Pitfalls: do not do this
 
 - **Do not write `REVOKE UPDATE (email, created_at, updated_at) ON public.profiles FROM authenticated` on its own.** Supabase grants `authenticated` table-level UPDATE, and a column-level REVOKE does not reduce a table-level grant. Revoke table-level UPDATE and grant `UPDATE (username)` back.
 - **Do not revoke SELECT on `profiles` from `authenticated`, or UPDATE on `username`.** WP04's `PATCH /api/profile` needs both (`RETURNING id, username, email`), and `GET /api/auth/me` reads the row.
 - **Do not add column grants on `box_recipes`/`portfolios`/`portfolio_holdings` for `user_id`/`created_at`.** RLS `WITH CHECK` already blocks reassignment; column grants would need every updatable column listed and maintained (WP06 added `currency`).
-- **Do not use `pg_column_size(packs)` for the size CHECK.** It can report the compressed size; `octet_length(packs::text)` measures what the client sent.
-- **Do not mint a JWT with `role: pokefin_scraper` or grant `pokefin_scraper` to `authenticator`.** The legacy HS256 keys are revoked (HARDENING_FOLLOWUPS.md:195) and the new `sb_` keys are not JWTs (verifier correction on F081); the only viable path is a Postgres login through the pooler. Granting it to `authenticator` would also expose it to PostgREST.
+- **Keep `octet_length(packs::text)` for the size CHECK; do not switch to `pg_column_size(packs)`.** The re-verification showed `pg_column_size` also rejects an oversized INSERT (a CHECK sees the uncompressed value), but it measures jsonb's binary datum, and on an UPDATE that leaves `packs` untouched it can see the already-compressed stored value. `octet_length(packs::text)` always measures the JSON text, which is what the 8192 limit and the "under 2 KB" sizing in step 2 assume.
+- **Do not mint a JWT with `role: pokefin_scraper` or grant `pokefin_scraper` to `authenticator`.** JWTs are signed with an asymmetric ECC P-256 key, the HS256 signing key is a standby being retired (HARDENING_FOLLOWUPS.md:186-187, :197-200), and the new `sb_` keys are not JWTs (verifier correction on F081); the only viable path is a Postgres login through the pooler. Granting it to `authenticator` would also expose it to PostgREST.
 - **Do not put a password in `0032` or run `ALTER ROLE ... PASSWORD '...'` in the SQL editor.** The file is public in the repo and the editor keeps query history; the owner uses psql `\password`, which sends only a SCRAM verifier.
 - **Do not create the role with BYPASSRLS, and do not skip the RLS policies.** A `NOBYPASSRLS` non-owner role is filtered by RLS; without the `*_scraper` policies every write fails with "new row violates row-level security policy" (verifier correction on F081).
 - **Do not grant INSERT or DELETE on `products`, or table-level UPDATE.** The scraper never creates or deletes products (admin tools do, with the service key), and column-level UPDATE keeps `url` and `sku` out of its reach.
@@ -2065,7 +2152,7 @@ In `audits/HARDENING_FOLLOWUPS.md`, change the WP21 bullet's first sentence (ste
 
 ## Tests
 
-Three new files under `tests/` plus the `EARLY_FILES` edit in step 13. The existing suite must pass unchanged (161 tests before WP16 plus whatever WP11 and WP16 added).
+Four new files under `tests/` plus the `EARLY_FILES` edit in step 13. The existing suite must pass unchanged (161 tests before WP16 plus whatever WP11 and WP16 added).
 
 **`tests/test_scraper_backends.py`** (unit, no database, no network). Cases: backend flags default to `supabase`, are case-insensitive, and refuse unknown values; `load_scraper_database_url` and `load_storage_s3_credentials` name what is missing; `load_supabase_readonly_credentials` prefers the publishable key, refuses an `sb_secret_` value in that slot, and falls back to the service key with a warning; `check_dsn` refuses remote URLs without `sslmode=require|verify-ca|verify-full` and accepts localhost; `ScraperDB` connects lazily with `autocommit=True`, `prepare_threshold=None` and `SET TIME ZONE 'UTC'`, refuses `update_product` columns outside the grant, returns PostgREST-shaped ISO strings, sends one upsert statement per batch with the right `ON CONFLICT` key, retries once after `OperationalError` and never retries a `UniqueViolation`; `S3ImageStore` calls `put_object` with bucket, key, content type and `max-age` and builds the same public URL supabase-py did; `main.py` routes `fetch_products_needing_update`, the sales/listings flushes (batch and per-row fallback), `upload_thumbnail`, `_insert_price_history_row` (duplicate counts as written), and the pending-price helpers through `pg_db`/`image_store` when set, and keeps `pg_db`/`image_store` `None` by default. Full file (run while writing this spec against a copy of `main.py` with steps 8a to 8i and WP16's helpers applied: 33 passed):
 
@@ -2741,6 +2828,77 @@ def test_normalize_drops_host_specific_lines_only():
     assert "ALTER DEFAULT PRIVILEGES" not in out
 ```
 
+**`tests/test_weekly_report_pagination.py`** (unit, no network; step 9e). Cases: `fetch_all` walks a 2,500-row table in three keyset pages, adds `id` to a column list that lacks it, never calls `.range()`, and leaves a column list that already holds `id` unchanged. Full file (2 passed):
+
+```python
+#!/usr/bin/env python3
+"""
+Keyset pagination in generate_weekly_report.fetch_all (audit 2026-09-25,
+F081/F085): the report runs as anon (3 s statement_timeout), so it must not
+page with OFFSET. A fake supabase-py client stands in for PostgREST.
+
+Run with: python -m pytest tests/test_weekly_report_pagination.py -v
+"""
+from unittest.mock import MagicMock
+
+import generate_weekly_report as report
+
+
+class FakeQuery:
+    def __init__(self, rows, log):
+        self._rows, self._log = rows, log
+        self._col, self._after, self._limit = None, None, None
+
+    def select(self, columns):
+        self._log.append(("select", columns))
+        return self
+
+    def order(self, col):
+        self._col = col
+        return self
+
+    def limit(self, n):
+        self._limit = n
+        return self
+
+    def gt(self, col, value):
+        self._log.append(("gt", col, value))
+        self._after = value
+        return self
+
+    def range(self, *args):
+        raise AssertionError("OFFSET pagination (.range) must not be used")
+
+    def execute(self):
+        rows = [r for r in self._rows if self._after is None or r[self._col] > self._after]
+        return MagicMock(data=rows[: self._limit])
+
+
+class FakeClient:
+    def __init__(self, rows):
+        self.rows, self.log = rows, []
+
+    def table(self, name):
+        return FakeQuery(self.rows, self.log)
+
+
+def test_fetch_all_walks_by_keyset_and_adds_the_key_column():
+    rows = [{"id": i, "product_id": 1, "usd_price": 1.0, "recorded_at": "2026-09-01"}
+            for i in range(1, 2501)]
+    client = FakeClient(rows)
+    got = report.fetch_all(client, "product_price_history", "product_id,usd_price,recorded_at")
+    assert [r["id"] for r in got] == list(range(1, 2501))
+    assert ("select", "id,product_id,usd_price,recorded_at") in client.log
+    assert [e for e in client.log if e[0] == "gt"] == [("gt", "id", 1000), ("gt", "id", 2000)]
+
+
+def test_fetch_all_keeps_a_column_list_that_already_holds_the_key():
+    client = FakeClient([{"id": 1, "name": "a", "release_date": None}])
+    assert report.fetch_all(client, "sets", "id,name,release_date") == [
+        {"id": 1, "name": "a", "release_date": None}]
+    assert client.log == [("select", "id,name,release_date")]
+```
+
 ## Verification
 
 Run from the repo root in a venv with `requirements.txt` installed (plus `pytest` and `pyflakes`).
@@ -2748,7 +2906,7 @@ Run from the repo root in a venv with `requirements.txt` installed (plus `pytest
 ```bash
 # 1. Static checks on everything this PR touches.
 python -m pyflakes scraper_db.py scraper_storage.py secrets_loader.py scripts/db/*.py \
-  tests/test_scraper_backends.py tests/test_db_roles_integration.py tests/test_prune_baseline.py
+  tests/test_scraper_backends.py tests/test_db_roles_integration.py tests/test_prune_baseline.py tests/test_weekly_report_pagination.py
 # expect no output
 python -m pyflakes main.py generate_weekly_report.py compare_prices.py
 # expect no NEW warnings compared with master (compare against `git stash; pyflakes ...; git stash pop`)
@@ -2768,6 +2926,8 @@ python3 verify_migration.py migrations/0031_user_table_write_limits.sql > /dev/n
 python3 verify_migration.py migrations/0032_scraper_least_privilege_role.sql > /dev/null; echo "exit=$?"  # exit=1, two REFUSED lines
 python3 verify_migration.py migrations/0003_integrity_constraints.sql > /dev/null; echo "exit=$?"
 # same exit code and verified lines as on master; NOT VERIFIED now reads "1 x ALTER TABLE ..., 8 x DO block"
+python3 verify_migration.py migrations/0012_advisor_followups.sql > /dev/null; echo "exit=$?"
+# exit=0; 12 privilege lines (the 8 backup-table lines are gone) and NOT VERIFIED: 1 x DO block
 
 # 4. Replay, drift and DB tests (phase B). Step 19 stopped (and, with --rm,
 #    removed) the server; start it again first with the same docker run and
@@ -2787,7 +2947,7 @@ git diff --stat master -- migrations/0003_integrity_constraints.sql   # the WP21
 docker stop pokefin-replay
 
 # 6. No em dashes and no secrets in new files.
-grep -rn $'\xe2\x80\x94' migrations/0031_*.sql migrations/0032_*.sql scripts/db scraper_db.py scraper_storage.py tests/test_scraper_backends.py tests/test_db_roles_integration.py tests/test_prune_baseline.py
+grep -rn $'\xe2\x80\x94' migrations/0031_*.sql migrations/0032_*.sql scripts/db scraper_db.py scraper_storage.py tests/test_scraper_backends.py tests/test_db_roles_integration.py tests/test_prune_baseline.py tests/test_weekly_report_pagination.py
 # expect no output
 git status --porcelain | grep db-dumps     # expect no output
 ```
@@ -2835,7 +2995,17 @@ SELECT table_name, is_identity, column_default
  ORDER BY 1;
 ```
 
-Correct: the last query returns 4 rows, all `is_identity = YES`. If any row says `NO` with a `column_default` like `nextval('public.<name>_id_seq'::regclass)`, stop before A2 and send the rows to the executor, who adds one line per such table to 0032, directly below the table GRANTs: `GRANT USAGE ON SEQUENCE public.<name>_id_seq TO pokefin_scraper;` (the name inside `nextval(...)`), pushes, and tells you to continue. Without it every scraper INSERT on that table fails with `permission denied for sequence`. `pending_table_0030` is not NULL (else apply WP16's 0030 first); tell the executor the server major version and which of `backup_table`, `legacy_trigger_fn`, `legacy_history_fn` are NULL (NULL means step 19's stand-in applies). The three counts are 0 (if not, fix or delete those rows first, or 0031 fails and changes nothing). The cap query returns no rows (rows mean those owners simply cannot add more; not a blocker). Note every bucket: a Storage S3 key can read and write all of them, so if a private bucket with user files exists, tell the executor and decide whether to stay on `POKEFIN_STORAGE_BACKEND=supabase` (the database cut-over still removes most of the risk). `pokefin_scraper` must not exist yet.
+Correct: the last query returns 4 rows, all `is_identity = YES`. If any row says `NO` with a `column_default` like `nextval('public.<name>_id_seq'::regclass)`, stop before A2 and send the rows to the executor, who adds one line per such table to 0032, directly below the table GRANTs: `GRANT USAGE ON SEQUENCE public.<name>_id_seq TO pokefin_scraper;` (the name inside `nextval(...)`), pushes, and tells you to continue. Without it every scraper INSERT on that table fails with `permission denied for sequence`. `pending_table_0030` is not NULL (else apply WP16's 0030 first); tell the executor the server major version and which of `legacy_trigger_fn`, `legacy_history_fn` are NULL (NULL means step 19's stand-in applies), and whether you kept or dropped the backup table (next paragraph). The three counts are 0 (if not, fix or delete those rows first, or 0031 fails and changes nothing). The cap query returns no rows (rows mean those owners simply cannot add more; not a blocker). Note every bucket: a Storage S3 key can read and write all of them, so if a private bucket with user files exists, tell the executor and decide whether to stay on `POKEFIN_STORAGE_BACKEND=supabase` (the database cut-over still removes most of the risk). `pokefin_scraper` must not exist yet.
+
+Backup table decision (recommended, your call). If `backup_table` is not NULL, `product_price_history_backup_20260128` is a January 2026 copy of price history that no application code reads (among the code and migrations, only `0012` names it). If you no longer need it, keep a data copy outside the database and drop it before A5, so the baseline does not carry a stale table:
+
+```bash
+docker run --rm postgres:17 pg_dump --data-only --table=public.product_price_history_backup_20260128 "$PGURL" \
+  | gzip > ~/pokefin-price-history-backup-20260128.sql.gz     # keep this file somewhere safe
+psql "$PGURL" -c 'DROP TABLE public.product_price_history_backup_20260128;'
+```
+
+If you keep it, do nothing; the baseline then includes its (schema-only) definition. Either way the replay works, because step 1b guards the one statement that names it. Tell the executor which you chose so the HARDENING_FOLLOWUPS bullet (step 20) records a drop.
 
 A2. **Apply 0031.** Preferred: Supabase MCP `apply_migration`, name `0031_user_table_write_limits`, the full file. Alternative: SQL editor, paste the whole file, nothing selected, Run. Verify:
 
@@ -2986,14 +3156,14 @@ B7. Update the WP21 bullet in `audits/HARDENING_FOLLOWUPS.md` section 7 with the
 ## Acceptance criteria
 
 - [ ] `migrations/0031_user_table_write_limits.sql` and `migrations/0032_scraper_least_privilege_role.sql` exist with the content in steps 2 and 3, apply twice in a row without error, and `verify_migration.py` exits 1 with only the documented REFUSED lines.
-- [ ] `migrations/0003_integrity_constraints.sql` applies twice in a row without error; no other applied migration changed (`git diff --stat master -- migrations/` lists only 0003, 0000, 0031, 0032 and any documented `NNNN_record_*` file).
+- [ ] `migrations/0003_integrity_constraints.sql` applies twice in a row without error; `0012` has only the step 1b guard around its backup-table REVOKE and `0001` only the step 1b comment change; no other applied migration changed (`git diff --stat master -- migrations/` lists only 0001, 0003, 0012, 0000, 0031, 0032 and any documented `NNNN_record_*` file).
 - [ ] `.github/copilot-instructions.md` (WP20's rewrite) describes the baseline/replay harness and the scraper backend flags (step 15f), or the PR body says why 15f was skipped.
 - [ ] `migrations/0000_baseline.sql` is generated by `scripts/db/prune_baseline.py` from the owner's dump, starts with the empty-database guard, contains `products.active` and the two legacy functions, and contains no GRANT, no OWNER TO, and no object a migration creates.
 - [ ] `schema.sql` is the normalised production dump with the generated header and contains `active boolean`, `is_public`, `client_idempotency_key` and `CREATE TABLE public.auth_events`.
 - [ ] `scripts/db/replay_migrations.sh` prints "OK: N files replayed once ... and twice" on an empty local Postgres of production's major version, and `schema_drift.sh` prints "No drift" (or every remaining hunk is reconciled by a documented migration).
 - [ ] `python -m pytest tests/ -q` passes with no database (26 skipped) and with `POKEFIN_TEST_DATABASE_URL` pointing at `replay_once` (0 skipped from the new files).
 - [ ] With neither flag set, `main.py` behaves exactly as before: existing tests pass unchanged and the log line reads "database=supabase storage=supabase".
-- [ ] `generate_weekly_report.py` and `run_weekly_report.sh` read `SUPABASE_PUBLISHABLE_KEY` from `report.env`, and `compare_prices.py` uses `load_supabase_readonly_credentials()`.
+- [ ] `generate_weekly_report.py` and `run_weekly_report.sh` read `SUPABASE_PUBLISHABLE_KEY` from `report.env`, `generate_weekly_report.py` pages by keyset (no `.range(` left; `tests/test_weekly_report_pagination.py` passes), and `compare_prices.py` uses `load_supabase_readonly_credentials()`.
 - [ ] After 0031, `authenticated` holds exactly SELECT plus UPDATE (username) on `profiles` (A2 query: every column as commented).
 - [ ] CI has a fifth job "Database replay and Python tests" that is green on the PR; the four existing job names are unchanged.
 - [ ] README and HARDENING_FOLLOWUPS describe the flags, the baseline, the replay and the owner cut-over; the "idempotent and safe to re-run" claim is corrected.
@@ -3048,9 +3218,10 @@ feat(db): least-privilege scraper role, user write limits, schema baseline (WP21
   the six tables the scraper writes (F081)
 - main.py: POKEFIN_DB_BACKEND=postgres (psycopg via Supavisor) and
   POKEFIN_STORAGE_BACKEND=s3 (Storage S3 key); defaults unchanged
-- weekly report and compare_prices.py read with the publishable key (F085)
+- weekly report and compare_prices.py read with the publishable key; the
+  report pages by keyset to stay inside anon's 3 s timeout (F085)
 - 0000_baseline.sql from a production dump, schema.sql regenerated,
-  0003 made re-runnable, scripts/db replay harness, CI job replays the
+  0003 made re-runnable, 0012's backup-table REVOKE guarded, scripts/db replay harness, CI job replays the
   chain twice and diffs it against schema.sql (F135)
 ```
 

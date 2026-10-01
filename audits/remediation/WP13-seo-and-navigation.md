@@ -4,8 +4,9 @@
   - F028 (full; cluster members F028, F029, F088): every navigation page renders the same `<title>`, and the site has no `metadataBase`, no default OG image, no canonical links, no `robots.txt`, no `sitemap.xml` and no Product structured data. Shared product links show the site name and no picture.
   - F093 (full as scoped by the plan; cluster members F093, F087, F100): no `not-found.tsx` (Next's stock 404, which also turns the body black in dark mode), no `loading.tsx` on the dynamic product route, and zero-result searches on `/prices` and `/market` show "Found 0 products" over nothing. Not in this package: the "Loading price history" toast (WP03 removed it), the `/prices` "Loading…" Suspense fallback (WP08 removed it), and the `ProductImage` "Loading..." text (WP12 owns `ProductImage.tsx` and its tests assert that text; see Pitfalls).
   - F002 (full; cluster members F002, F006, F021, F027, F129): the login page ignores the return-to destination, the three auth gates disagree on the parameter (`next`, `redirect`, none), and the only validator (`safeNextPath`) is private to the OAuth callback.
+  - Track 2 corrections (`01-PRODUCT-DIRECTION.md` §9 item 2; `research/trust-seo-brand.md` §3 "Corrections to the existing plan"), folded into steps 1b, 3, 4a, 6a and 7: product JSON-LD publishes an `AggregateOffer` (lowest TCGplayer listing and listing count, linked to the TCGplayer page) only from a fresh listings snapshot, never an `Offer` that names Pokéfin as the seller; the product description says "Daily TCGplayer Market Price", not "Live price"; `og:locale` is `en_CA`; the theme colour stays `#ffffff`; every metadata string spells the source "TCGplayer".
 - **Priority rationale**: cheap, low-risk fixes to how every page looks in tabs, search results and link previews, plus a sign-in flow that finally returns people to the page they asked for.
-- **Effort**: M, about 7 to 9 hours including tests and the stub-build checks.
+- **Effort**: M, about 8 to 10 hours including tests and the stub-build checks (the Track 2 corrections add about an hour).
 - **Depends on**: WP04 (the `sessionStatus` redirect effects in `app/portfolio/page.tsx` and `app/account/page.tsx`, and `signIn` setting `"authenticated"` immediately). Also assumes the already-merged WP00 (`pnpm build:stub`, `scripts/supabase-stub.mjs`), WP02 (login page `turnstileRef`, callback route with `RESET_PASSWORD_PATH` and `?error=auth_link`, and `app/lib/siteUrl.ts` with `getSiteUrl()` and the apex fallback `FALLBACK_SITE_URL = "https://pokefin.ca"`), WP03 ("updated daily" description in `layout.tsx`), WP08 (`updateUrlState` and `PRICES_URL_DEFAULTS` in `/prices`, stub `SUPABASE_STUB_FIXTURE=catalog`), WP11 (`/compare` page is a server component; product page has `revalidate` and `generateStaticParams`). WP02 is a hard prerequisite (WP04 depends on it); for WP08 and WP11 each step says what to do when one of them has not landed.
 - **Unblocks**: nothing in the plan depends on it formally. WP14 and WP15 must edit `app/auth/login/LoginForm.tsx` (not `page.tsx`) and the new `NotFoundPanel.tsx` / `NoResults.tsx` components after this lands. WP17's coverage config (which lists server pages explicitly) must treat `app/auth/login/page.tsx` and `app/analytics/page.tsx` as server pages after this PR; `LoginForm.tsx` is the client component.
 - **Suggested branch name**: `remediation/wp13-seo-and-navigation`
@@ -31,7 +32,8 @@ Read these files fully (paths relative to `frontend/`):
 - `app/components/ProductPrices/index.tsx` (after WP08: `updateUrlState`, `deferredSearchTerm`, the "Found {n} products" line and `{loading && ...}` line near the end of the JSX) and `app/components/ProductPrices/utils/urlState.ts` (`PRICES_URL_DEFAULTS`).
 - `app/components/MarketView/MarketView.tsx`: filter state `:224-237`, `rows` `:282`, "Found {rows.length} products" `:673`, `{loading && ...}` `:689`, table block `:691-857`.
 - `app/page.tsx:211-229` (the hero search form the 404 page copies), `app/globals.css:1-8,66-69` (light-only palette), `next.config.ts:51-77`.
-- `app/lib/serverMarketData.ts:896-903` (`getCachedMarketProductSummaries`; `fetchMarketProductSummaries` `:818-827` throws when both the RPC and the fallback fail) and `app/lib/priceGuard.ts:135-140` (`hasCurrentPrice`).
+- `app/lib/serverMarketData.ts:896-903` (`getCachedMarketProductSummaries`; `fetchMarketProductSummaries` `:818-827` throws when both the RPC and the fallback fail), `:579-598` (`ProductListingsSnapshot` with `active_listings`, `lowest_listing_price`, `snapshot_date`, and `ProductDetail.listings`) and `app/lib/priceGuard.ts:135-140` (`hasCurrentPrice`).
+- `app/lib/marketPulse.ts:194-213` (`isListingsSnapshotFresh(snapshotDate, referenceDate = new Date())`, true when the `YYYY-MM-DD` snapshot is at most `LISTINGS_STALENESS_TOLERANCE_DAYS = 3` days old, `:268`). The product page already gates its "Active listings" tile with it (`supplyIsFresh`, `page.tsx:208`).
 - Next docs shipped in `node_modules/next/dist/docs/01-app/03-api-reference/03-file-conventions/`: `not-found.md`, `loading.md` (section "Status Codes"), `01-metadata/sitemap.md`, `01-metadata/robots.md`, `01-metadata/opengraph-image.md`.
 - `node_modules/next/dist/lib/metadata/resolvers/resolve-url.js:69-92` (`"./"` resolves against the request pathname; a bare `"/"` resolves to the origin) and `node_modules/next/dist/lib/metadata/resolve-metadata.js:603-660` (`og:title` and `og:description` are filled from the page's `title`/`description` only when the inherited `openGraph` block has none).
 
@@ -62,6 +64,8 @@ grep -n 'FALLBACK_SITE_URL\|export function getSiteUrl' app/lib/siteUrl.ts
 #   expect: const FALLBACK_SITE_URL = "https://pokefin.ca"; and export function getSiteUrl(): string {
 #   If the file is missing, WP02 has not landed. STOP, this PR depends on it.
 grep -n 'SITE_URL' .env.example                # expect: NEXT_PUBLIC_SITE_URL=http://localhost:3000 (local dev value)
+grep -c 'updated daily from TCGplayer' app/layout.tsx   # WP03 landed: 2 (lower-case "p")
+grep -n 'export function isListingsSnapshotFresh' app/lib/marketPulse.ts   # expect 1 match
 ```
 
 Record the lint baseline for the files you will touch (compare in Verification):
@@ -102,6 +106,13 @@ import type { Metadata } from "next";
 import { FALLBACK_SITE_URL, getSiteUrl } from "./siteUrl";
 
 export const SITE_NAME = "Pokéfin";
+
+/**
+ * og:locale for every page. Canadian site (.ca domain, CAD figures), English.
+ * Product pages replace the layout's openGraph block wholesale, so they must
+ * set it again; both import this constant.
+ */
+export const OG_LOCALE = "en_CA";
 
 /**
  * The public origin of the site as a URL, for metadataBase, canonical links,
@@ -221,10 +232,10 @@ Run `grep -rn 'lib/redirect\.ts\|lib/redirect"' app`. The review's recommendatio
 Add below the existing imports:
 
 ```ts
-import { getSiteOrigin, SITE_NAME } from "./lib/site";
+import { getSiteOrigin, OG_LOCALE, SITE_NAME } from "./lib/site";
 ```
 
-Replace the whole `export const metadata: Metadata = { ... };` block (`:26-36`) with the block below. Keep WP03's description text exactly (the string that says "updated daily from TCGPlayer"); only the structure changes.
+Replace the whole `export const metadata: Metadata = { ... };` block (`:26-36`) with the block below. Keep WP03's description text exactly (the string that says "updated daily from TCGplayer", lower-case "p"; WP03 already fixed the spelling); only the structure changes. If the file still says "TCGPlayer", write "TCGplayer" anyway: every metadata string in this PR spells the source "TCGplayer" (Track 2, `research/trust-seo-brand.md` §3).
 
 ```ts
 export const metadata: Metadata = {
@@ -238,7 +249,7 @@ export const metadata: Metadata = {
     template: `%s · ${SITE_NAME}`,
   },
   description:
-    "Get up-to-date Pokémon sealed product prices, updated daily from TCGPlayer. Track the latest market trends and values for Pokémon TCG sealed items.",
+    "Get up-to-date Pokémon sealed product prices, updated daily from TCGplayer. Track the latest market trends and values for Pokémon TCG sealed items.",
   applicationName: SITE_NAME,
   // "./" resolves against each request's own pathname, so every page is its
   // own canonical (/prices -> https://.../prices, query string dropped).
@@ -251,7 +262,8 @@ export const metadata: Metadata = {
   openGraph: {
     type: "website",
     siteName: SITE_NAME,
-    locale: "en_US",
+    // Canadian site: .ca domain, CAD figures (Track 2).
+    locale: OG_LOCALE,
     url: "./",
   },
   twitter: { card: "summary_large_image" },
@@ -262,17 +274,18 @@ Member finding F029 asks for a theme colour; the F028 verifier says it belongs i
 
 ```ts
 // Browser UI colour (mobile address bar). White matches the sticky white
-// header; the site has no dark theme (globals.css is light only).
+// header; the site has no dark theme (globals.css is light only). Not red:
+// a red browser bar reads as an error state and clashes with the loss colour.
 export const viewport: Viewport = {
   themeColor: "#ffffff",
 };
 ```
 
-Next emits `<meta name="theme-color" content="#ffffff"/>` on every page. Do not put `themeColor` inside `metadata`.
+Next emits `<meta name="theme-color" content="#ffffff"/>` on every page. Do not put `themeColor` inside `metadata`. Keep `#ffffff` even though `research/performance-excellence.md` PX09a proposes `themeColor: "#dc2626"`: Track 2 rejected that (`research/trust-seo-brand.md` §3, row "WP13 step 3").
 
 ### 4. Per-route metadata (F028)
 
-Every title below is bare; the layout template appends ` · Pokéfin`. Add `import type { Metadata } from "next";` to each file that does not already import it.
+Every title below is bare; the layout template appends ` · Pokéfin`. Add `import type { Metadata } from "next";` to each file that does not already import it. Every string this PR writes (titles, descriptions, the share image text, JSON-LD) spells the source "TCGplayer", lower-case "p" (Track 2). Do not respell existing `TCGPlayer` text this PR does not otherwise touch (for example the "View on TCGPlayer" links); WP15 owns those.
 
 4a. `frontend/app/prices/page.tsx` (server component). Below the imports:
 
@@ -280,7 +293,7 @@ Every title below is bare; the layout template appends ` · Pokéfin`. Add `impo
 export const metadata: Metadata = {
   title: "Sealed Product Prices",
   description:
-    "Current market prices for every tracked Pokémon TCG sealed product, from booster boxes to Elite Trainer Boxes, updated daily from TCGPlayer.",
+    "Current market prices for every tracked Pokémon TCG sealed product, from booster boxes to Elite Trainer Boxes, updated daily from TCGplayer.",
 };
 ```
 
@@ -418,7 +431,7 @@ export default function OpengraphImage() {
           Pokémon Sealed Product Prices
         </div>
         <div style={{ display: "flex", marginTop: 28, fontSize: 34, color: "#475569" }}>
-          Market prices, returns and trends, updated daily from TCGPlayer.
+          Market prices, returns and trends, updated daily from TCGplayer.
         </div>
       </div>
     ),
@@ -433,13 +446,14 @@ Every `div` with more than one child must keep `display: "flex"` (Satori rejects
 
 ### 7. Product metadata, strict ids and JSON-LD (F028, F093)
 
-7a. New `frontend/app/product/[id]/productMeta.ts` (a plain module next to the page; only `page.tsx` and route files are routes). Pure functions, unit-tested in step 13.
+7a. New `frontend/app/product/[id]/productMeta.ts` (a plain module next to the page; only `page.tsx` and route files are routes). Pure functions, unit-tested in test 5.
 
 ```ts
 import type { Metadata } from "next";
 import type { Product } from "../../components/ProductPrices/types";
+import { isListingsSnapshotFresh } from "../../lib/marketPulse";
 import { hasCurrentPrice } from "../../lib/priceGuard";
-import { absoluteUrl, NO_INDEX, SITE_NAME } from "../../lib/site";
+import { absoluteUrl, NO_INDEX, OG_LOCALE, SITE_NAME } from "../../lib/site";
 
 // Canonical positive integers only: "42", never "042", "4.2e1", "0x2a" or
 // " 42". Number() accepts all of those, which served the same product under
@@ -489,33 +503,99 @@ export function buildProductMetadata(product: Product): Metadata {
   return {
     // Bare title: the root layout template appends " · Pokéfin".
     title: name,
-    description: `Live price, return metrics, and one-year price history for ${setName} ${label} sealed product.`,
+    // "Daily", never "Live": prices are scraped once a day (WP03).
+    description: `Daily TCGplayer Market Price, returns, volatility and price history for ${setName} ${label}.`,
     // Explicit, from the product's own id, so any alias URL canonicalises here.
     alternates: { canonical: path },
-    // Replaces the layout's openGraph block wholesale, so repeat siteName and
-    // url. og:title and og:description are filled from title/description.
+    // Replaces the layout's openGraph block wholesale, so repeat siteName,
+    // locale and url. og:title and og:description are filled from
+    // title/description.
     openGraph: {
       type: "website",
       siteName: SITE_NAME,
+      locale: OG_LOCALE,
       url: path,
       // image_url values are absolute storage URLs (main.py uploads them).
+      // WP37 replaces this with a file-based opengraph-image per product.
       ...(product.image_url
         ? { images: [{ url: product.image_url, alt: name }] }
         : {}),
     },
     // Product photos are roughly square; the large card would crop them.
+    // WP37 switches this to summary_large_image with its share images.
     twitter: { card: "summary" },
   };
+}
+
+/** The listings fields this module reads (ProductDetail["listings"] has them). */
+export type ListingsSnapshotFields = {
+  active_listings: number | null;
+  lowest_listing_price: number | null;
+  snapshot_date: string | null;
+};
+
+export type ListingsOffer = {
+  /** Lowest TCGplayer ask in the snapshot, USD. */
+  lowPrice: number;
+  /** Active TCGplayer listings in the snapshot. */
+  offerCount: number;
+};
+
+/**
+ * The marketplace offer summary Pokéfin may publish, or null. Requires a
+ * current price (hasCurrentPrice: a product whose price is withheld publishes
+ * no price of any kind) AND a listings snapshot at most 3 days old
+ * (isListingsSnapshotFresh, the same gate as the page's "Active listings"
+ * tile), with a positive lowest ask and at least one listing.
+ * The page uses the same function for the visible "Lowest TCGplayer listing"
+ * line (step 7b), so the JSON-LD never states a number the page hides.
+ */
+export function getListingsOffer(
+  product: Product,
+  listings: ListingsSnapshotFields | null | undefined,
+  now: Date = new Date()
+): ListingsOffer | null {
+  if (!hasCurrentPrice(product) || !listings) return null;
+  if (!isListingsSnapshotFresh(listings.snapshot_date, now)) return null;
+  const lowPrice = listings.lowest_listing_price;
+  const offerCount = listings.active_listings;
+  if (typeof lowPrice !== "number" || !Number.isFinite(lowPrice) || lowPrice <= 0) {
+    return null;
+  }
+  if (typeof offerCount !== "number" || !Number.isSafeInteger(offerCount) || offerCount <= 0) {
+    return null;
+  }
+  return { lowPrice, offerCount };
+}
+
+/** product.url when it is an absolute https URL (the TCGplayer page), else undefined. */
+function marketplaceUrl(raw: string | null | undefined): string | undefined {
+  if (!raw) return undefined;
+  try {
+    const url = new URL(raw);
+    return url.protocol === "https:" ? url.toString() : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 type JsonLd = Record<string, unknown>;
 
 /**
- * schema.org Product for /product/[id]. `offers` is present only when the
- * price guard says the price is current: a withheld (stale) price is never
- * published, here or anywhere else.
+ * schema.org Product for /product/[id].
+ *
+ * `offers` is an AggregateOffer describing TCGplayer's listings (lowest ask,
+ * number of listings, link to the TCGplayer page), present only when
+ * getListingsOffer returns one. Never an `Offer` with Pokéfin's URL: that
+ * would state that Pokéfin sells the item at that price. Without a fresh
+ * snapshot `offers` is omitted. The Market Price stays in the visible page,
+ * not in `offers`.
  */
-export function buildProductJsonLd(product: Product): JsonLd {
+export function buildProductJsonLd(
+  product: Product,
+  listings: ListingsSnapshotFields | null | undefined,
+  now: Date = new Date()
+): JsonLd {
   const jsonLd: JsonLd = {
     "@context": "https://schema.org",
     "@type": "Product",
@@ -526,12 +606,17 @@ export function buildProductJsonLd(product: Product): JsonLd {
   };
   if (product.image_url) jsonLd.image = [product.image_url];
   if (product.sku) jsonLd.sku = product.sku;
-  if (hasCurrentPrice(product) && typeof product.usd_price === "number") {
+  const offer = getListingsOffer(product, listings, now);
+  if (offer) {
+    const sellerUrl = marketplaceUrl(product.url);
     jsonLd.offers = {
-      "@type": "Offer",
-      price: product.usd_price.toFixed(2),
+      "@type": "AggregateOffer",
+      lowPrice: offer.lowPrice.toFixed(2),
       priceCurrency: "USD",
-      url: absoluteUrl(productPath(product.id)),
+      offerCount: offer.offerCount,
+      // The TCGplayer product page, where the listings are. Omitted when
+      // product.url is not an https URL; never Pokéfin's own URL.
+      ...(sellerUrl ? { url: sellerUrl } : {}),
     };
   }
   return jsonLd;
@@ -546,6 +631,12 @@ export function serializeJsonLd(data: JsonLd): string {
 }
 ```
 
+Notes on 7a (Track 2, `research/trust-seo-brand.md` §3):
+
+- The description deliberately stops after `{set} {label}.`. The Track 2 wording also ends with "Prices in USD and CAD.", but at this point the product page shows USD only (`ProductDetailChart` renders `currency="USD"`; there is no CAD figure on the page). Do not add that sentence here; WP31, which adds CAD to the product page, appends it.
+- `lowPrice` is `lowest_listing_price`, the cheapest TCGplayer listing in USD before shipping (`main.py` `_fetch_listings_snapshot_once`); `offerCount` is `active_listings`. Both come from `ProductDetail.listings`, which `getCachedProductDetail` already loads; no new query.
+- `isListingsSnapshotFresh` compares local calendar dates. Tests pass `now` explicitly so they do not depend on the clock or time zone.
+
 7b. `frontend/app/product/[id]/page.tsx`:
 
 - Delete the local `getProductLabel` function (`:31-37`) and add this import next to the other local imports (near `import ProductDetailChart from "./ProductDetailChart";`):
@@ -554,6 +645,7 @@ export function serializeJsonLd(data: JsonLd): string {
 import {
   buildProductJsonLd,
   buildProductMetadata,
+  getListingsOffer,
   getProductLabel,
   parseProductId,
   PRODUCT_NOT_FOUND_METADATA,
@@ -608,9 +700,37 @@ export async function generateMetadata({
       {/* Product JSON-LD. Escaped by serializeJsonLd; data, not executable script. */}
       <script
         type="application/ld+json"
-        dangerouslySetInnerHTML={{ __html: serializeJsonLd(buildProductJsonLd(product)) }}
+        dangerouslySetInnerHTML={{
+          __html: serializeJsonLd(buildProductJsonLd(product, detail.listings ?? null)),
+        }}
       />
 ```
+
+  Pass `detail.listings ?? null` (not a local variable): `detail` is non-null after the `notFound()` guard, and the `?? null` covers a `ProductDetail` cached before listings existed, as the page's own `listings` constant does.
+
+- Make the offer summary visible, so the JSON-LD never states a number the page hides (Google's structured data must describe visible content). Directly before the `return (` of `ProductPage`, add:
+
+```tsx
+  // Same gate as the JSON-LD offers: current price and a listings snapshot at
+  // most 3 days old. Null hides the line below and omits `offers`.
+  const listingsOffer = getListingsOffer(product, detail.listings ?? null);
+```
+
+  Then, inside the Market Pulse `<section>` (find `<h2 className="text-sm font-semibold text-slate-900">Market Pulse</h2>`), directly after the closing `</div>` of the tile grid (`<div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">` ... `</div>`) and before `</section>`, insert:
+
+```tsx
+        {listingsOffer && (
+          <p className="mt-3 text-xs text-slate-500">
+            Lowest TCGplayer listing:{" "}
+            <span className="font-semibold text-slate-700 tabular-nums">
+              {formatMoney(listingsOffer.lowPrice, "USD")}
+            </span>{" "}
+            across {listingsOffer.offerCount} listings, before shipping.
+          </p>
+        )}
+```
+
+  `formatMoney` is WP07's formatter from `app/lib/format.ts`, which the page already imports for the hero price (`formatMoney(product.usd_price, "USD")`). If the page has no `formatMoney` (WP07 not landed), use its local `formatUsd(listingsOffer.lowPrice)` instead. Do not add a seventh tile: the grid is `lg:grid-cols-6`.
 
 Do not change anything else in the page (WP07's formatters, WP11's `revalidate` and `generateStaticParams`, WP12's `priority` hero image stay as they are). If WP11 has not landed, do not add `generateStaticParams` here (see Pitfalls).
 
@@ -1104,7 +1224,13 @@ export default function NoResults({ query, onClearFilters }: NoResultsProps) {
 - **Do not delete the client-side redirect effects** in `portfolio/page.tsx` and `account/page.tsx` (F002 verifier: they handle a session that ends mid-visit). Only the URL changes. Do not change `proxy.ts`.
 - **Do not use `router.push(target)` after sign-in.** Use `router.replace` so Back does not reopen the login form. It is still a client navigation to the validated target.
 - **Do not disallow `/auth/` in `robots.txt`.** Blocked pages are never fetched, so their `noindex` is never seen and the URLs can still be indexed from links.
-- **Do not publish a price in JSON-LD when `hasCurrentPrice(product)` is false.** Omit `offers` entirely; a stale price must not reappear anywhere.
+- **Do not publish a price in JSON-LD when `hasCurrentPrice(product)` is false, or when the listings snapshot is older than 3 days.** Omit `offers` entirely; a stale price must not reappear anywhere. Both gates live in `getListingsOffer`; do not re-implement them in the page.
+- **Do not emit an `Offer`, and do not put Pokéfin's URL or the Market Price in `offers`** (Track 2). An `Offer` whose `url` is the Pokéfin page states that Pokéfin sells the item at that price. `offers` is an `AggregateOffer` built from TCGplayer's listings (`lowPrice` = lowest ask, `offerCount` = active listings) whose `url` is `product.url` (the TCGplayer page). The Product's own top-level `url` stays the Pokéfin page.
+- **Do not write "Live price", "live" or "real-time" in any metadata string**, and do not write "TCGPlayer" (capital "P") in any string this PR adds (Track 2). Prices are scraped daily; the source styles its name "TCGplayer".
+- **Do not append "Prices in USD and CAD." to the product description in this PR.** The product page shows no CAD figure yet; WP31 adds CAD and the sentence.
+- **Do not use `og:locale` `en_US`, and do not drop `locale` from the product `openGraph` block.** A child `openGraph` replaces the layout's wholesale, so `buildProductMetadata` repeats `locale: OG_LOCALE`.
+- **Do not change `viewport.themeColor` to red** (`#dc2626`, proposed in `research/performance-excellence.md` PX09a). Track 2 keeps `#ffffff`.
+- **Do not remove the product `openGraph.images` or switch the product card to `summary_large_image` here.** WP37 does both when it adds file-based share images (`research/trust-seo-brand.md` §3); until then the product photo is the only product-specific image.
 - **Do not interpolate product data into the JSON-LD script without `serializeJsonLd`.** A name containing `</script>` would otherwise close the tag.
 - **Do not export `metadata` from a `"use client"` file.** Next rejects it at build. That is why the client routes get pass-through `layout.tsx` files and the login page is split.
 - **Do not use `global-not-found.js`** (experimental flag). `app/not-found.tsx` inside the root layout is the right primitive here.
@@ -1150,6 +1276,7 @@ Save `process.env.NEXT_PUBLIC_SITE_URL` in `beforeAll` and restore it in `afterE
 - `"http://localhost:3000"` gives `"http://localhost:3000"`.
 - `absoluteUrl("/")` is the origin with no trailing slash; `absoluteUrl("/product/42")` is `"<origin>/product/42"`.
 - `NO_INDEX` equals `{ index: false, follow: true }`.
+- `OG_LOCALE` equals `"en_CA"`.
 
 Do not add cases for `getSiteUrl` itself; WP02's tests own it.
 
@@ -1222,9 +1349,15 @@ Further cases: the entry for product 42 has `lastModified` instanceof `Date`; th
 ### 5. New `app/product/[id]/__tests__/productMeta.test.ts`
 
 - `parseProductId`: `"42"` gives `42`; `"042"`, `"4.2"`, `"4.2e1"`, `"1e3"`, `"0x2a"`, `" 42"`, `"42 "`, `"-1"`, `"0"`, `""`, `"abc"`, `"12345678901234567"` (17 digits) give `null`.
-- `buildProductMetadata` for `{ id: 42, sets: { name: "Prismatic Evolutions", ... }, product_types: { label: "Elite Trainer Box", ... }, variant: "Pokemon Center", image_url: "https://x.supabase.co/storage/v1/object/public/products/42.png" }`: `title` is `"Prismatic Evolutions Elite Trainer Box (Pokemon Center)"` and contains no `"Pokéfin"`; `alternates.canonical` is `"/product/42"`; `openGraph.url` is `"/product/42"`; `openGraph.images` is `[{ url: <image_url>, alt: <title> }]`; `twitter.card` is `"summary"`. With `image_url: null` the `openGraph` object has no `images` key.
+- `buildProductMetadata` for `{ id: 42, sets: { name: "Prismatic Evolutions", ... }, product_types: { label: "Elite Trainer Box", ... }, variant: "Pokemon Center", image_url: "https://x.supabase.co/storage/v1/object/public/products/42.png" }`: `title` is `"Prismatic Evolutions Elite Trainer Box (Pokemon Center)"` and contains no `"Pokéfin"`; `alternates.canonical` is `"/product/42"`; `openGraph.url` is `"/product/42"`; `openGraph.locale` is `"en_CA"`; `openGraph.images` is `[{ url: <image_url>, alt: <title> }]`; `twitter.card` is `"summary"`. `description` equals `"Daily TCGplayer Market Price, returns, volatility and price history for Prismatic Evolutions Elite Trainer Box."` and contains neither `"Live"` nor `"TCGPlayer"`. With `image_url: null` the `openGraph` object has no `images` key.
 - `PRODUCT_NOT_FOUND_METADATA`: `title` is `"Product not found"`, `robots` equals `NO_INDEX`, `alternates.canonical` is `null`.
-- `buildProductJsonLd`: with `usd_price: 59.99` (and `NEXT_PUBLIC_SITE_URL` set to `https://pokefin.ca`, saved and restored as in test 2) the result has `"@type": "Product"`, `url: "https://pokefin.ca/product/42"`, `offers: { "@type": "Offer", price: "59.99", priceCurrency: "USD", url: "https://pokefin.ca/product/42" }`; with `usd_price: null` there is no `offers` key; `image` is an array when `image_url` is set and absent otherwise.
+- `getListingsOffer` and `buildProductJsonLd`. Use a fixed `const NOW = new Date(2026, 8, 30, 12, 0, 0);` (local time, 30 September 2026) as the last argument of every call, a product with `usd_price: 59.99` and `url: "https://www.tcgplayer.com/product/42"`, and `const FRESH = { active_listings: 12, lowest_listing_price: 54.5, snapshot_date: "2026-09-29" };`. Set `NEXT_PUBLIC_SITE_URL` to `https://pokefin.ca` (saved and restored as in test 2). Cases:
+  - With `FRESH`: the result has `"@type": "Product"`, `url: "https://pokefin.ca/product/42"` and `offers` equal to `{ "@type": "AggregateOffer", lowPrice: "54.50", priceCurrency: "USD", offerCount: 12, url: "https://www.tcgplayer.com/product/42" }`. `getListingsOffer` returns `{ lowPrice: 54.5, offerCount: 12 }`.
+  - `JSON.stringify(result.offers)` contains neither `"pokefin"` nor `"59.99"` and has no `"@type":"Offer"` (Pokéfin is not the seller; the Market Price is not an offer).
+  - `snapshot_date: "2026-09-27"` (3 days old) still has `offers`; `"2026-09-26"` has no `offers` key and `getListingsOffer` returns `null`.
+  - No `offers` key (and `getListingsOffer` returns `null`) for each of: `listings` `null`; `usd_price: null` with `FRESH` (withheld price); `snapshot_date: null`; `lowest_listing_price: null`, `0` or `-1`; `active_listings: null`, `0` or `2.5`.
+  - `product.url` `""` or `"http://www.tcgplayer.com/product/42"` with `FRESH`: `offers` is present and has no `url` key.
+  - `image` is an array when `image_url` is set and absent otherwise.
 - `serializeJsonLd`: for a product whose set name is `"</script><script>alert(1)</script>"`, the output contains no `"<"` character and `JSON.parse(output).name` equals the original display name.
 
 Access nested Metadata fields through narrow casts, for example `(meta.openGraph as { images?: unknown }).images`.
@@ -1383,6 +1516,10 @@ grep -rn 'function safeNextPath' app
 # expect: app/lib/redirects.ts only
 grep -rn '· Pokéfin"\|Pokefin",' app --include=*.tsx | grep -v __tests__
 # expect: no output (no hand-written title suffixes)
+grep -n 'TCGPlayer\|Live price\|en_US' app/layout.tsx app/prices/page.tsx app/opengraph-image.tsx "app/product/[id]/productMeta.ts"
+# expect: no output (Track 2 spelling, "Daily" not "Live", en_CA)
+grep -rn '"@type": "Offer"' app --include=*.ts --include=*.tsx | grep -v __tests__
+# expect: no output (product offers are an AggregateOffer)
 grep -rn '"https://pokefin.ca"\|"https://www.pokefin.ca"' app --include=*.tsx
 # expect: no output (layout no longer hardcodes a host; csrf/export/delete are .ts and unchanged)
 grep -rn 'NEXT_PUBLIC_SITE_URL' app --include=*.ts --include=*.tsx | grep -v __tests__
@@ -1418,6 +1555,8 @@ grep -c 'noindex' .next/server/app/auth/login.html
 # expect: 1 or more
 grep -c 'name="theme-color" content="#ffffff"' .next/server/app/index.html
 # expect: 1
+grep -c 'property="og:locale" content="en_CA"' .next/server/app/index.html .next/server/app/prices.html
+# expect: 1 for each file
 grep -c 'next-error-h1' .next/server/app/_not-found.html
 # expect: 0 (Next's stock 404 block is gone)
 grep -c 'find that page' .next/server/app/_not-found.html
@@ -1456,7 +1595,7 @@ kill %1
 
 Dynamic checks in the browser. Terminal 1: `cd frontend && SUPABASE_STUB_FIXTURE=catalog node scripts/supabase-stub.mjs`. Terminal 2: `cd frontend && NEXT_PUBLIC_SUPABASE_URL=http://127.0.0.1:54321 NEXT_PUBLIC_SUPABASE_KEY=stub-anon-key NEXT_PUBLIC_SITE_URL=http://localhost:3000 pnpm dev`. Then:
 
-1. `http://localhost:3000/product/900001`: renders. View source: `<title>Stubfixture Alpha Booster Box · Pokéfin</title>`, `<link rel="canonical" href="http://localhost:3000/product/900001"/>`, and a `<script type="application/ld+json">` whose JSON has `"@type":"Product"` and `"offers":{"@type":"Offer","price":"123.45","priceCurrency":"USD","url":"http://localhost:3000/product/900001"}`.
+1. `http://localhost:3000/product/900001`: renders. View source: `<title>Stubfixture Alpha Booster Box · Pokéfin</title>`, `<link rel="canonical" href="http://localhost:3000/product/900001"/>`, `<meta name="description" content="Daily TCGplayer Market Price, returns, volatility and price history for Stubfixture Alpha Booster Box."/>`, `<meta property="og:locale" content="en_CA"/>`, and a `<script type="application/ld+json">` whose JSON has `"@type":"Product"` and `"url":"http://localhost:3000/product/900001"` and no `"offers"` key: the stub has no listings snapshot, so `getListingsOffer` returns null, and the Market Pulse section shows no "Lowest TCGplayer listing" line. The `AggregateOffer` path is covered by test 5 and by Owner action 3.
 2. `/product/999999`, `/product/abc`, `/product/0900001` and `/product/0x10`: each shows "We don't track that product" with the search form and the three links, inside the normal header and footer, with a light background even with the OS in dark mode. Tab title "Product not found · Pokéfin".
 3. `/nope`: shows "We couldn't find that page"; submitting "booster" in its search box lands on `/prices?q=booster` with the filter applied.
 4. Product skeleton: DevTools Network "Slow 4G", go to `/prices`, click a product card. The pulse skeleton (image block, title bars, tiles) appears immediately, then the product page replaces it.
@@ -1468,7 +1607,7 @@ Dynamic checks in the browser. Terminal 1: `cd frontend && SUPABASE_STUB_FIXTURE
 
 1. **Confirm the canonical host (same host as WP02 owner action 4).** Run `curl -sI https://pokefin.ca/ | grep -iE '^HTTP|^location'` and `curl -sI https://www.pokefin.ca/ | grep -iE '^HTTP|^location'`. Expected, after WP02 owner action 4: the apex answers `200` and `www` answers `307`/`308` with `location: https://pokefin.ca/`. In Vercel, Project, Settings, Environment Variables, check that `NEXT_PUBLIC_SITE_URL` for **Production** is exactly `https://pokefin.ca` (no trailing slash). If `www` serves `200` and the apex redirects instead, do not change the variable alone: auth emails (WP02) and canonical URLs both follow it, so fix the redirect direction in Vercel, Domains (apex primary, `www` redirecting to it) as WP02 owner action 4 describes. Redeploy production after any change to the variable (`NEXT_PUBLIC_*` values are inlined at build). Confirm: view source of `https://pokefin.ca/prices` shows `<link rel="canonical" href="https://pokefin.ca/prices"/>` and `<meta property="og:url" content="https://pokefin.ca/prices"/>`.
 2. **Submit the sitemap** (recommended). In Google Search Console, add or open the property for the canonical host, go to Sitemaps and submit `https://<host>/sitemap.xml`. Confirm: status "Success" and a discovered URL count of about 300 plus 7.
-3. **Spot-check previews after deploy.** Paste the URL of a production product whose page shows a current price into the Rich Results Test (search.google.com/test/rich-results): a "Product snippets" item is detected with no errors (warnings about missing reviews, ratings or availability are expected). A product whose price is withheld has no `offers`, so the test reports it as not eligible; that is intended. Paste the same URL into a Discord or Slack message: the card shows the product name and photo. Paste `https://<host>/prices`: the card shows "Sealed Product Prices · Pokéfin" and the Pokéfin share image.
+3. **Spot-check previews after deploy.** Paste the URL of a production product whose page shows a current price and a "Lowest TCGplayer listing" line into the Rich Results Test (search.google.com/test/rich-results): a "Product snippets" item is detected with an `AggregateOffer` (low price, offer count, the TCGplayer URL) and no errors (warnings about missing reviews, ratings or availability are expected). A product whose price is withheld, or whose listings snapshot is older than 3 days (no "Lowest TCGplayer listing" line), has no `offers`, so the test may report it as not eligible; that is intended. If every product shows no "Lowest TCGplayer listing" line, the listings scraper has stalled: tell the developer (no code change in this PR). Paste the same URL into a Discord or Slack message: the card shows the product name and photo. Paste `https://<host>/prices`: the card shows "Sealed Product Prices · Pokéfin" and the Pokéfin share image.
 4. **Preview deployments.** Open `https://<any-preview-url>/robots.txt`: it must say `Disallow: /`. If it shows the production rules, `VERCEL_ENV` was not visible at build time; tell the developer (no code change is expected).
 
 ## Acceptance criteria
@@ -1480,7 +1619,8 @@ Dynamic checks in the browser. Terminal 1: `cd frontend && SUPABASE_STUB_FIXTURE
 - [ ] `/robots.txt` disallows `/api/`, `/account`, `/portfolio`, does not disallow `/auth`, and links the sitemap; on preview deployments it disallows everything.
 - [ ] `/sitemap.xml` lists the 7 public routes and one URL per product, and no `/stats`, `/portfolio`, `/account` or `/auth` URL.
 - [ ] `/stats` answers `308` to `/analytics`.
-- [ ] Product pages contain one Product JSON-LD block; `offers` appears only when the page shows a current price; the block contains no raw `<`.
+- [ ] Product pages contain one Product JSON-LD block; `offers` is an `AggregateOffer` (lowest TCGplayer ask, listing count, TCGplayer URL) that appears only when the page shows a current price and a listings snapshot at most 3 days old, and then the page also shows the "Lowest TCGplayer listing" line with the same price; no `Offer` names Pokéfin as seller; the block contains no raw `<`.
+- [ ] Product descriptions read "Daily TCGplayer Market Price, returns, volatility and price history for {set} {label}."; no string this PR adds says "Live price" or "TCGPlayer"; every page has `og:locale` `en_CA` and `theme-color` `#ffffff`.
 - [ ] `/product/abc`, `/product/042`, `/product/0x10` and an unknown numeric id show the branded "We don't track that product" page; unmatched URLs show "We couldn't find that page"; neither contains `next-error-h1` or a `rel="canonical"` link, and both keep the light background in OS dark mode.
 - [ ] Every page's `<head>` has `/icon.png` and `/apple-icon.png` links next to the existing `/favicon.ico`.
 - [ ] `app/lib/site.ts` reads the origin only through WP02's `getSiteUrl()`; no new file reads `NEXT_PUBLIC_SITE_URL` directly and no new file hardcodes a `pokefin.ca` host.
@@ -1509,7 +1649,9 @@ feat(seo): per-page metadata, sitemap, branded 404, login return-to
 - Per-route titles and descriptions; noindex on auth, account, portfolio;
   /stats redirects to /analytics (F028)
 - Product pages: strict id parsing, canonical, product photo as og:image,
-  Product JSON-LD without stale prices (F028, F093)
+  Product JSON-LD with an AggregateOffer from fresh TCGplayer listings
+  only, "Daily TCGplayer Market Price" description, og:locale en_CA
+  (F028, F093, Track 2)
 - robots.txt and a daily sitemap of every product (F028)
 - Branded not-found pages, product loading skeleton, zero-result panels
   on /prices and /market (F093)
@@ -1520,4 +1662,4 @@ feat(seo): per-page metadata, sitemap, branded 404, login return-to
 
 PR title: `WP13: SEO metadata, 404 and loading states, login return-to`
 
-PR body summary: list F028, F093 and F002 with one line each as in the metadata block above, and state what F093 items were intentionally left to other packages (toast: WP03; `/prices` Suspense fallback: WP08; `ProductImage` "Loading..." text: WP12). Paste the Verification output (tsc, lint counts before and after, Jest summary, the `pnpm build:stub` route table lines for `/auth/login`, `/robots.txt`, `/sitemap.xml`, `/opengraph-image`, and the grep results). List the four Owner actions. Note whether the sign-in return-to was checked manually or by unit tests only, and whether the `/market` empty state is covered by test 9 or only by the manual check. Include the prefetch sentence from Pitfalls verbatim. State that `app/lib/siteUrl.ts` changed only by exporting `FALLBACK_SITE_URL`, and that WP17's coverage list must treat `app/auth/login/page.tsx` and `app/analytics/page.tsx` as server pages.
+PR body summary: list F028, F093 and F002 with one line each as in the metadata block above, plus one line for the Track 2 corrections (AggregateOffer from fresh listings only, with the visible "Lowest TCGplayer listing" line; "Daily TCGplayer Market Price"; `en_CA`; theme colour kept `#ffffff`; "TCGplayer" spelling), and state what F093 items were intentionally left to other packages (toast: WP03; `/prices` Suspense fallback: WP08; `ProductImage` "Loading..." text: WP12). Paste the Verification output (tsc, lint counts before and after, Jest summary, the `pnpm build:stub` route table lines for `/auth/login`, `/robots.txt`, `/sitemap.xml`, `/opengraph-image`, and the grep results). List the four Owner actions. Note whether the sign-in return-to was checked manually or by unit tests only, and whether the `/market` empty state is covered by test 9 or only by the manual check. Include the prefetch sentence from Pitfalls verbatim. State that `app/lib/siteUrl.ts` changed only by exporting `FALLBACK_SITE_URL`, and that WP17's coverage list must treat `app/auth/login/page.tsx` and `app/analytics/page.tsx` as server pages.

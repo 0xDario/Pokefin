@@ -2,10 +2,10 @@
 
 - **Findings covered**
   - F014 (full; cluster members F014, F066): every `ProductCard` mounts a Recharts `<ResponsiveContainer><LineChart>` sparkline (one ResizeObserver and one Redux store per card, about 306 live after one scroll), and the 118 kB gzip Recharts chunk downloads on every `/` and `/prices` visit as soon as the first card's history arrives.
-  - F070 (full; cluster members F067, F070): one PostgREST request per card as it scrolls into view (about 306 per full scroll), two to three parent re-renders of the whole card list per card, and a burst of up to 306 concurrent requests when the chart timeframe changes after browsing.
+  - F070 (full; cluster members F067, F070): one PostgREST request per card as it scrolls into view (about 306 per full scroll), and a burst of up to 306 concurrent requests when the chart timeframe widens (for example 3M to 1Y) after browsing, which makes the visible sparklines refill slowly. Severity medium. Re-render cost per the full-effort verifier: React 19 batches the `setPriceHistory` and `setLoadingProductIds` calls that follow one fetch into a single render, so it is about one to two renders of the page that owns `useProductData` per card (not two to three), and each render re-renders only the affected memoised card plus a shallow compare of the other ~306. That is a minor cost; the request count and burst are the main defect. The flashing "Loading price history..." toast is removed by WP03, and the unused `historyLoading` card prop is removed here (step 5).
   - F015 (full): no `content-visibility` on the roughly 306 cards (10k to 17k DOM nodes), and every timeframe change disconnects and recreates all 306 IntersectionObservers.
   - F071 (full, button half only, per verifier): the "Show full chart" button only appears once history arrives, so each card grows about 30 px while the user scrolls (catalog grid and the home page "Recently Released" strip).
-  - F126 (full): the mobile filter drawer animates `max-height` and `margin-top` with `transition-all`, and the cards use `transition-all` for a hover shadow.
+  - F126 (refuted as a performance defect; severity info, polish only). The full-effort verifier found no meaningful cost: animating the drawer's `max-height` lays out only the `ControlBar` subtree and repaints the shifted viewport (browsers reuse cached layout for the unchanged siblings below), and desktop never animates (`md:` overrides). Card `transition-all` animates exactly what `transition-shadow` would (only `box-shadow` changes on hover), so this PR does NOT swap it. Step 8 is kept for two real issues the verifier found in the same drawer: (1) the closed drawer is only visually hidden (`max-h-0 opacity-0`), so on mobile its selects, search input, currency selector and Done button stay in the Tab order and the screen-reader tree, and the trigger has no `aria-controls`; (2) with `max-h-[1000px]` the first ~40-50% of the 200 ms close animation shows no visible change because the real content is only about 500-600 px tall.
 - **Priority rationale**: `/prices` is the most visited page and these are its biggest remaining scroll and interaction costs once WP08 has put the catalog in the server HTML; the fix is dependency-free and needs no database change.
 - **Effort**: M (8 to 10 hours: one component rewrite, one new data-layer batcher, one small store module, about 8 call-site edits, 6 new and 2 updated test files).
 - **Depends on**: WP07 (`recordedAtDateKey` in `app/lib/format.ts`; WP07 also edits `MiniSparkline.tsx` and `ProductCard.tsx`), WP08 (rewrites `ProductPrices/index.tsx`), and through them WP03 (removed the history toast and the hook-level `historyLoading`) and WP00 (`pnpm build:stub`).
@@ -15,7 +15,7 @@
 
 ## Why
 
-On `/prices` every card draws its 96x40 price line with a full Recharts chart. After one scroll through the catalog about 306 charts, 306 ResizeObservers and 306 chart stores are alive, and the 118 kB gzip charting library is downloaded on every visit to `/` and `/prices` just for those lines; switching USD/CAD or the chart period then re-renders all of them and freezes the page for a moment on phones. While scrolling, each card fires its own Supabase request (about 306 per scroll) and each request re-renders the entire card list two or three times; switching the timeframe after browsing fires hundreds of requests at once. Cards also grow about 30 px when their "Show full chart" button pops in, shifting the grid under the user's thumb, and opening the mobile filter drawer animates a layout property above the whole list. After this PR the sparkline is a plain SVG polyline that renders on the server and never loads Recharts, history requested together (the first screen, a row of cards, a fast scroll, a timeframe change) is fetched in batched `.in()` queries, only the affected card re-renders when its loading state changes, off-screen cards skip layout and paint, cards keep a fixed height, and the drawer animates without `max-height`.
+On `/prices` every card draws its 96x40 price line with a full Recharts chart. After one scroll through the catalog about 306 charts, 306 ResizeObservers and 306 chart stores are alive, and the 118 kB gzip charting library is downloaded on every visit to `/` and `/prices` just for those lines; switching USD/CAD or the chart period then re-renders all of them and freezes the page for a moment on phones. While scrolling, each card fires its own Supabase request (about 306 per scroll) and each finished request re-renders the page that owns the card list; switching the timeframe to a longer period after browsing fires hundreds of requests at once, so the visible sparklines refill slowly. Cards also grow about 30 px when their "Show full chart" button pops in, shifting the grid under the user's thumb. On mobile the closed filter drawer is only faded out, so keyboard and screen-reader users still land on its hidden controls, and its close animation lags because it animates a 1000px `max-height`. After this PR the sparkline is a plain SVG polyline that renders on the server and never loads Recharts, history requested together (the first screen, a row of cards, a fast scroll, a timeframe change) is fetched in batched `.in()` queries, only the affected card re-renders when its loading state changes, off-screen cards skip layout and paint, cards keep a fixed height, and the closed drawer is out of the Tab order and animates without `max-height`.
 
 ## Before you start
 
@@ -776,7 +776,7 @@ Keep the `{showFullChart && hasHistory && (<LazyPriceChart ... />)}` block that 
 
 with `<MiniSparkline history={history} days={365} />` (same indentation as the original). `selectedCurrency` and `exchangeRate` stay card props: `ReturnMetrics` and `LazyPriceChart` use them.
 
-5h. Card roots (F015, F126). Flat root (`:129`): replace
+5h. Card roots (F015). Add a marker class only; keep `transition-all`. Flat root (`:129`): replace
 
 ```tsx
         className={`bg-white rounded-xl ring-1 ring-slate-200 shadow-sm hover:shadow-md hover:ring-slate-300 transition-all overflow-hidden ${accentClass}`}
@@ -785,7 +785,7 @@ with `<MiniSparkline history={history} days={365} />` (same indentation as the o
 with
 
 ```tsx
-        className={`pf-card-flat bg-white rounded-xl ring-1 ring-slate-200 shadow-sm hover:shadow-md hover:ring-slate-300 transition-shadow overflow-hidden ${accentClass}`}
+        className={`pf-card-flat bg-white rounded-xl ring-1 ring-slate-200 shadow-sm hover:shadow-md hover:ring-slate-300 transition-all overflow-hidden ${accentClass}`}
 ```
 
 Grouped root (`:232`): replace
@@ -797,10 +797,10 @@ Grouped root (`:232`): replace
 with
 
 ```tsx
-      className={`pf-card-grouped bg-white rounded-lg ring-1 ring-slate-200 shadow-sm hover:shadow-md hover:ring-slate-300 transition-shadow ${accentClass}`}
+      className={`pf-card-grouped bg-white rounded-lg ring-1 ring-slate-200 shadow-sm hover:shadow-md hover:ring-slate-300 transition-all ${accentClass}`}
 ```
 
-`transition-shadow` covers the ring too: Tailwind 4 draws `ring-*` with `box-shadow`. The two `pf-card-*` classes have no styles of their own; step 7 styles them only inside `ProductGrid`.
+Do not change `transition-all` to `transition-shadow`: F126's full-effort verifier showed it is a no-op (Tailwind 4 draws `shadow-*` and `ring-*` through `box-shadow`, and the only computed property that changes on hover is `box-shadow`). The two `pf-card-*` classes have no styles of their own; step 7 styles them only inside `ProductGrid`.
 
 ### Step 6. Call sites of the hook and the card
 
@@ -902,8 +902,10 @@ Every other use of `loadingProductIds` in the file (`:545`, `:567`, the `useMemo
 
 ```tsx
       {/* Filter panel: collapsible on mobile, always open on md+.
-          Animates grid-template-rows 0fr -> 1fr instead of max-height and
-          margin-top (F126). The spacing lives on an inner element so the
+          Animates grid-template-rows 0fr -> 1fr instead of max-height, so
+          the close animation starts moving at once (max-h-[1000px] showed
+          no change for the first half of the close). The spacing lives on
+          an inner element so the
           collapsed row is truly 0px tall. `invisible` while closed keeps the
           collapsed controls out of the tab order; visibility is in the
           transition list so it flips only after the close animation. */}
@@ -936,7 +938,7 @@ Every other use of `loadingProductIds` in the file (`:545`, `:567`, the `useMemo
       </div>
 ```
 
-Paste the real children from `:138-178` (from `<GenerationFilter` through the `</div>` that closes `<div className="md:ml-auto">`) where the placeholder comment is, indented four more spaces, with no change to their content; do not leave the placeholder comment in the file. The trigger button, `activeFilterCount` and the outer card `<div className="rounded-xl border ...">` stay as they are. `ControlBar` is also used by `/market` (`MarketView.tsx:635`), which gets the same behaviour. Honest expectation: the list below the bar still moves down frame by frame while the drawer opens (any height animation does that), but the cards are only translated, not re-laid-out internally, and with step 7 off-screen cards are skipped; the win is dropping the `transition-all` over layout properties and the 1000px `max-height` easing curve.
+Paste the real children from `:138-178` (from `<GenerationFilter` through the `</div>` that closes `<div className="md:ml-auto">`) where the placeholder comment is, indented four more spaces, with no change to their content; do not leave the placeholder comment in the file. The trigger button, `activeFilterCount` and the outer card `<div className="rounded-xl border ...">` stay as they are. `ControlBar` is also used by `/market` (`MarketView.tsx:635`), which gets the same behaviour. Honest expectation: this is not a performance fix (F126 was refuted as one). The list below the bar still slides down while the drawer opens, which is normal accordion behaviour. The wins are: the closed drawer's controls leave the Tab order and the screen-reader tree on mobile (`invisible` is `visibility: hidden`; `md:visible` keeps the always-open desktop controls reachable, which is why this uses `invisible` and not a plain `inert` attribute, which would also disable them on desktop), the trigger gets `aria-controls`, and the close animation no longer lags. Do not add `contain: layout` to the list container: it does not stop the container from being moved and changes nothing.
 
 ## Pitfalls: do not do this
 
@@ -946,7 +948,7 @@ Paste the real children from `:138-178` (from `<GenerationFilter` through the `<
 - **Do not issue one `.in("product_id", ids)` query for a whole batch without chunking.** PostgREST truncates at 1000 rows without an error. At 3M, 20 products are about 1,860 rows: the later products would get a partial or empty history, and `ensureHistoryLoaded` would record that range as loaded and never refetch it.
 - **Do not treat "no rows for a product" as a failure.** Resolve `[]` and cache it; four live products (e.g. id 442) have zero history, and the existing test "does not refetch a product whose history is legitimately empty" must keep passing.
 - **Do not reject a whole batch when one chunk fails**, and do not cache anything for a failed chunk: the existing test "clears the loading flag and returns [] when the fetch fails" requires a retry to refetch.
-- **Do not put the loading flags back into React state in `useProductData`, and do not compute `loadingProductIds.includes(product.id)` in the parent.** Either one re-renders the whole card list per card (the F070 defect). Use the store.
+- **Do not put the loading flags back into React state in `useProductData`, and do not compute `loadingProductIds.includes(product.id)` in the parent.** Either one re-renders the page and re-maps the whole card list on every load start and finish (part of F070). Use the store.
 - **Do not reintroduce the `hasTriggeredLoad` latch or refetch every previously seen card on a timeframe change.** Only cards near the viewport refetch; the rest refetch on re-entry. Keep the observer connected after the first load; that is what makes re-entry work.
 - **Do not add `chartTimeframe` to the observer effect's dependencies.** Read it from `chartTimeframeRef`; otherwise every timeframe change rebuilds ~306 observers (F015 verifier correction 3).
 - **Do not render `--` placeholders in `ReturnMetrics`.** F071 verifier: the number of return lines is fixed by the server summary and does not change when history arrives; placeholders would add noise lines without preventing any shift. Leave `ReturnMetrics.tsx` untouched.
@@ -1349,7 +1351,7 @@ Base props: `product` from a `makeProduct(id = 1)` helper shaped like WP07's (`i
 3. **With history**: `history` of 3 daily entries: button enabled, no `invisible`; clicking it shows `getByTestId("full-chart")` and the label "Hide chart".
 4. **Only the affected card reacts**: two cards (ids 1 and 2) sharing one store; `act(() => store.start(1))`: card 1 shows "Loading chart...", card 2 still has the invisible "Show full chart".
 5. **Observer behaviour**: `setNearViewport(true)` calls `onLoadChart(1, "3M")` once; `rerender` with `chartTimeframe="1Y"` calls `onLoadChart(1, "1Y")`; `setNearViewport(false)` then `rerender` with `"6M"` does NOT call `onLoadChart` with `"6M"`; `setNearViewport(true)` then calls `onLoadChart(1, "6M")`. Throughout, `observers.length` stays `1` (no rebuild on timeframe change).
-6. **Root classes**: flat root (`container.firstChild`) has `pf-card-flat` and `transition-shadow` and not `transition-all`; grouped root has `pf-card-grouped`.
+6. **Root classes**: flat root (`container.firstChild`) has `pf-card-flat`; grouped root has `pf-card-grouped`. Do not assert anything about `transition-*` classes.
 
 ### Check, do not rewrite: `frontend/app/components/ProductPrices/__tests__/ProductCard.format.test.tsx` (WP07)
 
@@ -1394,7 +1396,9 @@ grep -rn "ChartBundle\|recharts" app/components/ProductPrices app/components/Mar
 grep -c '\.in("product_id"' app/lib/clientMarketData.ts                   # 2 (freshness + history)
 grep -rn "loadingProductIds" app --include=*.ts --include=*.tsx
 #   only MarketView.tsx (the useLoadingProductIds variable and its existing reads at :545, :567, :622)
-grep -rn "hasTriggeredLoad\|transition-all" app/components/ProductPrices/cards app/components/ProductPrices/controls   # no output
+grep -rn "hasTriggeredLoad" app/components/ProductPrices/cards             # no output
+grep -rn "transition-all" app/components/ProductPrices/controls            # no output
+grep -c "transition-all" app/components/ProductPrices/cards/ProductCard.tsx # 2 (card roots, intentionally unchanged)
 grep -n "max-h-" app/components/ProductPrices/controls/ControlBar.tsx      # no output
 grep -c "content-visibility: auto" app/globals.css                        # 2
 ```
@@ -1409,7 +1413,7 @@ Manual checks (need real data; do them on the Vercel preview deployment of this 
 4. Toggle USD/CAD after a full scroll: no visible freeze; sparklines do not change shape; prices change.
 5. Watch a card while it loads: the button slot shows "Loading chart..." then "Show full chart"; the card height does not change. Same on `/` in "Recently Released".
 6. In the Elements panel, pick an off-screen card in `/prices` grouped view and check Computed: `content-visibility: auto`. Scroll to it: it renders and its history still loads (the IntersectionObserver fires).
-7. At 375 px width, open and close the Filters drawer: it slides open and closed smoothly, with no content visible when closed. At 1024 px width the filters are always visible and the Filters button is hidden. Check `/market` too.
+7. At 375 px width, open and close the Filters drawer: it slides open and closed smoothly, the close starts moving immediately, and no content is visible when closed. With the drawer closed, press Tab from the Filters button: focus skips the hidden filter controls and moves to the next visible element. At 1024 px width the filters are always visible and the Filters button is hidden. Check `/market` too.
 8. Console: no React hydration warnings while loading `/prices` and `/`. Open one full chart, then scroll it far off-screen and back: if Recharts logs a "width(0) and height(0)" warning at that moment, it is the `content-visibility` skip the F015 verifier predicted (the chart re-measures when it comes back) and is harmless; mention it in the PR. A hydration warning is a bug in this PR: fix it before merging.
 
 ## Owner actions
@@ -1430,7 +1434,7 @@ No migrations, no environment variables, no dashboard toggles.
 - [ ] A timeframe change refetches only cards near the viewport; each card creates exactly one IntersectionObserver for its lifetime.
 - [ ] The "Show full chart" button is always rendered: invisible and disabled with no history, "Loading chart..." while loading, enabled once history exists; card height does not change when history arrives.
 - [ ] `/prices` catalog cards (inside `ProductGrid`) have `content-visibility: auto` with the step 7 intrinsic block sizes; home page cards do not.
-- [ ] Card roots use `transition-shadow`, not `transition-all`; the filter drawer animates `grid-template-rows`, contains no `max-h-` class, and is `invisible` (out of the tab order) while closed on mobile.
+- [ ] Card roots keep `transition-all` (only the `pf-card-*` marker classes are added); the filter drawer animates `grid-template-rows`, contains no `max-h-` class, is `invisible` (out of the Tab order and the accessibility tree) while closed on mobile and visible on md+, and the Filters trigger has `aria-controls` pointing at the panel id.
 - [ ] `tsc`, eslint on changed files, the full jest suite and `pnpm build:stub` all pass.
 
 ## Rollback
@@ -1455,11 +1459,11 @@ perf(prices): SVG sparklines, batched history, stable card layout
   timeframe change refetches only cards near the viewport, and each card
   keeps one IntersectionObserver (F070, F015).
 - Catalog cards get content-visibility: auto with intrinsic sizes (F015);
-  the "Show full chart" slot is always rendered (F071); cards use
-  transition-shadow and the mobile filter drawer animates
-  grid-template-rows instead of max-height (F126).
+  the "Show full chart" slot is always rendered (F071); the closed mobile
+  filter drawer is invisible (out of the Tab order), has aria-controls,
+  and animates grid-template-rows instead of max-height (F126).
 ```
 
 PR title: `perf(prices): SVG sparklines, batched history, stable card layout (WP09)`
 
-PR body summary: link `audits/remediation/WP09-prices-card-rendering.md`; list F014, F066, F070, F067, F015, F071, F126; paste the Verification command output; include the before/after request and chunk counts from Owner action 2 (or state that they are pending on the preview); note that `ReturnMetrics` was intentionally not changed (F071 verifier) and that MarketView row memoisation is WP19; list any other findings noticed but not fixed.
+PR body summary: link `audits/remediation/WP09-prices-card-rendering.md`; list F014, F066, F070, F067, F015, F071, F126; paste the Verification command output; include the before/after request and chunk counts from Owner action 2 (or state that they are pending on the preview); note that `ReturnMetrics` was intentionally not changed (F071 verifier), that F126 was refuted as a performance issue so the card `transition-all` stays and the drawer change is an accessibility and close-lag fix and that MarketView row memoisation is WP19; list any other findings noticed but not fixed.

@@ -1,22 +1,23 @@
 # WP11: Caching: scrape-triggered revalidation, ISR, server-fed tools
 
 - **Findings covered**
-  - F151 (full, cluster members F151, F123): every server cache revalidates hourly although prices change at most once per product per day, nothing ever calls `revalidateTag`, and production still issues 370 to 670 `get_market_product_summaries` calls a day (302 in one hour) despite the 1 hour cache. The "refreshed hourly" copy was already fixed by WP03; this package does the caching half.
-  - F147 (full): `/product/[id]` is fully dynamic (no `revalidate`, no `generateStaticParams`), so every visit and every crawler hit is a serverless render that the CDN never caches.
+  - F151 (low; full, cluster members F151, F123): every server cache revalidates hourly although prices change at most once per product per day, nothing ever calls `revalidateTag`, and production still issues 370 to 670 `get_market_product_summaries` calls a day (302 in one hour) despite the 1 hour cache. The "refreshed hourly" copy was already fixed by WP03; this package does the caching half. The re-verification put the waste at 4x the catalog's change rate (24 hourly refreshes against 6 scraper runs a day) and 24x a single product's, and confirmed that F123's "double lag" does not happen in Next 16.3.6: during ISR regeneration a stale `unstable_cache` entry is recomputed in the foreground (`unstable-cache.js:183-216`), which is what makes `revalidateTag(tag, "max")` in step 6 correct.
+  - F147 (medium; full): `/product/[id]` is fully dynamic (no `revalidate`, no `generateStaticParams`), so every visit and every crawler hit is a serverless render that the CDN never caches.
   - F143 (full for `/compare` and `/box-calculator`): both tools call the heavy summaries RPC from each visitor's browser instead of receiving server-cached data like `/market`. The `/portfolio` page-load leg (pricing the holdings) was moved server-side by WP05 (`portfolioRepo` reads `getCachedMarketProductSummaries`) and is not touched here. Two user-triggered browser calls remain and are out of scope: the product search in the add-holding modal and the Collectr import matcher still reach `fetchMarketProductsClient` through `lib/portfolio.ts` (`applyFreshPricesToSearchResults`, `getAllProducts`), at most once per tab per hour thanks to its TTL cache. List them as a follow-up in the PR body (the F143 recommendation's `get_latest_prices(product_ids)` RPC would remove them; no package schedules it).
-  - F146 (partial, the verifier's "simplest low-risk fix"): the server fallback path fetches a year of price history oldest-first and truncates at 50k rows, so the rows that survive are the oldest and the 1D to 3M returns come out null. This package orders the 367-day fetch newest first. Not done here, and not scheduled by any package in the plan: the `get_latest_prices` RPC that would replace the three "newest price per product" paging loops, and removing the up-to-55 serial page requests (both need a migration; WP11 adds none). List them as follow-ups in the PR.
-  - F150 (full for the defect, partial for the call sites): the client exchange-rate cache never expires and pins the hard-coded 1.36 fallback into the tab forever after one failed read. Fixed in `exchangeRate.ts` for every caller. `/compare` also gets the server-cached rate. `/portfolio` keeps its client read (now with the 1 hour TTL): it is a signed-in client page that WP04, WP05 and WP13 all edit, and turning it into a server wrapper is not worth one PostgREST read per tab per hour. Say so in the PR. (WP20 later closes this call site too: its `CurrencyProvider`, seeded by the root layout from `getCachedExchangeRate()`, replaces the `/portfolio` client read, which is why step 2e must keep `getCachedExchangeRate` non-throwing.)
+  - F146 (medium; partial, the verifier's "simplest low-risk fix"): the server fallback path (it runs only when `get_market_product_summaries` or `get_set_analytics` errors) fetches a year of price history oldest-first and truncates at 50k rows. At about 306 active products the surviving rows end roughly 200 days ago, so the 1D to 6M returns come out null and the 1Y return comes out as a wrong non-null number (measured from a months-old "latest" row); the set fallback's `returns365`, `vol90`, `drawdown365` and `trend90`/`trend365` are wrong the same way. This package orders the 367-day fetch newest first: afterwards 1D to 3M are correct, 6M and 1Y are null instead of wrong, and the set fallback's 365-day drawdown and trend describe only the surviving window (about five months). Not done here, and not scheduled by any package in the plan (both need a migration; WP11 adds none): a `get_latest_prices(p_product_ids bigint[] DEFAULT NULL)` RPC (`DISTINCT ON (product_id)` over `idx_price_history_product_recorded`) to replace the two "newest price per product" paging implementations (server `fetchNewestPricedAt`, which WP05's `fetchNewestPricedAtForProducts` reuses, and client `fetchNewestPricedAtClient`), and a per-product anchor RPC to replace the about 50 serial history pages the fallback still makes (the 14-day freshness pages run in parallel with them). List both as follow-ups in the PR, including this constraint for whoever writes the RPC: filter on `products.active` only when `p_product_ids` is NULL, never when ids are passed, or deactivated portfolio holdings lose their price.
+  - F150 (low; full for the defect, partial for the call sites): the client exchange-rate cache never expires and pins the hard-coded 1.36 fallback into the tab forever after one failed read. Callers: `/portfolio`, `/compare` (public, not signed-in) and `/box-calculator` (through `useCurrencyConversion`). The Bank of Canada rate changes at most once per business day, so the harm is the pinned fallback, not drift. Fixed in `exchangeRate.ts` for every caller. `/compare` and `/box-calculator` also get the server-cached rate (steps 9 and 10). Known limit, state it in the PR: every consumer fetches once per mount, so the TTL takes effect on the next mount or client navigation; a page left open keeps the rate it mounted with in React state. Refreshing on `visibilitychange` would fix that but needs `useCurrencyConversion.ts`, which this package does not touch (WP17 owns its lint error; WP20's `CurrencyProvider` replaces these reads). `/portfolio` keeps its client read (now with the 1 hour TTL): it is a signed-in client page that WP04, WP05 and WP13 all edit, and turning it into a server wrapper is not worth one PostgREST read per tab per hour. Say so in the PR. (WP20 later closes this call site too: its `CurrencyProvider`, seeded by the root layout from `getCachedExchangeRate()`, replaces the `/portfolio` client read, which is why step 2e must keep `getCachedExchangeRate` non-throwing.)
   - F068 (full, as corrected by the verifier): `/prices` and `/market` serialise about 300 KB of product and volume JSON into the RSC payload, roughly a third of it fields no client component reads.
+  - Track 2 (01-PRODUCT-DIRECTION.md §9 item 1; research/performance-excellence.md §8, item PX06): once this PR makes `/product/[id]` ISR, Next 16 prefetches every product `<Link>` that enters the viewport in full, up to 306 product pages per catalog scroll, each one a cold ISR render the first time. Step 13 adds `IntentLink` (prefetch only after an 80 ms hover, on focus and on pointerdown), uses it for every internal product link, and sets `prefetch={false}` on the footer links and the header's `/auth/*` links. It ships in this PR, not later, because this PR is what switches the viewport prefetch on.
 - **Priority rationale**: the nested-cache bug found while scoping F151 is the main load generator on the database's heaviest RPC, and fixing it together with ISR and event-driven revalidation cuts that load by an order of magnitude while making pages fresher, not staler.
-- **Effort**: M, about 9 to 12 hours including tests.
+- **Effort**: M, about 12 to 15 hours including tests (step 13 adds about 3).
 - **Depends on**: WP05 (portfolio route handlers call `getCachedMarketProductSummaries` server-side and add `fetchNewestPricedAtForProducts` to `serverMarketData.ts`), WP06 (rewrites `BoxCalculator.tsx`, adds `compareSetsNewestFirst` to `useBoosterBoxPrices.ts`), WP10 (bounded summaries and volume RPCs, so the fewer remaining calls are also cheap). Also relies on already-merged WP00 (`pnpm build:stub`), WP03 ("updated daily" copy), WP07 (`app/lib/format.ts`, `StalePriceNote` in `ProductCard.tsx`, deterministic dates in the compare page), WP08 (`prices/page.tsx` without `<Suspense>`) and WP09 (edits `clientMarketData.ts`, `MarketView.tsx` and `RecentlyReleased.tsx`, so their line numbers have moved).
-- **Unblocks**: WP18 (splits the compare page; after this PR its client code lives in `app/compare/CompareDashboard.tsx`), WP20 (types and currency context build on `VolumeMetricsSummary` and the exchange-rate changes here). WP12 edits `exchangeRate.ts` and the tool pages too; rebase it on this PR if it has not merged yet.
+- **Unblocks**: WP18 (splits the compare page; after this PR its client code lives in `app/compare/CompareDashboard.tsx`), WP20 (types and currency context build on `VolumeMetricsSummary` and the exchange-rate changes here), WP13 (its `loading.tsx` for `/product/[id]` no longer turns on per-card prefetch, because step 13 already made product links intent-only; its Pitfalls sentence about watching function invocations is superseded by step 13), WP30 (finds `app/components/IntentLink.tsx` in its soft check (a) and skips its own step 1). WP12 edits `exchangeRate.ts` and the tool pages too; rebase it on this PR if it has not merged yet.
 - **Suggested branch name**: `remediation/wp11-next-caching-and-isr`
-- **Risk level**: medium. It changes how long every public page and data cache lives; a mistake shows stale prices for up to a day. The daily backstop, the unit tests and the post-deploy checks bound that. No migrations. Known limit: a wrapper fallback (the 1.36 rate, `{}` volume, the set-analytics JS fallback) is not stored in the Data Cache, but the ISR page rendered with it is, until the next scraper revalidation (at most about 4 hours while the scraper runs) or the daily backstop. The tool pages treat the rate fallback as "absent" and fetch in the browser; `useVolumeMetrics` does the same for `{}`.
+- **Risk level**: medium. It changes how long every public page and data cache lives; a mistake shows stale prices for up to a day. The daily backstop, the unit tests and the post-deploy checks bound that. Step 13 changes when product pages are prefetched; the pre-merge check in Owner actions step 2 confirms it. No migrations. Known limit: a wrapper fallback (the 1.36 rate, `{}` volume, the set-analytics JS fallback) is not stored in the Data Cache, but the ISR page rendered with it is, until the next scraper revalidation (at most about 4 hours while the scraper runs) or the daily backstop. The tool pages treat the rate fallback as "absent" and fetch in the browser; `useVolumeMetrics` does the same for `{}`.
 
 ## Why
 
-Every market cache in `app/lib/serverMarketData.ts` revalidates on an hourly clock, but the scraper only runs every 4 hours and re-prices each product at most once per 23 hours, so most hourly refreshes recompute identical data, and pages can still lag a scrape by up to an hour. Worse, `getCachedProductDetail` calls `getCachedMarketProductSummaries` from inside its own `unstable_cache` callback, and Next.js bypasses the cache for a nested `unstable_cache` call, so every product-page cache miss (about 306 products, each expiring hourly, on a route that is fully dynamic) re-runs the summaries RPC; that matches the 302 calls production logged in one hour. `/compare` and `/box-calculator` additionally run the same RPC from each visitor's browser, adding about a second of spinner and a visible error whenever it hits the 3 s anon timeout, and the client exchange-rate cache can pin a stale or fallback rate for the life of a tab. After this PR the scraper tells the site when it has written data, every cache refreshes on that event with a daily backstop, product pages are ISR and served from the CDN, the two tools render with server-cached data, and `/prices` and `/market` ship about 20 KB less compressed payload.
+Every market cache in `app/lib/serverMarketData.ts` revalidates on an hourly clock, but the scraper only runs every 4 hours and re-prices each product at most once per 23 hours, so most hourly refreshes recompute identical data, and pages can still lag a scrape by up to an hour. Worse, `getCachedProductDetail` calls `getCachedMarketProductSummaries` from inside its own `unstable_cache` callback, and Next.js bypasses the cache for a nested `unstable_cache` call, so every product-page cache miss (about 306 products, each expiring hourly, on a route that is fully dynamic) re-runs the summaries RPC; that matches the 302 calls production logged in one hour. `/compare` and `/box-calculator` additionally run the same RPC from each visitor's browser, adding about a second of spinner and a visible error whenever it hits the 3 s anon timeout, and the client exchange-rate cache can pin a stale or fallback rate for the life of a tab. After this PR the scraper tells the site when it has written data, every cache refreshes on that event with a daily backstop, product pages are ISR and served from the CDN, the two tools render with server-cached data, and `/prices` and `/market` ship about 20 KB less compressed payload. Making product pages ISR has one side effect this PR must also handle: Next 16 prefetches a static route in full when its `<Link>` scrolls into view, so without step 13 a scroll through `/prices` would fetch (and cold-render) up to 306 product pages that the visitor never opens.
 
 ## Before you start
 
@@ -30,6 +31,7 @@ Read these files fully first (paths relative to `frontend/` unless they start wi
 - `app/components/BoxCalculator/BoxCalculator.tsx` (signature and hook calls near the top of the default export), `app/components/BoxCalculator/hooks/useBoosterBoxPrices.ts`, `app/components/BoxCalculator/types.ts`, `app/components/BoxCalculator/__tests__/useBoosterBoxPrices.test.tsx`.
 - `app/components/ProductPrices/types/index.ts` (`ProductVolumeMetrics` :24-34, `Product` :46-80), `app/components/ProductPrices/index.tsx` (props interface), `app/components/MarketView/MarketView.tsx` (:22-26 imports, props :103-106), `app/components/dashboard/RecentlyReleased.tsx` (:10-16).
 - `app/lib/csrf.ts`, `app/lib/rateLimit.ts`, `proxy.ts` (matcher covers `/api/:path*`).
+- For step 13: `app/components/ProductPrices/cards/ProductCard.tsx` (the five `<Link` elements whose `href` is `` `/product/${product.id}` ``), `app/page.tsx` (`MoverCard`, the home-page strip), the siblings section of `app/product/[id]/page.tsx` (`{siblings.map((sib) => (`), `app/components/Footer.tsx`, `app/components/Header.tsx` (four links to `/auth/login` and `/auth/signup`: two in the desktop bar, two in the mobile menu), `next.config.ts`, `node_modules/next/dist/client/app-dir/link.js:108-110` (`prefetch={false}` sets the intent to `'none'`, so Next's own hover prefetch is off too; that is why `IntentLink` calls `router.prefetch` itself) and `node_modules/next/dist/docs/01-app/03-api-reference/05-config/01-next-config-js/staleTimes.md`.
 - `app/lib/__tests__/serverMarketData.freshness.test.ts`, `app/lib/__tests__/clientMarketData.cache.test.ts` (mocking patterns to copy).
 - Repo root: `main.py` (`fetch_and_store_exchange_rate` :961-1022, `update_prices` :1055-1306, the `__main__` block :1490-1558), `run_scraper.sh`, `README.md` :100-140, `tests/test_main.py` (header :14-22 shows how `main` is imported).
 
@@ -56,6 +58,14 @@ grep -n "toLocaleDateString" app/compare/page.tsx    # WP07 landed: expect no ou
 grep -n "StalePriceNote" app/components/ProductPrices/cards/ProductCard.tsx   # WP07 landed: 1+ match
 grep -n "Suspense" app/prices/page.tsx               # WP08 landed: expect no output
 grep -rn "refreshed hourly" app                      # WP03 landed: expect no output
+ls app/components/IntentLink.tsx                     # expect: No such file or directory
+grep -rn 'href={`/product/' app --include=*.tsx | grep -v __tests__
+# expect: ProductCard.tsx (5 lines), app/page.tsx (1, MoverCard) and
+# app/product/[id]/page.tsx (1, siblings). Any other hit (for example a /market
+# row or a portfolio holding that an earlier package turned into an internal
+# product link) is switched in step 13 too. At the base the /market row links
+# out to TCGplayer with a plain <a> and portfolio holdings are not links.
+grep -n "staleTimes" next.config.ts                  # expect no output
 ```
 
 If `compareSetsNewestFirst` is missing, WP06 has not landed: stop, this PR depends on it. If `toLocaleDateString` is still in `app/compare/page.tsx`, WP07 has not landed: stop, because server-rendering the compare page with a viewer-timezone date would cause a hydration mismatch. If `fetchNewestPricedAtForProducts` is missing, WP05 has not landed: stop.
@@ -67,7 +77,9 @@ pnpm exec eslint app/lib/serverMarketData.ts app/lib/exchangeRate.ts app/lib/cli
   "app/product/[id]/page.tsx" app/compare app/box-calculator app/components/BoxCalculator \
   app/prices/page.tsx app/market/page.tsx app/components/ProductPrices/types/index.ts \
   app/components/ProductPrices/hooks/useVolumeMetrics.ts app/components/ProductPrices/index.tsx \
-  app/components/MarketView/MarketView.tsx app/components/dashboard/RecentlyReleased.tsx 2>&1 | tail -2
+  app/components/MarketView/MarketView.tsx app/components/dashboard/RecentlyReleased.tsx \
+  app/components/ProductPrices/cards/ProductCard.tsx app/page.tsx app/components/Footer.tsx \
+  app/components/Header.tsx next.config.ts 2>&1 | tail -2
 ```
 
 Python side: tests that import `main` need the scraper's dependencies (`pip install -r requirements.txt` in a virtualenv). In an environment where `import supabase` fails, only `tests/test_revalidate_hook.py` can run; say so in the PR.
@@ -80,7 +92,7 @@ Python side: tests that import `main` need the scraper's dependencies (`pip inst
 
 ## Implementation steps
 
-Steps 1 to 6 are the server caching core and must be done in order. Steps 7 to 11 are independent of each other but need step 1 and step 2. Step 12 (Python) is independent of the frontend.
+Steps 1 to 6 are the server caching core and must be done in order. Steps 7 to 11 are independent of each other but need step 1 and step 2. Step 12 (Python) is independent of the frontend. Step 13 (intent-only prefetch) touches no file of steps 1 to 12 except `app/product/[id]/page.tsx` (step 7 edits the top, step 13 the siblings list); it must ship in the same PR as step 7.
 
 ### Step 1. `frontend/app/lib/cacheTags.ts` (new)
 
@@ -125,6 +137,12 @@ export const SCRAPE_REVALIDATED_TAGS: readonly CacheTag[] = [
  * hour: a product is re-priced at most once per 23 hours (main.py:1082), so an
  * hourly clock re-ran the heaviest RPCs many times a day for identical output
  * (review F151, F123).
+ *
+ * The backstop also bounds values computed from the clock, not the data: the
+ * 14-day price-freshness cutoff the RPC applies at call time, and day counts
+ * such as "days since release". If the scraper stops, a price can stay on a
+ * page up to one day past its cutoff. Never raise this above a day, and never
+ * replace it with `revalidate: false`.
  *
  * It is also the ISR period of every page that reads these caches, because
  * Next takes the lowest revalidate it sees during a render.
@@ -450,13 +468,16 @@ Replace its doc comment (:70-80) with:
  * Page through product_price_history for a set of products.
  *
  * The cap is a real ceiling: a full year across every active product is well
- * over 100k rows. The 367-day callers pass newestFirst so the rows that
- * survive the cap are the most recent ones (about five months across the
- * catalog): the 1D to 3M returns stay correct and only 6M and 1Y come back
- * null. Ordered oldest-first, the survivors were the oldest rows and every
- * short-window return was null (review F146). groupHistoryRowsByProduct
- * re-sorts each product ascending, so callers see the same order either way.
- * Truncation is logged.
+ * over 100k rows (one row per product per day). The 367-day callers pass
+ * newestFirst so the rows that survive the cap are the most recent ones
+ * (about five months at ~306 active products): the 1D to 3M returns stay
+ * correct and 6M and 1Y come back null, because getReturnPercent finds no
+ * row old enough. Ordered oldest-first, the survivors ended about 200 days
+ * ago: 1D to 6M were null and 1Y was a wrong non-null number measured from
+ * that months-old "latest" row (review F146). The set fallback's 365-day
+ * drawdown and trend still cover only the surviving window. Truncation is
+ * logged. groupHistoryRowsByProduct re-sorts each product ascending, so
+ * callers see the same order either way.
  */
 ```
 
@@ -563,7 +584,11 @@ export async function generateStaticParams(): Promise<Array<{ id: string }>> {
 }
 ```
 
-Nothing else in the file changes. `generateMetadata` (:125-147) and the page (:149-159) keep calling `getCachedProductDetail`; React `cache()` makes that one read per render. Do not add `dynamic`, `dynamicParams` or `fetchCache` exports.
+Nothing else in the file changes in this step (step 13 edits the siblings list). `generateMetadata` (:125-147) and the page (:149-159) keep calling `getCachedProductDetail`; React `cache()` makes that one read per render, which is what the old `unstable_cache` wrapper on `fetchProductDetail` did for these two calls (the F147 re-verification's "keep the wrapper" point is met by `cache()` plus the two cached reads in step 4, see Pitfalls). Do not add `dynamic`, `dynamicParams` or `fetchCache` exports.
+
+Two side effects to accept and state in the PR:
+- An unknown id (`/product/999999`) renders `notFound()`, and that 404 is cached like any ISR page. `loadProductDetail` read the `market-products`-tagged summaries before returning null, so the scraper hook's revalidation also refreshes it; a product added to the catalog becomes visible after the scrape that prices it.
+- Values computed from today's date (`daysSinceRelease` and the price per day derived from it, via `utcMidnightMs()` near `page.tsx:173`) are frozen at render time. After UTC midnight they can read one day low until the page regenerates: normally within about 4 hours (the next scrape that writes data), at most one day (the backstop). `/`, `/prices` and `/market` already behave this way as ISR pages.
 
 ### Step 8. Client caches (F150 and two stale comments)
 
@@ -578,8 +603,9 @@ import { logCaughtError } from "./logger";
 
 /**
  * How long a fetched rate may be reused. Same clock as CLIENT_CACHE_TTL_MS in
- * clientMarketData.ts: a long-lived tab must not keep converting with a rate
- * the rest of the site has moved past (review F150).
+ * clientMarketData.ts (review F150). Callers fetch once per mount, so a
+ * long-lived tab picks up a newer rate on its next mount or client
+ * navigation, not while a page stays open.
  */
 export const EXCHANGE_RATE_TTL_MS = 60 * 60 * 1000;
 
@@ -627,6 +653,8 @@ export async function fetchLatestExchangeRateClient(): Promise<ExchangeRateSnaps
       logCaughtError("client_exchange_rate_failed", error);
       // Never cached: one transient failure must not pin the hard-coded rate
       // into the tab. An expired real rate beats the constant, so prefer it.
+      // No negative cache either: the next mount retries, which costs one
+      // single-row query.
       return exchangeRateCache ?? { rate: DEFAULT_EXCHANGE_RATE, date: null };
     }
   })();
@@ -1297,16 +1325,141 @@ REVALIDATE_URL=https://your-site-host/api/revalidate
 REVALIDATE_SECRET=the-same-value-as-in-vercel
 ```
 
-and one sentence below the block: `After each run that writes data, the scraper POSTs to REVALIDATE_URL so the site refreshes its caches; leave both unset locally to skip it. Use the host that answers without a redirect (pokefin.ca or www.pokefin.ca, whichever serves 200), because the hook does not follow redirects.` Do not hard-code one of the two hosts here: the repo references both (`layout.tsx:34` uses `pokefin.ca`, `.env.example` suggests `www.pokefin.ca`), and only the owner's check in Owner actions step 2 settles which one redirects.
+and one sentence below the block: `After each run that writes data, the scraper POSTs to REVALIDATE_URL so the site refreshes its caches; leave both unset locally to skip it. Use the host that answers without a redirect (pokefin.ca or www.pokefin.ca, whichever serves 200), because the hook does not follow redirects.` Do not hard-code one of the two hosts here: the repo references both (`layout.tsx:34` uses `pokefin.ca`, `.env.example` suggests `www.pokefin.ca`), and only the owner's check in Owner actions step 3 settles which one redirects.
 - `run_scraper.sh`, in the comment that lists the env file contents (:25-28), add `#   REVALIDATE_URL=https://<site host, no redirect>/api/revalidate` and `#   REVALIDATE_SECRET=<same value as the Vercel env var>` lines directly after the `SUPABASE_SERVICE_ROLE_KEY` line.
+
+### Step 13. Product links prefetch on intent only (Track 2, PX06)
+
+Why in this PR: Next 16.3.6 prefetches a static route in full as soon as its `<Link>` enters the viewport (research/performance-excellence.md §8, from the bundled `prefetching.md`). Step 7 makes `/product/[id]` a static ISR route, so from this PR on, every product card, home-page mover and product-page sibling that scrolls into view would download its whole product page and, for each page not cached yet, wake a cold ISR render: up to 306 per scroll through `/prices`. `IntentLink` prefetches only when the visitor shows intent. WP13's later `loading.tsx` for `/product/[id]` then changes nothing for these links.
+
+13a. New `frontend/app/components/IntentLink.tsx`. WP30 step 1 creates the same file when it is missing; keep this code identical to that spec so WP30 can reuse it.
+
+```tsx
+"use client";
+
+import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { useEffect, useRef, type ComponentProps } from "react";
+
+/**
+ * Hover dwell before a prefetch, so a pointer sweeping across the catalog
+ * prefetches nothing (research/performance-excellence.md §8).
+ */
+export const INTENT_DWELL_MS = 80;
+
+// Each href is prefetched at most once per page load. router.prefetch also
+// dedupes in its own cache; this skips the call and the timer.
+const prefetchedHrefs = new Set<string>();
+
+/** Test hook: forget which hrefs were prefetched. */
+export function resetIntentPrefetchForTests(): void {
+  prefetchedHrefs.clear();
+}
+
+type IntentLinkProps = Omit<ComponentProps<typeof Link>, "href" | "prefetch"> & {
+  href: string;
+};
+
+/**
+ * A product link for grids and lists. Next 16 prefetches a static route in
+ * full when its Link enters the viewport, and product pages are ISR (WP11),
+ * so a catalog scroll would fetch up to 306 product pages. This link never
+ * prefetches on viewport entry: only after an 80 ms hover, on focus, and on
+ * pointerdown (80 to 150 ms before the click on touch screens).
+ */
+export default function IntentLink({
+  href,
+  onMouseEnter,
+  onMouseLeave,
+  onFocus,
+  onPointerDown,
+  ...rest
+}: IntentLinkProps) {
+  const router = useRouter();
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(
+    () => () => {
+      if (timerRef.current !== null) clearTimeout(timerRef.current);
+    },
+    []
+  );
+
+  const cancel = () => {
+    if (timerRef.current !== null) {
+      clearTimeout(timerRef.current);
+      timerRef.current = null;
+    }
+  };
+
+  const prefetchNow = () => {
+    cancel();
+    if (prefetchedHrefs.has(href)) return;
+    prefetchedHrefs.add(href);
+    router.prefetch(href);
+  };
+
+  return (
+    <Link
+      {...rest}
+      href={href}
+      prefetch={false}
+      onMouseEnter={(event) => {
+        onMouseEnter?.(event);
+        if (!prefetchedHrefs.has(href) && timerRef.current === null) {
+          timerRef.current = setTimeout(prefetchNow, INTENT_DWELL_MS);
+        }
+      }}
+      onMouseLeave={(event) => {
+        onMouseLeave?.(event);
+        cancel();
+      }}
+      onFocus={(event) => {
+        onFocus?.(event);
+        prefetchNow();
+      }}
+      onPointerDown={(event) => {
+        onPointerDown?.(event);
+        prefetchNow();
+      }}
+    />
+  );
+}
+```
+
+`<Link prefetch={false}>` also turns off Next's own hover prefetch (`link.js:108-110`), which is why the handlers call `router.prefetch` themselves. The module-level `Set` lives until a full page load, so a product is prefetched at most once per visit even across client navigations; a later click on it still navigates normally.
+
+13b. Use `IntentLink` for every internal product link. Keep every other prop (`className`, `key`, children) exactly as it is; change only the element name and the import.
+
+- `app/components/ProductPrices/cards/ProductCard.tsx` (a client component; it also renders the "Recently released" strip on `/` through `RecentlyReleased.tsx`): replace each of the five `<Link` ... `</Link>` elements whose `href` is `` {`/product/${product.id}`} `` with `<IntentLink` ... `</IntentLink>`. Replace `import Link from "next/link";` with `import IntentLink from "../../IntentLink";`. If `grep -n "<Link" app/components/ProductPrices/cards/ProductCard.tsx` still finds a link to another route after the swap, keep the `next/link` import as well.
+- `app/page.tsx`, `MoverCard`: replace its `<Link` ... `</Link>` (`` href={`/product/${product.id}`} ``) with `<IntentLink` ... `</IntentLink>` and add `import IntentLink from "./components/IntentLink";`. Keep `import Link from "next/link";`: the page's other links (`/prices`, `/market` and so on) stay `Link`.
+- `app/product/[id]/page.tsx`, the siblings list (`{siblings.map((sib) => (`): replace that `<Link` ... `</Link>` (`` href={`/product/${sib.id}`} ``) with `<IntentLink` ... `</IntentLink>` and add `import IntentLink from "../../components/IntentLink";`. Keep `import Link from "next/link";` for the `/market` breadcrumb.
+- Any other hit of the "Before you start" grep for `` href={`/product/ `` (for example a `/market` row or a portfolio holding that an earlier package made into an internal product link): the same swap. External links (`product.url` to TCGplayer, `target="_blank"`) stay plain `<a>` elements.
+
+`app/page.tsx` and the product page are server components. Rendering the client `IntentLink` from them is fine because they pass only serialisable props (`href`, `className`, `key`, children). Never pass an event handler to `IntentLink` from a server component.
+
+13c. `frontend/app/components/Footer.tsx`: add `prefetch={false}` to every `<Link` element in the file (the two `.map` lists, which include `/auth/login` and `/auth/signup`, the CardRinkTCG link and the `/privacy` link). The footer enters the viewport at the end of every long page and would otherwise prefetch every route it lists although nobody is about to open them. After the edit, `grep -c "prefetch={false}" app/components/Footer.tsx` equals `grep -c "<Link" app/components/Footer.tsx`.
+
+13d. `frontend/app/components/Header.tsx`: add `prefetch={false}` to the four `<Link` elements whose `href` starts with `/auth/` (Sign In and Sign Up in the desktop bar and in the mobile menu). They are dynamic, rarely clicked, and each prefetch counts against the proxy's auth rate limit. Leave every other header link (logo, primary nav, `/portfolio`, `/account`, the other mobile-menu links) on the default prefetch: those are the core destinations, and the mobile menu is only visible after the tap that opens it.
+
+13e. `frontend/next.config.ts` (optional, recommended; the PR says whether it was done): keep the client router cache for prefetched static pages for 30 minutes instead of the default 5, so going back and forth between `/prices` and product pages reuses what was prefetched. Data changes at most every 4 hours. Inside `const nextConfig: NextConfig = {`, add the block below after `poweredByHeader: false,`. If an earlier package already added an `experimental` object, add only the `staleTimes` line and its comment inside that object.
+
+```ts
+  experimental: {
+    // Client router cache for prefetched static pages: 30 minutes instead of
+    // the default 5 (research/performance-excellence.md §8). It only extends a
+    // TTL; delete this key to roll back.
+    staleTimes: { static: 1800 },
+  },
+```
 
 ## Pitfalls: do not do this
 
 - **Do not call a cached function from inside another cached function's callback.** Next skips the cache for a nested `unstable_cache` call (`unstable-cache.js:147,160`). That was the root cause of hundreds of summaries RPC calls an hour. Compose cached reads in plain async functions (`loadProductDetail`, `getCachedSetAnalytics`).
-- **Do not call `revalidateTag(tag)` with one argument.** Next 16 deprecates it (it logs a warning and behaves like `{ expire: 0 }`). Do not use `updateTag`: it throws outside Server Actions (`revalidate.js`, `updateTag`). Do not use `{ expire: 0 }`: it makes the first visitor after every scrape wait on the summaries RPC and, if that times out, on the 55-query fallback. `"max"` is correct because regeneration refreshes stale data caches in the foreground.
-- **Do not set `revalidate: false`** on the caches (F123's suggestion). The daily backstop keeps the site current if the scraper host or the hook dies.
+- **Do not call `revalidateTag(tag)` with one argument.** Next 16 deprecates it (it logs a warning and behaves like `{ expire: 0 }`). Do not use `updateTag`: it throws outside Server Actions (`revalidate.js`, `updateTag`). Do not use `{ expire: 0 }`: it makes the first visitor after every scrape wait on the summaries RPC and, if that times out, on the fallback's about 50 serial history pages. `"max"` is correct because regeneration refreshes stale data caches in the foreground.
+- **Do not set `revalidate: false`** on the caches (F123's suggestion). The daily backstop keeps the site current if the scraper host or the hook dies, and it is the only thing that ages out clock-derived values: the RPC nulls a price once its `price_recorded_at` crosses the 14-day cutoff, computed at call time, so with no clock a stalled scraper would leave expired prices on the pages indefinitely. The re-verification called 6 hours "a safe value"; this spec keeps 24 hours because the scraper hook covers normal freshness and WP13, WP24 and WP26 are written against `86400` and `DAILY_BACKSTOP_SECONDS`. Do not change it in this PR.
 - **Do not return a fallback from inside an `unstable_cache` callback** for the exchange rate, volume metrics or set analytics. With a 24 hour backstop a cached fallback would stick until the next scrape. Throw inside, degrade in the exported wrapper.
-- **Do not make `fetchMarketProductSummaries` throw instead of falling back** (F146 verifier). At build time `unstable_cache` has no stale entry to serve, so a throw fails the build instead of keeping the previous page, and WP05's `/api/portfolio` would lose prices during an RPC outage. Keep the fallback; only reorder it. Accepted consequence, state it in the PR: the fallback catalog (6M and 1Y returns null) is now cached until the next scraper revalidation instead of for one hour. (On a stale entry a failing RPC is not reached at all: `unstable_cache` keeps serving the previous value when a refresh throws, `unstable-cache.js:190-196`, but the summaries function does not throw, so the fallback result replaces it.)
+- **Do not make `fetchMarketProductSummaries` throw instead of falling back** (F146 verifier). At build time `unstable_cache` has no stale entry to serve, so a throw fails the build instead of keeping the previous page, and WP05's `/api/portfolio` would lose prices during an RPC outage. Keep the fallback; only reorder it. Accepted consequence, state it in the PR: the fallback catalog (6M and 1Y returns null; the set fallback's 365-day drawdown and trend over about five months) is now cached until the next scraper revalidation instead of for one hour. It still makes about 50 serial history page requests (the 14-day freshness pages overlap them through `Promise.all`); only a migration can remove those. (On a stale entry a failing RPC is not reached at all: `unstable_cache` keeps serving the previous value when a refresh throws, `unstable-cache.js:190-196`, but the summaries function does not throw, so the fallback result replaces it.)
 - **Do not gate `/compare` on the sku map being empty.** `page.tsx` passes `undefined` when it had no catalog; an empty map is a real answer and must not make every browser fetch the catalog again.
 - **Do not change the order in `fetchNewestPricedAt`.** Its 14-day window is complete; only the two 367-day callers pass `newestFirst`.
 - **Do not add a CSRF check to `/api/revalidate`** and do not remove `/api/*` from the proxy matcher. The scraper sends no Origin header, so `rejectIfCsrfFails` would 403 every call; the route has no cookie authority to protect. The proxy's per-IP limit stays as a brute-force brake.
@@ -1319,13 +1472,18 @@ and one sentence below the block: `After each run that writes data, the scraper 
 - **Do not import `buildBoosterPackData` from `useBoosterBoxPrices.ts` in the server page.** That file is `"use client"`; a server component importing a function from it gets a client reference, not the function. Pure helpers live in `boosterPackData.ts` and `marketProducts.ts`.
 - **Do not remove the `<Suspense>` around `<BoxCalculator>`.** It still calls `useSearchParams` for `?recipe=`; without the boundary the build fails.
 - **Do not make `generateStaticParams` call Supabase.** Returning all ids would put 306 renders and their queries into every build and every stub build. `[]` plus `dynamicParams` (default) gives ISR on first hit. Do not set `dynamicParams = false` (every product would 404) or `dynamic = "force-static"`.
-- **Do not drop the per-product data cache entirely** (F147 verifier: keep it). The narrower `product-detail-rows` cache is what keeps a product page's three queries off the database if the route ever falls back to dynamic rendering. Only the nesting goes.
+- **Do not drop the per-product data cache entirely** (F147 verifier: keep it). The narrower `product-detail-rows` cache is what keeps a product page's three queries off the database if the route ever falls back to dynamic rendering. Only the nesting goes. The F147 re-verification also warns against removing the `unstable_cache` wrapper around `fetchProductDetail`, because it deduplicated the `generateMetadata` and page calls and shared the summaries cache with `/` and `/prices`. Step 2e keeps both properties: React `cache()` dedupes the two calls within a render, and `loadProductDetail` reads the shared `getCachedMarketProductSummaries` entry. Do not remove `cache()` from `getCachedProductDetail`.
 - **Do not restructure the catalog payload** into a sets map, `set_id` references, image paths or volume tuples (F068 verifier). It saves about 1 KB compressed and touches ProductCard, MarketView, RecentlyReleased, filtering, set grouping and ProductImage's URL regex.
 - **Do not drop `price_recorded_at` for products without a current price.** Correction to the F068 verifier, whose grep predates WP07: `ProductCard`'s `StalePriceNote` reads it to print "last recorded <date>". Keep it when `usd_price` is null, drop it otherwise.
 - **Do not apply the projection inside `serverMarketData.ts` or on the dashboard.** `app/page.tsx:128` groups by `sets.id`, `/product/[id]` needs the full shape, and WP05's portfolio code reads summaries server-side.
 - **Do not make `exchangeRate.ts` import `clientMarketData.ts`** to reuse its TTL constant. It would pull the market-data module into every bundle that only converts currency (WP12 is shrinking those).
 - **Do not change `MARKET_PRODUCTS_TTL_MS` or `CLIENT_CACHE_TTL_MS`.** Only their comment is stale.
 - **Do not touch the "updated daily" copy** (WP03) or `useCurrencyConversion.ts` (its lint error is WP17's).
+- **Do not leave a product link in a grid or list as a plain `<Link>`, and do not give one `prefetch={true}`.** With step 7 a default `<Link>` to `/product/<id>` prefetches the full page on viewport entry. Use `IntentLink`.
+- **Do not prefetch from an `IntersectionObserver`, a mount effect or any other trigger that fires without the visitor pointing, focusing or pressing.** That is viewport prefetch again.
+- **Do not add `prefetch={false}` to the header's primary nav, logo, `/portfolio` or `/account` links.** Only the footer and the `/auth/*` links lose prefetch (research §8 keeps it for the core destinations).
+- **Do not change `IntentLink`'s code or export names** (`INTENT_DWELL_MS`, `resetIntentPrefetchForTests`, the default export). WP30 checks for the file and builds on this exact component.
+- **Do not forget the `next/navigation` mock in tests.** `IntentLink` calls `useRouter()`, which throws `invariant expected app router to be mounted` outside the App Router. Every test that renders a product card, the product page or the home page needs the mock described in test 12.
 
 ## Tests
 
@@ -1585,7 +1743,7 @@ it("pages the 367-day fallback newest first and the freshness window oldest firs
 });
 ```
 
-Add a second case, "keeps the short-window returns when the long window arrives newest first". Copy `recordedDaysAgo` from the freshness test. Build the same `fromMock` shape as the first case, with these differences: the `products` query resolves `{ data: [{ ...PRODUCT_ROW, usd_price: 110 }], error: null }` (a copy; do not mutate `PRODUCT_ROW`), and `range(from)` resolves `from === 0 ? rows : []`, where `rows` is, for the year bound (the earlier of the two `gte` bounds, compare them as strings), `[{ product_id: 42, usd_price: 110, recorded_at: recordedDaysAgo(1) }, { product_id: 42, usd_price: 100, recorded_at: recordedDaysAgo(8) }]` (newest first, as the real query now returns them), and for the tolerance bound `[{ product_id: 42, usd_price: 110, recorded_at: recordedDaysAgo(1) }]`. Tell the bounds apart the way the freshness test's `mockSupabase` does (`bound >= toleranceBound`, with `toleranceBound` 20 days back). Then `const [product] = await getCachedMarketProductSummaries();` and `expect(product.returns?.["7D"]).toBeCloseTo(10, 5)`, proving the grouping re-sorts and the short returns survive.
+Add a second case, "keeps the short-window returns when the long window arrives newest first". Copy `recordedDaysAgo` from the freshness test. Build the same `fromMock` shape as the first case, with these differences: the `products` query resolves `{ data: [{ ...PRODUCT_ROW, usd_price: 110 }], error: null }` (a copy; do not mutate `PRODUCT_ROW`), and `range(from)` resolves `from === 0 ? rows : []`, where `rows` is, for the year bound (the earlier of the two `gte` bounds, compare them as strings), `[{ product_id: 42, usd_price: 110, recorded_at: recordedDaysAgo(1) }, { product_id: 42, usd_price: 100, recorded_at: recordedDaysAgo(8) }]` (newest first, as the real query now returns them), and for the tolerance bound `[{ product_id: 42, usd_price: 110, recorded_at: recordedDaysAgo(1) }]`. Tell the bounds apart the way the freshness test's `mockSupabase` does (`bound >= toleranceBound`, with `toleranceBound` 20 days back). Then `const [product] = await getCachedMarketProductSummaries();` and `expect(product.returns?.["7D"]).toBeCloseTo(10, 5)`, proving the grouping re-sorts and the short returns survive. Also assert `expect(product.returns?.["6M"]).toBeNull()` and `expect(product.returns?.["1Y"]).toBeNull()`: with no row old enough, the long returns are null, never a number computed from the wrong anchor.
 
 `serverMarketData.freshness.test.ts` must pass unchanged (its mocks ignore `order` arguments; `groupHistoryRowsByProduct` re-sorts).
 
@@ -1800,9 +1958,65 @@ class TestRunJobsOnce:
             main.run_jobs_once()   # must not raise
 ```
 
-### Existing tests that must pass unchanged
+### 11. `frontend/app/components/__tests__/IntentLink.test.tsx` (new, jsdom, fake timers)
 
-`serverMarketData.freshness.test.ts`, `clientMarketData.cache.test.ts`, `useProductData.test.tsx`, WP05's portfolio route and repo tests (they mock `getCachedMarketProductSummaries`), WP06's `BoxCalculator` tests, `rateLimit.test.ts`, and `tests/test_main.py`'s existing classes.
+```ts
+const mockPrefetch = jest.fn();
+jest.mock("next/navigation", () => ({
+  useRouter: () => ({ prefetch: mockPrefetch, push: jest.fn(), replace: jest.fn() }),
+}));
+```
+
+`jest.useFakeTimers()`; in `beforeEach` call `jest.clearAllMocks()` and `resetIntentPrefetchForTests()`. Render `<IntentLink href="/product/7" className="card" data-anchor-link="">Seven</IntentLink>` with `@testing-library/react` and get the anchor with `screen.getByRole("link", { name: "Seven" })`. Cases:
+- renders an `<a>` with `href="/product/7"`, the children, `className="card"` and the `data-anchor-link` attribute; rendering alone calls `mockPrefetch` 0 times;
+- `fireEvent.mouseEnter`, advance 79 ms: no prefetch; advance 1 ms more: `mockPrefetch` called once with `"/product/7"`;
+- `fireEvent.mouseEnter`, advance 40 ms, `fireEvent.mouseLeave`, advance 200 ms: no prefetch;
+- `fireEvent.focus` prefetches immediately; `fireEvent.pointerDown` prefetches immediately (separate cases, each after the reset);
+- after one prefetch, another `mouseEnter` plus 200 ms, a `focus` and a `pointerDown` call nothing more (still 1 call);
+- a caller's own `onMouseEnter` passed as a prop still runs.
+
+Wrap timer advances in `act(() => { jest.advanceTimersByTime(n); })`.
+
+### 12. Existing tests that render an `IntentLink` (update)
+
+`IntentLink` calls `useRouter()`. Any existing test that renders `ProductCard`, `ProductPrices`, `RecentlyReleased`, the home page or the product page now needs `next/navigation` mocked with a `useRouter` that has `prefetch`. Find them by running `pnpm test --ci` after step 13: every failure that mentions `invariant expected app router to be mounted`, `useRouter is not a function` or a thrown `useRouter` mock is one of them. Known ones from earlier packages: WP07's `app/components/ProductPrices/__tests__/ProductCard.format.test.tsx`, WP09's `ProductCard.history.test.tsx`, and WP08's two `ProductPrices` tests that mock `next/navigation`.
+
+- A file with no `next/navigation` mock: add, next to its other `jest.mock` calls,
+
+```ts
+jest.mock("next/navigation", () => ({
+  useRouter: () => ({ prefetch: jest.fn(), push: jest.fn(), replace: jest.fn() }),
+}));
+```
+
+- A file that already mocks `next/navigation` with only `useSearchParams`: add the same `useRouter` key to its existing factory. Never add a second `jest.mock("next/navigation", ...)` to one file.
+- WP08's URL-sync test, whose `useRouter` mock throws "ProductPrices must not use the App Router for URL sync": keep the test's intent and move the throw to the navigation methods:
+
+```ts
+  useRouter: () => ({
+    prefetch: jest.fn(),
+    push: () => {
+      throw new Error("ProductPrices must not use the App Router for URL sync");
+    },
+    replace: () => {
+      throw new Error("ProductPrices must not use the App Router for URL sync");
+    },
+  }),
+```
+
+- A test whose `next/link` mock spreads every prop onto an `<a>` would now pass `prefetch={false}` to the DOM, and React logs a warning. Drop `prefetch` in that mock (`({ children, href, prefetch: _prefetch, ...rest }) => ...`).
+
+Change nothing else in these files. List each file you changed in the PR.
+
+### 13. `frontend/app/components/ProductPrices/__tests__/ProductCard.prefetch.test.tsx` (new, jsdom)
+
+Copy `makeProduct`, `baseProps`, the two heavy-child mocks and any `IntersectionObserver` stub from `ProductCard.format.test.tsx` (WP07, as updated by WP09), and use the `mockPrefetch` mock from test 11. Call `resetIntentPrefetchForTests()` in `beforeEach`. Cases:
+- rendering a flat card (`viewMode="flat"`) for product 1 calls `mockPrefetch` 0 times;
+- `fireEvent.focus` on the first `a[href="/product/1"]` calls `mockPrefetch` once with `"/product/1"`; focusing the card's other `a[href="/product/1"]` (the flat card has two: the image and the set name) adds no call.
+
+### Existing tests that must pass
+
+Unchanged except for the `next/navigation` mocks of test 12: `serverMarketData.freshness.test.ts`, `clientMarketData.cache.test.ts`, `useProductData.test.tsx`, WP05's portfolio route and repo tests (they mock `getCachedMarketProductSummaries`), WP06's `BoxCalculator` tests, `rateLimit.test.ts`, and `tests/test_main.py`'s existing classes.
 
 ## Verification
 
@@ -1819,14 +2033,17 @@ pnpm exec eslint app/lib/cacheTags.ts app/lib/catalogProjection.ts app/lib/serve
   app/compare app/box-calculator app/components/BoxCalculator app/prices/page.tsx app/market/page.tsx \
   app/components/ProductPrices/types/index.ts app/components/ProductPrices/hooks/useVolumeMetrics.ts \
   app/components/ProductPrices/index.tsx app/components/MarketView/MarketView.tsx \
-  app/components/dashboard/RecentlyReleased.tsx 2>&1 | tail -2
+  app/components/dashboard/RecentlyReleased.tsx app/components/IntentLink.tsx \
+  app/components/ProductPrices/cards/ProductCard.tsx app/page.tsx app/components/Footer.tsx \
+  app/components/Header.tsx next.config.ts 2>&1 | tail -2
 # expect: error count no higher than the baseline recorded in "Before you start";
 # 0 errors in cacheTags.ts, catalogProjection.ts, exchangeRate.ts, app/api/revalidate,
-# app/compare, app/box-calculator, boosterPackData.ts.
+# app/compare, app/box-calculator, boosterPackData.ts, IntentLink.tsx.
 
 pnpm test --ci app/api/revalidate app/lib/__tests__/serverMarketData app/lib/__tests__/exchangeRate \
   app/lib/__tests__/catalogProjection app/lib/__tests__/clientMarketData app/components/BoxCalculator \
-  app/compare app/components/MarketView app/components/ProductPrices
+  app/compare app/components/MarketView app/components/ProductPrices \
+  app/components/__tests__/IntentLink.test.tsx
 # expect: all pass
 
 pnpm test --ci
@@ -1839,6 +2056,12 @@ grep -rn "unstable_cache(" app --include=*.ts | grep -v __tests__ | wc -l
 grep -n "revalidateTag(" app/api/revalidate/route.ts     # one call, with "max"
 grep -rn "fetchMarketProductsClient\|fetchLatestExchangeRateClient" app/compare app/box-calculator | grep -v __tests__
 # expect: only app/compare/CompareDashboard.tsx (the import lines and the fallback effect)
+grep -rn -B3 'href={`/product/' app --include=*.tsx | grep -v __tests__ | grep "<Link"
+# expect no output: every internal product link is an IntentLink
+grep -c "prefetch={false}" app/components/Header.tsx     # 4
+[ "$(grep -c 'prefetch={false}' app/components/Footer.tsx)" = "$(grep -c '<Link' app/components/Footer.tsx)" ] && echo footer-ok
+# expect: footer-ok
+grep -n "staleTimes" next.config.ts                      # 1 line if step 13e was done
 
 pnpm build:stub
 # expect: exit 0. In the route table:
@@ -1866,26 +2089,28 @@ Manual checks (local, no production access needed):
    - Restart terminal 2 without `REVALIDATE_SECRET`: the authenticated POST prints `503`.
 2. Python hook against the same dev server (from the repo root): `REVALIDATE_URL=http://localhost:3000/api/revalidate REVALIDATE_SECRET=$(printf 'a%.0s' {1..40}) python -c "import logging; logging.basicConfig(level=logging.INFO); import revalidate_hook as h; print(h.trigger_site_revalidation())"` prints `True`, and the dev server logs `POST /api/revalidate 200`.
 3. `/compare` and `/box-calculator` still work with the stub: both pages load; because the stub returns no products, the browser falls back to its own fetch (the stub terminal logs a `POST /rest/v1/rpc/get_market_product_summaries`). With real data (after deploy) that request must be absent; see Owner actions.
+4. Step 13 cannot be checked against the stub: its catalog is empty, so `/prices` has no product links. The prefetch check is Owner actions step 2. Locally, confirm only that `/` and `/prices` render without a console error about the App Router.
 
 ## Owner actions
 
-Do these in this order. If they are skipped, the site still works but refreshes at most once a day.
+Do these in this order. If steps 1, 3 and 4 are skipped, the site still works but refreshes at most once a day. Step 2 is the pre-merge check for step 13.
 
 1. **Before merging: set the secret in Vercel.** Generate it locally with `openssl rand -hex 32`. Vercel dashboard, project, Settings, Environment Variables: add `REVALIDATE_SECRET` with that value for the **Production** environment only (preview deployments then answer 503, which is intended). It must not start with `NEXT_PUBLIC_`. Confirm: the variable is listed for Production.
-2. **Merge and let Vercel deploy.** The deploy picks up the new variable. Confirm with the canonical host (check which one serves without a redirect first: `curl -sI https://pokefin.ca/ | head -1` and `curl -sI https://www.pokefin.ca/ | head -1`; use the one that answers 200):
+2. **Before merging: prefetch check (step 13).** Use the PR's Vercel preview deployment (it reads the same public Supabase data; the missing `REVALIDATE_SECRET` there does not matter). If previews have no Supabase variables, run `pnpm build && pnpm start` locally with the production `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_KEY` (the public anon key) in `frontend/.env.local`. Do not use `pnpm dev`: Next does not prefetch in development. In Chrome DevTools, Network tab, filter `_rsc`, open `/prices`, clear the log, then scroll from top to bottom at reading speed. Expect: 0 requests to `/product/...` while scrolling; when the pointer rests on a card for more than 80 ms, exactly one request for that card's product, and none again for the same card. Tab to a product link: one request for that product. Scroll to the footer: no `_rsc` request for any footer route or for `/auth/login` and `/auth/signup`. Paste the counts into the PR. Any product request during the scroll means a product link is still a plain `<Link>`: run the `<Link` grep from Verification.
+3. **Merge and let Vercel deploy.** The deploy picks up the new variable. Confirm with the canonical host (check which one serves without a redirect first: `curl -sI https://pokefin.ca/ | head -1` and `curl -sI https://www.pokefin.ca/ | head -1`; use the one that answers 200):
    - `curl -s -o /dev/null -w '%{http_code}\n' -X POST https://<canonical-host>/api/revalidate` prints `401`.
    - `curl -s -X POST -H "x-revalidate-secret: <secret>" https://<canonical-host>/api/revalidate` prints JSON with `"revalidated":["market-products","set-analytics","exchange-rate"]`.
-3. **Configure the scraper host.** Append to `~/.config/pokefin/env` (the file `run_scraper.sh` sources; keep `chmod 600`):
+4. **Configure the scraper host.** Append to `~/.config/pokefin/env` (the file `run_scraper.sh` sources; keep `chmod 600`):
    ```
    REVALIDATE_URL=https://<canonical-host>/api/revalidate
    REVALIDATE_SECRET=<the same secret>
    ```
    Confirm after the next scheduled run: `grep -E "Site caches revalidated|Site revalidation" <repo>/scraper.log | tail -3` shows `Site caches revalidated.` (or "not needed" for a run that wrote nothing). A line with `HTTP 30x` means the URL uses the redirecting host; switch to the canonical one.
-4. **Confirm ISR on product pages.** `curl -sI https://<canonical-host>/product/<any id> | grep -iE "x-vercel-cache|cache-control"` twice: the second response shows `x-vercel-cache: HIT` (or `STALE`), and `cache-control` is not `private, no-cache, no-store`.
-5. **Confirm the tools no longer call the RPC from the browser.** Open `/compare` and `/box-calculator` with DevTools, Network tab, filter `supabase.co`: no request to `rpc/get_market_product_summaries` and none to `exchange_rates` (both pages receive the server-cached rate unless the server only had the 1.36 fallback). The set picker in the box calculator is populated as soon as the page hydrates. If `/compare` still requests the summaries, check that the production catalog is not empty and that `CompareDashboard` gates on `initialMarketProducts === undefined`.
-6. **Confirm the database load drop after 48 hours.** Supabase dashboard, Logs, API (edge) logs, filter on path `rpc/get_market_product_summaries`, group by day: server-originated calls per day fall from 370 to 670 to under 100, and the `canceling statement due to statement timeout` count in Postgres logs trends to zero (WP10 bounds the RPC itself).
-7. **Optional: confirm a single function region.** Vercel, Settings, Functions, Function Region: exactly one region selected. Several regions each keep their own Data Cache and multiply cold misses.
-8. **Optional: measure F068.** Compare before and after deploy: `curl -s -H 'Accept-Encoding: br' -o /dev/null -w '%{size_download}\n' https://<canonical-host>/prices` should be about 20 KB smaller.
+5. **Confirm ISR on product pages.** `curl -sI https://<canonical-host>/product/<any id> | grep -iE "x-vercel-cache|cache-control"` twice: the second response shows `x-vercel-cache: HIT` (or `STALE`), and `cache-control` is not `private, no-cache, no-store`.
+6. **Confirm the tools no longer call the RPC from the browser.** Open `/compare` and `/box-calculator` with DevTools, Network tab, filter `supabase.co`: no request to `rpc/get_market_product_summaries` and none to `exchange_rates` (both pages receive the server-cached rate unless the server only had the 1.36 fallback). The set picker in the box calculator is populated as soon as the page hydrates. If `/compare` still requests the summaries, check that the production catalog is not empty and that `CompareDashboard` gates on `initialMarketProducts === undefined`.
+7. **Confirm the database load drop after 48 hours.** Supabase dashboard, Logs, API (edge) logs, filter on path `rpc/get_market_product_summaries`, group by day: server-originated calls per day fall from 370 to 670 to under 100, and the `canceling statement due to statement timeout` count in Postgres logs trends to zero (WP10 bounds the RPC itself).
+8. **Optional: confirm a single function region.** Vercel, Settings, Functions, Function Region: exactly one region selected. Several regions each keep their own Data Cache and multiply cold misses.
+9. **Optional: measure F068.** Compare before and after deploy: `curl -s -H 'Accept-Encoding: br' -o /dev/null -w '%{size_download}\n' https://<canonical-host>/prices` should be about 20 KB smaller.
 
 ## Acceptance criteria
 
@@ -1901,10 +2126,14 @@ Do these in this order. If they are skipped, the site still works but refreshes 
 - [ ] `main.py` calls `trigger_site_revalidation` once per run that wrote data, never when `update_prices` raised, and a hook failure never fails the run.
 - [ ] `pnpm exec tsc --noEmit`, `pnpm test --ci`, `pnpm build:stub` and `python -m pytest tests/ -q` pass; lint errors in touched files do not exceed the baseline.
 - [ ] `REVALIDATE_SECRET` is documented in `frontend/.env.example`; `REVALIDATE_URL` and `REVALIDATE_SECRET` in `README.md` and `run_scraper.sh`.
+- [ ] `app/components/IntentLink.tsx` exists with the step 13a code; every internal product link (`ProductCard`, `MoverCard`, product-page siblings, and any other `` href={`/product/ `` hit) is an `IntentLink` (the Verification `<Link` grep prints nothing); `IntentLink.test.tsx` and `ProductCard.prefetch.test.tsx` pass.
+- [ ] Every `<Link` in `Footer.tsx` and the four `/auth/*` links in `Header.tsx` have `prefetch={false}`; no other header link changed.
+- [ ] Owner actions step 2 done on a production build: scrolling `/prices` issues 0 product `_rsc` prefetches until a pointer rests on a card; the counts are in the PR.
+- [ ] The PR states whether `experimental.staleTimes.static = 1800` (step 13e) was added.
 
 ## Rollback
 
-No migrations. Revert the merge commit (`git revert -m 1 <merge-sha>`) and deploy. Pages return to hourly caches immediately; product pages become dynamic again. The `product-detail-rows` Data Cache entries are simply never read again. After the revert, the scraper's hook gets 404 from the removed route and logs `Site revalidation failed: HTTP 404` without failing the run; remove `REVALIDATE_URL` from `~/.config/pokefin/env` to silence it. The `REVALIDATE_SECRET` variable in Vercel is harmless if left; delete it for tidiness. If only the Python side misbehaves, removing `REVALIDATE_URL` on the scraper host disables the hook without a deploy.
+No migrations. Revert the merge commit (`git revert -m 1 <merge-sha>`) and deploy. Pages return to hourly caches immediately; product pages become dynamic again. The `product-detail-rows` Data Cache entries are simply never read again. After the revert, the scraper's hook gets 404 from the removed route and logs `Site revalidation failed: HTTP 404` without failing the run; remove `REVALIDATE_URL` from `~/.config/pokefin/env` to silence it. The `REVALIDATE_SECRET` variable in Vercel is harmless if left; delete it for tidiness. If only the Python side misbehaves, removing `REVALIDATE_URL` on the scraper host disables the hook without a deploy. If only step 13 misbehaves (for example a product link that does not navigate), revert the `IntentLink` swaps to `<Link>` in a follow-up PR only together with reverting step 7, because ISR product pages with default `<Link>` prefetch bring back the 306-page prefetch; removing `staleTimes` from `next.config.ts` is safe on its own.
 
 ## Commit and PR
 
@@ -1923,10 +2152,13 @@ perf(cache): scrape-triggered revalidation, product ISR, server-fed tools
 - Fallback price history is paged newest first
 - Client exchange-rate cache gets a 1h TTL and never caches the fallback
 - /prices and /market send projected products and two-field volume metrics
+- Product links prefetch on intent only (IntentLink); footer and auth links
+  never prefetch; client staleTimes.static 1800 (if done)
 
 Review findings: F151, F123, F147, F143, F068; F146 and F150 in part (see PR body)
+Track 2: PX06 (01-PRODUCT-DIRECTION.md section 9 item 1)
 ```
 
 PR title: `perf(cache): scrape-triggered revalidation, product ISR, server-fed tools (WP11)`
 
-PR body summary: what was wrong (hourly clock on data that changes daily; a nested `unstable_cache` that bypassed the summaries cache on every product-page miss, the likely source of ~300 RPC calls an hour; dynamic product pages; two tools running the heavy RPC per browser; oldest-first fallback truncation; a never-expiring client rate; oversized RSC props); what changed, step by step; the decisions and why (`"max"` not `{ expire: 0 }`; throw inside caches, degrade outside; keep a narrower per-product cache; keep `price_recorded_at` for unpriced products because of WP07's StalePriceNote, correcting the F068 verifier); the Owner actions checklist verbatim (secret in Vercel before merge, scraper env after deploy, the curl checks); test and build output pasted from Verification; follow-ups not done here: the `/portfolio` search still uses the client summaries fetch (WP05 decision) and `/portfolio` still reads the exchange rate in the browser (now with a 1 hour TTL; F150 partial); F146's `get_latest_prices` RPC and the up-to-55 serial history pages on the fallback path are not scheduled by any package (they need a migration); the fallback catalog is now cached until the next scrape instead of an hour; `ExchangeRateService.ts` is unused; and the compare page's own `DEFAULT_EXCHANGE_RATE = 1.35` differs from `1.36` (WP20).
+PR body summary: what was wrong (hourly clock on data that changes daily; a nested `unstable_cache` that bypassed the summaries cache on every product-page miss, the likely source of ~300 RPC calls an hour; dynamic product pages; two tools running the heavy RPC per browser; oldest-first fallback truncation; a never-expiring client rate; oversized RSC props); what changed, step by step; the step 13 prefetch counts from Owner actions step 2 and the list of test files whose `next/navigation` mock was extended (test 12); the decisions and why (`"max"` not `{ expire: 0 }`; product links prefetch on intent because ISR product pages would otherwise be prefetched on viewport entry; a 24-hour backstop, not 6 hours, because the scraper hook covers normal freshness; throw inside caches, degrade outside; keep a narrower per-product cache; keep `price_recorded_at` for unpriced products because of WP07's StalePriceNote, correcting the F068 verifier); the Owner actions checklist verbatim (secret in Vercel before merge, scraper env after deploy, the curl checks); test and build output pasted from Verification; follow-ups not done here: the `/portfolio` search still uses the client summaries fetch (WP05 decision) and `/portfolio` still reads the exchange rate in the browser (now with a 1 hour TTL; F150 partial); a page left open keeps the rate it mounted with until the next mount or navigation (F150; a `visibilitychange` refresh in `useCurrencyConversion.ts` would close it); F146's `get_latest_prices` RPC (filter on `active` only when no ids are passed) and a per-product anchor RPC for the about 50 serial history pages on the fallback path are not scheduled by any package (they need a migration); the fallback catalog (6M and 1Y null, set 365-day drawdown and trend over about five months) is now cached until the next scrape instead of an hour; unknown product ids are cached as ISR 404s and day counts on product pages can read one day low for a few hours after UTC midnight (F147 side effects); `ExchangeRateService.ts` is unused; and the compare page's own `DEFAULT_EXCHANGE_RATE = 1.35` differs from `1.36` (WP20).

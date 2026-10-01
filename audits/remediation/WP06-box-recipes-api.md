@@ -2,13 +2,13 @@
 
 - **Findings covered**:
   - F001 (partial, cluster members F001, F018): the browser Supabase client never has a session (the session cookie is HttpOnly), so every `box_recipes` query in `useBoxRecipes.ts` runs as `anon` and RLS plus migration 0013 reject it. **In scope here (part 3):** all `box_recipes` reads and writes move to cookie-backed route handlers under `app/api/box-recipes/`. Part 1 (profile) is WP04, part 2 (portfolio) is WP05.
-  - F055 (full): the calculator never sets `isPublic`, so "Share Link" can never appear, and saving a recipe that is shared silently un-shares it.
-  - F059 (full): the saved-recipes list converts a retail price that is already in the display currency (C$150 shows as C$204.00), and recipes are stored without a currency.
-  - F149 (full): recipes are fetched twice on mount (`loadMyRecipes` changes identity when the set list arrives), with `select("*")` and no limit.
-  - F116 (full): "Copied!" shows before (and even if) the clipboard write fails; the shared-recipe effect has no cancel flag and stale dependencies.
-  - F117 (full): the set picker sorts with `new Date("")`, a NaN comparator, for sets with no release date.
-  - F131 (full): share codes are chosen by the client with no database format check, and `get_shared_recipe` returns the owner's `auth.users` UUID to anonymous callers.
-- **Priority rationale**: the Box Calculator's save, list and share features have been dead for every signed-in user since 2026-05-27, and the fix also closes a small anonymous data leak (owner UUID) in the same RPC.
+  - F055 (full, severity low): the calculator never sets `isPublic`, so every save writes `share_code = null, is_public = false` and a freshly saved recipe can never show "Share Link", although the page advertises "Save and share". The residual symptom: legacy rows auto-shared before migration 0005 still carry a non-null `share_code` with `is_public = false`, so opening one from the saved list shows a Share Link whose URL loads nothing for the recipient. (The "re-saving silently un-shares a public recipe" half is unreachable in practice: no app path can set `is_public = true`, and 0005's `DEFAULT false` already killed the legacy links. Step 1 section 2 purges those dead codes; the UI only shows copy controls when a code exists, which after the migration means the recipe is public.)
+  - F059 (full, severity low): the saved-recipes list converts a retail price that is already in the display currency (C$150 shows as C$204.00), and recipes are stored without a currency.
+  - F149 (full, severity low): recipes are fetched twice on mount (`loadMyRecipes` changes identity when the set list arrives) and again on every window focus (`AuthContext.tsx:88` replaces the `user` object on each `refreshSession`), with no guard against an older response overwriting a newer one. Keying the fetch on the user id with a cancel flag (step 8) fixes all three. The explicit column list is kept for clarity only: it is not a performance fix (the old `select("*")` read the same columns). The new `limit(100)` must not hide recipes silently, so step 9k shows a notice when the list is full.
+  - F116 (full, severity info, code hygiene): "Copied!" shows before (and even if) the clipboard write fails; the shared-recipe effect has no cancel flag and stale dependencies.
+  - F117 (full, severity low, latent until a set with a NULL `release_date` has a booster pack product): the set picker sorts with `new Date("")`, a NaN comparator, for sets with no release date. The order then changes between page loads (it follows the RPC's row order), not between renders.
+  - F131 (full, severity info today, low once this package ships a working share control): share codes are chosen by the client with no database format check, and `get_shared_recipe` returns the owner's `auth.users` UUID to anonymous callers.
+- **Priority rationale**: the Box Calculator's save, list and share features have been dead for every signed-in user since 2026-05-27 (F001, critical). The ride-along findings are low or info on their own. F131 is latent today because no recipe can be public, but this package makes sharing possible, so the server-owned share code and the trimmed RPC must ship in the same PR (migration applied first).
 - **Effort**: L (about 10 hours: one migration, three route handlers, a hook rewrite, component edits, six test files).
 - **Depends on**: WP04 (`sessionStatus` in `AuthContext`, `app/lib/authSession.ts`, the `ANON_CLIENT_FORBIDDEN_FILES` ESLint guard). WP00 for `pnpm build:stub`. WP01 claims migration numbers 0024 and 0025; WP10 claims 0027 to 0029 and WP16 claims 0030, so this package's migration is **0026**. WP05 runs before this package in plan order and, as specified, creates `rejectIfNotAppRequest` in `app/lib/csrf.ts` (WP05 step 6a), `app/lib/routeAuth.ts` with `requireRouteUser`, `jsonNoStore` and `NO_STORE` (WP05 step 6b, byte-identical to step 3b below), the `no-restricted-syntax` ESLint block (WP05 step 18c) and the relative-path `^\.{1,2}/supabase$` import pattern (WP05 step 18b). The default path is therefore: skip steps 3a, 3b and 4, and use the first variant of step 11b. Steps 3a, 3b, 4 and the second variant of 11b are fallbacks for a tree where those files are missing.
 - **Also closes (handed over by WP04)**: the F058 note that `useBoxRecipes` / `BoxCalculator` must key their recipe loading on `user?.id`, not on the `user` object (WP04 "Pitfalls" and PR body). Step 8 keys the fetch on the user id and step 9d deletes the `[user, loadMyRecipes]` effect.
@@ -18,7 +18,7 @@
 
 ## Why
 
-Since commit `fec21dc` the session lives only in HttpOnly cookies, but `frontend/app/components/BoxCalculator/hooks/useBoxRecipes.ts` still reads and writes `box_recipes` through the anonymous browser client (`useBoxRecipes.ts:4`, `:64-68`, `:109-123`, `:144-156`, `:184-188`), so PostgREST answers 401 / 42501: signed-in users never see their saved recipes, and Save shows "Error". Even before that broke, sharing never worked: the UI never sets `isPublic` (`BoxCalculator.tsx:207-214`), so the Share Link button (`:318-325`) never renders, and pressing Update on a recipe that was public rewrote it to `share_code = null` and killed its link. The share code itself is generated in JavaScript and accepted by the database in any format, and the public lookup RPC hands the owner's account UUID to anyone holding a link. Smaller defects ride along: the saved list shows CAD prices multiplied by the exchange rate a second time, recipes do not record which currency their prices were typed in, recipes are fetched twice per visit, "Copied!" appears even when copying failed, and the set picker's sort is undefined for sets without a release date. After this PR, saved recipes load once through `GET /api/box-recipes`, Save and Delete work through CSRF-gated route handlers, a saved recipe gets an explicit "Make shareable" / "Stop sharing" control whose code the database mints, re-saving never changes sharing, each recipe remembers its currency, and the public RPC returns only what the calculator renders.
+Since commit `fec21dc` the session lives only in HttpOnly cookies, but `frontend/app/components/BoxCalculator/hooks/useBoxRecipes.ts` still reads and writes `box_recipes` through the anonymous browser client (`useBoxRecipes.ts:4`, `:64-68`, `:109-123`, `:144-156`, `:184-188`), so PostgREST answers 401 / 42501: signed-in users never see their saved recipes, and Save shows "Error". Even before that broke, sharing never worked: the UI never sets `isPublic` (`BoxCalculator.tsx:207-214`), so a newly saved recipe never gets a share code and the Share Link button (`:318-325`) never renders for it; the only recipes that show the button are legacy rows auto-shared before migration 0005, whose `is_public` is false, so their link opens an empty calculator for the recipient. The share code itself is generated in JavaScript and accepted by the database in any format, and the public lookup RPC hands the owner's account UUID to anyone holding a link. Smaller defects ride along: the saved list shows CAD prices multiplied by the exchange rate a second time, recipes do not record which currency their prices were typed in, recipes are fetched twice per visit, "Copied!" appears even when copying failed, and the set picker's sort is undefined for sets without a release date. After this PR, saved recipes load once through `GET /api/box-recipes`, Save and Delete work through CSRF-gated route handlers, a saved recipe gets an explicit "Make shareable" / "Stop sharing" control whose code the database mints, re-saving never changes sharing, each recipe remembers its currency, and the public RPC returns only what the calculator renders.
 
 ## Before you start
 
@@ -121,9 +121,10 @@ Create the file with exactly this content (it was applied twice on a scratch Pos
 --         signed-in user could publish under a 1-character code, and
 --         get_shared_recipe returned the whole row, including the owner's
 --         auth.users UUID, to anonymous callers.
---   F055  saving a recipe always wrote share_code/is_public, so re-saving a
---         shared recipe silently broke its link. With the trigger below the
---         client can only flip is_public; the code itself is server-owned.
+--   F055  the UI never set is_public, so sharing never worked, and legacy
+--         pre-0005 rows kept a share_code that no longer resolves. With the
+--         trigger below the client can only flip is_public; the code itself
+--         is server-owned.
 --   F059  recipes stored retail/promo prices with no currency.
 --
 -- What this does (idempotent; safe to re-run):
@@ -1171,6 +1172,7 @@ After line 10 (`import { PackEntry, BoxRecipe, NavResult } from "./types";`) add
 ```ts
 import type { Currency } from "../ProductPrices/types";
 import { logCaughtError } from "../../lib/logger";
+import { BOX_RECIPES_LIST_LIMIT } from "../../lib/boxRecipes";
 ```
 
 9b. Above the `calculateNav` doc comment (line 18, `/**` followed by ` * Calculate NAV in the user's display currency.`), add this module-level helper:
@@ -1460,10 +1462,15 @@ with:
             </button>
           </p>
         )}
+        {user && savedRecipes.length >= BOX_RECIPES_LIST_LIMIT && (
+          <p role="status" className="text-sm text-gray-500 mb-2">
+            Showing your {BOX_RECIPES_LIST_LIMIT} most recently updated recipes.
+          </p>
+        )}
 
 ```
 
-This also uses `recipesLoading`, which clears the existing unused-variable warning.
+This also uses `recipesLoading`, which clears the existing unused-variable warning. The last block exists because `GET /api/box-recipes` stops at `BOX_RECIPES_LIST_LIMIT` rows ordered by `updated_at` (step 5a): without it, a user with more than 100 recipes would lose the oldest ones from the list with no hint (review F149 verifier). Use `>=`, not `===`: a save in the same session prepends a row and can push the count past the limit.
 
 9l. In the saved list, replace line 361:
 
@@ -1615,7 +1622,7 @@ Both variants were checked with the installed ESLint 9.39.5 while writing this s
 - **Do not format saved-recipe prices with `formatPrice`** (it converts from USD) or with the display currency; use the recipe's own `currency` (step 9l).
 - **Do not set "Copied!" before `writeText` resolves**, and do not swallow the failure (F116).
 - **Do not keep `new Date(...)` in the set sort** (F117). Compare the date strings.
-- **Do not touch `export_my_data`** (WP01 owns it in migration 0024). The export does not include the new `currency` column; list that as a follow-up in the PR description.
+- **Do not touch `export_my_data`** (WP01 owns it in migration 0024). The F059 verifier asks for `'currency'` in the export's `box_recipes` object; it is deferred on purpose, because redefining the function here would duplicate WP01's body and break WP34's precondition that only 0011 and 0024 define it. The export does not include the new `currency` column; list that as a follow-up in the PR description (the next package that replaces `export_my_data`, currently WP34, should add `'currency', currency` to the `box_recipes` object).
 - **Do not edit `schema.sql`.** It already lacks `is_public` and is reconciled by WP21 (F135); list the new column, constraints and trigger as input for WP21 in the PR description.
 - **Do not deploy the code before the migration is applied.** The routes select `currency`, which does not exist until the migration runs, so `GET /api/box-recipes` would return 500. The reverse order is safe: the old client code is already broken for signed-in users, and the trigger handles its writes.
 - **Do not write route tests without `/** @jest-environment node */`** on the first line; under jsdom `next/server` throws.
@@ -2587,7 +2594,7 @@ Seed legacy rows (after the four migrations, before NNNN): one private row with 
 - The query printed by `verify_migration.py` returns 9 rows, all `OK`.
 
 **Manual checks** (local `pnpm dev` against a Supabase project where the migration is applied; the executor has no production access, so this is for the owner or a staging project):
-   1. Sign in, open `/box-calculator`. DevTools Network: exactly one `GET /api/box-recipes` (200), no request to `/rest/v1/box_recipes`.
+   1. Sign in, open `/box-calculator`. DevTools Network: exactly one `GET /api/box-recipes` (200), no request to `/rest/v1/box_recipes` Switch to another browser tab and back: `/api/auth/me` may refetch, but no second `GET /api/box-recipes` appears (F149).
    2. Add a pack, set retail to 150 with CAD selected, Save. `POST /api/box-recipes` returns 201; the button shows "Saved!" then "Update"; "Make shareable" appears.
    3. Show saved recipes: the row reads "1 pack type · C$150.00" (not C$204.00).
    4. Click "Make shareable": `PATCH /api/box-recipes/<id>` with body `{"isPublic":true}`; "Copy share link" and "Stop sharing" appear. Click "Copy share link": "Copied!" and the clipboard holds `<origin>/box-calculator?recipe=<32 hex>`.
@@ -2633,7 +2640,8 @@ Seed legacy rows (after the four migrations, before NNNN): one private row with 
 - [ ] `useBoxRecipes.ts`, `BoxCalculator.tsx`, `app/lib/boxRecipes.ts` and `app/api/box-recipes/**` do not import `app/lib/supabase`, and ESLint fails if they do.
 - [ ] No browser code calls `.from("box_recipes")`; ESLint fails if it does.
 - [ ] A signed-in visit to `/box-calculator` makes exactly one `GET /api/box-recipes` and no `/rest/v1/box_recipes` request.
-- [ ] `GET /api/box-recipes` selects an explicit column list with `limit(100)`; no `select("*")` remains in the box-recipe code.
+- [ ] `GET /api/box-recipes` selects an explicit column list with `limit(100)`; no `select("*")` remains in the box-recipe code. When the list holds 100 or more recipes, the calculator shows "Showing your 100 most recently updated recipes."
+- [ ] Returning focus to the tab (which makes `AuthContext` replace its `user` object) does not trigger another `GET /api/box-recipes`.
 - [ ] Saving a new recipe returns 201 and it appears first in the list; updating returns 200; deleting returns 200 and removes it.
 - [ ] A saved recipe shows "Make shareable"; after clicking it, "Copy share link" and "Stop sharing" appear, and the link opens the recipe for a signed-out visitor.
 - [ ] Clicking Update on a shared recipe sends no `isPublic` and does not change its share code.

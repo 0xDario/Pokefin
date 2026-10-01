@@ -1,11 +1,11 @@
 # WP20: Types, currency context, CSRF dedupe, docs
 
 - **Findings covered**
-  - F034 (full; cluster members F034, F041, F046): the CSRF/origin gate, the body-size cap and the cookie-backed Supabase client are re-implemented inline in `api/account/delete`, `api/account/export` and `auth/callback` instead of using `lib/csrf.ts` and `lib/routeSupabase.ts`, and the copies have already drifted.
+  - F034 (low, maintainability: behaviour matches `lib/csrf.ts` today; full; cluster members F034, F041, F046): the CSRF/origin gate, the body-size cap and the cookie-backed Supabase client are re-implemented inline in `api/account/delete`, `api/account/export` and `auth/callback` instead of using `lib/csrf.ts` and `lib/routeSupabase.ts`, and the copies have already drifted.
   - F047 (full; cluster members F038, F047): every Supabase client is untyped (no generated `Database` types), so row boundaries are held together with `as unknown as` and `any`, and `no-explicit-any` is switched off.
   - F048 (full): `app/lib` imports its domain types from `components/*/types` (six lib modules); `"use client"` sits on two plain lib modules; `serverSupabase.ts`, three exported interfaces and `PriceChart`'s duplicate types are dead or duplicated.
-  - F051 (full; cluster members F051, F105): currency and exchange rate are prop-drilled with a literal `1.36` default in 12 places (`1.35` in `/compare`), `/portfolio` has its own toggle, and the chosen currency does not carry between pages.
-  - F107 (full; cluster members F107, F109): `.github/copilot-instructions.md` describes an architecture that no longer exists, and dead modules/exports remain (`ExchangeRateService.ts`, `fetchSalesHistory` and its cache, the `Portfolio/index.ts` barrel, `searchProductsBySet`, `formatScore`).
+  - F051 (low: the `1.36` prop defaults are dead code today because every caller passes the rate; the visible part is the currency choice not carrying between pages; full; cluster members F051, F105): currency and exchange rate are prop-drilled with a literal `1.36` default in 12 places (`1.35` in `/compare`), `/portfolio` has its own toggle, and the chosen currency does not carry between pages.
+  - F107 (low, no security impact; full; cluster members F107, F109): `.github/copilot-instructions.md` describes an architecture that no longer exists, `audits/HARDENING_FOLLOWUPS.md` says `secrets_loader.py` reads only from the environment (it still falls back to `secretsFile.py`), and dead modules/exports remain (`ExchangeRateService.ts`, `fetchSalesHistory` and its cache, the `Portfolio/index.ts` barrel, `searchProductsBySet`, `formatScore`).
 - **Priority rationale**: no user-facing defect except currency persistence, so it runs after every package that edits these files has landed (only WP21 follows it), and it prevents the next column rename or CSRF fix from silently missing half the code.
 - **Effort**: L, about 15 hours (F034 2 h, F048 2.5 h, F051 4 h, F047 4 h plus the wait for the owner's generated types file, F107 1.5 h, tests and verification 1 h).
 - **Depends on**: WP05 (`app/lib/server/portfolioRepo.ts`, `app/lib/portfolioApi.ts`, `app/lib/routeAuth.ts`, `rejectIfNotAppRequest` in `app/lib/csrf.ts`, the portfolio route handlers), WP06 (`app/lib/boxRecipes.ts`, box-recipe routes, `sharedRecipe.ts`, `useBoxRecipes` rewrite, migration 0026), WP11 (`getCachedExchangeRate` never throws and returns `date: null` for the fallback; `/compare` and `/box-calculator` are server-fed). Also assumes every package before it in plan order has merged, in particular WP00 (`pnpm build:stub`), WP02 (callback route collects cookies and headers), WP07 (`app/lib/format.ts`), WP08 (`/prices` URL state), WP12 (`app/lib/supabaseLoader.ts`), WP13 (`app/lib/redirects.ts`), WP17 (blocking lint, `logger.ts` helpers, delete-route and proxy tests, `useCurrencyConversion` test), WP18 (`app/lib/marketMath.ts`, `app/compare/CompareDashboard.tsx`). Database prerequisite for step 4: the owner has applied the migrations of WP06 (0026), WP10 (0027-0029) and WP16 (0030) in production, because the generated `app/types/database.ts` must contain `box_recipes.currency`, `get_portfolio_history`, `get_market_product_metrics` and `product_price_pending` (step 4.2 stops otherwise). WP19 must also have merged (step 3 relies on its `columns.tsx`/`MarketTableRow.tsx` receiving currency values as props).
@@ -839,6 +839,8 @@ The return shape is the same as before, so the destructuring in the three remain
 
 Do not call `rememberCurrency` in the URL-to-state block that runs during render; that block keeps calling only `setSelectedCurrency`.
 
+Known limit, leave it and state it in the PR body: plain `/prices` (no `?currency=`, which is how the header link opens it) still shows CAD for a visitor whose preference is USD, because WP08's `parsePricesQuery` fills a missing `currency` with the `PRICES_URL_DEFAULTS` value `"CAD"` and the URL is this page's source of truth. Do not change `parsePricesQuery`, `serializePricesState` or the URL-to-state block to fix it here: WP27 step 27 removes currency from the `/prices` URL and makes the page follow the site preference, and it edits the exact lines this step leaves (`useCurrencyConversion(initialUrlState.currency)` and the `rememberCurrency` line). The home page's Recently Released strip likewise stays USD (step 3.8) until WP27.
+
 3.7. `app/prices/page.tsx`: stop passing `initialExchangeRate={exchangeRate.rate}`. If `exchangeRate` is then unused, remove `getCachedExchangeRate()` from the `Promise.all` and from the destructuring and the import.
 
 3.8. `app/components/dashboard/RecentlyReleased.tsx`: delete `initialExchangeRate: number;` from the props interface and from the destructure; the hook call becomes `useCurrencyConversion("USD")`. `app/page.tsx`: stop passing `initialExchangeRate={exchangeRate.rate}` (line 284 at `a188fea`); remove `getCachedExchangeRate` from the page's `Promise.all`, destructuring and import if nothing else on the page uses the rate (`grep -n "exchangeRate" app/page.tsx`).
@@ -1432,6 +1434,24 @@ Type generation (local or CI secret): `SUPABASE_ACCESS_TOKEN`.
 
 Also check section 4 ("Rate limiting"): at `a188fea` it names the file twice, `frontend/middleware.ts` (line 101) and `middleware.ts` (line 114). If either is still there, change it to `frontend/proxy.ts` and `proxy.ts` respectively (F109; WP02 step 18 should already have done this). Check: `grep -n "middleware.ts" /home/user/Pokefin/audits/HARDENING_FOLLOWUPS.md` prints nothing.
 
+Also fix the stale scraper-credentials sentence (F107 verifier: the contributor doc is right about `secretsFile.py`, this audit note is wrong). In the "Scraper key migration completed" bullet (lines 193-194 at `a188fea`; find it with `grep -n "reads exclusively from env" /home/user/Pokefin/audits/HARDENING_FOLLOWUPS.md`), replace
+
+```markdown
+    `secretsFile.SUPABASE_KEY` blanked out on the host;
+    `secrets_loader.py` now reads exclusively from env.
+```
+
+with
+
+```markdown
+    `secretsFile.SUPABASE_KEY` blanked out on the host, so on the
+    scraper host every credential comes from the environment.
+    `secrets_loader.py` still reads the environment first and falls back
+    to a gitignored `secretsFile.py` for local development.
+```
+
+Keep the indentation of the surrounding sub-bullet. If an earlier package (WP16, WP21) already rewrote that bullet, keep its text and only make sure it no longer says the loader reads exclusively from the environment. Do not change `secrets_loader.py` (WP16 keeps the fallback on purpose). Check: `grep -n "exclusively from env" /home/user/Pokefin/audits/HARDENING_FOLLOWUPS.md` prints nothing.
+
 ## Pitfalls: do not do this
 
 - **Do not use `createRouteSupabaseClient()` in `proxy.ts` or the callback.** F034 verifier: both write cookies onto a `NextResponse` they build; `cookies()` from `next/headers` would write to a different response. Use `createRequestSupabaseClient` and `applyTo`.
@@ -1445,6 +1465,9 @@ Also check section 4 ("Rate limiting"): at `a188fea` it names the file twice, `f
 - **Do not make `/prices` follow the stored preference, and do not call `useCurrency().setCurrency` during render.** `/prices` keeps `?currency=` as its source of truth (F051 verifier); WP08's URL-to-state block calls the page-local `setSelectedCurrency` during render, which is only legal for the component's own state. Remember the preference only in click handlers.
 - **Do not let a loaded or shared box recipe change the visitor's preference.** `loadRecipeIntoState` uses only the page-local setter.
 - **Do not import `app/lib/exchangeRate.ts` statically from `CurrencyContext.tsx`.** The provider is in the root layout; a static import would pull the rate fetcher (and, without WP12, supabase-js) into every page's initial bundle.
+- **Do not store the currency preference in a cookie read by server code, and do not read `cookies()` in the layout or a page to pick the SSR currency.** The F051 re-verification suggested a `currency` cookie; `cookies()` turns `/`, `/prices` and `/market` from ISR into per-request rendering, which undoes WP11's caching, and WP27 forbids it in the layout for the same reason. The accepted cost of `localStorage` plus `useSyncExternalStore`: on the ISR pages (`/market`, `/box-calculator`) a visitor whose stored preference differs from CAD sees the server's CAD figures until hydration, then their currency, with no hydration error. Today they see CAD with no switch at all, so this is strictly better. State it in the PR body.
+- **Do not replace the layout seed with a lazy browser fetch.** The F051 re-verification proposed a provider with no server read; keep `await getCachedExchangeRate()` in the layout. It is one `unstable_cache` row shared by every page, WP11 makes it non-throwing and the anon 3 s statement timeout bounds a slow read, and it gives every page the real rate on first render without a browser Supabase request (which would load supabase-js on pages that otherwise never do). WP27 builds on the async layout and `initialRate`.
+- **Do not make `PriceChart` read `useCurrency()` or drop its `exchangeRate` prop.** `app/product/[id]/ProductDetailChart.tsx:81` passes `exchangeRate={1}` with `currency="USD"` on purpose for its USD-only chart; step 3.12 changes only the default value.
 - **Do not replace `MarketSummaryRow`, `ProductVolumeMetrics` or other hand-written RPC row types with the generated `Functions[...]["Returns"]` type.** The generator cannot see function output nullability; the hand-written types are more precise. Annotate assignments into them instead.
 - **Do not remove the array-or-object normalisation from `mapProductsQueryResultToProducts`** (F047 verifier correction), even though the typed client infers objects.
 - **Do not hand-write or edit `app/types/database.ts`.** Only `pnpm types:db` writes it. A hand-written file is a fourth hand-maintained shape, which is the problem F047 describes.
@@ -1688,7 +1711,7 @@ Lint probe (then delete the probe files): create `app/api/zz-probe/route.ts` con
 Manual checks (`pnpm dev` with a real `.env.local`, or against the Vercel preview):
 
 1. With cleared site data, open `/market`: currency CAD. Choose USD. Open `/box-calculator`: USD. Sign in and open `/portfolio`: the page shows the shared currency selector with USD pressed and the rate text "1 USD = x.xxxx CAD"; values are in USD. Reload each page: still USD. DevTools console shows no hydration warning on any of them.
-2. Open `/prices?currency=CAD` while the preference is USD: `/prices` shows CAD (the URL wins). Click USD then CAD on `/prices`, then open `/market`: CAD (the click became the preference).
+2. Open `/prices?currency=CAD` while the preference is USD: `/prices` shows CAD (the URL wins). Click USD then CAD on `/prices`, then open `/market`: CAD (the click became the preference). Plain `/prices` with no `?currency=` opens in CAD whatever the preference: that is the known limit from step 3.6 (WP27 changes it), not a bug in this PR.
 3. On `/box-calculator` with preference USD, load a saved or shared recipe typed in CAD: the calculator switches to CAD; `/market` is still USD.
 4. Open `/market` in two tabs, change the currency in one: the other follows without a reload.
 5. DevTools, Application, Local Storage: key `pokefin.currency` holds the last choice.
@@ -1728,7 +1751,7 @@ No database migration and no Vercel environment change is part of this package.
 - [ ] `/portfolio` renders the shared `CurrencySelector`; `PortfolioDashboard` takes no currency props.
 - [ ] `fetchSalesHistory`, its caches, `searchProductsBySet` and `formatScore` are gone.
 - [ ] `.github/copilot-instructions.md` matches the checklist in step 6.2 (every named path exists).
-- [ ] `HARDENING_FOLLOWUPS.md` section 7 records the WP20 cleanup and F-15, and section 4 names `proxy.ts`, not `middleware.ts`.
+- [ ] `HARDENING_FOLLOWUPS.md` section 7 records the WP20 cleanup and F-15, section 4 names `proxy.ts`, not `middleware.ts`, and no line says `secrets_loader.py` reads exclusively from the environment.
 - [ ] `app/auth/callback/route.ts` reads `redirectType` with an `in` check, not a cast.
 - [ ] `.github/workflows/db-types.yml` exists and `package.json` has `types:db`.
 - [ ] `tsc`, lint, the full jest suite and `pnpm build:stub` pass.
@@ -1755,4 +1778,4 @@ docs: rewrite copilot-instructions for the current architecture; remove dead cod
 
 PR title: `WP20: typed Supabase clients, shared currency preference, one CSRF gate, current docs`
 
-PR body summary: what was wrong (CSRF gate and cookie client copied into the account and callback routes and already drifted; untyped Supabase clients with `as unknown as` at every row boundary; lib depending on component-folder types; currency re-defaulted to 1.36/1.35 in 13 places and forgotten between pages; contributor docs describing a dead architecture). What changed, per finding, with the visible changes called out: `/portfolio` now opens in the visitor's remembered currency (CAD by default) instead of always USD; `/compare`'s fallback rate is 1.36 instead of 1.35; responses where the proxy refreshed a session now carry `Cache-Control: no-store`; every page now reads the cached exchange rate in the root layout. Paste the Verification output. List Owner actions 1 to 3. Note the two `@deprecated` type shims to delete next release, and any out-of-scope item found in 6.1.
+PR body summary: what was wrong (CSRF gate and cookie client copied into the account and callback routes and already drifted; untyped Supabase clients with `as unknown as` at every row boundary; lib depending on component-folder types; currency re-defaulted to 1.36/1.35 in 13 places and forgotten between pages; contributor docs describing a dead architecture). What changed, per finding, with the visible changes called out: `/portfolio` now opens in the visitor's remembered currency (CAD by default) instead of always USD; `/compare`'s fallback rate is 1.36 instead of 1.35; responses where the proxy refreshed a session now carry `Cache-Control: no-store`; every page now reads the cached exchange rate in the root layout; on `/market` and `/box-calculator` a visitor with a stored USD preference sees CAD until hydration, then USD (no cookie, to keep those pages ISR); plain `/prices` still opens in CAD and the home strip stays USD until WP27. Paste the Verification output. List Owner actions 1 to 3. Note the two `@deprecated` type shims to delete next release, and any out-of-scope item found in 6.1.

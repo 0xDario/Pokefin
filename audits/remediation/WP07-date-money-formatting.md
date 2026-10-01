@@ -2,20 +2,20 @@
 
 - **Findings covered**
   - F007 (full; cluster members F007, F009, F010, F026): date-only `release_date` values are formatted with the viewer's zone and locale (`toLocaleDateString()` with no options), so release dates show one day early west of UTC, and on `/` the server HTML and the first client render disagree (hydration error).
-  - F089 (full; members F089, F102): no shared formatting helpers. Money is `$1649.99` on public pages and `$1,649.99` in the portfolio; date style varies by page and by browser locale.
-  - F096 (full; members F096, F112, F115): the dashboard "Last Refreshed" stat is formatted in the server's UTC clock with no zone label; the default grouped catalog card shows a bare `--` for a stale product with no explanation.
-  - F072 (full): `ProductCard` builds uncached Intl formatters (`Intl.DateTimeFormat().resolvedOptions()` plus `toLocaleString(undefined, {...})`) on every render of every card.
-  - F122 (full): offset-less `recorded_at` timestamps (`timestamp without time zone`, UTC) are parsed with `new Date(raw)`, which reads them as viewer-local time, shifting return windows and sparkline day buckets by the viewer's UTC offset.
-- **Priority rationale**: it removes the only hydration error on `/`, fixes a visible wrong fact (release dates one day early) on four pages, and gives WP08, WP09 and WP18 one formatting API to build on instead of each re-inventing it.
+  - F089 (full; medium; members F089, F102): no shared formatting helpers. Money is `$1649.99` on public pages and `$1,649.99` in the portfolio; date style varies by page and by browser locale.
+  - F096 (full; low; members F096, F112, F115): the dashboard "Last Refreshed" stat is formatted in the server's UTC clock with no zone label; the default grouped catalog card shows a bare `--` for a stale product with no explanation.
+  - F072 (full; medium): `ProductCard` builds uncached Intl formatters (`Intl.DateTimeFormat().resolvedOptions()` plus `toLocaleString(undefined, {...})`) on every render of every card. Re-verified cost: about 44 ms per full 306-card render of `/prices` on desktop (130-180 ms on a mid-range phone), paid on the initial client render of `/prices` and on every USD/CAD or chart-timeframe toggle. About 98% of it is the `lastUpdated` expression, which only the flat card displays; the default grouped view computes it for nothing. The bare `toLocaleDateString()` for the release date costs about 3 us per card. (Not a trigger: the exchange rate arriving. It is seeded from the server and never changes after mount.)
+  - F122 (full; low): offset-less `recorded_at` timestamps (`timestamp without time zone`, UTC) are parsed with `new Date(raw)`, which reads them as viewer-local time. Re-verified scope: (1) the main defect is `getPortfolioHistory` (DST skip/duplicate day, wrong last-point date), which WP05 step 10d already fixes; this PR only checks it landed. (2) The client return fallback (`returns.ts`, `ReturnMetrics.tsx`) can show a 7D figure the RPC leaves blank for viewers east of UTC; this PR fixes it by anchoring on the UTC calendar day exactly like the RPC. The CAGR, `marketData.ts:391` sort and MiniSparkline parses are harmless (equal shifts cancel, or index-spaced dedupe keys); this PR still routes them through `format.ts` for consistency and so the grep and lint guards reach zero. "1D always uses the client fallback" is false: 1D comes from the RPC.
+- **Priority rationale**: it removes the only hydration error on `/` (triggered by the browser zone alone, so it hits nearly every Canadian visitor, and React 19 then discards the server HTML and re-renders the page on the client), fixes a visible wrong fact (release dates one day early) on four pages, and gives WP08, WP09 and WP18 one formatting API to build on instead of each re-inventing it.
 - **Effort**: M (6 to 8 hours: one new module plus about 25 mechanical call-site edits, 3 new test files, 3 updated test files).
 - **Depends on**: WP00 (hard: `pnpm build:stub` and the CI job this PR adds a step to). In plan order WP01 to WP06 have also merged before this package, and this spec is written for that tree by default: WP05 added `app/lib/portfolioInput.ts` (with its own `PRICE_MAX.toLocaleString("en-US")`), WP06 added a `formatInCurrency` money helper to `BoxCalculator.tsx`, and WP04 to WP06 added ESLint blocks. Each step that touches one of those names the fallback for a tree where that package is missing.
-- **Unblocks**: WP08, WP09, WP18 (and WP19, WP20 through them).
+- **Unblocks**: WP08, WP09, WP18 (and WP19, WP20 through them). WP18 moves the three return fallbacks into `lib/marketMath.ts`; it must keep the UTC date-key anchor step 3 introduces.
 - **Suggested branch name**: `remediation/wp07-date-money-formatting`
-- **Risk level**: medium. Display-only for most edits, but it touches about 25 files, changes visible strings on every page (date style, thousands separators, `C$` on /compare, zone label on "Last Refreshed"), and changes the return-window arithmetic that feeds the 1D/7D figures.
+- **Risk level**: medium. Display-only for most edits, but it touches about 25 files, changes visible strings on every page (date style, thousands separators, `C$` on /compare, zone label on "Last Refreshed"), and changes the client and server fallback return-window arithmetic (used only when the RPC value is missing).
 
 ## Why
 
-Set release dates are printed with the browser's own zone and locale: a set released 2026-09-26 reads "9/25/2026" for every Canadian and US visitor on `/`, `/prices`, `/market` and `/compare`, while `/product/[id]` (fixed in commit 2969cd4) says "Sep 26, 2026". On `/` the same text is rendered once on the server (Vercel, UTC, en-US) and again in the browser, so React 19 logs a hydration error and rewrites the dates and the "Updated:" line after load (visible flicker). Money is formatted by hand with `toFixed(2)` on public pages, so a $1,649.99 booster box shows as "$1649.99" next to portfolio values that do have separators, and the dashboard's "Last Refreshed" is a UTC clock time with no zone, which Toronto readers take as local (it can look like a time in the future). Return and sparkline math parses offset-less UTC timestamps as local time, so the 1D figure can measure a 2-day move and sparklines put a row on the wrong day for viewers east of UTC. After this PR every date, timestamp and money string comes from `app/lib/format.ts`, produces the same text on the server and in every browser zone and locale, and a lint rule stops new bare `toLocale*` calls.
+Set release dates are printed with the browser's own zone and locale: a set released 2026-09-26 reads "9/25/2026" for every Canadian and US visitor on `/`, `/prices`, `/market` and `/compare`, while `/product/[id]` (fixed in commit 2969cd4) says "Sep 26, 2026". On `/` the same text is rendered once on the server (Vercel, UTC, en-US) and again in the browser, so for any visitor whose browser zone is not UTC (the zone alone triggers it, even with the same en-US locale) React 19 throws a hydration mismatch, discards the server HTML and re-renders the whole page on the client (reproduced with React 19.2: "Hydration failed because the server rendered text didn't match the client. As a result this tree will be regenerated on the client."). That costs extra main-thread work and a visible repaint on every load of `/`. Money is formatted by hand with `toFixed(2)` on public pages, so a $1,649.99 booster box shows as "$1649.99" next to portfolio values that do have separators, and the dashboard's "Last Refreshed" is a UTC clock time with no zone, which Toronto readers take as local (it can look like a time in the future). The client fallback for return windows parses offset-less UTC timestamps as local time, so for viewers east of UTC it can print a 7D (or longer) return that the RPC, which anchors on `day <= current_date - N`, leaves blank. After this PR every date, timestamp and money string comes from `app/lib/format.ts`, produces the same text on the server and in every browser zone and locale, and a lint rule stops new bare `toLocale*` calls.
 
 ## Before you start
 
@@ -83,7 +83,13 @@ pnpm exec eslint app/lib/marketData.ts app/lib/serverMarketData.ts app/lib/portf
   app/components/ProductPrices app/components/MarketView app/components/PriceChart.tsx \
   app/components/charts app/components/BoxCalculator/BoxCalculator.tsx app/components/Portfolio \
   app/page.tsx app/product app/stats/page.tsx app/compare/page.tsx app/privacy/page.tsx 2>&1 | tail -3
+
+# 9. F122's main defect (portfolio chart skips or repeats a day at DST, last point dated tomorrow in the
+#    North American evening) is fixed by WP05 step 10d, not here. Expect exactly 1 hit:
+grep -n "for (let ms = startMs; ms <= endMs; ms += DAY_MS)" app/lib/portfolio.ts
 ```
+
+If check 9 prints nothing, WP05 has not merged. Do not port its loop here (WP05 owns `portfolio.ts` and WP10 replaces the function); add the line "F122 portfolio-chart part still open until WP05 step 10d merges" to the PR body and continue.
 
 Assumptions to check:
 
@@ -327,30 +333,44 @@ for z in UTC America/Vancouver Asia/Tokyo; do TZ=$z pnpm exec jest app/lib/__tes
 
 ### Step 3. Parse offset-less timestamps as UTC (F122)
 
-3a. `app/components/MarketView/returns.ts`. Add `import { parseRecordedAt } from "../../lib/format";` below the existing import on line 1. Replace lines 33-50 of `getReturnPercent` (from `const latestEntry = history[history.length - 1];` through the `}` that closes the `for` loop; keep the blank line 51 and `if (!pastEntry) return null;` at 52) with:
+The three return-window helpers (`returns.ts`, `ReturnMetrics.tsx`, `serverMarketData.ts`) are fallbacks for the `get_market_product_summaries` RPC, which picks its anchor with `dh.day <= current_date - N` (UTC calendar days, `migrations/20260506_market_performance_functions.sql:47-96`). The server copy says so itself ("the RPC this path stands in for", `serverMarketData.ts:801`). So 3a, 3b and 3e compare UTC date keys, not instants: the anchor is the newest row whose UTC date is on or before (today's UTC date minus N days), and the newest row's UTC date must be after that. Comparing instants (`now - N*24h`), even after parsing as UTC, still disagrees with the RPC before the day's scrape (for example at 02:00 UTC it rejects the row recorded at 04:00 UTC on the anchor day and falls back to a row a day older). Row dates come from `recordedAtDateKey` (step 1). `marketPulse.ts` has a private `toRecordedDateKey` that splits the string; do not export and reuse it here: `recordedAtDateKey` gives the same key for every offset-less value and also handles values that carry an offset.
+
+3a. `app/components/MarketView/returns.ts`. Add these two imports below the existing import on line 1:
+
+```ts
+import { parseRecordedAt, recordedAtDateKey } from "../../lib/format";
+import { utcMidnightMs } from "../../lib/marketPulse";
+```
+
+Replace lines 33-50 of `getReturnPercent` (from `const latestEntry = history[history.length - 1];` through the `}` that closes the `for` loop; keep the blank line 51 and `if (!pastEntry) return null;` at 52) with:
 
 ```ts
   const latestEntry = history[history.length - 1];
-  const latestEntryMs = parseRecordedAt(latestEntry.recorded_at).getTime();
 
-  // Elapsed milliseconds, not setDate() on a local calendar: the result must
-  // not depend on the runtime's zone or on a DST change inside the window.
-  const targetMs = referenceDate.getTime() - days * DAY_MS;
+  // Same anchor as the get_market_product_summaries RPC this falls back for:
+  // UTC calendar days, `day <= current_date - N`. Not setDate() on the local
+  // calendar and not new Date(recorded_at): both depend on the runtime's zone,
+  // and east of UTC they found an anchor the RPC does not have (F122).
+  const targetKey = new Date(utcMidnightMs(referenceDate) - days * DAY_MS)
+    .toISOString()
+    .slice(0, 10);
 
-  // If the latest point is already older than the target window,
+  // If the latest point is already on or before the target day,
   // there is not enough recent data to compute that return.
-  if (latestEntryMs <= targetMs) return null;
+  const latestKey = recordedAtDateKey(latestEntry.recorded_at);
+  if (latestKey === null || latestKey <= targetKey) return null;
 
   let pastEntry: PriceHistoryEntry | undefined;
   for (let i = history.length - 1; i >= 0; i--) {
-    if (parseRecordedAt(history[i].recorded_at).getTime() <= targetMs) {
+    const key = recordedAtDateKey(history[i].recorded_at);
+    if (key !== null && key <= targetKey) {
       pastEntry = history[i];
       break;
     }
   }
 ```
 
-`DAY_MS` already exists at `returns.ts:3`. In `getCagrPercent`, replace lines 74-75 with:
+`DAY_MS` already exists at `returns.ts:3`. `YYYY-MM-DD` keys compare correctly as strings. In `getCagrPercent` (consistency only: both ends shift equally under the old parse, so the result does not change; this keeps the step-12 grep at zero), replace lines 74-75 with:
 
 ```ts
   const startMs = parseRecordedAt(first.recorded_at).getTime();
@@ -359,19 +379,29 @@ for z in UTC America/Vancouver Asia/Tokyo; do TZ=$z pnpm exec jest app/lib/__tes
 
 Leave `toDailyPoints` (`recorded_at.slice(0, 10)` is already the UTC date of an offset-less UTC value).
 
-3b. `app/components/ProductPrices/shared/ReturnMetrics.tsx`. Add `import { parseRecordedAt } from "../../../lib/format";` with the other imports and `const DAY_MS = 24 * 60 * 60 * 1000;` above `function getHistoricalReturn`. Replace lines 40-59 (from `const targetDate = new Date();` through the `}` on line 59 that closes the `for` loop; keep the blank line 60 and the final `return null;` at 61) with:
+3b. `app/components/ProductPrices/shared/ReturnMetrics.tsx`. Below `import { hasCurrentPrice } from "../../../lib/priceGuard";` add:
 
 ```ts
-  const targetMs = Date.now() - days * DAY_MS;
+import { recordedAtDateKey } from "../../../lib/format";
+import { utcMidnightMs } from "../../../lib/marketPulse";
+```
 
-  // The newest reading must fall inside the window, or there is no "now" to
+and add `const DAY_MS = 24 * 60 * 60 * 1000;` above `function getHistoricalReturn`. Replace lines 40-59 (from `const targetDate = new Date();` through the `}` on line 59 that closes the `for` loop; keep the blank line 60 and the final `return null;` at 61) with:
+
+```ts
+  // UTC calendar days, the RPC's `day <= current_date - N` anchor (F122).
+  const targetKey = new Date(utcMidnightMs() - days * DAY_MS).toISOString().slice(0, 10);
+
+  // The newest reading must fall after the target day, or there is no "now" to
   // measure to: without this the loop's first match is that same newest row
   // and the function returns a flat 0.00%, reading as a stable product rather
   // than an unpriced one. Mirrors the identical bail in MarketView/returns.ts.
-  if (parseRecordedAt(latestEntry.recorded_at).getTime() <= targetMs) return null;
+  const latestKey = recordedAtDateKey(latestEntry.recorded_at);
+  if (latestKey === null || latestKey <= targetKey) return null;
 
   for (let i = history.length - 1; i >= 0; i -= 1) {
-    if (parseRecordedAt(history[i].recorded_at).getTime() <= targetMs) {
+    const key = recordedAtDateKey(history[i].recorded_at);
+    if (key !== null && key <= targetKey) {
       const pastPrice = convertPrice(history[i].usd_price);
       if (pastPrice === 0) return null;
       return {
@@ -391,14 +421,16 @@ Leave `toDailyPoints` (`recorded_at.slice(0, 10)` is already the UTC date of an 
 with:
 
 ```ts
-      // UTC day of the row. new Date(raw) read the offset-less value as local
-      // time and put rows on the previous day for viewers east of UTC (F122).
+      // UTC day of the row, the same key the rest of the site uses (F122).
+      // new Date(raw) read the offset-less value as local time.
       const dateKey = recordedAtDateKey(entry.recorded_at);
       if (dateKey === null) continue;
       if (!map.has(dateKey)) {
 ```
 
-3d. `app/lib/marketData.ts`. Add `import { parseRecordedAt } from "./format";` to the imports. Replace lines 389-392:
+3c is consistency, not a visible fix: the sparkline has no axis or labels and spaces points by index, so the old key only mattered for dedupe, and one row per UTC day plus the 23-hour scrape gate means a uniform shift almost never merges two rows. Do it so every `recorded_at` goes through `format.ts` and the step-12 grep reaches zero.
+
+3d. `app/lib/marketData.ts` (consistency only: this is a sort comparator and both sides shift equally, so order does not change; it keeps the step-12 grep at zero). Add `import { parseRecordedAt } from "./format";` to the imports. Replace lines 389-392:
 
 ```ts
     historyByProduct[Number(productId)].sort(
@@ -408,16 +440,19 @@ with:
     );
 ```
 
-3e. `app/lib/serverMarketData.ts`. Add `import { parseRecordedAt, recordedAtDateKey } from "./format";` below the other `./` imports (keep `import "server-only";` first). In `getReturnPercent` (starts line 204 at a188fea) replace lines 210-224 (from `const latestEntry = history[history.length - 1];` through the `}` on line 224 that closes the `for` loop; keep the blank line and the final `return null;` after it) with:
+3e. `app/lib/serverMarketData.ts`. Add `import { recordedAtDateKey } from "./format";` below the other `./` imports (keep `import "server-only";` first). `utcMidnightMs` is already imported from `./marketPulse` (line 23). In `getReturnPercent` (starts line 204 at a188fea) replace lines 210-224 (from `const latestEntry = history[history.length - 1];` through the `}` on line 224 that closes the `for` loop; keep the blank line and the final `return null;` after it) with:
 
 ```ts
   const latestEntry = history[history.length - 1];
-  const targetMs = Date.now() - days * DAY_MS;
+  // UTC calendar days, the anchor of the RPC this path stands in for (F122).
+  const targetKey = new Date(utcMidnightMs() - days * DAY_MS).toISOString().slice(0, 10);
 
-  if (parseRecordedAt(latestEntry.recorded_at).getTime() <= targetMs) return null;
+  const latestKey = recordedAtDateKey(latestEntry.recorded_at);
+  if (latestKey === null || latestKey <= targetKey) return null;
 
   for (let i = history.length - 1; i >= 0; i -= 1) {
-    if (parseRecordedAt(history[i].recorded_at).getTime() <= targetMs) {
+    const key = recordedAtDateKey(history[i].recorded_at);
+    if (key !== null && key <= targetKey) {
       const pastPrice = history[i].usd_price;
       if (pastPrice === 0) return null;
       return ((latestEntry.usd_price - pastPrice) / pastPrice) * 100;
@@ -425,7 +460,7 @@ with:
   }
 ```
 
-`DAY_MS` is the module-level constant at `serverMarketData.ts:51`. In `buildDailySeries` replace line 237 and the `if` below it the same way as 3c (`recordedAtDateKey`, `if (dateKey === null) continue;`). On Vercel the runtime is UTC so this only changes behaviour for local builds in other zones, but it keeps server and client math identical; WP18 later merges these duplicates.
+`DAY_MS` is the module-level constant at `serverMarketData.ts:51`. In `buildDailySeries` replace line 237 and the `if` below it the same way as 3c (`recordedAtDateKey`, `if (dateKey === null) continue;`). On Vercel the runtime is UTC, so the parse change only matters for local builds in other zones; the date-key anchor does change which row is used before the day's 04:00 UTC scrape, and now matches the RPC. It keeps server and client math identical; WP18 later merges these duplicates (the F122 re-verification also recommends merging `returns.ts` and `ReturnMetrics.tsx`; that is WP18's job, do not do it here).
 
 3f. `app/components/PriceChart.tsx`. Add `import { formatMoney, formatMonthDay, parseRecordedAt } from "../lib/format";` below the `resolvePrice` import. In `groupedDaily` replace lines 92-105, the whole parse block (from the comment `// Parse the recorded_at timestamp and convert to local date string` through the `}` that closes the final `else` branch, just above `// Format as local YYYY-MM-DD`), with:
 
@@ -497,16 +532,28 @@ Render `<StalePriceNote product={product} />` in two places: in the flat branch 
 
 ### Step 5. "Last Refreshed" on the dashboard (F096)
 
-`app/page.tsx`. Add `import { formatInteger, formatMoney, formatTimestamp } from "./lib/format";`. Keep the `latestUpdateRaw` reduce (lines 173-176). Replace lines 177-192 (from `let latestUpdateLabel = "Unknown";` through the closing `}` of `if (latestUpdateRaw)`) with:
+`app/page.tsx`. Add `import { formatInteger, formatMoney, formatTimestamp, parseRecordedAt } from "./lib/format";`. Keep the `latestUpdateRaw` reduce (lines 173-176). Replace lines 177-192 (from `let latestUpdateLabel = "Unknown";` through the closing `}` of `if (latestUpdateRaw)`) with:
 
 ```ts
   // products.last_updated is a UTC instant without an offset. Shown in Eastern
   // time with its abbreviation, so the ISR HTML says what zone it is in instead
   // of printing the build machine's UTC clock unlabeled (F096).
-  const latestUpdateLabel = formatTimestamp(latestUpdateRaw, { withYear: false });
+  const latestUpdate = parseRecordedAt(latestUpdateRaw);
+  const latestUpdateIso = Number.isNaN(latestUpdate.getTime())
+    ? undefined
+    : latestUpdate.toISOString();
+  const latestUpdateLabel = formatTimestamp(latestUpdate, { withYear: false });
 ```
 
-`formatTimestamp("")` returns "Unknown", which matches today's fallback. Line 319 is unchanged. The stat now reads e.g. `Sep 25, 12:12 AM EDT`.
+`parseRecordedAt("")` is an Invalid Date and `formatTimestamp` of an Invalid Date returns "Unknown", which matches today's fallback. The stat now reads e.g. `Sep 25, 12:12 AM EDT`.
+
+Wrap the value in a machine-readable `<time>` (F096 re-verification). In `function StatCard` (line 84), add `dateTime?: string;` to the props type after `sub?: string;`, add `dateTime,` to the destructured parameters after `sub,`, and change the `{value}` line inside the `text-2xl` `<div>` to:
+
+```tsx
+        {dateTime ? <time dateTime={dateTime}>{value}</time> : value}
+```
+
+Line 319 becomes `<StatCard label="Last Refreshed" value={latestUpdateLabel} dateTime={latestUpdateIso} />`. Do not add a relative "42 min ago" label: the ISR HTML is up to an hour old, so a server-computed relative time is wrong, and a client-computed one needs after-mount formatting that this spec rejects (Pitfalls).
 
 ### Step 6. Money (F089)
 
@@ -681,7 +728,7 @@ Run the grep checks in Verification. Every hit left must be one of the "do not t
 - **Do not fix only the zone.** `toLocaleDateString(undefined, { timeZone: "UTC" })` still prints "Sep 26, 2026" on the server and "26 Sept 2026" (en-GB) or "2026-09-26" (en-CA numeric) in the browser. The F007 verifier measured this; locale must be fixed too. This spec avoids Intl entirely for date-only values.
 - **Do not format date-only values through `Intl.DateTimeFormat` even with a fixed locale.** Server (Node) and browser ship different ICU/CLDR versions and English abbreviations and spacing have changed between them. String split plus a fixed table cannot drift.
 - **Do not use `Intl.DateTimeFormat(...).format()` for timestamps.** Its literal text (the space before AM/PM became U+202F in ICU 72; en-CA prints "a.m.") differs by ICU version. Use `formatToParts` and assemble, as `formatTimestamp` does.
-- **Do not format timestamps in the viewer's zone** (`Intl.DateTimeFormat().resolvedOptions().timeZone`, or no `timeZone`). The server renders `/` in UTC and the browser in its own zone; that is the hydration error. The F072 verifier also measured `resolvedOptions()` alone at about 46 us per card.
+- **Do not format timestamps in the viewer's zone** (`Intl.DateTimeFormat().resolvedOptions().timeZone`, or no `timeZone`). The server renders `/` in UTC and the browser in its own zone; that is the hydration error. The F072 re-verification measured the `resolvedOptions()` lookup alone at about 60 us per card, most of the card's formatting cost; the viewer's zone is already the default, so the option was pure overhead even before this PR.
 - **Do not reach for `suppressHydrationWarning` or a `useSyncExternalStore`/`useEffect` "format after mount" pattern.** With fixed locale and zone there is nothing to suppress; after-mount formatting adds a flash of different text (the F007 and F096 verifiers list it only as an alternative to a fixed zone).
 - **Do not use `style: "currency"`.** en-CA prints `US$` for USD, en-US prints `CA$` for CAD, and `currencyDisplay: "narrowSymbol"` makes both `$`, ambiguous next to the USD/CAD toggle. Keep `$` / `C$`.
 - **Do not append "Z" blindly.** `"2026-09-25" + "Z"` and `"...+00:00" + "Z"` are wrong, and `"...+00"` is rejected by V8. Always go through `parseRecordedAt`.
@@ -691,7 +738,8 @@ Run the grep checks in Verification. Every hit left must be one of the "do not t
 - **Do not precompute labels in `useProductData` and do not change ProductCard's props** to pass currency primitives. F072 verifier: it couples the data hook to presentation, and `selectedCurrency`/`exchangeRate` are already props that must re-render the card.
 - **Do not turn input pre-fills into formatted money** (`EditHoldingModal.tsx:43`, `AddHoldingModal.tsx:62`): `"1,649.99"` in a number input fails to parse.
 - **Do not set `process.env.TZ` inside a test file to switch zones.** Jest gives each test file a copy of `process.env` (jest-util `createProcessEnv`), so the assignment never reaches V8's clock. Switch zones on the command line (`TZ=... pnpm exec jest ...`), as step 10 does.
-- **Do not claim a full-tree client re-render in the PR description.** React 19 patches mismatched text and logs one recoverable error (F089 verifier). The user-visible effect is the console error plus the date text flipping after load.
+- **Do not describe today's hydration error on `/` as a harmless text patch.** The F089 re-verification reproduced it with React 19.2 and jsdom: a text mismatch throws, React logs "Hydration failed because the server rendered text didn't match the client. As a result this tree will be regenerated on the client.", and the tree is client-rendered from the nearest Suspense boundary, which on `/` is the root (there is no `loading.tsx` or Suspense there). It triggers on the browser zone alone (any non-UTC zone, even with an en-US locale). An earlier verdict said React 19 patches the text; that is wrong. The PR description should say the page was being re-rendered on the client for nearly every visitor.
+- **Do not add a module-level formatter with an `undefined` locale or zone to an SSR'd client component** (for example `new Intl.DateTimeFormat(undefined, {...})` in `ProductCard.tsx`, which the F072 re-verification suggests as a cheap perf fix). It is cheap but still prints differently on the server and in the browser, so it keeps the `/` hydration error. `formatTimestamp` and `formatDateOnly` give the same speed-up with fixed output.
 - **Do not pass a value with a non-UTC offset to `formatDateOnly`.** It reads the leading `YYYY-MM-DD` as written, which is the UTC date only for date keys and for offset-less UTC timestamps (`release_date`, `price_recorded_at`, `exchange_rates.recorded_at`, the only inputs this spec gives it). For anything carrying an offset, take `recordedAtDateKey(value)` first.
 - **Do not delete WP06's `formatInCurrency` in `BoxCalculator.tsx`.** Change its body to `formatMoney` (step 6g); WP17 expects the helper to exist.
 - **Do not leave `PRICE_MESSAGE` in `app/lib/portfolioInput.ts` on `toLocaleString`.** It is inside `app/`, so the new lint rule flags it; step 7 replaces it with `formatInteger` (same text).
@@ -1021,10 +1069,10 @@ describe("offset-less recorded_at is UTC (F122)", () => {
   });
 
   it("picks the UTC row at the window edge in every zone", () => {
-    // Target = 2026-02-10T02:00Z - 7 days = 2026-02-03T02:00Z. The 02-03 01:00
-    // UTC row is inside the edge and must be the past point: (132-110)/110.
-    // Read as local time in America/Vancouver it became 09:00Z, fell outside,
-    // and the 02-01 row was used instead (32%).
+    // Target day = UTC date of 2026-02-10T02:00Z minus 7 days = 2026-02-03.
+    // The 02-03 01:00 UTC row is on the target day and must be the past
+    // point: (132-110)/110. Read as local time in America/Vancouver it became
+    // 09:00Z, fell outside, and the 02-01 row was used instead (32%).
     const history = makeHistory([
       { recordedAt: "2026-02-01T01:00:00", usdPrice: 100 },
       { recordedAt: "2026-02-03T01:00:00", usdPrice: 110 },
@@ -1033,6 +1081,37 @@ describe("offset-less recorded_at is UTC (F122)", () => {
     expect(
       getReturnPercent(history, 7, identityConvert, new Date("2026-02-10T02:00:00Z"))
     ).toBeCloseTo(20, 10);
+  });
+
+  it("anchors on the UTC calendar day like the RPC, not on now minus 7x24h", () => {
+    // 02:00 UTC, before the day's 04:00 UTC scrape. The RPC's anchor is the
+    // newest row with day <= 2026-02-03, i.e. the 02-03 04:00 row: (132-110)/110.
+    // An instant comparison (now - 7 days = 02-03T02:00Z) rejected that row and
+    // used the 02-02 row instead (32%), disagreeing with the server.
+    const history = makeHistory([
+      { recordedAt: "2026-02-02T04:00:00", usdPrice: 100 },
+      { recordedAt: "2026-02-03T04:00:00", usdPrice: 110 },
+      { recordedAt: "2026-02-10T01:00:00", usdPrice: 132 },
+    ]);
+    expect(
+      getReturnPercent(history, 7, identityConvert, new Date("2026-02-10T02:00:00Z"))
+    ).toBeCloseTo(20, 10);
+  });
+
+  it("finds no 7D anchor the RPC does not have (east-of-UTC regression)", () => {
+    // Seven daily rows at 04:00 UTC, 2026-09-24 .. 2026-09-30, evaluated at
+    // 2026-09-30T20:00Z. Target day 2026-09-23: no row on or before it, so the
+    // RPC and this fallback both give null. The old code under TZ=Asia/Tokyo
+    // read 2026-09-24T04:00 as 19:00Z on 09-23 and returned a number.
+    const history = makeHistory(
+      ["24", "25", "26", "27", "28", "29", "30"].map((d, i) => ({
+        recordedAt: `2026-09-${d}T04:00:00`,
+        usdPrice: 100 + i,
+      }))
+    );
+    expect(
+      getReturnPercent(history, 7, identityConvert, new Date("2026-09-30T20:00:00Z"))
+    ).toBeNull();
   });
 
   it("CAGR is the same for Z and offset-less spellings", () => {
@@ -1088,9 +1167,12 @@ for z in America/Vancouver Asia/Tokyo; do
 done
 
 # Optional regression proof for F122: with your new returns.test.ts in place, restore only the old
-# returns.ts and confirm the "window edge" case FAILS under Vancouver (expected 20, receives 32), then restore:
+# returns.ts and confirm: the "window edge" case FAILS under Vancouver (expected 20, receives 32); the
+# "calendar day like the RPC" case FAILS in every zone (receives 32); the "east-of-UTC regression" case
+# FAILS under Tokyo (receives a number, expected null). Then restore:
 #   git stash push app/components/MarketView/returns.ts
 #   TZ=America/Vancouver pnpm exec jest app/components/MarketView/__tests__/returns.test.ts -t "window edge"
+#   TZ=Asia/Tokyo pnpm exec jest app/components/MarketView/__tests__/returns.test.ts -t "east-of-UTC"
 #   git stash pop
 
 # Greps. Each must print nothing:
@@ -1144,6 +1226,9 @@ None. (Optional: open the PR's Vercel preview and run manual checks 1 to 3 if th
 - [ ] `ProductCard` no longer computes the `Updated:` label outside the flat branch.
 - [ ] `grep -rn '"C\$"' app --include=*.ts --include=*.tsx | grep -v __tests__` prints only `app/lib/format.ts`; `grep -rn "PRICE_MAX.toLocaleString" app` prints nothing; WP06's `formatInCurrency` still exists and returns `formatMoney(value, currency)`.
 - [ ] `PriceChart`'s price `<YAxis>` has `width={56}`, and CAD ticks above C$1,000 are not clipped.
+- [ ] The three return fallbacks (`returns.ts` `getReturnPercent`, `ReturnMetrics.tsx` `getHistoricalReturn`, `serverMarketData.ts` `getReturnPercent`) compare UTC date keys against `utcMidnightMs(...) - days * DAY_MS`, like the RPC's `day <= current_date - N`; the "calendar day like the RPC" and "east-of-UTC regression" cases in `returns.test.ts` pass under UTC, Vancouver and Tokyo.
+- [ ] "Last Refreshed" is wrapped in `<time dateTime="...Z">` carrying the ISO instant.
+- [ ] "Before you start" check 9 printed one hit (WP05's UTC portfolio loop), or the PR body says the F122 portfolio-chart part is still open.
 
 ## Rollback
 
@@ -1167,12 +1252,13 @@ EDT/EST label, and money uses $ / C$ with thousands separators.
 - "Last Refreshed" shows its zone; stale catalog cards say why the price
   is missing (F096, F112, F115).
 - ProductCard stops building Intl formatters per render (F072).
-- recorded_at without an offset is parsed as UTC in return, CAGR and
-  sparkline math (F122).
+- Return fallbacks anchor on the UTC calendar day like the RPC, and
+  recorded_at without an offset is read as UTC everywhere (F122).
+  The portfolio chart's DST day skip is WP05's fix.
 - ESLint bans bare toLocale* in app/; CI reruns the zone-sensitive tests
   under America/Vancouver and Asia/Tokyo.
 ```
 
 PR title: `fix(format): shared date/timestamp/money formatting; fix off-by-one release dates and hydration on /`
 
-PR body summary: what was wrong (release dates a day early for North American visitors, hydration error on `/`, `$1649.99` vs `$1,649.99`, unlabeled UTC "Last Refreshed", local-time parsing of UTC timestamps in return math); the three decisions (date-only by string split, fixed America/Toronto with label, `$`/`C$` symbols with en-US digits) and why; visible changes reviewers should expect (date style "Sep 26, 2026" everywhere, `C$` on /compare, `-$100.00` instead of `$-100.00`, "EDT/EST" on timestamps, stale-price note on grouped cards, thousands separators in the box calculator including WP06's saved-recipe prices, a wider price Y axis on PriceChart); how it was tested (unit tests, zone matrix, stub build, manual DevTools timezone check); follow-ups: WP08/WP09 build on this module, WP18 merges the duplicated return helpers in `serverMarketData.ts`/`ReturnMetrics.tsx`/`returns.ts`, WP20 may unify `CurrencyCode` with `ProductPrices/types` `Currency`.
+PR body summary: what was wrong (release dates a day early for North American visitors, hydration error on `/`, `$1649.99` vs `$1,649.99`, unlabeled UTC "Last Refreshed", local-time parsing of UTC timestamps in return math); the three decisions (date-only by string split, fixed America/Toronto with label, `$`/`C$` symbols with en-US digits) and why; visible changes reviewers should expect (date style "Sep 26, 2026" everywhere, `C$` on /compare, `-$100.00` instead of `$-100.00`, "EDT/EST" on timestamps, stale-price note on grouped cards, thousands separators in the box calculator including WP06's saved-recipe prices, a wider price Y axis on PriceChart); how it was tested (unit tests, zone matrix, stub build, manual DevTools timezone check); follow-ups: WP08/WP09 build on this module, WP18 merges the duplicated return helpers in `serverMarketData.ts`/`ReturnMetrics.tsx`/`returns.ts` and must keep their UTC date-key anchor (not an instant `now - N*24h` comparison) and this PR's two new return test cases, WP20 may unify `CurrencyCode` with `ProductPrices/types` `Currency`.
