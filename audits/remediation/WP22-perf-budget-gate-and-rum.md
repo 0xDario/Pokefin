@@ -1,17 +1,17 @@
 # WP22: Performance budget gate, real-user monitoring and production smoke test
 
-- **Goal**: every pull request shows what it costs in bytes per route and fails when it breaks a budget or a layout-stability rule; the owner gets one GitHub issue within a week when real-user p75 on a route regresses; and a production page that renders without prices, or a signed-in flow that stops working, is reported within a day instead of months.
-- **Why now / value**: WP08, WP09, WP11 and WP12 bought the site its speed, and nothing protects it. Track 2 adds 16 packages of new UI (indices, sparklines, screener, watchlist, share cards); without a gate each one can quietly add 10 to 30 kB, and the product direction makes this package the precondition for all of them (01-PRODUCT-DIRECTION.md §6.1, "WP22 lands first"). Separately, the signed-in features were broken in production for months (WP01, WP04 to WP06) without anyone noticing; a daily smoke test is the cheapest possible alarm.
+- **Goal**: every pull request shows, per route, its bytes and their growth since the recorded baseline, and fails when it breaks a budget or a layout-stability rule; the owner gets one GitHub issue within a week when real-user p75 on a route regresses; and a production page that renders without prices, or a signed-in flow that stops working, is reported within a day instead of months.
+- **Why now / value**: WP08, WP09, WP11 and WP12 bought the site its speed, and nothing protects it. Track 2 adds 15 more packages, most of them new UI (indices, sparklines, screener, watchlist, share cards); without a gate each one can quietly add 10 to 30 kB, and the product direction makes this package the precondition for all of them (01-PRODUCT-DIRECTION.md §6.1, "WP22 lands first"). Separately, the signed-in features were broken in production for months (WP01, WP04 to WP06) without anyone noticing; a daily smoke test is the cheapest possible alarm.
 - **Effort**: L, 14 to 16 hours (fixture and stub 4 h, measurement and budget scripts 3 h, Lighthouse CI including one calibration round trip 2 h, smoke, confirmation and RUM workflows 3 h, tests 2 h, quick wins and docs 1 h). Plus about 1 hour of owner time.
 - **Depends on**: WP00 (stub harness, `pnpm build:stub`, `pnpm test:scripts`), WP08 (opt-in `SUPABASE_STUB_FIXTURE` mechanism), WP12 (supabase-js off the hydration path; limits must be recorded after it), WP17 (blocking lint, `instrumentation-client.ts`, the `error.tsx` comment this package edits), WP21 (adds the `database` job to `ci.yml`; landing after it avoids a merge conflict). Also reads the results of WP01 (`POST /api/account/export`), WP05 (`GET /api/portfolio`), WP11 (ISR product page with `generateStaticParams` returning `[]`), WP13 (`/sitemap.xml`, `/stats` redirect), WP15 (restyled error pages) and WP20 (`app/types/database.ts`, async root layout).
-- **Unblocks**: every Track 2 package that lists it: WP23, WP26, WP27, WP29, WP30, WP32, WP33 and WP37 (each adds its routes to `frontend/perf-budgets.json`), and indirectly all later ones.
+- **Unblocks**: every Track 2 package that lists it: WP23, WP26, WP27, WP29, WP30, WP31, WP32, WP33 and WP37 (each adds its routes to `frontend/perf-budgets.json` and its new public reads to `scripts/fixtures/perf.mjs`), and indirectly all later ones.
 - **Placement**: first package of Track 2, after WP21. It can move to right after WP17 if the owner wants budgets to guard WP18 to WP21; nothing else changes if it moves, because it only adds CI steps, a fixture, scripts and workflows (see "Before you start" for what to do when WP21 has not landed).
 - **Suggested branch name**: `remediation/wp22-perf-budget-gate-and-rum`
 - **Risk level**: medium. It adds blocking steps to the required `Frontend (lint + typecheck + tests)` check, so a flaky assertion would block every PR; only deterministic byte counts and stable Lighthouse audits block, timings only warn, and one step can be removed in a one-line follow-up. Runtime changes are two lines of behaviour (lazy Sentry in the error boundaries, query strings stripped from Speed Insights events).
 
 ## Why
 
-Today nothing measures what a PR costs a visitor. `pnpm build:stub` proves the app builds, but against an empty catalog, so a route's HTML and flight data are unrealistically small, and nobody reads the chunk sizes anyway. A stub build of master in this workspace shows how easy it is to lose track: `/prices` loads 15 scripts, 232 kB gzip (1 kB = 1024 bytes) plus a 39.5 kB `noModule` polyfill that modern browsers skip, and the floor every route pays is 210 kB, of which 64.6 kB is supabase-js (WP12 moves it off the first load) and 3.6 kB is `@sentry/nextjs`, pulled in statically by `error.tsx` and `global-error.tsx` even though no DSN is set. The measurement method in this spec was checked against that build: the client-reference-manifest route of `/prices` lists exactly the scripts of its HTML. Speed Insights is installed but unconfigured and nobody looks at it, and the only check of production is a human visiting the site. After this PR a realistic synthetic catalog (306 products, 55 sets, a year of history for the pages Lighthouse visits) feeds a CI build; a script prints each route's JS, CSS, document and flight bytes in the job summary and fails on a breach; Lighthouse CI fails on layout shift, bfcache loss, byte growth and oversized catalog images; production is measured after each deploy, smoke-tested every morning (including a signed-in portfolio load and data export), and checked weekly against real-user p75 targets. Evidence and the exact design come from `audits/remediation/research/performance-excellence.md` §3 (targets), §4 (budgets), §5 (CI enforcement, fixture, pipeline), §6 (Speed Insights and weekly alerting), §9 and §15 (lazy Sentry), §17 (owner measurements), and from `01-PRODUCT-DIRECTION.md` §6.1 (the rules every Track 2 package follows).
+Today nothing measures what a PR costs a visitor. `pnpm build:stub` proves the app builds, but against an empty catalog, so a route's HTML and flight data are unrealistically small, and nobody reads the chunk sizes anyway. A stub build of master in this workspace shows how easy it is to lose track: `/prices` loads 15 scripts, 232 kB gzip (1 kB = 1024 bytes) plus a 39.5 kB `noModule` polyfill that modern browsers skip, and the floor every route pays is 210 kB, of which 64.6 kB is supabase-js (WP12 moves it off the first load) and 3.6 kB is `@sentry/nextjs`, pulled in statically by `error.tsx` and `global-error.tsx` even though no DSN is set. The measurement method in this spec was checked against that build: the client-reference-manifest route of `/prices` lists exactly the scripts of its HTML. Speed Insights is installed but unconfigured and nobody looks at it, and the only check of production is a human visiting the site. After this PR a realistic synthetic catalog (306 products, 55 sets, up to a year of daily history per priced product, so every sparkline Lighthouse sees fills the way production's do) feeds a CI build; a script prints each route's JS, CSS, document and flight bytes in the job summary and fails on a breach; Lighthouse CI fails on layout shift, bfcache loss, byte growth and oversized catalog images; production is measured after each deploy, smoke-tested every morning (including a signed-in portfolio load and data export), and checked weekly against real-user p75 targets. Evidence and the exact design come from `audits/remediation/research/performance-excellence.md` §3 (targets), §4 (budgets), §5 (CI enforcement, fixture, pipeline), §6 (Speed Insights and weekly alerting), §9 and §15 (lazy Sentry), §17 (owner measurements), and from `01-PRODUCT-DIRECTION.md` §6.1 (the rules every Track 2 package follows).
 
 ## Design
 
@@ -55,7 +55,7 @@ Synthetic and seeded (mulberry32, seed `20260930`), generated at stub start with
 | Product types | 12 types with production-style labels | inside the summaries |
 | Volume | `get_market_product_volume_metrics` rows for about 80% of priced products (always for 900001 to 900003) | `POST /rest/v1/rpc/get_market_product_volume_metrics` |
 | Listings | one snapshot per product that has volume | `GET /rest/v1/product_listings_history` |
-| Price history | 365 daily rows for 900001, 900002, 900003, ending at the current price; other products have none (their sparklines show the empty state) | `GET /rest/v1/product_price_history` |
+| Price history | one row per day for every priced product of a released set, ending at its current price: 365 days, or from 30 days before its set's release when that is shorter. 900001 to 900003 always have 365. The 6 stale products and the unreleased set's products have none. About 100,000 rows, so the client sparkline batcher (WP09) on `/`, `/prices` and `/market` receives and draws real lines: an empty fixture would hide the layout shift and main-thread cost of sparklines filling in, which is exactly what the CLS gate must see | `GET /rest/v1/product_price_history` |
 | Sales history | 52 weekly and 30 daily rows for 900001 to 900003 | `GET /rest/v1/product_sales_history` |
 | Set analytics | one row per set (55), `key` = `code:name` as in the SQL | `POST /rest/v1/rpc/get_set_analytics` |
 | Exchange rate | one row, 1.3714 | `GET /rest/v1/exchange_rates` (also answers `.single()` with an object) |
@@ -74,7 +74,7 @@ All sizes in kB where 1 kB = 1024 bytes, one decimal.
 - **Shared JS** = the scripts present on every measured route (set intersection), summed as above. This is the floor every page pays: framework, router, layout, error boundaries.
 - **`/portfolio`** (anonymous requests are redirected to sign-in, so there is no HTML to fetch): `build-manifest.json` `rootMainFiles` plus the union of every `entryJSFiles` list in `.next/server/app/portfolio/page_client-reference-manifest.js`. The script cross-checks this method on `/prices` against its HTML and prints a warning if the two sets differ.
 - **Document (br)** = brotli q11 of the full HTML response body. **Inline flight (br)** = brotli q11 of the concatenated `self.__next_f.push(...)` script bodies.
-- **Largest lazy chunk (gz)** = the largest `gzip -9` of any `.next/static/chunks/**/*.js` that is in no route's initial set and is not a polyfill file.
+- **Largest lazy chunk (gz)** = the largest `gzip -9` of any `.next/static/chunks/**/*.js` that is in no measured route's initial set and is not a polyfill file. A page chunk of a route the budget file does not measure (for example `/account`) also counts, so this is a cap on any single chunk outside the measured first loads, which is the intent of research §4's "any lazy chunk ≤ 120 kB".
 - **CSS (gz)** = sum of `gzip -9` over the union of `<link rel="stylesheet" href="/_next/...">` across routes.
 - **Preloaded fonts** = per route, count and raw bytes of `<link rel="preload" as="font">` (woff2 is already compressed). Hard cap: 1 file; budget on the largest per-route total.
 - **Third-party scripts** = any `<script src>` not starting with `/`. Must be zero except the origins a route lists in `thirdPartyAllow` (`/auth/login` may load `https://challenges.cloudflare.com`).
@@ -110,7 +110,7 @@ Why not simply enforce the targets: several are below what the plan can reach to
 
 Statuses: `ok`; `over target` (passes, shown); `FAIL` (measured above limit); `unset` (limit null in CI: fails and says to run `--write-limits`); `missing` (the route could not be measured: fails).
 
-Raise rule, enforced: on a `pull_request` event the script reads the base branch's `perf-budgets.json` (`git show HEAD^1:...`, which is the base tip in a PR merge commit; the checkout fetches depth 2) and, for every key whose `limit` or `target` went up, requires a line `Perf budget raise: <key> <reason>` in the PR body. Adding a new route is not a raise.
+Raise rule, enforced: on a `pull_request` event the script reads the base branch's `perf-budgets.json` (`git show HEAD^1:...`, which is the base tip in a PR merge commit; the checkout fetches depth 2) and, for every key whose `limit` or `target` went up, and for every key that exists on the base branch but not in the PR (a removed or renamed budget is an unlimited raise), requires a line `Perf budget raise: <key> <reason>` in the PR body. Adding a new key is not a raise. The body is read live from the GitHub API with the job's read-only `GITHUB_TOKEN`, because a re-run reuses the original event payload: without the API read, editing the body and re-running the job would still see the old body. If the API call fails, the payload's body is used.
 
 ### D5. Lighthouse CI
 
@@ -130,7 +130,7 @@ Reports go to `frontend/lhci-reports/` (filesystem target, never public temporar
 
 ### D6. Production confirmation (after each deploy, informational)
 
-`.github/workflows/prod-confirm.yml` runs on `deployment_status` when a `Production` deployment succeeds. It waits 30 s for the alias, then for each HTML route of the budget file (the product route uses the first `/product/<id>` link found on production `/prices`): one warm-up request, then a measured request with the same functions and units as the CI gate (static files fetched over HTTPS instead of read from disk). It records `x-vercel-cache` (expected `HIT`, `STALE` or `PRERENDER`), document and JS sizes, compares JS with the CI limit, checks that `https://pokefin.ca/` answers exactly one `308` to `https://www.pokefin.ca/`, and prints the `/prices` calibration drift. It never fails the run; problems are `::warning::` annotations.
+`.github/workflows/prod-confirm.yml` runs on `deployment_status` when a deployment whose environment name starts with `Production` succeeds (Vercel's GitHub integration names it `Production`, or `Production` plus the project name when one repository feeds several projects; previews are `Preview...` and are skipped). It waits 30 s for the alias, then for each HTML route of the budget file (the product route uses the first `/product/<id>` link found on production `/prices`): one warm-up request, then a measured request with the same functions and units as the CI gate (static files fetched over HTTPS instead of read from disk). It records `x-vercel-cache` (expected `HIT`, `STALE` or `PRERENDER`), document and JS sizes, compares JS with the CI limit, checks that `https://pokefin.ca/` answers exactly one `308` to `https://www.pokefin.ca/`, and prints the `/prices` calibration drift. It never fails the run; problems are `::warning::` annotations.
 
 ### D7. Production smoke test (daily)
 
@@ -138,7 +138,7 @@ Reports go to `frontend/lhci-reports/` (filesystem target, never public temporar
 
 | Check | Pass condition |
 |---|---|
-| `/`, `/prices`, `/market`, `/analytics`, `/box-calculator` | HTTP 200, final URL on the same path, no error-page marker, and at least N price-formatted strings (`$12.34`, `C$1,234.56`, `US$5.00`) in the rendered body text; N per page in `prod-smoke-lib.mjs`, calibrated from production at implementation time |
+| `/`, `/prices`, `/market`, `/analytics`, `/box-calculator` | HTTP 200, final URL on the same path, no error-page marker, and at least N price-formatted strings (`$12.34`, `C$1,234.56`, as WP07's `formatMoney` prints them) in the rendered body text; N per page in `prod-smoke-lib.mjs`, calibrated from production at implementation time |
 | One product page | the id from repository variable `SMOKE_PRODUCT_ID`, else the first `/product/<id>` link on `/prices`; HTTP 200 and at least 1 price |
 | `/sitemap.xml` | HTTP 200 and at least 200 `<loc>` entries under `/product/` |
 | Signed in: `/portfolio` | not redirected to `/auth/login`, HTTP 200, and the page's own `GET /api/portfolio` answers 200 |
@@ -146,14 +146,14 @@ Reports go to `frontend/lhci-reports/` (filesystem target, never public temporar
 
 Each public check is retried once after 30 s before it counts as failed (a cold ISR render or a deploy in progress).
 
-**How the signed-in leg signs in.** A password sign-in needs a Cloudflare Turnstile token, and Supabase verifies it (WP02 made the token mandatory on every credential route), so a headless browser cannot sign in reliably, and a service-role key in GitHub would undo WP21's least-privilege work. Default design: a **rotating session**. The owner seeds it once with the `cookie` request header of a signed-in session of a dedicated smoke account (secret `SMOKE_SESSION_SEED`). Each run loads the previous run's Playwright storage state, visits `/portfolio`, where `proxy.ts` refreshes the Supabase session and sets rotated cookies, and saves the new state encrypted (`openssl enc -aes-256-cbc -pbkdf2`, key in secret `SMOKE_STATE_KEY`) into the Actions cache for the next run. If the chain breaks (a run redirected to sign-in), the workflow opens a separate issue labelled `prod-smoke-session` with re-seed instructions, instead of reporting a site outage. Without the secrets, the signed-in leg reports "not configured" and the public leg still runs.
+**How the signed-in leg signs in.** A password sign-in needs a Cloudflare Turnstile token, and Supabase verifies it (WP02 made the token mandatory on every credential route), so a headless browser cannot sign in reliably, and a service-role key in GitHub would undo WP21's least-privilege work. Default design: a **rotating session**. The owner seeds it once with the `cookie` request header of a signed-in session of a dedicated smoke account (secret `SMOKE_SESSION_SEED`). Each run loads the previous run's Playwright storage state, visits `/portfolio`, where `proxy.ts` refreshes the Supabase session and sets rotated cookies, and saves the new state encrypted (`openssl enc -aes-256-cbc -pbkdf2`, key in secret `SMOKE_STATE_KEY`) into the Actions cache for the next run, even when a check failed (only the rotated token is valid tomorrow). The cache key carries a 12-character hash of the seed, so a re-seed starts a fresh chain and the dead state is never restored again. A rejected saved state never falls back to the seed within the same run: presenting an already-rotated refresh token makes Supabase revoke the whole session family, which would turn one transient auth outage into a permanent break. If the chain breaks (a run redirected to sign-in), the workflow opens a separate issue labelled `prod-smoke-session` with re-seed instructions, instead of reporting a site outage. The leg needs both secrets: with only the seed, the first run would rotate the token without being able to save it. Without both, the signed-in leg reports "not configured" and the public leg still runs. The export call writes one `data_exported` row to `auth_events` per day for the smoke account; that is expected.
 
 Issues: on failure, one open issue labelled `prod-smoke` is created or gets a new comment; when a later run passes, it gets a "passing again" comment and is closed. Labels are created on first use.
 
 ### D8. Real-user monitoring
 
 - **Speed Insights configuration** (`app/layout.tsx` through a small client wrapper, because a server component cannot pass a function prop to a client component): `sampleRate={1}` (explicit; low traffic needs every sample, research §6), and `beforeSend` that removes the query string and hash from `event.url`, because `/prices?q=` carries what users typed. Routes are still grouped by pattern (`/product/[id]`) by the library.
-- **Weekly check** (`.github/workflows/rum-weekly.yml`, Mondays 13:07 UTC and on demand): `vercel metrics` p75 for LCP, INP, CLS and TTFB grouped by route over 7 days, plus the matching `_count` metrics, compared with `rum.targets` in `perf-budgets.json` (from research §3 and 01-PRODUCT-DIRECTION.md §6.1). A route with fewer than 200 samples is reported "insufficient data", never a breach. Any breach opens or updates one issue labelled `perf-regression`; a clean week comments and closes it. The raw CLI JSON is uploaded as an artifact.
+- **Weekly check** (`.github/workflows/rum-weekly.yml`, Mondays 13:07 UTC and on demand): `vercel metrics <metric> -a p75 --group-by route --since 7d --prod` for LCP, INP, CLS and TTFB, plus `-a count` on the same metric for the sample count, compared with `rum.targets` in `perf-budgets.json` (from research §3 and 01-PRODUCT-DIRECTION.md §6.1). The script reads the `summary` array of the JSON output (one row per route over the whole window; checked against the `vercel@61.1.0` source: the value column is `<metric id>_<aggregation>` with dots as underscores, for example `vercel_speed_insights_lcp_ms_p75`), never the time-bucketed `data` array, so no granularity flag is needed (the CLI only accepts 1m to 1d buckets). A route with fewer than 200 samples is reported "insufficient data", never a breach. Any breach opens or updates one issue labelled `perf-regression`; a clean week comments and closes it. The raw CLI JSON is uploaded as an artifact.
 - The job is **disabled until the owner confirms the plan exposes the metrics**: it runs only when the repository variable `RUM_WEEKLY_ENABLED` is `true`. If `vercel metrics schema vercel.speed_insights` fails on the owner's plan, the variable stays unset and the self-hosted web-vitals beacon (research §6 fallback) becomes a follow-up, not part of this PR.
 
 RUM targets (p75, ms except CLS):
@@ -173,7 +173,7 @@ RUM targets (p75, ms except CLS):
 
 ### D9. Quick win: lazy Sentry in the error boundaries
 
-`app/error.tsx` and `app/global-error.tsx` import `@sentry/nextjs` statically. Error boundaries are part of every route's first load, so the SDK chunk ships on every page (3.6 kB gz measured on a stub build without a DSN; more when a DSN is set). After this PR both files call `import("@sentry/nextjs").then((Sentry) => Sentry.captureException(error))`, and only when `NEXT_PUBLIC_SENTRY_DSN` was set at build time (the value is inlined, so a build without a DSN contains no import at all). WP17's `instrumentation-client.ts` initialises the SDK with the same lazy pattern, and a dynamic import resolves to the same module instance, so events still carry WP17's scrubbing.
+`app/error.tsx` and `app/global-error.tsx` import `@sentry/nextjs` statically. Error boundaries are part of every route's first load, so the SDK chunk ships on every page (3.6 kB gz measured on a stub build without a DSN; more when a DSN is set). After this PR both files call `import("@sentry/nextjs").then((Sentry) => Sentry.captureException(error))`, and only when `NEXT_PUBLIC_SENTRY_DSN` was set at build time (the value is inlined, so in a build without a DSN the import is unreachable and the browser never requests the SDK; the bundler may still emit the SDK as a lazy chunk, as it already does for WP17's `instrumentation-client.ts`, which costs no visitor anything). WP17's `instrumentation-client.ts` initialises the SDK with the same lazy pattern, and a dynamic import resolves to the same module instance, so events still carry WP17's scrubbing.
 
 ### D10. What people see
 
@@ -183,16 +183,16 @@ CI job summary (the budget table; values illustrative):
 ## Performance budgets
 Sizes in kB (1 kB = 1024 bytes). JS and CSS: gzip -9 per file, summed. Documents and flight: brotli q11.
 
-| Budget                      | Measured | Limit | Target | Recorded | Status      |
-|-----------------------------|---------:|------:|-------:|---------:|-------------|
-| Shared JS (gz)              |    141.2 |   149 |    125 |    141.2 | over target |
-| / JS (gz)                   |    152.8 |   161 |    150 |    152.8 | over target |
-| /prices JS (gz)             |    163.9 |   173 |    155 |    163.9 | over target |
-| /prices document (br)       |     58.4 |    62 |     70 |     58.4 | ok          |
-| /prices inline flight (br)  |     17.1 |    18 |     22 |     17.1 | ok          |
-| /product/[id] JS (gz)       |    143.0 |   145 |    145 |    143.0 | ok          |
-| Largest lazy chunk (gz)     |    118.3 |   120 |    120 |    118.3 | ok          |
-| CSS (gz)                    |     11.0 |    12 |     14 |     11.0 | ok          |
+| Budget                      | Measured | Change vs recorded | Limit | Target | Recorded | Status      |
+|-----------------------------|---------:|-------------------:|------:|-------:|---------:|-------------|
+| Shared JS (gz)              |    141.2 |                0.0 |   149 |    125 |    141.2 | over target |
+| / JS (gz)                   |    152.8 |                0.0 |   161 |    150 |    152.8 | over target |
+| /prices JS (gz)             |    166.1 |               +2.2 |   173 |    155 |    163.9 | over target |
+| /prices document (br)       |     58.4 |                0.0 |    62 |     70 |     58.4 | ok          |
+| /prices inline flight (br)  |     17.1 |                0.0 |    18 |     22 |     17.1 | ok          |
+| /product/[id] JS (gz)       |    143.0 |                0.0 |   145 |    145 |    143.0 | ok          |
+| Largest lazy chunk (gz)     |    118.3 |                0.0 |   120 |    120 |    118.3 | ok          |
+| CSS (gz)                    |     11.0 |                0.0 |    12 |     14 |     11.0 | ok          |
 ...
 Shared chunks (9): 2q-sya_sd7gzs.js, 3a4rc5favqh_n.js, ...
 Largest lazy chunks: 1k2...js 118.3, 3nn...js 64.6, ...
@@ -203,9 +203,9 @@ Largest lazy chunks: 1k2...js 118.3, 3nn...js 64.6, ...
 Lighthouse summary (per URL, medians of 3):
 
 ```text
-| URL             | CLS   | LCP ms | TBT ms | Script KiB | Image KiB | bf-cache | Resp. images | Suggested script limit | Suggested image limit |
-|-----------------|-------|--------|--------|-----------:|----------:|----------|--------------|-----------------------:|----------------------:|
-| /prices         | 0.001 | 1920   | 210    | 238        | 96        | 3/3 pass | 0 items      | 268288 B               | 108544 B              |
+| URL             | CLS   | LCP ms | TBT ms | Script KiB | Image KiB | bf-cache | Oversized images | Suggested script limit | Suggested image limit |
+|-----------------|-------|--------|--------|-----------:|----------:|----------|-----------------:|-----------------------:|----------------------:|
+| /prices         | 0.001 | 1920   | 210    | 238.0      | 96.0      | 3/3 pass |                0 | 268288 B               | 108544 B              |
 ```
 
 Smoke failure issue (label `prod-smoke`):
@@ -222,8 +222,8 @@ Likely causes: scraper stopped for 14+ days (0023 withholds every price), an RPC
 
 ### D11. Rules for every later package (also written into `frontend/README.md`)
 
-1. A PR that adds a route adds it to `frontend/perf-budgets.json` in the same PR with `"limit": null`, runs `pnpm perf:budget --write-limits` against the perf build, and commits the result. A new data endpoint gets a fixture route in `scripts/fixtures/perf.mjs` in the same PR.
-2. A PR that raises any `limit` or `target` puts `Perf budget raise: <key> <reason>` in its body. CI enforces it.
+1. A PR that adds a route adds it to `frontend/perf-budgets.json` in the same PR with `"limit": null` (and a `rum.targets` entry for its route pattern when the route is public), runs `pnpm perf:budget --write-limits` against the perf build, and commits the result. A new data endpoint gets a fixture route in `scripts/fixtures/perf.mjs` in the same PR, with rows shaped like production's.
+2. A PR that raises any `limit` or `target`, or removes or renames a budget key, puts `Perf budget raise: <key> <reason>` in its body (for a rename, the old key). CI enforces it.
 3. Never loosen a Lighthouse assertion to get green; fix the page or state the exception and its reason in the PR.
 
 ## Before you start
@@ -347,7 +347,12 @@ export function compareValues(a, b) {
   return sa < sb ? -1 : sa > sb ? 1 : 0;
 }
 
-function test(row, column, expression) {
+/**
+ * Parse one filter once per request into a row predicate. Parsing per row
+ * made a batched history read (100,000 rows, `in.(20 ids)`) take about 350 ms,
+ * enough to distort the Lighthouse runs; compiled, it takes a few ms.
+ */
+function compileFilter(column, expression) {
   let op = expression.slice(0, expression.indexOf("."));
   let raw = expression.slice(expression.indexOf(".") + 1);
   let negate = false;
@@ -356,39 +361,46 @@ function test(row, column, expression) {
     op = raw.slice(0, raw.indexOf("."));
     raw = raw.slice(raw.indexOf(".") + 1);
   }
-  const value = row[column];
-  let ok;
+  let predicate;
   switch (op) {
-    case "eq":
-      ok = compareValues(value, scalar(raw)) === 0;
+    case "eq": {
+      const target = scalar(raw);
+      predicate = (value) => compareValues(value, target) === 0;
       break;
-    case "neq":
-      ok = compareValues(value, scalar(raw)) !== 0;
+    }
+    case "neq": {
+      const target = scalar(raw);
+      predicate = (value) => compareValues(value, target) !== 0;
       break;
+    }
     case "gt":
-      ok = value != null && compareValues(value, raw) > 0;
+      predicate = (value) => value != null && compareValues(value, raw) > 0;
       break;
     case "gte":
-      ok = value != null && compareValues(value, raw) >= 0;
+      predicate = (value) => value != null && compareValues(value, raw) >= 0;
       break;
     case "lt":
-      ok = value != null && compareValues(value, raw) < 0;
+      predicate = (value) => value != null && compareValues(value, raw) < 0;
       break;
     case "lte":
-      ok = value != null && compareValues(value, raw) <= 0;
+      predicate = (value) => value != null && compareValues(value, raw) <= 0;
       break;
     case "in": {
       const list = raw.replace(/^\(|\)$/g, "").split(",").map((v) => v.replace(/^"|"$/g, ""));
-      ok = value != null && list.some((v) => compareValues(value, v) === 0);
+      const numeric = list.every((v) => v !== "" && !Number.isNaN(Number(v)));
+      const numbers = new Set(list.map(Number));
+      predicate = numeric
+        ? (value) => value != null && numbers.has(Number(value))
+        : (value) => value != null && list.some((v) => compareValues(value, v) === 0);
       break;
     }
     case "is":
-      ok = raw === "null" ? value === null || value === undefined : value === scalar(raw);
+      predicate = (value) => (raw === "null" ? value === null || value === undefined : value === scalar(raw));
       break;
     default:
       throw new Error(`perf fixture: unsupported PostgREST operator "${op}" on column "${column}"`);
   }
-  return negate ? !ok : ok;
+  return (row) => (negate ? !predicate(row[column]) : predicate(row[column]));
 }
 
 /**
@@ -398,17 +410,14 @@ function test(row, column, expression) {
  */
 export function applyPostgrest(rows, url) {
   const params = url.searchParams;
-  for (const key of params.keys()) {
+  const filters = [];
+  for (const [key, expression] of params) {
     if (key === "or" || key === "and") throw new Error(`perf fixture: PostgREST "${key}" groups are not supported`);
+    if (RESERVED.has(key)) continue;
+    if (key.includes(".")) throw new Error(`perf fixture: filter on embedded column "${key}" is not supported`);
+    filters.push(compileFilter(key, expression));
   }
-  let out = rows.filter((row) => {
-    for (const [key, expression] of params) {
-      if (RESERVED.has(key)) continue;
-      if (key.includes(".")) throw new Error(`perf fixture: filter on embedded column "${key}" is not supported`);
-      if (!test(row, key, expression)) return false;
-    }
-    return true;
-  });
+  let out = filters.length ? rows.filter((row) => filters.every((matches) => matches(row))) : rows;
 
   const order = params.get("order");
   if (order) {
@@ -723,22 +732,35 @@ export function buildPerfData({ now = new Date(), baseUrl }) {
     });
   }
 
+  // Daily history for every priced product of a released set, so client
+  // sparklines on /, /prices and /market fill in as they do in production
+  // (WP09's batcher fetches the visible cards). Stale products get none (0023
+  // withholds their price), nor does the unreleased set (WP26's fixture
+  // treats it as "No history" too).
   const history = [];
   const sales = [];
   let historyId = 1;
-  for (const id of PERF_HISTORY_IDS) {
-    const s = summaries.find((row) => row.id === id);
+  const setById = new Map(sets.map((set) => [set.id, set]));
+  for (const s of summaries) {
+    if (s.usd_price === null) continue;
+    const setAgeDays = Math.floor((nowMs - setById.get(s.set_id).releaseMs) / DAY_MS);
+    if (setAgeDays < 0) continue;
+    // Listings start about 30 days before release; at least 14 days, at most a year.
+    const days = Math.max(14, Math.min(365, setAgeDays + 30));
     const lastMs = Date.parse(`${s.price_recorded_at}Z`);
     const points = [];
     let walk = s.usd_price;
-    for (let d = 0; d < 365; d++) {
+    for (let d = 0; d < days; d++) {
       points.push(round2(walk));
       walk = walk / (1 + normal() * 0.012);
     }
     points.reverse(); // oldest first; the last point is the current price
     points.forEach((usd, i) => {
-      history.push({ id: historyId++, product_id: id, usd_price: usd, recorded_at: isoNoZone(lastMs - (364 - i) * DAY_MS) });
+      history.push({ id: historyId++, product_id: s.id, usd_price: usd, recorded_at: isoNoZone(lastMs - (days - 1 - i) * DAY_MS) });
     });
+  }
+  for (const id of PERF_HISTORY_IDS) {
+    const s = summaries.find((row) => row.id === id);
     const saleRow = (bucketMs, granularity, lo, hi) => ({
       product_id: id,
       bucket_date: isoDate(bucketMs),
@@ -1035,12 +1057,15 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { PERF_DIR, PERF_FRONT_PORT } from "./perf-config.mjs";
 ```
 
-(If the file already imports from `node:fs`, add `mkdirSync, writeFileSync` to that import instead of a second import line.)
+(WP00's file already has `import { rmSync } from "node:fs";`: add `mkdirSync, writeFileSync` to that import instead of a second import line. `path` is already imported too.)
 
 7b. Replace the block from `const port = process.env.SUPABASE_STUB_PORT ...` through the `startSupabaseStub({ ... })` call (WP08 put `const fixture = ...` between them) with:
 
 ```js
   const fixture = process.env.SUPABASE_STUB_FIXTURE || undefined;
+  // A request log from an earlier perf build must never vouch for this one:
+  // perf-serve.mjs reads it to decide whether .next/ is a perf build.
+  rmSync(path.join(PERF_DIR, "build-requests.json"), { force: true });
   // Port 0 = ephemeral, so a local `supabase start` (which owns 54321) or a
   // second build cannot collide. The perf build uses a fixed port because
   // NEXT_PUBLIC_SUPABASE_URL is inlined and perf-serve.mjs must serve the
@@ -1470,15 +1495,19 @@ export function evaluateSlots(slots, measured) {
   });
 }
 
-/** Keys whose limit or target is higher than on the base branch. New keys are not raises. */
+/**
+ * Keys whose limit or target is higher than on the base branch, plus keys the
+ * PR removed (a removed or renamed budget is an unlimited raise). New keys are
+ * not raises.
+ */
 export function findRaisedLimits(baseBudgets, headBudgets) {
-  const base = new Map(budgetSlots(baseBudgets).map((s) => [s.key, s.spec]));
-  return budgetSlots(headBudgets)
+  const head = new Map(budgetSlots(headBudgets).map((s) => [s.key, s.spec]));
+  return budgetSlots(baseBudgets)
     .filter((slot) => {
-      const before = base.get(slot.key);
-      if (!before) return false;
-      const limitRaised = before.limit != null && slot.spec.limit != null && slot.spec.limit > before.limit;
-      return limitRaised || slot.spec.target > before.target;
+      const after = head.get(slot.key);
+      if (!after) return true;
+      const limitRaised = slot.spec.limit != null && after.limit != null && after.limit > slot.spec.limit;
+      return limitRaised || after.target > slot.spec.target;
     })
     .map((slot) => slot.key);
 }
@@ -1494,14 +1523,21 @@ export function missingRaiseReasons(keys, prBody) {
 
 export function renderBudgetTable({ rows, shared, lazy, errors, warnings }) {
   const cell = (v) => (v === null || v === undefined ? "-" : String(v));
+  // Growth since the limit was recorded: what this branch costs on top of the
+  // baseline the reviewer agreed to.
+  const change = (r) => {
+    if (typeof r.value !== "number" || typeof r.recorded !== "number") return "-";
+    const d = Math.round((r.value - r.recorded) * 10) / 10;
+    return `${d > 0 ? "+" : ""}${d.toFixed(1)}`;
+  };
   const lines = [
     "## Performance budgets",
     "",
     "Sizes in kB (1 kB = 1024 bytes). JS and CSS: gzip -9 per file, summed. Documents and flight: brotli q11.",
     "",
-    "| Budget | Measured | Limit | Target | Recorded | Status |",
-    "|---|---:|---:|---:|---:|---|",
-    ...rows.map((r) => `| ${r.label} | ${cell(r.value)} | ${cell(r.limit)} | ${cell(r.target)} | ${cell(r.recorded)} | ${r.status} |`),
+    "| Budget | Measured | Change vs recorded | Limit | Target | Recorded | Status |",
+    "|---|---:|---:|---:|---:|---:|---|",
+    ...rows.map((r) => `| ${r.label} | ${cell(r.value)} | ${change(r)} | ${cell(r.limit)} | ${cell(r.target)} | ${cell(r.recorded)} | ${r.status} |`),
     "",
     `Shared chunks (${shared.length}): ${shared.map((p) => p.split("/").pop()).join(", ") || "none"}`,
     "",
@@ -1594,17 +1630,12 @@ Every `limit` and `recorded` starts as `null`; step 22 fills them from the measu
   "rum": {
     "minSamples": 200,
     "since": "7d",
-    "granularity": "7d",
     "filters": [],
     "metricIds": {
       "lcpMs": "vercel.speed_insights.lcp_ms",
-      "lcpCount": "vercel.speed_insights.lcp_count",
       "inpMs": "vercel.speed_insights.inp_ms",
-      "inpCount": "vercel.speed_insights.inp_count",
       "cls": "vercel.speed_insights.cls",
-      "clsCount": "vercel.speed_insights.cls_count",
-      "ttfbMs": "vercel.speed_insights.ttfb_ms",
-      "ttfbCount": "vercel.speed_insights.ttfb_count"
+      "ttfbMs": "vercel.speed_insights.ttfb_ms"
     },
     "defaultTargets": { "lcpMs": 2500, "inpMs": 200, "cls": 0.1, "ttfbMs": 800 },
     "targets": {
@@ -1665,9 +1696,25 @@ import {
 
 const WRITE_LIMITS = process.argv.slice(2).includes("--write-limits");
 
-function pullRequestContext() {
+async function pullRequestContext() {
   if (process.env.GITHUB_EVENT_NAME !== "pull_request" || !process.env.GITHUB_EVENT_PATH) return null;
   const event = JSON.parse(fs.readFileSync(process.env.GITHUB_EVENT_PATH, "utf8"));
+  let body = event.pull_request?.body ?? "";
+  // A re-run reuses the original event payload, so a body edited after the
+  // push is only visible through the API (read-only GITHUB_TOKEN, ci.yml).
+  const number = event.pull_request?.number;
+  if (process.env.GITHUB_TOKEN && process.env.GITHUB_REPOSITORY && number) {
+    try {
+      const api = process.env.GITHUB_API_URL || "https://api.github.com";
+      const res = await fetch(`${api}/repos/${process.env.GITHUB_REPOSITORY}/pulls/${number}`, {
+        headers: { authorization: `Bearer ${process.env.GITHUB_TOKEN}`, accept: "application/vnd.github+json" },
+      });
+      if (res.ok) body = (await res.json()).body ?? "";
+      else console.log(`::warning::could not read the live PR body (HTTP ${res.status}); using the event payload`);
+    } catch (err) {
+      console.log(`::warning::could not read the live PR body (${err.message}); using the event payload`);
+    }
+  }
   let base = null;
   try {
     // In a PR merge commit, HEAD^1 is the base branch tip (checkout uses fetch-depth: 2).
@@ -1677,7 +1724,7 @@ function pullRequestContext() {
   } catch {
     base = null; // first PR that adds the file, or shallow history
   }
-  return { body: event.pull_request?.body ?? "", base };
+  return { body, base };
 }
 
 async function main() {
@@ -1779,7 +1826,7 @@ async function main() {
     if (row.status === "missing") errors.push(`${row.key}: not measured (route failed above)`);
   }
 
-  const pr = pullRequestContext();
+  const pr = await pullRequestContext();
   if (pr?.base) {
     const raised = findRaisedLimits(pr.base, budgets);
     if (raised.length) warnings.push(`raised in this PR: ${raised.join(", ")}`);
@@ -1970,7 +2017,13 @@ Only the `frontend` job changes. Keep its `name:` byte for byte (branch protecti
           fetch-depth: 2
 ```
 
-14b. Change the job's `timeout-minutes: 20` to `timeout-minutes: 30`.
+14b. Change the job's `timeout-minutes: 20` to `timeout-minutes: 30`, and directly below it add job-level permissions (they replace the workflow-level `contents: read` for this job only; `pull-requests: read` lets the budget step read the live PR body for the raise rule, it cannot write anything):
+
+```yaml
+    permissions:
+      contents: read
+      pull-requests: read
+```
 
 14c. Replace the step
 
@@ -2002,6 +2055,9 @@ Only the `frontend` job changes. Keep its `name:` byte for byte (branch protecti
           done
           cat "$RUNNER_TEMP/perf-serve.log"; exit 1
       - name: Performance budgets (bytes, blocking)
+        env:
+          # Read-only token for the raise rule's live PR-body read (design D4).
+          GITHUB_TOKEN: ${{ github.token }}
         run: pnpm perf:budget
       # Pinned and run with dlx so the lockfile does not change. Blocks on
       # CLS, bf-cache, byte totals and catalog image sizing; LCP and TBT only
@@ -2183,7 +2239,9 @@ permissions:
 jobs:
   confirm:
     name: Production bytes and CDN cache (informational)
-    if: github.event.deployment_status.state == 'success' && github.event.deployment.environment == 'Production'
+    # Vercel names the environment "Production", or "Production" followed by
+    # the project name when the repository feeds more than one Vercel project.
+    if: github.event.deployment_status.state == 'success' && startsWith(github.event.deployment.environment, 'Production')
     runs-on: ubuntu-latest
     timeout-minutes: 10
     continue-on-error: true
@@ -2211,7 +2269,8 @@ jobs:
 ```js
 // Pure helpers for the daily production smoke test (WP22).
 
-// Money as WP07's formatMoney prints it: $12.34, C$1,234.56, US$5.00 (optionally followed by a currency code).
+// Money as WP07's formatMoney prints it: $12.34 (USD) and C$1,234.56 (CAD), sign before the symbol.
+// US$ is accepted too, in case a later package labels USD explicitly.
 export const PRICE_RE = /(?:C\$|US\$|\$)\s?\d{1,3}(?:,\d{3})*\.\d{2}/g;
 
 // minPrices: calibrated against production at implementation time (step 17d).
@@ -2304,8 +2363,9 @@ export function renderSummary(result, runUrl) {
 // Env: SMOKE_ORIGIN (default https://www.pokefin.ca), SMOKE_PRODUCT_ID
 // (optional), PLAYWRIGHT_PREFIX (npm prefix where playwright is installed),
 // SMOKE_STATE_IN / SMOKE_STATE_OUT (Playwright storage state of the rotating
-// session), SMOKE_SESSION_SEED (cookie header, used when there is no state),
-// SMOKE_RESULT (result JSON path), RUN_URL. The export response body (the
+// session), SMOKE_SESSION_SEED (cookie header, used only when there is no
+// saved state for this seed), SMOKE_STATE_KEY (only checked for presence: the
+// workflow encrypts the state with it), SMOKE_RESULT (result JSON path), RUN_URL. The export response body (the
 // smoke account's data) is never read or logged; only its status.
 import fs from "node:fs";
 import { createRequire } from "node:module";
@@ -2344,25 +2404,15 @@ async function withRetry(name, run) {
   return { ...(await attempt()), retried: true };
 }
 
-async function signedInLeg(browser) {
-  const stateIn = process.env.SMOKE_STATE_IN;
-  const seed = process.env.SMOKE_SESSION_SEED;
-  let context;
-  if (stateIn && fs.existsSync(stateIn)) context = await browser.newContext({ storageState: stateIn });
-  else if (seed) {
-    context = await browser.newContext();
-    await context.addCookies(lib.cookiesFromHeader(seed, new URL(ORIGIN).hostname));
-  } else {
-    return { status: "not-configured", detail: "no SMOKE_SESSION_SEED or saved session; signed-in checks skipped" };
-  }
+// One signed-in pass with a prepared browser context.
+async function signedInPass(context) {
   const page = await context.newPage();
   const portfolioApi = page
     .waitForResponse((r) => new URL(r.url()).pathname === "/api/portfolio" && r.request().method() === "GET", { timeout: 30_000 })
     .catch(() => null);
   const nav = await page.goto(`${ORIGIN}/portfolio`, { waitUntil: "load", timeout: 45_000 });
   if (new URL(page.url()).pathname.startsWith("/auth/login")) {
-    await context.close();
-    return { status: "session-expired", detail: "redirected to /auth/login: the saved session is no longer valid" };
+    return { status: "session-expired", detail: "redirected to /auth/login: the session is no longer valid" };
   }
   const api = await portfolioApi;
   const exportStatus = await page.evaluate(async () => {
@@ -2371,13 +2421,39 @@ async function signedInLeg(browser) {
   });
   // Save even when a check failed: proxy.ts has rotated the refresh token,
   // and only the new one is valid tomorrow.
-  if (process.env.SMOKE_STATE_OUT) await context.storageState({ path: process.env.SMOKE_STATE_OUT });
-  await context.close();
+  await context.storageState({ path: process.env.SMOKE_STATE_OUT });
   const ok = nav?.status() === 200 && api?.status() === 200 && exportStatus === 200;
   return {
     status: ok ? "ok" : "failed",
     detail: `/portfolio ${nav?.status() ?? "no response"}, /api/portfolio ${api?.status() ?? "not called"}, export ${exportStatus}`,
   };
+}
+
+async function signedInLeg(browser) {
+  const stateIn = process.env.SMOKE_STATE_IN;
+  const seed = process.env.SMOKE_SESSION_SEED;
+  // Without the key the rotated session cannot be saved, so the first run
+  // would burn the seed's refresh token and every later run would fail.
+  if (!process.env.SMOKE_STATE_KEY || !process.env.SMOKE_STATE_OUT || !seed) {
+    return { status: "not-configured", detail: "SMOKE_SESSION_SEED and SMOKE_STATE_KEY are both required; signed-in checks skipped" };
+  }
+  // The saved state, else the seed. Never fall back to the seed after a saved
+  // state was rejected: presenting an already-rotated refresh token makes
+  // Supabase revoke the whole session family, so a transient auth outage would
+  // kill a healthy chain. A re-seed needs no fallback either: the workflow keys
+  // the cache by a hash of the seed, so a new seed starts with no saved state.
+  let context;
+  if (stateIn && fs.existsSync(stateIn)) {
+    context = await browser.newContext({ storageState: stateIn });
+  } else {
+    context = await browser.newContext();
+    await context.addCookies(lib.cookiesFromHeader(seed, new URL(ORIGIN).hostname));
+  }
+  try {
+    return await signedInPass(context);
+  } finally {
+    await context.close();
+  }
 }
 
 async function runChecks() {
@@ -2484,18 +2560,25 @@ jobs:
     name: Production smoke
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    # The runner context is not available in job-level env, so the temp
+    # paths are exported by the first step instead.
     env:
       SMOKE_ORIGIN: https://www.pokefin.ca
       SMOKE_PRODUCT_ID: ${{ vars.SMOKE_PRODUCT_ID }}
-      PLAYWRIGHT_PREFIX: ${{ runner.temp }}/pw
-      SMOKE_STATE_IN: ${{ runner.temp }}/smoke-state.json
-      SMOKE_STATE_OUT: ${{ runner.temp }}/smoke-state-new.json
-      SMOKE_RESULT: ${{ runner.temp }}/smoke-result.json
       RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
     defaults:
       run:
         working-directory: frontend
     steps:
+      - name: Temp paths
+        working-directory: .
+        run: |
+          {
+            echo "PLAYWRIGHT_PREFIX=$RUNNER_TEMP/pw"
+            echo "SMOKE_STATE_IN=$RUNNER_TEMP/smoke-state.json"
+            echo "SMOKE_STATE_OUT=$RUNNER_TEMP/smoke-state-new.json"
+            echo "SMOKE_RESULT=$RUNNER_TEMP/smoke-result.json"
+          } >> "$GITHUB_ENV"
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
@@ -2508,12 +2591,18 @@ jobs:
           mkdir -p "$PLAYWRIGHT_PREFIX"
           npm install --no-save --no-audit --no-fund --prefix "$PLAYWRIGHT_PREFIX" playwright@1.63.0
           "$PLAYWRIGHT_PREFIX/node_modules/.bin/playwright" install --with-deps chromium
+      # The cache is keyed by a short hash of the seed: after a re-seed the
+      # old, dead state is never restored again, and the new seed is used.
+      - name: Session cache key
+        env:
+          SMOKE_SESSION_SEED: ${{ secrets.SMOKE_SESSION_SEED }}
+        run: echo "SEED_ID=$(printf '%s' "$SMOKE_SESSION_SEED" | sha256sum | cut -c1-12)" >> "$GITHUB_ENV"
       - name: Restore the rotating session
         uses: actions/cache/restore@v6
         with:
           path: ${{ runner.temp }}/smoke-state.enc
-          key: smoke-session-${{ github.run_id }}
-          restore-keys: smoke-session-
+          key: smoke-session-${{ env.SEED_ID }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: smoke-session-${{ env.SEED_ID }}-
       - name: Decrypt the session
         env:
           SMOKE_STATE_KEY: ${{ secrets.SMOKE_STATE_KEY }}
@@ -2526,6 +2615,7 @@ jobs:
       - name: Smoke test
         env:
           SMOKE_SESSION_SEED: ${{ secrets.SMOKE_SESSION_SEED }}
+          SMOKE_STATE_KEY: ${{ secrets.SMOKE_STATE_KEY }}
         run: node scripts/prod-smoke.mjs
       - name: Encrypt the rotated session
         id: encrypt
@@ -2544,7 +2634,7 @@ jobs:
         uses: actions/cache/save@v6
         with:
           path: ${{ runner.temp }}/smoke-state.enc
-          key: smoke-session-${{ github.run_id }}
+          key: smoke-session-${{ env.SEED_ID }}-${{ github.run_id }}-${{ github.run_attempt }}
       - name: Open, update or close issues
         if: always()
         env:
@@ -2561,7 +2651,7 @@ mkdir -p /tmp/wp22-pw && npm install --no-save --no-audit --no-fund --prefix /tm
 PLAYWRIGHT_PREFIX=/tmp/wp22-pw SMOKE_RESULT=/tmp/wp22-smoke.json node scripts/prod-smoke.mjs; echo "exit=$?"
 ```
 
-Read the printed table. For each public page, set its `minPrices` in `prod-smoke-lib.mjs` to `max(1, floor(observed / 3))` if that is lower than the default above, so a normal day passes with a wide margin while a page with no prices still fails; never raise a default. If `/analytics` shows 0 prices because the page renders returns rather than money, set its `minPrices` to 0 and add `{ path: "/analytics", minReturns: 10 }` handling: in `judgePage`, also count `/[+−-]?\d{1,3}\.\d%/g` matches and fail when fewer than `minReturns`; add a test case for it. The signed-in row shows "not configured" locally; that is expected. The run must end with exit=0. If it cannot (production really is broken, or no network), say so in the PR and leave the defaults.
+Read the printed table. For each public page, set its `minPrices` in `prod-smoke-lib.mjs` to `max(1, floor(observed / 3))` if that is lower than the default above, so a normal day passes with a wide margin while a page with no prices still fails; never raise a default. If `/analytics` shows 0 prices because the page renders returns rather than money, set its `minPrices` to 0 and add `{ path: "/analytics", minReturns: 10 }` handling: in `judgePage`, also count `/[+−-]?\d{1,3}\.\d%/g` matches and fail when fewer than `minReturns`; add a test case for it. If a tool page (`/box-calculator`) legitimately shows no money before the visitor picks something, set its `minPrices` to 0: the check then still fails on a non-200, a redirect or an error-page marker. Also confirm `ERROR_MARKERS` still matches the heading of `app/error.tsx` and `app/global-error.tsx` after WP15 (`grep -n "<h1" app/error.tsx app/global-error.tsx`) and add the heading text if it changed. The signed-in row shows "not configured" locally; that is expected. The run must end with exit=0. If it cannot (production really is broken, or no network), say so in the PR and leave the defaults.
 
 ### 18. Speed Insights configuration: new `frontend/app/lib/rum.ts`, new `frontend/app/components/SpeedInsightsClient.tsx`, edit `frontend/app/layout.tsx`
 
@@ -2614,8 +2704,9 @@ and the element `<SpeedInsights />` with `<SpeedInsightsClient />`. Change nothi
 ```js
 /* eslint-disable no-console -- terminal tool; console output is its UI. */
 // Weekly real-user check (WP22): p75 LCP, INP, CLS and TTFB per route over
-// the last 7 days from Vercel Speed Insights (`vercel metrics`), compared
-// with rum.targets in perf-budgets.json. Routes with fewer than
+// the last 7 days from Vercel Speed Insights (`vercel metrics`, aggregation
+// p75 for the value and count for the samples), compared with rum.targets in
+// perf-budgets.json. Routes with fewer than
 // rum.minSamples samples are "insufficient data", never a breach. A breach
 // opens or updates the issue labelled perf-regression; a clean week closes it.
 // Env: VERCEL_TOKEN, VERCEL_PROJECT (default pokefin), VERCEL_SCOPE
@@ -2628,37 +2719,31 @@ import { resolveIssue, upsertIssue } from "./gh-issue.mjs";
 import { BUDGETS_FILE, PERF_DIR } from "./perf-config.mjs";
 
 export const METRICS = [
-  { key: "lcpMs", countKey: "lcpCount", label: "LCP", unit: " ms" },
-  { key: "inpMs", countKey: "inpCount", label: "INP", unit: " ms" },
-  { key: "cls", countKey: "clsCount", label: "CLS", unit: "" },
-  { key: "ttfbMs", countKey: "ttfbCount", label: "TTFB", unit: " ms" },
+  { key: "lcpMs", label: "LCP", unit: " ms" },
+  { key: "inpMs", label: "INP", unit: " ms" },
+  { key: "cls", label: "CLS", unit: "" },
+  { key: "ttfbMs", label: "TTFB", unit: " ms" },
 ];
 
+/** Column the CLI names the aggregated value: `${metric}_${aggregation}` with dots and slashes as underscores (vercel 61.1.0, getRollupColumnName). */
+export const rollupKey = (metricId, aggregation) => `${metricId}_${aggregation}`.replace(/[./]/g, "_");
+
 /**
- * Route -> number from `vercel metrics --group-by route --format json`.
- * Tolerant of the exact shape: any object with a string `route` (directly or
- * under groups/dimensions/group) and a numeric value/p75/sum/count. Throws
- * when nothing matches or a route repeats (time-bucketed output).
+ * Route -> number from `vercel metrics <id> -a <agg> --group-by route --format json`.
+ * The CLI prints `{ data: [...time buckets], summary: [{ route, <rollupKey>: n }], statistics }`;
+ * `summary` holds one row per route over the whole window, which is the p75
+ * (or count) this check needs. `data` is time-bucketed and is ignored.
  */
-export function extractRouteValues(json) {
+export function extractRouteValues(json, valueKey) {
+  if (!json || !Array.isArray(json.summary)) {
+    throw new Error("unrecognised `vercel metrics --format json` output: no summary array (raw output saved in .perf/rum-raw/)");
+  }
   const out = new Map();
-  const visit = (node) => {
-    if (Array.isArray(node)) {
-      node.forEach(visit);
-      return;
-    }
-    if (!node || typeof node !== "object") return;
-    const route = [node.route, node.groups?.route, node.dimensions?.route, node.group?.route].find((v) => typeof v === "string");
-    const value = [node.value, node.p75, node.sum, node.count].find((v) => typeof v === "number");
-    if (route !== undefined && value !== undefined) {
-      if (out.has(route)) throw new Error(`route ${route} appears twice: the output is time-bucketed; adjust rum.granularity in perf-budgets.json`);
-      out.set(route, value);
-      return;
-    }
-    Object.values(node).forEach(visit);
-  };
-  visit(json);
-  if (out.size === 0) throw new Error("unrecognised `vercel metrics --format json` output (raw output saved in .perf/rum-raw/)");
+  for (const row of json.summary) {
+    if (!row || typeof row.route !== "string" || typeof row[valueKey] !== "number") continue;
+    if (out.has(row.route)) throw new Error(`route ${row.route} appears twice in the summary`);
+    out.set(row.route, row[valueKey]);
+  }
   return out;
 }
 
@@ -2693,15 +2778,18 @@ export function renderRumReport(rows, { since, runUrl }) {
 }
 
 function query(metricId, aggregation, rum, env) {
-  const args = ["metrics", metricId, "--aggregation", aggregation, "--group-by", "route", "--since", rum.since, "--limit", "100", "--prod", "--project", env.project, "--format", "json", "--token", env.token];
-  if (rum.granularity) args.push("--granularity", rum.granularity);
+  const args = ["metrics", metricId, "--aggregation", aggregation, "--group-by", "route", "--since", rum.since, "--limit", "100", "--prod", "--project", env.project, "--format", "json", "--non-interactive", "--token", env.token];
   for (const filter of rum.filters ?? []) args.push("--filter", filter);
   if (env.scope) args.push("--scope", env.scope);
-  const out = execFileSync("vercel", args, { encoding: "utf8", stdio: ["ignore", "pipe", "inherit"] });
+  const out = execFileSync("vercel", args, {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "inherit"],
+    env: { ...process.env, VERCEL_TELEMETRY_DISABLED: "1" },
+  });
   const rawDir = path.join(PERF_DIR, "rum-raw");
   fs.mkdirSync(rawDir, { recursive: true });
   fs.writeFileSync(path.join(rawDir, `${metricId}.${aggregation}.json`), out);
-  return extractRouteValues(JSON.parse(out));
+  return extractRouteValues(JSON.parse(out), rollupKey(metricId, aggregation));
 }
 
 function main() {
@@ -2716,9 +2804,11 @@ function main() {
   const counts = {};
   for (const metric of METRICS) {
     p75[metric.key] = query(rum.metricIds[metric.key], "p75", rum, env);
-    counts[metric.key] = query(rum.metricIds[metric.countKey], "sum", rum, env);
+    // Samples per route: the count aggregation of the same metric.
+    counts[metric.key] = query(rum.metricIds[metric.key], "count", rum, env);
   }
   const rows = evaluateRum({ rum, p75, counts });
+  if (rows.length === 0) console.log("::warning::Speed Insights returned no routes for the window; nothing to compare (check the project name, scope and filters).");
   const report = renderRumReport(rows, { since: rum.since, runUrl: process.env.RUN_URL ?? "" });
   console.log(report);
   if (process.env.GITHUB_STEP_SUMMARY) fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${report}\n`);
@@ -2810,7 +2900,7 @@ In both files:
     // No-op until NEXT_PUBLIC_SENTRY_DSN is set (see instrumentation-client.ts).
     // Loaded on demand (WP22): error boundaries ship with every route, so a
     // static import put the SDK in every page's first-load JS. The DSN is
-    // inlined at build time, so a build without one contains no import.
+    // inlined at build time, so without one this import is unreachable.
     if (!process.env.NEXT_PUBLIC_SENTRY_DSN) return;
     void import("@sentry/nextjs")
       .then((Sentry) => Sentry.captureException(error))
@@ -2818,7 +2908,7 @@ In both files:
   }, [error]);
 ```
 
-Keep everything else (WP15's markup and inline styles, WP17's behaviour). Check: `grep -n "sentry" app/error.tsx app/global-error.tsx` prints only the comment and the `import("@sentry/nextjs")` line in each file.
+Keep everything else (WP15's markup and inline styles, WP17's behaviour). Check: `grep -n "@sentry/nextjs" app/error.tsx app/global-error.tsx` prints exactly two lines, the `void import("@sentry/nextjs")` line of each file.
 
 ### 21. `frontend/README.md`: document the gate
 
@@ -2839,7 +2929,7 @@ pnpm dlx @lhci/cli@0.15.1 autorun            # optional, needs Chrome: Lighthous
 - Budgets live in `perf-budgets.json`: `target` is the goal, `limit` is enforced (1 kB = 1024 bytes; JS and CSS gzip -9 per file; documents brotli).
 - A new route goes into `perf-budgets.json` in the same PR, with `"limit": null`; then run `pnpm perf:budget --write-limits` and commit the file.
 - A new Supabase query the public pages make needs a route in `scripts/fixtures/perf.mjs` in the same PR; the perf build fails otherwise.
-- Raising a `limit` or `target` needs `Perf budget raise: <key> <reason>` in the PR body. CI checks it.
+- Raising a `limit` or `target`, or removing or renaming a budget key, needs `Perf budget raise: <key> <reason>` in the PR body. CI checks it (it reads the live body, so edit the body and re-run the job).
 - Lighthouse assertions (`lighthouserc.json`) are never loosened to get green.
 - Production is checked by three workflows: `prod-confirm.yml` (after each deploy, informational), `prod-smoke.yml` (daily, opens a `prod-smoke` issue) and `rum-weekly.yml` (weekly real-user p75, opens a `perf-regression` issue once enabled).
 
@@ -2857,7 +2947,7 @@ SUPABASE_STUB_FIXTURE=perf pnpm build:stub > /tmp/wp22-perf-build.log 2>&1; echo
 node scripts/perf-serve.mjs > /tmp/wp22-serve.log 2>&1 &
 for i in $(seq 120); do [ -f .perf/ready ] && break; node -e "setTimeout(()=>{},1000)"; done; cat .perf/ready
 pnpm perf:budget --write-limits; echo "exit=$?"
-# exit=0; "wrote N limit(s)" with N = 20 (one per budget slot); every row "ok" or "over target".
+# exit=0; "wrote N limit(s)" with N = 19 (one per budget slot: shared JS, 15 route slots, lazy chunk, CSS, fonts); every row "ok" or "over target".
 ```
 
 Then calibration, if you have network:
@@ -2878,7 +2968,9 @@ Stop the server (`kill %1` or `pkill -f scripts/perf-serve.mjs`) and check `git 
 4. In the same table check: CLS below 0.05 and bf-cache "3/3 pass" on all four URLs, and 0 oversized images on `/` and `/prices`. If a URL fails bf-cache or CLS, find the cause in the uploaded report (`perf-reports` artifact, `lhci-reports/*.html`, "Page prevented back/forward cache restoration" or "Avoid large layout shifts"). A real defect in the page is out of scope: switch only that URL's assertion to `warn`, open a follow-up issue with the reason and the report, and list it in the PR. Do the same if `uses-responsive-images` fails on `/` or `/prices`. Never raise the CLS threshold.
 5. Push. The Lighthouse step must now pass with every remaining assertion at `error`.
 
-If the table shows `0/3 pass` for bf-cache on every URL and the uploaded report has no "back/forward cache" audit at all, the audit was not run under `onlyCategories: ["performance"]` in this Lighthouse version: delete the `"onlyCategories"` setting (the runs get a few seconds slower) and push again. Do not remove the assertion.
+Facts that decide step 4, checked in `lighthouse@12.6.1` (the version `@lhci/cli@0.15.1` pins): `bf-cache`, `uses-responsive-images` and `resource-summary` are all in the performance category (weight 0), so `onlyCategories: ["performance"]` keeps them; `bf-cache` scores 0 for any failure reason, including the "Pending browser support" and "Not actionable" types, so read the reason type in the report before calling a failure a page defect. The pages are ISR, so Next sends no `Cache-Control: no-store` that would block bfcache; if the report names `MainResourceHasCacheControlNoStore`, some package made a public route dynamic, which is itself a regression to report.
+
+If Chrome does not start at all in the Lighthouse step (a "No usable sandbox" or `ECONNREFUSED` from chrome-launcher), add `"chromeFlags": "--no-sandbox"` to `ci.collect.settings` in `lighthouserc.json` and say so in the PR. Do not remove any assertion.
 
 `grep -c '"maxNumericValue": 1,' lighthouserc.json` must print 0 before merge.
 
@@ -3077,12 +3169,27 @@ test("300 fresh prices, and 6 stale ones withheld as migration 0023 does", () =>
   }
 });
 
-test("365 days of history for the Lighthouse products, ending at the current price", () => {
+test("daily history for every priced product, ending at the current price; 365 days for the Lighthouse products", () => {
   for (const id of PERF_HISTORY_IDS) {
-    const rows = query("history", `product_id=eq.${id}&order=recorded_at.asc`);
-    assert.equal(rows.length, 365);
-    assert.equal(rows.at(-1).usd_price, data.summaries.find((r) => r.id === id).usd_price);
+    assert.equal(query("history", `product_id=eq.${id}`).length, 365);
   }
+  const byProduct = new Map();
+  for (const row of data.history) {
+    if (!byProduct.has(row.product_id)) byProduct.set(row.product_id, []);
+    byProduct.get(row.product_id).push(row);
+  }
+  for (const s of data.summaries) {
+    const rows = byProduct.get(s.id) ?? [];
+    if (s.usd_price === null || s.set_release_date > NOW.toISOString().slice(0, 10)) {
+      assert.equal(rows.length, 0, `stale or unreleased ${s.id} has history`);
+      continue;
+    }
+    assert.ok(rows.length >= 14 && rows.length <= 365, `${s.id}: ${rows.length} rows`);
+    const sorted = [...rows].sort((a, b) => (a.recorded_at < b.recorded_at ? -1 : 1));
+    assert.equal(sorted.at(-1).usd_price, s.usd_price);
+    assert.equal(sorted.at(-1).recorded_at, s.price_recorded_at);
+  }
+  assert.ok(data.history.length > 60_000, `history rows: ${data.history.length}`);
 });
 
 test("PostgREST subset: in, gte, order, limit, select with alias; unsupported syntax throws", () => {
@@ -3210,11 +3317,12 @@ test("evaluateSlots: ok, over target, FAIL, unset", () => {
   assert.deepEqual(status, { "shared.jsGzKb": "over target", "routes./a.jsGzKb": "FAIL", "routes./b.jsGzKb": "unset", cssGzKb: "ok" });
 });
 
-test("a raised limit needs a reason line; a new route is not a raise", () => {
-  const base = { routes: { "/a": { jsGzKb: { target: 150, limit: 160 } } } };
+test("a raised or removed limit needs a reason line; a new route is not a raise", () => {
+  const base = { routes: { "/a": { jsGzKb: { target: 150, limit: 160 } }, "/gone": { jsGzKb: { target: 150, limit: 150 } } } };
   const head = { routes: { "/a": { jsGzKb: { target: 150, limit: 170 } }, "/new": { jsGzKb: { target: 150, limit: 140 } } } };
-  const raised = findRaisedLimits(base, head);
-  assert.deepEqual(raised, ["routes./a.jsGzKb"]);
+  assert.deepEqual(findRaisedLimits(base, head), ["routes./a.jsGzKb", "routes./gone.jsGzKb"]);
+  assert.deepEqual(findRaisedLimits(base, base), []);
+  const raised = ["routes./a.jsGzKb"];
   assert.deepEqual(missingRaiseReasons(raised, "no reason here"), ["routes./a.jsGzKb"]);
   assert.deepEqual(missingRaiseReasons(raised, "Perf budget raise: routes./a.jsGzKb"), ["routes./a.jsGzKb"]);
   assert.deepEqual(missingRaiseReasons(raised, "Summary\nPerf budget raise: routes./a.jsGzKb index chart adds 9 kB"), []);
@@ -3272,16 +3380,25 @@ test("renderSummary lists every check and the signed-in leg", () => {
 ```js
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { evaluateRum, extractRouteValues, renderRumReport } from "./rum-weekly.mjs";
+import { evaluateRum, extractRouteValues, renderRumReport, rollupKey } from "./rum-weekly.mjs";
 
-test("extractRouteValues reads flat and nested shapes", () => {
-  assert.deepEqual([...extractRouteValues([{ route: "/", value: 1500 }, { route: "/prices", value: 2100 }])], [["/", 1500], ["/prices", 2100]]);
-  assert.deepEqual([...extractRouteValues({ data: [{ groups: { route: "/market" }, p75: 1900 }] })], [["/market", 1900]]);
+test("extractRouteValues reads the CLI summary rows and ignores the time buckets", () => {
+  const key = rollupKey("vercel.speed_insights.lcp_ms", "p75");
+  assert.equal(key, "vercel_speed_insights_lcp_ms_p75");
+  const json = {
+    data: [
+      { timestamp: "2026-09-28T00:00:00Z", route: "/", [key]: 9999 },
+      { timestamp: "2026-09-28T04:00:00Z", route: "/", [key]: 1 },
+    ],
+    summary: [{ route: "/", [key]: 1500 }, { route: "/prices", [key]: 2100 }, { route: "/quiet", [key]: null }],
+    statistics: { rowsRead: 1 },
+  };
+  assert.deepEqual([...extractRouteValues(json, key)], [["/", 1500], ["/prices", 2100]]);
 });
 
-test("extractRouteValues rejects unknown and time-bucketed output", () => {
-  assert.throws(() => extractRouteValues({ foo: 1 }), /unrecognised/);
-  assert.throws(() => extractRouteValues([{ route: "/", value: 1 }, { route: "/", value: 2 }]), /time-bucketed/);
+test("extractRouteValues rejects output without a summary, and a repeated route", () => {
+  assert.throws(() => extractRouteValues({ foo: 1 }, "x"), /unrecognised/);
+  assert.throws(() => extractRouteValues({ summary: [{ route: "/", x: 1 }, { route: "/", x: 2 }] }, "x"), /appears twice/);
 });
 
 test("evaluateRum: a breach needs enough samples; unknown routes use the defaults", () => {
@@ -3416,7 +3533,7 @@ curl -s -o /dev/null -w '%{http_code} %{size_download}\n' http://127.0.0.1:3100/
 curl -s -D - -o /dev/null http://127.0.0.1:3100/prices | grep -i content-security-policy | grep -c upgrade-insecure   # 0
 curl -s -o /dev/null -w '%{http_code} %{content_type}\n' http://127.0.0.1:3100/storage/v1/object/public/product-images/products/900001_thumb.webp   # 200 image/webp
 pnpm perf:budget; echo "exit=$?"                                                               # exit=0, the table, every row ok or over target
-pnpm run test:scripts 2>&1 | grep -E '^# (pass|fail|skipped)'                                  # fail 0, skipped 0 (the coverage test ran)
+pnpm run test:scripts 2>&1 | grep -E '^# (pass|fail|skipped)'                                  # fail 0; skipped 0 (the coverage test ran), or 1 if app/types/database.ts (WP20) is absent
 ```
 
 If Chrome is available locally, also run `pnpm dlx @lhci/cli@0.15.1 autorun` and `node scripts/perf-lhci-summary.mjs` against the running server; otherwise CI is the check. Then stop the server (`pkill -f scripts/perf-serve.mjs`) and confirm `test ! -e .next/cache/fetch-cache && echo wiped`.
@@ -3487,7 +3604,7 @@ Manual checks at 390 px and 1440 px: there is no visual change in this PR. On th
 1. **Function region** (research §7.4): Vercel, Project pokefin, Settings, Functions, Region: `cle1` (Cleveland, next to Supabase us-east-2). Confirmation: `curl -sI https://www.pokefin.ca/product/<any id> | grep -i x-vercel-id` on a cold response contains `cle1`.
 2. **Apex redirect**: `curl -sI https://pokefin.ca/ | head -3` must show exactly one `308` with `location: https://www.pokefin.ca/`. If it shows `307`, Vercel, Domains, `pokefin.ca`, set the redirect to permanent (308). The `prod-confirm` workflow reports it after every deploy.
 3. **Speed Insights metrics access**: create a Vercel access token (Account Settings, Tokens; scope: the team that owns pokefin; no expiry or 1 year). Locally, `npx vercel@61.1.0 metrics schema vercel.speed_insights --token <token>`.
-   - If it lists metrics: add the repository secret `VERCEL_TOKEN`, variables `VERCEL_PROJECT` (the project name, `pokefin` if that is its name) and `VERCEL_SCOPE` (the team slug, empty for a personal account), then run the exact query once: `npx vercel@61.1.0 metrics vercel.speed_insights.lcp_ms --aggregation p75 --group-by route --since 7d --granularity 7d --limit 100 --prod --project <name> --format json --token <token>`. If it errors on `--granularity 7d`, set `"granularity": null` in `perf-budgets.json` `rum` in a small PR. If the dimension names include device type and country, add the filters (for example `"device_type eq 'mobile'"`, `"country eq 'CA'"`, with the names the schema prints) to `rum.filters`. Then set the repository variable `RUM_WEEKLY_ENABLED` to `true` and run "RUM weekly" once from the Actions tab. Confirmation: a green run with the p75 table in its summary.
+   - If it lists metrics: compare the four ids in `perf-budgets.json` `rum.metricIds` (`vercel.speed_insights.lcp_ms`, `.inp_ms`, `.cls`, `.ttfb_ms`) with the printed names and correct any that differ (CLS is unitless, so its id is the one most likely to differ) in a small PR. Add the repository secret `VERCEL_TOKEN`, variables `VERCEL_PROJECT` (the project name, `pokefin` if that is its name) and `VERCEL_SCOPE` (the team slug, empty for a personal account), then run the exact query once: `npx vercel@61.1.0 metrics vercel.speed_insights.lcp_ms --aggregation p75 --group-by route --since 7d --limit 100 --prod --project <name> --format json --non-interactive --token <token>`. Confirm the JSON has a `summary` array whose rows carry `route` and `vercel_speed_insights_lcp_ms_p75`; if the shape differs, paste it into an issue and leave the job disabled (the parser in `rum-weekly.mjs` must change first). If `vercel metrics schema vercel.speed_insights.lcp_ms` lists device and country dimensions, add the filters (for example `"device_type eq 'mobile'"`, `"country eq 'CA'"`, with the names the schema prints) to `rum.filters`, because the targets are mobile, Canada p75. Then set the repository variable `RUM_WEEKLY_ENABLED` to `true` and run "RUM weekly" once from the Actions tab. Confirmation: a green run with the p75 table in its summary.
    - If the schema command fails on the plan: do nothing more; the workflow stays disabled and the self-hosted web-vitals beacon becomes a follow-up.
 4. **Smoke account and secrets**: create a dedicated account (for example `smoke+pokefin@<your domain>`) through the normal sign-up, add one holding to its portfolio. Then:
    - `openssl rand -base64 48`, save it as repository secret `SMOKE_STATE_KEY`.
@@ -3501,9 +3618,9 @@ Manual checks at 390 px and 1440 px: there is no visual change in this PR. On th
 ## Acceptance criteria
 
 - [ ] `SUPABASE_STUB_FIXTURE=perf pnpm build:stub` exits 0, uses port 3100, and reports no endpoint without a fixture route; the default `pnpm build:stub` still exits 0 on an ephemeral port.
-- [ ] `scripts/fixtures/perf.mjs` generates 306 products, 55 sets, 9 generations, 12 product types, about 15% variants, volume for about 80% of priced products, 6 stale products withheld as 0023 does, 365 days of history for 900001 to 900003, set analytics for all 55 sets, from a mulberry32 seed; `scripts/fixtures/img/` holds exactly `original.jpg` and `thumb.webp`, about 100 kB together, generated by the committed script.
+- [ ] `scripts/fixtures/perf.mjs` generates 306 products, 55 sets, 9 generations, 12 product types, about 15% variants, volume for about 80% of priced products, 6 stale products withheld as 0023 does, daily history for every priced product of a released set (365 days for 900001 to 900003, about 100,000 rows), set analytics for all 55 sets, from a mulberry32 seed; `scripts/fixtures/img/` holds exactly `original.jpg` and `thumb.webp`, about 100 kB together, generated by the committed script.
 - [ ] `perf-serve` serves the app and the stub on one origin (127.0.0.1:3100), without `upgrade-insecure-requests` in the proxied CSP, and wipes `.next/cache/fetch-cache` on exit.
-- [ ] `frontend/perf-budgets.json` holds the D4 targets, a non-null `limit` and `recorded` for all 20 slots computed by the D4 rule, the calibration fields, and the RUM targets.
+- [ ] `frontend/perf-budgets.json` holds the D4 targets, a non-null `limit` and `recorded` for all 19 slots computed by the D4 rule, the calibration fields, and the RUM targets.
 - [ ] CI prints the budget table and the Lighthouse table in the Frontend job summary and uploads the `perf-reports` artifact.
 - [ ] The JS probe (about 30 kB gz added to `/prices`) fails the "Performance budgets" step (link in the PR).
 - [ ] The CLS probe fails the "Lighthouse CI" step on `cumulative-layout-shift` for `/prices` (link in the PR).
@@ -3539,8 +3656,8 @@ Commit message:
 ```
 ci: performance budget gate, Lighthouse CI, production smoke and RUM (WP22)
 
-- synthetic seeded perf fixture (306 products, 55 sets, 365-day history for
-  the Lighthouse product pages, noise images) behind SUPABASE_STUB_FIXTURE=perf;
+- synthetic seeded perf fixture (306 products, 55 sets, daily history for
+  every priced product, noise images) behind SUPABASE_STUB_FIXTURE=perf;
   the perf build fails on any Supabase endpoint without a fixture route
 - perf-serve: stub and next start behind one origin (the CSP allows only
   'self'), perf-budget: per-route gzip/brotli JS, document, flight, CSS,

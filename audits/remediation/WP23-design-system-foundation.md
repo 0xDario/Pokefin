@@ -17,7 +17,7 @@ Today the site has tokens but no system: red is the logo, the primary CTA, the l
 
 ### Decisions (binding, from `01-PRODUCT-DIRECTION.md` §3)
 
-- Light-only theme. `:root { color-scheme: light }`. No dark tokens ship.
+- Light-only theme. `:root { color-scheme: light }` plus `colorScheme: "light"` in the root layout's `viewport` export (WP13 created it), so `<meta name="color-scheme" content="light">` reaches the browser before any CSS and form controls, scrollbars and the 404 never half-darken. No dark tokens ship.
 - Brand red `--pf-accent` (#dc2626) is for the logo mark and the accent "é" only. Blue `--pf-action` (#2563eb, hover `--pf-action-strong` #1d4ed8) is the action colour: primary buttons, links, focus ring, selected segment.
 - Gain `--pf-gain-text` (#047857) always with ▲, loss `--pf-loss-text` (#be123c) always with ▼, flat `--pf-ink-soft` (#475569) with no glyph. Flat means strictly inside ±0.05% (`FLAT_BAND_PERCENT`), which is exactly the set of values that would print as `0.0%`.
 - Amber is the warning role: `--pf-warn-text` #b45309 (5.0:1 on white), `--pf-warn-fill` #fffbeb.
@@ -49,11 +49,13 @@ Today the site has tokens but no system: red is the logo, the primary CTA, the l
 | `--pf-radius-control`, `--pf-radius-card` | 8px, 12px | `rounded-control`, `rounded-card` | The two radii |
 | type scale | see below | `text-display` ... `text-caption` | |
 
+Every colour token is registered as `--color-<name>` in `@theme inline`, and Tailwind 4 generates every colour utility from that one entry: `bg-`, `text-`, `border-`, `divide-`, `ring-`, `fill-`, `stroke-`, `accent-`, `outline-`, `decoration-`. So `bg-chart-volume`, `bg-chart-line`, `border-chart-bench`, `bg-gain-text`, `bg-line` and `accent-action` all exist without further entries (WP29, WP31, WP35 rely on this). The "Tailwind utility" column lists only the intended uses.
+
 Type scale (`@theme`, rem at a 16 px root): `text-display` 32/40, `text-h1` 24/32, `text-h2` 20/28, `text-h3` 16/24, `text-body` 14/20, `text-prose` 16/26, `text-small` 13/18, `text-caption` 12/16. Weights are set with `font-semibold` (600) on display and headings. Nothing smaller than 12 px in new components.
 
 ### Components (`frontend/app/components/ui/`)
 
-All are server-compatible (no `"use client"`) except `SegmentedControl`. All use token utilities only: no raw palette classes (`slate-*`, `blue-*`...) and no hex, enforced by the conventions test. Default exports, direct imports (no barrel `index.ts`; WP20 removed barrels).
+All are server-compatible (no `"use client"`) except `SegmentedControl`, which must be rendered from a client component because `onChange` is a function (a server component cannot pass it). All use token utilities only: no raw palette classes (`slate-*`, `blue-*`...) and no hex, enforced by the conventions test. Default exports, direct imports (no barrel `index.ts`; WP20 removed barrels).
 
 | Component | Props (summary) | Rendering and states |
 |---|---|---|
@@ -62,12 +64,12 @@ All are server-compatible (no `"use client"`) except `SegmentedControl`. All use
 | `Badge` | `variant?: "neutral" \| "info" \| "warn"`, `children` | 12 px medium text. neutral ink-soft, info action-strong, warn warn-text with a warning triangle icon (`aria-hidden`). No fill, no border, no pill |
 | `SegmentedControl<T>` | `label`, `ariaLabel?`, `hideLabel?`, `options: {value,label,ariaLabel?}[]`, `value`, `onChange`, `trailing?`, `fullWidthOnPhone?` (default true), `className?` | `role="radiogroup"` of `<button role="radio">`. Roving tabindex (only the checked radio is in the tab order). Arrow keys move focus and select, with wrap; Home/End. `onChange` runs inside `startTransition`; the pressed state is `useOptimistic`, so it paints on the next frame while the page re-renders. Selected: `bg-action text-white`; others ink-soft with `hover:bg-surface-alt`. 12 px semibold labels, `pointer-coarse:min-h-11 pointer-coarse:min-w-11`. Phones: full width, equal segments |
 | `PageHeader` | `title`, `provenance?`, `actions?` | `h1.text-h1`; provenance slot under it; actions right-aligned on desktop, below on phones |
-| `DataList`, `DataListRow` | list: `label`, `children`; row: `href?`, `title`, `subtitle?`, `meta?`, `value?`, `delta?`, `sparkline?`, `leading?`, `prefetch?` (default false) | `<ul aria-label>` with divided `<li>` rows, each `min-h-14` and one link (`next/link`, `prefetch={false}` by default). Line 1: title (medium, truncated) and subtitle (small, ink-soft). Line 2: meta left, value and delta right, tabular. Optional 40x40 leading slot; optional sparkline slot fixed at 64x24 (`h-6 w-16`, `aria-hidden`) |
+| `DataList`, `DataListRow` | list: `label`, `children`; row: `href?`, `title`, `subtitle?`, `meta?`, `value?`, `delta?`, `sparkline?`, `leading?`, `prefetch?` (default false) | `<ul aria-label>` with divided `<li>` rows, each `min-h-14` and one link (`next/link`, `prefetch={false}` by default). Line 1: title (medium, truncated; the subtitle truncates first) and subtitle (small, ink-soft), with the optional sparkline slot fixed at 64x24 (`h-6 w-16`, `aria-hidden`) flush right. Line 2: meta left, value and delta flush right, tabular, so price and trend share the row's right edge. Optional 40x40 leading slot |
 | `EmptyState` | `title`, `description?`, `action?`, `headingLevel?: 2 \| 3` | Dashed-border card, centred. Title is a `<p>` unless `headingLevel` is given |
-| `Skeleton` | `className?` | `aria-hidden` flat bar, `bg-surface-alt rounded-control`. No animation, no shape |
+| `Skeleton` | `className?` | `aria-hidden` flat bar, `bg-line rounded-control` (slate-200: visible on white cards and on the `--pf-bg` page, where slate-100 disappears at a 4 px sparkline bar). No animation, no shape |
 | `RangeBar` | `low`, `high`, `value`, `lowLabel`, `highLabel`, `windowLabel?` (default "52-week"), `showSummary?` | Track (`bg-chart-grid`) with an ink marker at the clamped position; low and high labels under it; a summary sentence ("38% below 52-week high", "At 52-week high", "At 52-week low", "Less than 1% below 52-week high", "No 52-week range yet"), `sr-only` unless `showSummary`. Non-finite input renders nothing |
 | `Button` + `buttonClasses()` | `variant?: "primary" \| "secondary" \| "ghost"`, `size?: "sm" \| "md"`, native button props | primary `bg-action` white text; secondary bordered surface; ghost action text. `type="button"` default. Never red. `buttonClasses()` styles a `Link` the same way |
-| `AsOf` | `date` (YYYY-MM-DD or `recorded_at`), `variant?: "inline" \| "hero" \| "table"`, `referenceDate?`, `prefix?` (default "as of") | Always a `<time dateTime="YYYY-MM-DD">`. Age = UTC days from `date` to `referenceDate` (default today UTC). Fresh (0 to 1 day): inline "as of Sep 29" (caption, ink-soft), hero "as of Sep 29, 2026" (small). Stale (2 days or more): clock icon plus "Last priced Sep 25" in warn-text. Table variant: nothing when fresh; when stale, only the clock icon with `title` and `sr-only` text. Year shown when it differs from the reference year. Missing or unparseable date renders nothing. Withholding at 14 days stays upstream (migration 0023) |
+| `AsOf` | `date` (YYYY-MM-DD or `recorded_at`), `variant?: "inline" \| "hero" \| "table"`, `referenceDate?`, `prefix?` (default "as of") | Always a `<time dateTime="YYYY-MM-DD">`. Age = UTC days from `date` to `referenceDate` (default today UTC). Fresh (0 to 1 day): inline "as of Sep 29" (caption, ink-soft), hero "as of Sep 29, 2026" (small). Stale (2 days or more): clock icon plus "Last priced Sep 25" in warn-text. Table variant: nothing when fresh; when stale, only the clock icon with `title` and `sr-only` text. Year shown when it differs from the reference year. Missing or unparseable date renders nothing. Withholding at 14 days stays upstream (migration 0023). Age is computed at render time: on an ISR page the warning can lag by up to WP11's 24-hour backstop, which is acceptable because the date itself is always printed and WP27's header chip is the live clock. The table variant is for desktop tables only (a `title` tooltip never shows on touch); phone rows use `inline` |
 | `ProvenanceLine` | `children`, `methodologyHref?`, `methodologyLabel?` | One `<p>` in small ink-soft text, optional trailing link in action colour. WP24 supplies the copy |
 | `icons.tsx` | `ClockIcon`, `WarnIcon` | 16x16 stroke icons, `currentColor`, `aria-hidden` |
 
@@ -137,7 +139,7 @@ Header: `SHOPIFY v` is bold ink with a visible ▼; other sortable headers are s
 +----------------------------------------------------------+
 | [img] Booster Box  Evolving Skies                  /\/\_ |  line 1: title + subtitle, 64x24 sparkline
 |       SWSH07 . Aug 2021            C$612.40  ^ 4.2% 30D  |  line 2: meta | value + Delta
-+----------------------------------------------------------+  min 56 px, whole row is one link
++----------------------------------------------------------+  min 56 px (62 with a sparkline), whole row is one link
 ```
 
 `Stat` (hero) with `Delta`, `AsOf` and `RangeBar` at 1440 px (WP31 product header):
@@ -174,7 +176,7 @@ Stale product in a dense table (WP33): `C$81.30 (clock)` where the clock has the
 
 ### Performance
 
-- One font file on first view (Geist Sans latin). Geist Mono's `@font-face` rules and its late request on four routes disappear.
+- One font file on first view (Geist Sans latin). Geist Mono's `@font-face` rules and its late request on four routes (`/`, `/prices`, `/analytics`, `/product/[id]`) disappear.
 - New CSS is a few dozen utilities; the WP22 CSS budget (14 kB gz) holds. New client JS is `SegmentedControl` (about 1 kB); every other component is server-compatible and unused by pages in this PR.
 - Toggles on `/prices` re-render the card list at transition priority with the list dimmed, so the pressed segment paints on the next frame (INP target 100 ms on `/prices` filters).
 
@@ -194,7 +196,7 @@ Read these files fully (paths relative to `frontend/`):
 - Every `<MiniSparkline` call site: `grep -rn "<MiniSparkline" app --include=*.tsx | grep -v __tests__` (expect `ProductPrices/cards/ProductCard.tsx` twice and `MarketView/columns.tsx` once; `MarketView.tsx` itself no longer renders it after WP19).
 - `app/components/SortableTable/SortableTable.tsx` and its test (WP18); `app/compare/compareColumns.tsx` (WP18).
 - The four search inputs: `app/components/ProductPrices/controls/SearchInput.tsx`, `app/page.tsx` (hero form), `app/components/NotFoundPanel.tsx` (WP13), and the compare search in `app/compare/CompareDashboard.tsx` (WP18 moved it next to `CompareTabs`).
-- The four `font-mono` call sites: `app/components/ProductPrices/cards/GroupHeader.tsx`, `app/stats/page.tsx` (two), `app/product/[id]/page.tsx`, `app/components/Portfolio/cards/ImportHoldingsModal.tsx` (the CSV textarea).
+- The six `font-mono` call sites in five files: `app/components/ProductPrices/cards/GroupHeader.tsx`, `app/stats/page.tsx` (two; `/analytics` re-exports this page and `/stats` redirects there since WP13), `app/product/[id]/page.tsx`, `app/components/Portfolio/cards/ImportHoldingsModal.tsx` (the CSV textarea), and `app/components/ui/ConfirmDialog.tsx` (WP15: the "Type DELETE to confirm" label).
 - `/home/user/Pokefin/audits/remediation/01-PRODUCT-DIRECTION.md` §3 and `research/performance-excellence.md` §9 and §13.
 
 Confirm the starting state (run from `frontend/`):
@@ -238,15 +240,18 @@ grep -c "export function buildSparklinePath" app/components/MarketView/MiniSpark
 grep -c "animate-pulse" app/components/MarketView/MiniSparkline.tsx                       # 1 (the zigzag)
 grep -n "const cardList = useMemo\|{cardList}" app/components/ProductPrices/index.tsx     # 2 hits
 
-# WP13.
+# WP13: 404 panel and the layout's viewport export (step 4 adds colorScheme to it).
 ls app/components/NotFoundPanel.tsx
+grep -n "export const viewport" app/layout.tsx                                # 1 hit
 
 # WP22: budgets and scripts.
 ls perf-budgets.json scripts/perf-budget.mjs scripts/perf-serve.mjs
 node -e 'console.log(require("./package.json").scripts["perf:budget"])'      # a command, not undefined
 
-# Current font-mono and Geist Mono usage: expect 5 font-mono lines, then 5 lines in layout.tsx
+# Current font-mono and Geist Mono usage: expect 6 font-mono lines (GroupHeader, stats x2,
+# product page, ImportHoldingsModal, ui/ConfirmDialog), then 5 lines in layout.tsx
 # (import, comment, const, variable, body class) and 1 in globals.css (--font-mono).
+# Any other font-mono hit (a file added by WP16 to WP22): treat it like the rows of step 5.
 grep -rn "font-mono" app --include=*.tsx | grep -v __tests__
 grep -n "Geist_Mono\|geistMono\|geist-mono" app/layout.tsx app/globals.css
 
@@ -259,13 +264,13 @@ What to do if a dependency is missing:
 - WP14, WP15, WP18 or WP20 missing (a `ls` fails): stop and report. This package edits their files and tests.
 - WP19 missing (`columns.tsx` absent; the sparkline is then rendered in `MarketView.tsx`): continue; the `MiniSparkline` change is call-site neutral. Report it.
 - WP22 missing (`perf-budgets.json` or the scripts absent): continue, run the manual size checks in Verification instead of `pnpm perf:budget`, and say so in the PR.
-- WP13 missing (`NotFoundPanel.tsx` absent): skip that one search input.
+- WP13 missing (`NotFoundPanel.tsx` absent): skip that one search input. If `layout.tsx` has no `viewport` export, step 4 creates one with `colorScheme: "light"` only (`themeColor` stays WP13's job).
 
 Record the "before" measurements now (step 0 below) before editing anything.
 
 ## Implementation steps
 
-### Step 0. Baseline screenshots and sizes (before any edit)
+### Step 0. Baseline sizes and screenshots (before any edit)
 
 0a. Build and serve the realistic fixture (WP22):
 
@@ -273,31 +278,12 @@ Record the "before" measurements now (step 0 below) before editing anything.
 cd /home/user/Pokefin/frontend
 SUPABASE_STUB_FIXTURE=perf pnpm build:stub
 rm -f .perf/ready
-node scripts/perf-serve.mjs &   # WP22 front door on 127.0.0.1:3100 (stub + next start); note the PID
+node scripts/perf-serve.mjs &   # WP22 front door on 127.0.0.1:3100 (stub + next start)
+PERF_PID=$!
 until [ -f .perf/ready ]; do sleep 2; done   # WP22 writes .perf/ready after warming every route
 ```
 
-If WP22 is missing, use the research fixture instead (58 products; dev mode is acceptable for a visual comparison, not for sizes):
-
-```bash
-node /home/user/Pokefin/audits/remediation/research/tools/fixture-stub.js &
-NEXT_PUBLIC_SUPABASE_URL=http://127.0.0.1:54399 NEXT_PUBLIC_SUPABASE_KEY=stub pnpm exec next dev -p 3100 &
-```
-
-0b. Screenshots of `/prices`, `/market`, `/compare`, `/stats` and `/box-calculator` at 390x844 and 1440x900. `shoot.js` hardcodes port 3099, so make an untracked copy pointing at 3100:
-
-```bash
-cd /home/user/Pokefin/audits/remediation/research/tools
-npm install --no-save playwright-core@1.56
-sed 's#http://localhost:3099#http://127.0.0.1:3100#' shoot.js > shoot.local.js
-mkdir -p shots/seg2
-PAGES="prices:/prices,market:/market,compare:/compare,stats:/stats,boxcalc:/box-calculator" node shoot.local.js
-rm -rf /tmp/wp23-shots-before && mv shots /tmp/wp23-shots-before
-```
-
-Set `CHROME_PATH` if Playwright cannot find a browser (see `research/tools/README.md`).
-
-0c. Sizes (only with the WP22 build):
+0b. Sizes first (only with the WP22 build). Measure before taking screenshots: `perf:budget` fails on any Supabase request the perf fixture cannot answer anywhere in the serve log, and the screenshot pages (`/compare`, `/box-calculator`, the 404) are not all budget routes, so a shot taken first can turn the size run red for a reason unrelated to this PR.
 
 ```bash
 cd /home/user/Pokefin/frontend
@@ -305,7 +291,31 @@ pnpm perf:budget | tee /tmp/wp23-budget-before.txt
 find .next/static -name '*.css' -print0 | xargs -0 cat | gzip -9 | wc -c | tee /tmp/wp23-css-before.txt
 ```
 
-Stop the server (`kill <PID>`). Do not commit anything from `research/tools/` (`shoot.local.js`, `shots/`, `node_modules/`).
+If WP22 is missing, skip 0b and use the research fixture instead for 0c (58 products; dev mode is acceptable for a visual comparison, not for sizes):
+
+```bash
+node /home/user/Pokefin/audits/remediation/research/tools/fixture-stub.js &
+STUB_PID=$!
+NEXT_PUBLIC_SUPABASE_URL=http://127.0.0.1:54399 NEXT_PUBLIC_SUPABASE_KEY=stub pnpm exec next dev -p 3100 &
+PERF_PID=$!
+```
+
+0c. Screenshots at 390x844 and 1440x900 of every page this PR can change: `/` (hero search input, group headers), `/prices`, `/market`, `/compare`, `/analytics` (set codes; `/stats` 308-redirects here since WP13), `/box-calculator` (currency control), one product page (set code) and the 404 page (search input). `shoot.js` hardcodes port 3099, so make an untracked copy pointing at 3100:
+
+```bash
+cd /home/user/Pokefin/audits/remediation/research/tools
+npm install --no-save playwright-core@1.56
+sed 's#http://localhost:3099#http://127.0.0.1:3100#' shoot.js > shoot.local.js
+mkdir -p shots/seg2
+# Product id: 900001 in WP22's perf fixture, 110 in the research fixture.
+PRODUCT_ID=900001
+PAGES="home:/,prices:/prices,market:/market,compare:/compare,analytics:/analytics,boxcalc:/box-calculator,product:/product/${PRODUCT_ID},notfound:/product/999999" node shoot.local.js
+rm -rf /tmp/wp23-shots-before && mv shots /tmp/wp23-shots-before
+```
+
+Set `CHROME_PATH` if Playwright cannot find a browser (see `research/tools/README.md`).
+
+Stop the servers (`kill $PERF_PID`, and `kill $STUB_PID` if you used the research fixture). Do not commit anything from `research/tools/` (`shoot.local.js`, `shots/`, `node_modules/`).
 
 ### Step 1. Add `axe-core` as a direct dev dependency
 
@@ -371,7 +381,7 @@ export async function axeViolations(node: Element): Promise<string[]> {
   --pf-pokeyellow: #facc15;
 ```
 
-3b. Directly after the data-semantics block (after the `--pf-loss-soft` line and WP14's `--pf-loss-text` line, before the `/* Legacy aliases consumed elsewhere */` comment), insert:
+3b. Directly after the data-semantics block, that is after its last line `--pf-loss-soft: #ffe4e6;` (WP14 put `--pf-gain-text` under `--pf-gain` and `--pf-loss-text` under `--pf-loss`, so `--pf-loss-soft` is still last) and before the `/* Legacy aliases consumed elsewhere */` comment, insert:
 
 ```css
   /* Warning role (WP23): stale price, delayed pipeline, provisional day.
@@ -443,10 +453,22 @@ Keep the `@custom-variant dark` line, every other token, WP14's rules and WP09's
 - Import line: `import { Geist, Geist_Mono } from "next/font/google";` becomes `import { Geist } from "next/font/google";`.
 - Delete the `geistMono` constant and the comment block above it (the `// preload: false - next/font would otherwise emit ...` lines).
 - The body class `` `${geistSans.variable} ${geistMono.variable} antialiased` `` becomes `` `${geistSans.variable} antialiased` ``.
+- In WP13's `export const viewport: Viewport = { themeColor: "#ffffff", };` add one property after `themeColor` and extend WP13's comment above it by one line:
+
+```ts
+// Light only (WP23): the meta tag reaches the browser before globals.css,
+// so form controls, scrollbars and the 404 never render dark.
+export const viewport: Viewport = {
+  themeColor: "#ffffff",
+  colorScheme: "light",
+};
+```
+
+Next 16 types `colorScheme` as `"normal" | "light" | "dark" | "light dark" | "dark light" | "only light"` and emits `<meta name="color-scheme" content="light"/>`. Do not use `"only light"`: it also opts the page out of browser auto-dark modes (Chrome on Android), which are a setting the user chose. If the file has no `viewport` export (WP13 missing), add `Viewport` to the `import type { Metadata } from "next";` line and create the export with `colorScheme: "light"` only.
 
 Leave WP13's metadata, WP20's `CurrencyProvider`, `Analytics` and `SpeedInsights` as they are. Do not write the words "font-mono" in any comment (the conventions test scans comments).
 
-### Step 5. The five `font-mono` call sites
+### Step 5. The six `font-mono` call sites
 
 Replace `font-mono` in each class list; keep every other class exactly as the file has it (WP14 may have changed `text-slate-400` to `text-slate-500`):
 
@@ -456,8 +478,9 @@ Replace `font-mono` in each class list; keep every other class exactly as the fi
 | `app/stats/page.tsx` (two identical lines) | `<span className="font-mono">{set.code}</span>` | `className="font-sans tabular-nums tracking-wide uppercase"` |
 | `app/product/[id]/page.tsx` | `<span className="text-xs font-mono ...">{setCode}</span>` | `font-mono` becomes `font-sans tabular-nums tracking-wide uppercase` |
 | `app/components/Portfolio/cards/ImportHoldingsModal.tsx` | the CSV `<textarea ... resize-none font-mono text-sm">` | `font-mono` becomes `font-sans tabular-nums` (no `uppercase`: CSS uppercase on a textarea would show pasted CSV in capitals while the value stays unchanged, which is confusing) |
+| `app/components/ui/ConfirmDialog.tsx` (WP15) | `Type <span className="font-mono font-semibold">{confirmText}</span> to confirm` | `className="font-semibold tracking-wide"` (the confirm word is already uppercase, `DELETE`; WP15's `getByLabelText(/Type DELETE to confirm/)` test is unaffected) |
 
-Then `grep -rn "font-mono" app | grep -v __tests__` must print nothing.
+Then `grep -rn "font-mono" app | grep -v __tests__` must print nothing. Step 24's font rule scans every `.ts`/`.tsx` under `app/`, `components/ui/` included, so a missed site fails the conventions test.
 
 ### Step 6. `frontend/app/lib/format.ts`: percent helpers
 
@@ -985,13 +1008,24 @@ export function DataListRow({
   leading,
   prefetch = false,
 }: DataListRowProps) {
+  // Line 1: title, subtitle, sparkline flush right. Line 2: meta, then value
+  // and delta flush right. Price and trend share the row's right edge, as in
+  // finance watchlists. The subtitle shrinks three times faster than the
+  // title, so the product name keeps its room on a 390 px phone.
   const body = (
     <>
       {leading && <div className="size-10 shrink-0 overflow-hidden rounded-control">{leading}</div>}
       <div className="min-w-0 flex-1">
-        <div className="flex min-w-0 items-baseline gap-2">
-          <span className="truncate text-body font-medium text-ink">{title}</span>
-          {subtitle && <span className="truncate text-small text-ink-soft">{subtitle}</span>}
+        <div className="flex min-w-0 items-center gap-2">
+          <span className="min-w-0 truncate text-body font-medium text-ink">{title}</span>
+          {subtitle && (
+            <span className="min-w-0 shrink-[3] truncate text-small text-ink-soft">{subtitle}</span>
+          )}
+          {sparkline && (
+            <div className="ml-auto h-6 w-16 shrink-0" aria-hidden="true" data-slot="sparkline">
+              {sparkline}
+            </div>
+          )}
         </div>
         <div className="mt-0.5 flex items-baseline justify-between gap-2">
           <span className="min-w-0 truncate text-small text-ink-soft">{meta}</span>
@@ -1003,11 +1037,6 @@ export function DataListRow({
           </span>
         </div>
       </div>
-      {sparkline && (
-        <div className="h-6 w-16 shrink-0" aria-hidden="true" data-slot="sparkline">
-          {sparkline}
-        </div>
-      )}
     </>
   );
 
@@ -1078,7 +1107,7 @@ export default function Skeleton({ className = "" }: { className?: string }) {
     <span
       aria-hidden="true"
       data-skeleton=""
-      className={`block rounded-control bg-surface-alt ${className}`}
+      className={`block rounded-control bg-line ${className}`}
     />
   );
 }
@@ -1260,7 +1289,10 @@ export interface AsOfProps {
  * The as-of stamp for a price (01-PRODUCT-DIRECTION.md §6.2). Says which
  * TCGplayer day the number describes, not when the page rendered. Prices are
  * withheld upstream at 14 days (migration 0023); this component only flags
- * the 2 to 13 day window.
+ * the 2 to 13 day window. Age is measured at render time, so on an ISR page
+ * the flag can lag by up to the 24-hour backstop (WP11); the printed date is
+ * always right. The table variant is for desktop tables: its title tooltip
+ * never shows on touch, so phone rows use the inline variant.
  */
 export default function AsOf({
   date,
@@ -1377,7 +1409,7 @@ export default function ChartTimeframeButtons({ selected, onChange }: ChartTimef
 }
 ```
 
-19b. `CurrencySelector.tsx`: replace the component body. Copy the rate `<span>` exactly as the file has it now (class list and text), only its position changes to the `trailing` slot. Remove the `useId` import and `labelId` WP14 added if nothing else uses them.
+19b. `CurrencySelector.tsx`: replace the component body. Keep the rate text exactly as the file has it now (`rate…` while loading, `1 USD = ${exchangeRate.toFixed(4)} CAD` after, as WP20's tests assert), move it to the `trailing` slot, and give it the class list below: 12 px `text-caption` and `text-ink-soft` instead of 11 px slate-500, because this control is migrated here and the type floor is 12 px. Remove the `useId` import and `labelId` WP14 added if nothing else uses them.
 
 ```tsx
 import SegmentedControl, { type SegmentedOption } from "../../ui/SegmentedControl";
@@ -1402,7 +1434,7 @@ export default function CurrencySelector({
       onChange={onChange}
       fullWidthOnPhone={false}
       trailing={
-        <span className="text-[11px] font-medium text-slate-500 tabular-nums whitespace-nowrap">
+        <span className="text-caption font-medium text-ink-soft tabular-nums whitespace-nowrap">
           {exchangeRateLoading ? "rate…" : `1 USD = ${exchangeRate.toFixed(4)} CAD`}
         </span>
       }
