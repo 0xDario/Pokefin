@@ -7,7 +7,7 @@
 - **Unblocks**: nothing in Track 2 depends on it. A later "realised P/L" package builds on its lot model (it needs a sale model first, deferred in `01-PRODUCT-DIRECTION.md` §10).
 - **Placement**: Track 2, after WP29 (index series) and WP25 (`fx_daily`, stats). Reserves migration **0040** and keeps it even if it merges before WP34 (0038) or WP35 (0039). It can run in parallel with WP31 to WP35; step 1 explains how 0040 stays correct in either merge order.
 - **Suggested branch name**: `remediation/wp36-portfolio-analytics`
-- **Risk level**: medium. It adds a trigger to two user tables and patches `export_my_data()` in place; both were replayed twice on PostgreSQL 16, the trigger fails closed (no rate, no row), every existing row keeps its USD value, and a 13-case database test proves the conversion, the exact round trip and the export.
+- **Risk level**: medium. It adds a trigger to two user tables and patches `export_my_data()` in place; both were replayed twice on PostgreSQL 16, the trigger fails closed (no rate, no row), every existing row keeps its USD value, and a 14-case database test proves the conversion, the exact round trip and the export.
 
 ## Why
 
@@ -46,7 +46,7 @@ All amounts are totals for a row (quantity included) unless named per unit. USD 
 | Cost (CAD) | CAD lot: `quantity × purchase_price_native` (exact). USD lot: `costUsd × rateOn(fx, purchase_date)` | USD lot with no rate for its date: `null`, and the lot is left out of CAD totals ("Covers n of m priced holdings") |
 | Rate at purchase `FX0` | CAD lot: `purchase_price_native ÷ purchase_price_usd` (the rate the database used). USD lot: `rateOn(fx, purchase_date)` | Stored conversion is never recomputed on read |
 | Value (CAD) | `valueUsd × FX1`, `FX1 = rateOn(fx, today)` | `null` without a rate today |
-| Unrealised P/L | `value − cost` in the same currency | Over priced lots only. `plPct = pl ÷ cost × 100`, `null` when cost is 0 |
+| Unrealized P/L | `value − cost` in the same currency | Over priced lots only. `plPct = pl ÷ cost × 100`, `null` when cost is 0 |
 | Market move (CAD) | `(valueUsd − costUsd) × FX0` | Sum with currency move equals CAD P/L exactly |
 | Currency move (CAD) | `valueUsd × (FX1 − FX0)` | Positive when the US dollar rose against the Canadian dollar since purchase |
 | Contribution | `lot P/L ÷ total priced cost × 100`, in points | Sums to the total return %. CAD: over lots with a CAD cost |
@@ -82,7 +82,7 @@ The analytics request repeats after every add, edit, delete, import or refresh (
 
 ### API contract
 
-`GET /api/portfolio/analytics`: same gates as WP05's `GET /api/portfolio` (403 without `x-pokefin-request: 1`, 401 signed out, 503 auth outage, 500 on a failed read), `Cache-Control: no-store`, never creates a portfolio. 200 body is `PortfolioAnalytics` (step 3): `version: 1`, `today`, `exitFeePct`, `statsDay`, `fxNow`, `fxSourceDate`, `totals`, `benchmark`, `benchmarkSeries` (`{ start, usd[] }`, 366 entries, or null), `allocation`, `concentration`, `lots[]` (one per holding row, keyed by `holdingId`), `fx` (the `fx_daily` series from today − 400 days, for the chart). About 1.5 kB plus 0.5 kB per holding before compression.
+`GET /api/portfolio/analytics`: same gates as WP05's `GET /api/portfolio` (403 without `x-pokefin-request: 1`, 401 signed out, 503 auth outage, 500 on a failed read), `Cache-Control: no-store`, never creates a portfolio. 200 body is `PortfolioAnalytics` (step 3): `version: 1`, `today`, `exitFeePct`, `statsDay`, `fxNow`, `fxSourceDate`, `totals`, `benchmark`, `benchmarkSeries` (`{ start, usd[] }`, 366 entries, or null), `allocation`, `concentration`, `lots[]` (one per holding row, keyed by `holdingId`), `fx` (the `fx_daily` series from today − 400 days, for the chart). About 9 kB plus 0.8 kB per holding before compression (measured: 12.5 kB for the 6-holding sample; the 366-point benchmark series and the 400-day FX slice are most of the fixed part), roughly a quarter of that over the wire with Vercel's gzip or brotli. It is a private `no-store` response fetched once per holdings change, never on first paint, so it does not touch the `/portfolio` JS budget.
 
 `PATCH /api/portfolio`: body `{ "exit_fee_pct": number }` (0 to 50, rounded to 1 decimal), CSRF-gated like WP05's writes, at most 1 KB. 200 `{ "exit_fee_pct": 12.5 }`; 400 `{ error }` for an invalid value; 401/503 as above; 500 on a failed write. Creates the portfolio if missing (same as `GET /api/portfolio`).
 
@@ -100,8 +100,8 @@ Track holdings, returns, and allocation across your sealed collection.
 [ Holdings | Watchlist ]
                                                                         [Import from Collectr] [#Add holding#]
 +-----------------------------------------------------------------------------------------------------------------+
-| Market value ?        Day change ?          Unrealised P/L ?         Exit value ?            vs Sealed Index ?   |
-| C$4,301.20            +C$5.12 ▲ 0.1% 1D     +C$982.55 ▲ 29.6%        C$3,656.02              +C$182.40 ▲ 5.9%    |
+| Market value ?        Day change ?          Unrealized P/L ?         Exit value ?            vs Sealed Index ?   |
+| C$4,301.20            +C$5.12 ▲ 0.1% 1D     +C$982.55 ▲ 29.6%        C$3,656.02              +C$182.40 +5.9 pts  |
 | as of Sep 29          5 of 6 repriced       Market +C$900.09 ·       Selling fees [ 15 ] %   Your return +26.7%, |
 |                                             Currency move ? +C$82.46 Net of cost: +C$674.80  the same money in   |
 |                                                                                              the index +20.9%    |
@@ -144,13 +144,13 @@ Track holdings, returns, and allocation across your sealed collection.
 | Market value ?     Day change ?       |
 | C$4,301.20         +C$5.12 ▲ 0.1% 1D  |
 | as of Sep 29       5 of 6 repriced    |
-| Unrealised P/L ?   Exit value ?       |
+| Unrealized P/L ?   Exit value ?       |
 | +C$982.55          C$3,656.02         |
 | ▲ 29.6%            Selling fees [15]% |
 | Market +C$900.09 · Net of cost:       |
 | Currency +C$82.46  +C$674.80          |
 | vs Sealed Index ?                     |
-| +C$182.40 ▲ 5.9%                      |
+| +C$182.40 +5.9 pts                    |
 | Your return +26.7%, the same money in |
 | the index +20.9%                      |
 +--------------------------------------+
@@ -174,8 +174,8 @@ Track holdings, returns, and allocation across your sealed collection.
 |              C$2,264.80 ▲ 34.0%       |
 |---------------------------------------|
 | Paldean Fates Elite Trainer Box [E][D]|
-| 3 × $54.50 · Exit: over 1 month       |
-|                  -- (clock) --        |
+| 3 × $54.50 · Exit: over 1 month --  --|
+|            (clock) Last priced Sep 1  |
 +--------------------------------------+
 ```
 
@@ -232,19 +232,19 @@ The edit dialog has the same "Paid in" control, starting at the lot's currency a
 - **Analytics loading** (holdings shown, analytics pending): summary values are flat skeleton bars; holdings rows show quantity, bought and paid at once and a skeleton in the price, value, P/L, contribution and days-to-exit cells; allocation shows three skeleton bars. The chart renders its value line as soon as history arrives; the index line appears when analytics arrives.
 - **Analytics error**: a warn note at the top of the summary ("We could not load your portfolio figures. Your holdings below are up to date.") with "Try again"; analytics cells show `--`; the rest works. A 401 says "Your session has expired. Please sign in again."
 - **Empty**: the empty state above (replaces WP05's one-line "No holdings yet").
-- **Stale price** (withheld, 14 days or more): the row's price, value, P/L and contribution show `--` with a visually hidden "Price withheld. Last priced {date}." and the WP23 `AsOf` clock; the holding is excluded from value, P/L, exit value, allocation and the benchmark; the summary says "{n} of {m} holdings priced". A price 2 to 13 days old shows the clock with its value.
+- **Stale price** (withheld, 14 days or more): the row's price, value, P/L and contribution show `--` with a visually hidden "Price withheld. Last priced {date}." and the WP23 `AsOf` clock; the holding is excluded from value, P/L, exit value, allocation and the benchmark; the summary says "{n} of {m} holdings priced". A price 2 to 13 days old shows the clock with its value (desktop: the table-variant clock with its tooltip; phones: an inline "Last priced {date}" line, because a tooltip never shows on touch).
 - **Index unavailable / stale / nothing to compare**: "vs Sealed Index" shows `--` with one sentence (see Copy); the chart hides the toggle when there is no series.
 - **No FX**: a USD lot with no rate for its purchase date has no CAD cost; CAD totals say "Covers {n} of {m} priced holdings." With no `fx_daily` at all, CAD amounts fall back to USD with the code ("$1,234.00 USD") and the chart says it is in US dollars.
 - **Fee field**: "Saving…", "Saved", or "Not saved. This view uses it until you reload."; an invalid value says "Enter 0 to 50." and is not applied.
 
 ### Copy (all new user-facing strings)
 
-"Market value", "Day change", "Unrealised P/L", "Exit value", "vs Sealed Index", "Currency move", "Contribution", "Days to exit", "Selling fees", "Net of cost:", "{n} of {m} holdings priced", "{n} of {m} repriced", "Covers {n} of {m} priced holdings.", "Your return {+x%}, the same money in the index {+y%}", "Index as of {date}", "Compares {n} of {m} priced holdings; {k} bought before the index starts on {date}.", "The Pokéfin Sealed Index is not available right now.", "The Sealed Index has not been published since {date}.", "None of your priced holdings was bought on or after {date}, when the index starts.", "Same money in the Pokéfin Sealed Index", "Compare with the Sealed Index", "Your holdings", "Last point {date}. The index is published for the previous day; its line ends {date}.", "Bank of Canada rates are unavailable right now, so this chart is in US dollars.", "Allocation", "Set", "Type", "Era", "Other ({n})", "Concentrated", "{product} is {x%} of your priced value.", "{set} products are {x%} of your priced value.", "{n} holdings have no current price and are left out.", "Under 1 week", "1 to 4 weeks", "Over 1 month", "Unknown", "About {n} days of recent TCGplayer sales for the {q} you hold.", "No TCGplayer sales in the last 30 days.", "No recent TCGplayer sales data for this product.", "Paid in", "Price paid per unit ({USD|CAD})", "Kept exactly as you enter it. Pokéfin converts it to US dollars at the Bank of Canada rate of the purchase date to compare it with US Market Prices.", "Costs in this file are in", "Collectr exports costs in the currency your Collectr app shows. Pick CAD if you see C$ there.", "Start with what you own", "Import from Collectr", "Add a product", "Explore a sample portfolio", "The sample uses made-up purchases and generated prices. Nothing is saved.", "Sample portfolio.", "Close the sample", "There is no Bank of Canada rate for that purchase date. Enter the price in USD, or pick another date.", "Selling fees must be between 0% and 50%". No em dash, no "live", "real-time", "all-time", "TCGPlayer".
+"Market value", "Day change", "Unrealized P/L", "Exit value", "vs Sealed Index", "Currency move", "Contribution", "Days to exit", "Selling fees", "Net of cost:", "{n} of {m} holdings priced", "{n} of {m} repriced", "Covers {n} of {m} priced holdings.", "Your return {+x%}, the same money in the index {+y%}", "Index as of {date}", "Compares {n} of {m} priced holdings; {k} bought before the index starts on {date}.", "The Pokéfin Sealed Index is not available right now.", "The Sealed Index has not been published since {date}.", "None of your priced holdings was bought on or after {date}, when the index starts.", "Same money in the Pokéfin Sealed Index", "Compare with the Sealed Index", "Your holdings", "Last point {date}. The index is published for the previous day; its line ends {date}.", "Bank of Canada rates are unavailable right now, so this chart is in US dollars.", "Allocation", "Set", "Type", "Era", "Other ({n})", "Concentrated", "{product} is {x%} of your priced value.", "{set} products are {x%} of your priced value.", "{n} holdings have no current price and are left out.", "Under 1 week", "1 to 4 weeks", "Over 1 month", "Unknown", "About {n} days of recent TCGplayer sales for the {q} you hold.", "No TCGplayer sales in the last 30 days.", "No recent TCGplayer sales data for this product.", "Paid in", "Price paid per unit ({USD|CAD})", "Kept exactly as you enter it. Pokéfin converts it to US dollars at the Bank of Canada rate of the purchase date to compare it with US Market Prices.", "Costs in this file are in", "Collectr exports costs in the currency your Collectr app shows. Pick CAD if you see C$ there.", "Start with what you own", "Import from Collectr", "Add a product", "Explore a sample portfolio", "The sample uses made-up purchases and generated prices. Nothing is saved.", "Sample portfolio.", "Close the sample", "There is no Bank of Canada rate for that purchase date. Enter the price in USD, or pick another date.", "Selling fees must be between 0% and 50%", "{+x} pts". No em dash, no "live", "real-time", "all-time", "TCGPlayer". Spelling follows the site's existing copy ("Unrealized", as today's summary card writes it). A difference of two returns (vs Sealed Index, contribution) always prints as points through `formatPoints` ("+5.9 pts"), never with `Delta`, which would print it as a percent change ("▲ 5.9%").
 
 ### Accessibility
 
 - Each section is a `section` with a heading (`Portfolio summary` is visually hidden); every metric label is WP24's `MetricLabel` with its "?" link to `/methodology#...`.
-- Direction is never colour alone: WP23 `Delta` carries a glyph and a spoken word. Bars in Allocation are decorative (`aria-hidden`); the name, amount and share are text.
+- Direction is never colour alone: WP23 `Delta` carries a glyph and a spoken word, and point differences ("+5.9 pts", "-0.8 pts") carry the sign in the text itself. Bars in Allocation are decorative (`aria-hidden`); the name, amount and share are text.
 - Holdings: desktop `SortableTable` (header buttons with `aria-sort`), phone `DataList` with a labelled sort `select` (16 px text, no iOS zoom) and an order button. Edit and delete are separate buttons with names ("Edit Evolving Skies Booster Box"), 44 px on touch; the product link is the row text, never wrapping a button.
 - "Paid in" and "Group by" and the chart range are WP23 `SegmentedControl` radio groups (arrow keys, Home/End). The index toggle is a native checkbox with a visible label.
 - The fee input has a visible label, `inputMode="decimal"`, `aria-invalid` when out of range and an `aria-describedby` status line with `role="status"`.
@@ -346,7 +346,7 @@ grep -rln "convertDailySeries\|toCadAtDatedRates\|usdToCadOn" "app/product/[id]"
 ```
 
 Tooling:
-- Local Postgres for the replay and the database tests (WP21): Docker `postgres:17`, or the PostgreSQL 16 binaries at `/usr/lib/postgresql/16/bin`. Every SQL statement in step 1 was applied twice to PostgreSQL 16.13 while this spec was written, on a scaffold with 0024's `export_my_data`, WP21's row-cap trigger and WP25's `fx_daily`; the 13 cases of `tests/test_wp36_portfolio_currency_db.py` passed there, and step 1d was also checked after 0038's body (`watchlist` kept) and in the order 0040, 0038, 0040 (keys restored).
+- Local Postgres for the replay and the database tests (WP21): Docker `postgres:17`, or the PostgreSQL 16 binaries at `/usr/lib/postgresql/16/bin`. Every SQL statement in step 1 was applied twice to PostgreSQL 16.13 while this spec was written, on a scaffold with 0024's `export_my_data`, WP21's row-cap trigger and WP25's `fx_daily`; the 14 cases of `tests/test_wp36_portfolio_currency_db.py` passed there (the carry case was added in review and re-run there), and step 1d was also checked after 0038's body (`watchlist` kept) and in the order 0040, 0038, 0040 (keys restored).
 - The analytics builder, chart model, input parsing and sample portfolio were compiled with the repo's TypeScript (`--strict`) against the WP05, WP20, WP23, WP25 and WP29 code those specs give, and their arithmetic was checked numerically; the expected numbers in Tests come from that run. The React components were type-checked against Recharts 3 and the WP18, WP23 and WP24 components.
 - A Python venv with `requirements.txt` plus `pytest` (WP21 added `psycopg[binary]`).
 
@@ -381,8 +381,9 @@ Create the file with exactly this content:
 --               wins; a native value sent for a USD row is ignored).
 --      CAD row  purchase_price_native is required. The rate is the fx_daily
 --               row with the newest day <= purchase_date, used only when
---               purchase_date - day <= 14 (FX_CARRY_MAX_DAYS in
---               frontend/app/lib/fx.ts). purchase_price_usd :=
+--               purchase_date - source_date <= 14 (FX_CARRY_MAX_DAYS in
+--               frontend/app/lib/fx.ts, counted from the Bank of Canada
+--               date as rateOn() counts it). purchase_price_usd :=
 --               round(native / rate, 6). No usable rate: SQLSTATE PF001,
 --               which the routes answer with HTTP 400.
 --               An UPDATE that changes neither the currency, the native
@@ -500,7 +501,7 @@ SET search_path = public, pg_temp
 AS $$
 DECLARE
   v_rate double precision;
-  v_rate_day date;
+  v_source_date date;
 BEGIN
   IF NEW.purchase_currency = 'USD' THEN
     -- The USD price is canonical for a USD row.
@@ -523,16 +524,18 @@ BEGIN
     RETURN NEW;
   END IF;
 
-  SELECT f.usd_to_cad, f.day
-    INTO v_rate, v_rate_day
+  SELECT f.usd_to_cad, f.source_date
+    INTO v_rate, v_source_date
     FROM public.fx_daily f
    WHERE f.day <= NEW.purchase_date
    ORDER BY f.day DESC
    LIMIT 1;
 
-  -- 14 = FX_CARRY_MAX_DAYS (frontend/app/lib/fx.ts), the carry limit of
-  -- refresh_fx_daily (0034).
-  IF v_rate IS NULL OR NEW.purchase_date - v_rate_day > 14 THEN
+  -- 14 = FX_CARRY_MAX_DAYS (frontend/app/lib/fx.ts). The carry is counted
+  -- from the Bank of Canada date behind the row (source_date), exactly as
+  -- refresh_fx_daily (0034) and rateOn() count it, never from a row that is
+  -- itself carried: a date in a gap or after the series ends gets no rate.
+  IF v_rate IS NULL OR NEW.purchase_date - v_source_date > 14 THEN
     RAISE EXCEPTION 'no Bank of Canada rate for %', NEW.purchase_date
       USING ERRCODE = 'PF001',
             HINT = 'Enter the price in USD, or pick a purchase date that has a Bank of Canada rate.';
@@ -596,7 +599,7 @@ Why each part is shaped this way:
 
 - **1a. Columns.** `purchase_price_native` is `numeric` with no scale, so a price arrives from JSON as `129.99` and comes back as `129.99` (exact round trip). `purchase_currency` is `NOT NULL DEFAULT 'USD'`, so every existing row and every pre-WP36 insert is a USD row. All constraints are in `DO` blocks that ignore `duplicate_object`, so the file is re-runnable (`replay_twice`).
 - **1b. Backfill before the triggers.** On the first run it copies `purchase_price_usd` into `purchase_price_native` for every row; on a re-run it matches nothing. `double precision` to `numeric` keeps 15 significant digits (`33.333333333333336` becomes `33.3333333333333`); for a USD row `purchase_price_usd` stays the figure the app reads, so nothing changes for the user.
-- **1c. Trigger.** `apply_purchase_currency()` is SECURITY INVOKER and reads `fx_daily` as the writing user (`authenticated` has SELECT through WP25's `fx_daily_read` policy). It fires on every insert and update of either table, so the add route, the edit route, the bulk import and a direct PostgREST call all store the same value. `PF001` is a custom SQLSTATE; supabase-js exposes it as `error.code`, which step 7 maps to HTTP 400. EXECUTE is revoked from every API role, as WP21 did for `enforce_owner_row_cap()`; triggers still fire. Alphabetical trigger order puts `portfolio_holdings_purchase_currency_trg` before WP21's `portfolio_holdings_row_cap_trg`; they do not interact.
+- **1c. Trigger.** `apply_purchase_currency()` is SECURITY INVOKER and reads `fx_daily` as the writing user (`authenticated` has SELECT through WP25's `fx_daily_read` policy). It fires on every insert and update of either table, so the add route, the edit route, the bulk import and a direct PostgREST call all store the same value. `PF001` is a custom SQLSTATE; supabase-js exposes it as `error.code`, which step 7 maps to HTTP 400. The 14-day carry is measured from the row's `source_date` (the Bank of Canada date), not from the row's `day`: a date inside a gap of more than 14 days, or more than 14 days after the newest Bank of Canada date, finds a carried row whose own `day` may be recent, and comparing against `day` would accept a rate up to 28 days old. `rateOn()` in `fx.ts` and `refresh_fx_daily` both count from the Bank of Canada date, so the database, the analytics and the chart agree on which days have a rate (Tests 1 `test_carry_counts_from_the_boc_date`). EXECUTE is revoked from every API role, as WP21 did for `enforce_owner_row_cap()`; triggers still fire. Alphabetical trigger order puts `portfolio_holdings_purchase_currency_trg` before WP21's `portfolio_holdings_row_cap_trg`; they do not interact.
 - **1d. `export_my_data()` patched in place.** The function is redefined from its live definition (`pg_get_functiondef`) with three `replace()` calls, each anchored on a line every full definition since 0011 contains (`'notes', h.notes,`, `'notes', l.notes,`, `'name', p.name,`). A full `CREATE OR REPLACE FUNCTION public.export_my_data()` in this file would be wrong in two ways: if 0038 (WP34) or 0039 (WP35) is already applied, it would drop their keys; and WP34's "which files define export_my_data" check would find a third definition with no body to copy. The patch keeps every key, raises if an anchor is missing, and does nothing when the keys are already there. `CREATE OR REPLACE` through `EXECUTE` keeps the owner, the ACL (EXECUTE for `authenticated` and `service_role` only) and VOLATILE (pg_get_functiondef omits it because it is the default). The file deliberately never contains the text `FUNCTION public.export_my_data`: `tests/test_wp36_portfolio_currency_static.py` enforces it.
 - **1e. Merge order.** If WP34 or WP35 merges after this package, their own instructions copy the newest full definition of `export_my_data` (0024's or 0038's body), which lacks the new keys. In a replayed database 0038 and 0039 run before 0040, so the replay is always right. In production the owner applies them after 0040, so Owner action 5 re-runs 0040 after any such migration (it is idempotent and only re-adds the keys). The static test also fails any future migration numbered above 0040 that redefines the function without the keys.
 
@@ -611,7 +614,7 @@ python3 verify_migration.py migrations/0040_portfolio_lot_currency.sql > /tmp/wp
 #   -- privilege EXECUTE on public.apply_purchase_currency() for authenticated: revoked
 #   -- NOT VERIFIED (out of scope, check by hand): 3 x ALTER TABLE (other than RLS enablement), 2 x CREATE TRIGGER, 8 x DO block, 2 x DROP object, 2 x data statement
 #   -- run the statement below; every row must say OK
-# With the file copied verbatim the body hash is 1e772fdce59ab062e416a5a20b00d989.
+# With the file copied verbatim the body hash is f05a29233e0b66bb02a8b96bfa08f123.
 grep -c "FUNCTION public.export_my_data" migrations/0040_portfolio_lot_currency.sql   # 0
 ```
 
@@ -1585,6 +1588,8 @@ with
   }
 ```
 
+In the doc comment above `parseHoldingUpdate`, "Only the four editable columns are copied out." becomes "Only the editable columns (quantity, price, date, notes and, since WP36, purchase_currency and purchase_price_native) are copied out." Keep the rest of the comment: the route still passes only this parsed object to `.update()`.
+
 7d. Directly above `export function describeWriteError(`, add:
 
 ```ts
@@ -2036,7 +2041,25 @@ Keep the existing comment block about the withheld-price else branch above `hand
         </div>
 ```
 
-In the price field: the label text `Purchase Price (USD)` becomes `` {`Price paid per unit (${paidIn})`} ``; the `$` prefix span becomes `{paidIn === "CAD" ? "C$" : "$"}`; the input gets `inputMode="decimal"` and `aria-describedby={paidIn === "CAD" ? paidInHintId : undefined}`, and its left padding becomes `${paidIn === "CAD" ? "pl-10" : "pl-7"}` (make the `className` a template literal; keep its other classes). If WP31 landed, leave its `initialProductId` effect and status lines exactly as they are.
+In the price field: the label text `Purchase Price (USD)` becomes `` {`Price paid per unit (${paidIn})`} ``; the `$` prefix span becomes `{paidIn === "CAD" ? "C$" : "$"}`; the input gets `inputMode="decimal"` and `aria-describedby={paidIn === "CAD" ? paidInHintId : undefined}`, and its left padding becomes `${paidIn === "CAD" ? "pl-10" : "pl-7"}` (make the `className` a template literal; keep its other classes).
+
+12g. If WP31 landed (Before you start printed a line for `initialProductId`): its `getProductForAdd(initialProductId).then(` success branch must pre-fill through the same rule as a manual pick, or a CAD "Paid in" would show the USD Market Price under a CAD label and the user would save it as CAD. WP31's effect depends on `[initialProductId]` only, so it cannot call `handleProductSelect` directly (that function changes every render). Add `useEffectEvent` to the React import (stable in React 19.2; `eslint-plugin-react-hooks` 7 knows it and keeps it out of the dependency list), declare below `handlePaidInChange`:
+
+```tsx
+  // WP31's ?add= product: pre-filled exactly like a manual pick (currency-aware).
+  const selectInitialProduct = useEffectEvent((product: ProductSearchResult) => handleProductSelect(product));
+```
+
+and in WP31's effect replace the body of `if (product) { ... }` so it reads:
+
+```tsx
+        if (product) {
+          selectInitialProduct(product);
+          setInitialStatus("idle");
+        } else {
+```
+
+Leave the rest of WP31's effect (the `cancelled` flag, the rejection branch, the dependency array) and its two status lines exactly as they are. If WP31 has not landed, skip 12g.
 
 ### Step 13. `app/components/Portfolio/cards/EditHoldingModal.tsx`: "Paid in" and an exact round trip
 
@@ -2091,6 +2114,7 @@ Leave the validation above it (the price is still validated when unchanged) and 
 ```ts
 import { formatDateOnly, formatMoney, formatSignedPercent } from "../../lib/format";
 import { EXIT_BAND_LABELS, EXIT_BAND_ORDER } from "../../lib/portfolioExit";
+import { STALE_AFTER_DAYS, daysBetween } from "../ui/AsOf";
 import type { Currency } from "../../types/market";
 import type { HoldingWithProduct } from "../../types/portfolio";
 import type { BenchmarkComparison, LotAnalytics } from "../../types/portfolioAnalytics";
@@ -2160,6 +2184,18 @@ export function exitBandDetail(lot: LotAnalytics): string {
   if (lot.daysToExit === null) return "No TCGplayer sales in the last 30 days.";
   const days = Math.max(1, Math.round(lot.daysToExit));
   return `About ${days} ${days === 1 ? "day" : "days"} of recent TCGplayer sales for the ${lot.productQuantity} you hold.`;
+}
+
+/**
+ * True when the price day is 2 or more UTC days before `today`: the rule
+ * WP23's AsOf uses to switch to its stale clock. Phone rows use it to show
+ * the inline "Last priced" line only when it says something (WP23: the
+ * table variant's tooltip never shows on touch).
+ */
+export function isPriceStale(priceDay: string | null, today: string | null): boolean {
+  if (!priceDay || !today) return false;
+  const age = daysBetween(priceDay.slice(0, 10), today.slice(0, 10));
+  return Number.isFinite(age) && age >= STALE_AFTER_DAYS;
 }
 
 export function withheldReason(lot: LotAnalytics | null): string {
@@ -2428,7 +2464,7 @@ import { exitValueAfterFees } from "../../../lib/portfolioExit";
 import type { Currency } from "../../../types/market";
 import type { PortfolioAnalytics } from "../../../types/portfolioAnalytics";
 import ExitFeeField, { type FeeStatus } from "./ExitFeeField";
-import { CARD, benchmarkCoverageText, benchmarkUnavailableText, money, toCad } from "../portfolioDisplay";
+import { CARD, benchmarkCoverageText, benchmarkUnavailableText, formatPoints, money, toCad } from "../portfolioDisplay";
 
 export interface PortfolioSummaryProps {
   analytics: PortfolioAnalytics | null;
@@ -2442,6 +2478,14 @@ export interface PortfolioSummaryProps {
 }
 
 const VALUE_SKELETON = <Skeleton className="h-7 w-28" />;
+// Holds the height of the sub-lines that arrive with the analytics, so the
+// chart and allocation below do not jump when they load (CLS budget 0.05).
+const SUB_SKELETON = (
+  <div className="mt-1 space-y-1.5">
+    <Skeleton className="h-3 w-24" />
+    <Skeleton className="h-3 w-20" />
+  </div>
+);
 
 /**
  * The portfolio's headline figures (WP36): market value, day change,
@@ -2500,21 +2544,21 @@ export default function PortfolioSummary({
         <Stat
           label={<MetricLabel metric="portfolioMarketValue" />}
           value={showSkeleton ? VALUE_SKELETON : money(currency, t?.valueUsd, t?.valueCad)}
-          sub={t && t.priced < t.holdings ? `${t.priced} of ${t.holdings} holdings priced` : undefined}
+          sub={showSkeleton ? SUB_SKELETON : t && t.priced < t.holdings ? `${t.priced} of ${t.holdings} holdings priced` : undefined}
           asOf={a?.statsDay ? <AsOf date={a.statsDay} referenceDate={a.today} /> : undefined}
         />
         <Stat
           label={<MetricLabel metric="portfolioDayChange" />}
           value={showSkeleton ? VALUE_SKELETON : money(currency, t?.dayChangeUsd, toCad(t?.dayChangeUsd, fxNow), { signed: true })}
           delta={t ? <Delta value={t.dayChangePct} period="1D" missingReason="No holding was repriced in the last day" /> : undefined}
-          sub={t && t.dayChangeCovered < t.priced ? `${t.dayChangeCovered} of ${t.priced} repriced` : undefined}
+          sub={showSkeleton ? SUB_SKELETON : t && t.dayChangeCovered < t.priced ? `${t.dayChangeCovered} of ${t.priced} repriced` : undefined}
         />
         <Stat
           label={<MetricLabel metric="unrealisedPl" />}
           value={showSkeleton ? VALUE_SKELETON : money(currency, t?.usd.pl, cadReady ? t?.cad.pl : null, { signed: true })}
           delta={totals ? <Delta value={totals.plPct} missingReason="No holding has a current price" /> : undefined}
           sub={
-            cadReady && t ? (
+            showSkeleton ? SUB_SKELETON : cadReady && t ? (
               <>
                 Market {money("CAD", null, t.cad.market, { signed: true })} · <MetricLabel metric="currencyEffect" />{" "}
                 {money("CAD", null, t.cad.fx, { signed: true })}
@@ -2549,9 +2593,15 @@ export default function PortfolioSummary({
                   : money(currency, benchFigures.delta, benchFigures.delta, { signed: true })
                 : "--"
           }
-          delta={benchFigures ? <Delta value={benchFigures.deltaPts} missingReason="No return to compare" /> : undefined}
+          delta={
+            benchFigures ? (
+              // Percentage points, not a percent change: Delta would print "5.9%".
+              // The sign carries the direction (text, never colour alone).
+              <span className="text-small font-medium tabular-nums text-ink-soft">{formatPoints(benchFigures.deltaPts)}</span>
+            ) : undefined
+          }
           sub={
-            bench === null ? undefined : bench.status === "ok" && benchFigures ? (
+            showSkeleton ? SUB_SKELETON : bench === null ? undefined : bench.status === "ok" && benchFigures ? (
               <>
                 Your return {formatSignedPercent(benchFigures.returnPct)}, the same money in the index{" "}
                 {formatSignedPercent(benchFigures.benchmarkReturnPct)}
@@ -3008,6 +3058,7 @@ import {
   HOLDING_SORT_OPTIONS,
   exitBandText,
   holdingSortValue,
+  isPriceStale,
   money,
   paidUnit,
   productHref,
@@ -3062,7 +3113,6 @@ export default function HoldingsPhoneList({
                     money(currency, lot.valueUsd, lot.valueCad)
                   )}
                 </span>
-                <AsOf date={lot.priceDay} variant="table" referenceDate={today ?? undefined} />
                 <Delta
                   value={currency === "CAD" && lot.plPctCad !== null ? lot.plPctCad : lot.plPctUsd}
                   missingReason={withheldReason(lot)}
@@ -3073,6 +3123,12 @@ export default function HoldingsPhoneList({
             )}
           </span>
         </span>
+        {/* WP23: phone rows use the inline AsOf (a table-variant tooltip never shows on touch), and only when stale. */}
+        {lot && isPriceStale(lot.priceDay, today) && (
+          <span className="mt-0.5 self-end text-caption">
+            <AsOf date={lot.priceDay} variant="inline" referenceDate={today ?? undefined} />
+          </span>
+        )}
       </>
     );
   };
@@ -3515,7 +3571,7 @@ export default function PortfolioChart({
               type="checkbox"
               checked={showBenchmark}
               onChange={(event) => onShowBenchmarkChange(event.target.checked)}
-              className="size-4 accent-[var(--pf-action)]"
+              className="size-4 accent-action"
             />
             Compare with the Sealed Index
           </label>
@@ -3919,6 +3975,8 @@ export default function PortfolioSampleView({
 }
 ```
 
+`statsRow` builds a complete `ProductDailyStats` literal, so it must list every field the interface has when you implement. WP28 adds five required fields (`msrp_multiple`, `cost_per_pack_usd`, `nav_usd`, `premium_to_packs_pct`, `nav_status`) and WP33 adds `max_dd_365d_pct`; if either merged first, `tsc` names the missing keys: add each as `null` here and in the Tests 3 `statsRow` helper (and in `test-utils/portfolioAnalyticsFixture.ts`). Never cast the literal to silence it.
+
 With the formulas above the sample is worth US$3,116.42 (C$4,342.73 at its rate of 1.3935) against US$2,459.22 of cost (+26.7%; in CAD +C$982.55, of which market move +C$900.09 and currency move +C$82.46), the same money in the index returns +20.9% (so +5.9 points), it raises one concentration flag (Evolving Skies Booster Box, 52.4%), and the bands Under 1 week, 1 to 4 weeks and Over 1 month all appear. Tests item 9 pins these numbers.
 
 ### Step 21. `app/components/Portfolio/PortfolioDashboard.tsx`: wire it together
@@ -3929,7 +3987,7 @@ Replace the whole file with the version below. It keeps WP05's data flow (`apply
 "use client";
 
 import dynamic from "next/dynamic";
-import { useCallback, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { usePortfolioData } from "./hooks";
 import { usePortfolioAnalytics } from "./hooks/usePortfolioAnalytics";
 import { useCurrency } from "../../context/CurrencyContext";
@@ -3996,11 +4054,15 @@ export default function PortfolioDashboard() {
 
   const exitFeePct = feeOverride ?? portfolio?.exit_fee_pct ?? EXIT_FEE_DEFAULT_PCT;
 
+  // Only the newest save may set the status: two quick commits (12, then
+  // 12.5) must never end on the first one's "Saved" after the second failed.
+  const feeSaveSeq = useRef(0);
   const handleExitFeeCommit = useCallback(async (pct: number) => {
+    const seq = ++feeSaveSeq.current;
     setFeeOverride(pct);
     setFeeStatus("saving");
     const result = await updateExitFee(pct);
-    setFeeStatus(result.ok ? "saved" : "error");
+    if (seq === feeSaveSeq.current) setFeeStatus(result.ok ? "saved" : "error");
   }, []);
 
   const handleDelete = useCallback(
@@ -4199,7 +4261,7 @@ and, inside `DEFINITIONS`, directly before the closing `] as const;` (after the 
   // Portfolio (WP36)
   def({ key: "portfolioMarketValue", label: "Market value", unitLabel: "currency", window: "latest TCGplayer day", short: "Quantity times Market Price for each holding with a current price. Withheld prices are left out.", anchor: "portfolio-pl" }),
   def({ key: "portfolioDayChange", label: "Day change", unitLabel: "currency", window: "1 day", short: "Change in market value since each product's previous recorded price, for holdings repriced in the last day.", anchor: "portfolio-pl" }),
-  def({ key: "unrealisedPl", label: "Unrealised P/L", unitLabel: "currency", window: "since purchase", short: "Market value minus what you paid, for holdings with a current price. CAD cost uses the purchase-date rate.", anchor: "portfolio-pl" }),
+  def({ key: "unrealisedPl", label: "Unrealized P/L", unitLabel: "currency", window: "since purchase", short: "Market value minus what you paid, for holdings with a current price. CAD cost uses the purchase-date rate.", anchor: "portfolio-pl" }),
   def({ key: "plContribution", label: "Contribution", unitLabel: "points", window: "since purchase", short: "A holding's P/L as points of your priced cost. The contributions add up to your total return.", anchor: "portfolio-pl" }),
   def({ key: "currencyEffect", label: "Currency move", unitLabel: "CAD", window: "since purchase", short: "The part of a CAD gain or loss caused by the US dollar moving against the Canadian dollar since purchase.", anchor: "portfolio-currency" }),
   def({ key: "exitValue", label: "Exit value", unitLabel: "currency", window: "latest TCGplayer day", short: `Market value less your selling-fee assumption (default ${EXIT_FEE_DEFAULT_PCT}%): roughly what selling would net.`, anchor: "exit-value" }),
@@ -4258,7 +4320,7 @@ import { INDEX_LEVEL_MAX_GAP_DAYS, INDEX_STALE_AFTER_DAYS } from "../lib/portfol
             </p>
             <Sub id="portfolio-pl">
               <p>
-                Market value = quantity × Market Price, for holdings with a current price. Unrealised P/L = market
+                Market value = quantity × Market Price, for holdings with a current price. Unrealized P/L = market
                 value − cost, over the same holdings. Contribution = a holding&apos;s P/L ÷ the cost of all priced
                 holdings, in percentage points, so the contributions add up to the total return. Day change = the sum
                 of quantity × (price − price ÷ (1 + 1-day change)) over holdings repriced in the last day.
@@ -4319,7 +4381,7 @@ import { INDEX_LEVEL_MAX_GAP_DAYS, INDEX_STALE_AFTER_DAYS } from "../lib/portfol
 
 If `Section` and `Sub` take their titles from `METHODOLOGY_SECTIONS`/`METHODOLOGY_SUBSECTIONS` by id (WP24), nothing else is needed; if they take a `title` prop, pass the titles from 22b.
 
-22d. `#limits`: find the bullet WP25 wrote ("Product and portfolio charts still convert CAD history at the latest rate ...") and its `{/* WP31 and WP36 remove this bullet */}` comment.
+22d. `#limits`: find the `{/* WP31 and WP36 remove this bullet */}` comment and the bullet under it. Its text is WP25's ("Product and portfolio charts still convert CAD history at the latest rate ...") or, if WP31 merged first, WP31's ("Portfolio charts still convert CAD history at the latest rate ..."); find it by the comment, not by the text.
 - If Before you start's last soft check printed a file (the product page already converts by date): delete the bullet and the comment.
 - Otherwise replace the bullet's text with `Product charts still convert CAD history at the latest rate until they move to the daily rates described under Canadian dollars.` and the comment with `{/* WP31 removes this bullet */}`.
 - If neither the bullet nor the comment exists, change nothing here.
@@ -4398,7 +4460,7 @@ Every numeric expectation below was computed by running the step 5, 6 and 20b co
 
 ### 1. `tests/test_wp36_portfolio_currency_db.py` (new, needs the replayed database)
 
-13 cases; all passed against step 1 on PostgreSQL 16.13. The `fx` fixture inserts one week of 2019 rates only where `fx_daily` has no row for that day, and deletes only what it inserted.
+14 cases; all passed against step 1 on PostgreSQL 16.13. The `fx` fixture inserts one week of 2019 rates only where `fx_daily` has no row for that day, and deletes only what it inserted.
 
 ```python
 """
@@ -4429,12 +4491,16 @@ from psycopg import errors  # noqa: E402
 TAG = "wp36-" + uuid.uuid4().hex[:8]
 
 # Bank of Canada rates for a week in 2019, as fx_daily (0034) stores them:
-# Friday's rate carried over the weekend.
+# Friday's rate carried over the weekend. The June pair is a carried row
+# whose own day (Jun 13) is recent but whose Bank of Canada date (Jun 3) is
+# 10 days older: the carry cap counts from Jun 3.
 FX_ROWS = [
     (date(2019, 3, 1), 1.3150, date(2019, 3, 1), "boc"),
     (date(2019, 3, 2), 1.3150, date(2019, 3, 1), "carry_forward"),
     (date(2019, 3, 3), 1.3150, date(2019, 3, 1), "carry_forward"),
     (date(2019, 3, 4), 1.3320, date(2019, 3, 4), "boc"),
+    (date(2019, 6, 3), 1.3400, date(2019, 6, 3), "boc"),
+    (date(2019, 6, 13), 1.3400, date(2019, 6, 3), "carry_forward"),
 ]
 
 
@@ -4460,7 +4526,8 @@ def fx(admin):
             mine.append(row[0])
     rates = {
         d: r for d, r in admin.execute(
-            "SELECT day, usd_to_cad FROM public.fx_daily WHERE day BETWEEN '2019-03-01' AND '2019-03-04'"
+            "SELECT day, usd_to_cad FROM public.fx_daily WHERE day = ANY(%s)",
+            ([row[0] for row in FX_ROWS],),
         ).fetchall()
     }
     yield rates
@@ -4587,6 +4654,27 @@ class TestCurrency:
                 )
         finally:
             rollback(admin)
+        assert exc.value.sqlstate == "PF001"
+
+    def test_carry_counts_from_the_boc_date(self, admin, owner, product, fx):
+        uid, portfolio_id = owner
+        as_user(admin, uid)
+        try:
+            # The newest row on or before Jun 17 is Jun 13, carried from the
+            # Jun 3 Bank of Canada rate: 14 days from Jun 3, allowed.
+            _, _, _, usd = insert_holding(
+                admin, portfolio_id, product, currency="CAD", native=Decimal("10"), usd=10, day="2019-06-17"
+            )
+            admin.execute("SAVEPOINT carry")
+            # Jun 18 is 5 days after that row but 15 after its Bank of Canada date: refused.
+            with pytest.raises(psycopg.Error) as exc:
+                insert_holding(
+                    admin, portfolio_id, product, currency="CAD", native=Decimal("10"), usd=10, day="2019-06-18"
+                )
+            admin.execute("ROLLBACK TO SAVEPOINT carry")
+        finally:
+            rollback(admin)
+        assert usd == pytest.approx(round(10 / fx[date(2019, 6, 13)], 6), abs=1e-9)
         assert exc.value.sqlstate == "PF001"
 
     def test_cad_without_native_is_rejected(self, admin, owner, product, fx):
@@ -4773,7 +4861,8 @@ def test_exit_fee_bounds_match_the_frontend():
 
 
 def test_fx_carry_matches_fx_ts():
-    carry = re.search(r"NEW\.purchase_date - v_rate_day > (\d+)", _sql()).group(1)
+    # Counted from source_date (the Bank of Canada date), as rateOn() counts it.
+    carry = re.search(r"NEW\.purchase_date - v_source_date > (\d+)", _sql()).group(1)
     assert re.search(rf"export const FX_CARRY_MAX_DAYS = {carry};", FX_TS.read_text())
 ```
 
@@ -5070,15 +5159,16 @@ Delete the `AllocationTooltip` import and cases (step 17c). Replace the `Portfol
 
 ### 12. Component and hook tests (new or updated, jsdom; every render ends with `expect(await axeViolations(container)).toEqual([])`)
 
-Build analytics for the components with `buildPortfolioAnalytics` and the Tests 3 fixtures: copy them into `frontend/test-utils/portfolioAnalyticsFixture.ts` (outside `app/` and outside any `__tests__` folder, so Jest does not run it as a suite and Next never bundles it), exporting `fx`, `points`, `index`, `stats`, `holdings` and `analytics` (the Tests 3 call), and import it as `@/test-utils/portfolioAnalyticsFixture`. Or use `buildSamplePortfolio(15)`.
+Build analytics for the components with `buildPortfolioAnalytics` and the Tests 3 fixtures: copy them into `frontend/test-utils/portfolioAnalyticsFixture.ts` (outside `app/` and outside any `__tests__` folder, so Jest does not run it as a suite and Next never bundles it), exporting `fx`, `points`, `index`, `stats`, `holdings` and `analytics` (the Tests 3 call), and import it as `@/test-utils/portfolioAnalyticsFixture`. Or use `buildSamplePortfolio(15)`. Any suite that renders the holdings views with links (`HoldingsTable`, the dashboard) mocks `next/navigation` with `useRouter: () => ({ prefetch: jest.fn(), push: jest.fn() })`, because WP11's `IntentLink` calls `useRouter()` and jsdom has no app router; keep the real `IntentLink` so the link assertions test real anchors.
 
-- `PortfolioSummary.test.tsx`: in USD shows "$570.00" market value, "3 of 4 holdings priced", the P/L with a `Delta`, "Selling fees" with value 15, "Index as of Sep 29, 2026" and "Compares 2 of 3 priced holdings; 1 bought before the index starts on Dec 1, 2025."; in CAD shows the CAD market value and "Market" and "Currency move" lines; `loading` with `analytics={null}` renders five skeletons and no figures; `errorText` renders the alert and "Try again" calls `onRetry`; a stale-index analytics (today "2026-10-20") shows "The Sealed Index has not been published since Sep 29, 2026."; typing 12.5 in the fee field and pressing Enter calls `onExitFeeCommit(12.5)` once and the exit value updates; typing 60 and blurring shows "Enter 0 to 50." and does not call it.
-- `HoldingsTable.test.tsx` (replace WP05/WP15/WP17's file): the desktop table has the ten column headers (Product, Bought, Qty, Paid (each), Price, Value, P/L, Contribution, Days to exit, Actions); the withheld row's price cell has the visually hidden "Price withheld. Last priced Sep 1, 2026." and a `time` with `dateTime="2026-09-01"`; lot 11's row shows "+$100.00", "1.5"-day band "Under 1 week" with the detail text "About 2 days of recent TCGplayer sales for the 3 you hold." in its `title`, and its contribution in points; with `analytics={null}` analytics cells are skeletons and quantity, bought and paid show; clicking the "Days to exit" header sorts fastest first with the unknown band last; the phone list's sort select has the six options and its order button flips the label; "Edit {name}" and "Delete {name}" call `onEdit(holding)` and `onDelete(id)` (use `getAllByRole(...)[0]`: both views are in the DOM in jsdom); `readOnly` renders no links and no Edit or Delete buttons; a CAD lot viewed in USD shows "in CAD:" under its P/L.
+- `PortfolioSummary.test.tsx`: in USD shows "$570.00" market value, "3 of 4 holdings priced", the P/L with a `Delta`, "Selling fees" with value 15, "Index as of Sep 29, 2026", the vs Sealed Index difference as the text "+16.4 pts" (and no element with `data-direction` inside that figure: it is points, not a `Delta` percent) and "Compares 2 of 3 priced holdings; 1 bought before the index starts on Dec 1, 2025."; in CAD shows the CAD market value and "Market" and "Currency move" lines; `loading` with `analytics={null}` renders a skeleton in each of the five values (plus the sub-line skeletons under four of them) and no figure, and the fee field is already there; `errorText` renders the alert and "Try again" calls `onRetry`; a stale-index analytics (today "2026-10-20") shows "The Sealed Index has not been published since Sep 29, 2026."; typing 12.5 in the fee field and pressing Enter calls `onExitFeeCommit(12.5)` once and the exit value updates; typing 60 and blurring shows "Enter 0 to 50." and does not call it.
+- `HoldingsTable.test.tsx` (replace WP05/WP15/WP17's file): the desktop table has the ten column headers (Product, Bought, Qty, Paid (each), Price, Value, P/L, Contribution, Days to exit, Actions); the withheld row's price cell has the visually hidden "Price withheld. Last priced Sep 1, 2026." and a `time` with `dateTime="2026-09-01"`; lot 11's row shows "+$100.00", "1.5"-day band "Under 1 week" with the detail text "About 2 days of recent TCGplayer sales for the 3 you hold." in its `title`, and its contribution in points; with `analytics={null}` analytics cells are skeletons and quantity, bought and paid show; clicking the "Days to exit" header sorts fastest first with the unknown band last; the phone list's sort select has the six options and its order button flips the label; in the phone list (`within(getByRole("list", { name: "Your holdings" }))`) the withheld row shows the inline "Last priced Sep 1" text and the rows priced on Sep 29 (today Sep 30) show no "as of" or "Last priced" text; "Edit {name}" and "Delete {name}" call `onEdit(holding)` and `onDelete(id)` (use `getAllByRole(...)[0]`: both views are in the DOM in jsdom); `readOnly` renders no links and no Edit or Delete buttons; a CAD lot viewed in USD shows "in CAD:" under its P/L.
 - `AllocationPanel.test.tsx`: "Set" selected by default lists set groups with share text; choosing "Era" (click the radio) lists eras; nine groups fold into six plus "Other (3)"; the flag text "Set 1 Booster Box is 79% of your priced value." appears with the "Concentrated" badge (the Tests 3 fixture); "1 holding has no current price and is left out."; `allocation={null}` with `loading` shows skeletons, without it shows "Allocation is not available right now.".
 - `PortfolioEmptyState.test.tsx`: the heading "Start with what you own"; the three buttons call `onImport`, `onAdd`, `onSample`; "Import from Collectr" is the primary button (it has the `bg-action` class).
 - `PortfolioSampleView.test.tsx`: mock `../shared/PortfolioChart` to a stub; `global.fetch = jest.fn()`; renders the note starting "Sample portfolio." and "Sep 29, 2026"; the holdings show "Evolving Skies Booster Box" with no link and no "Edit" button; `fetch` was never called; "Close the sample" calls `onExit`; "Import from Collectr" calls `onImport`.
 - `usePortfolioAnalytics.test.tsx` (`renderHook`): no fetch while `portfolioId` is null or holdings are empty; one fetch for a holdings array; a new array aborts the first request (its signal is aborted) and fetches again; while the second request runs, `analytics` is still the first result and `loading` is true; a rejection gives `errorText` "We could not load your portfolio figures." and `retry()` fetches again; a 401 `PortfolioApiError` gives the session text.
-- `AddHoldingModal.test.tsx` (update WP05/WP31's file; mock `../../../context/CurrencyContext` `useCurrency` to `{ currency: "CAD", exchangeRate: 1.4, ... }`): "Paid in" starts at CAD; selecting a product priced $100 pre-fills "140.00" and the label reads "Price paid per unit (CAD)"; switching to USD re-fills "100.00"; after typing "95" switching back to CAD keeps "95"; submitting sends `purchase_currency: "CAD"`, `purchase_price_native: 140`, `purchase_price_usd: 140`; a second submit with the same values reuses the idempotency key, and switching currency mints a new one.
+- `AddHoldingModal.test.tsx` (update WP05/WP31's file; mock `../../../context/CurrencyContext` `useCurrency` to `{ currency: "CAD", exchangeRate: 1.4, ... }`): "Paid in" starts at CAD; selecting a product priced $100 pre-fills "140.00" and the label reads "Price paid per unit (CAD)"; switching to USD re-fills "100.00"; after typing "95" switching back to CAD keeps "95"; submitting sends `purchase_currency: "CAD"`, `purchase_price_native: 140`, `purchase_price_usd: 140`; a second submit with the same values reuses the idempotency key, and switching currency mints a new one. If WP31 landed: WP31's `initialProductId` case (product at `usd_price: 59.99`) now expects "83.99" in the price field (59.99 × 1.4, step 12g) with "Paid in" on CAD; rewrite that one expectation, nothing else in WP31's cases.
+- `PortfolioModals.a11y.test.tsx` (WP14's file; update): the add and edit dialogs' price label is now "Price paid per unit (CAD)" or "(USD)". Replace each `getByLabelText("Purchase Price (USD)")` with `getByLabelText(/^Price paid per unit/)`. The file does not mock `CurrencyContext`, so `useCurrency()` returns WP20's fallback (`DEFAULT_CURRENCY` "CAD", `DEFAULT_EXCHANGE_RATE`): in the add pre-fill case the expected value becomes `Number((100 * DEFAULT_EXCHANGE_RATE).toFixed(2))` (import `DEFAULT_EXCHANGE_RATE` from `app/lib/currency.ts`); the edit fixture has no `purchase_currency`, so it stays USD and "12.50". Every other assertion and the axe check stay as they are.
 - `EditHoldingModal.test.tsx` (new or update): a CAD holding with `purchase_price_native: 129.99` shows CAD checked and "129.99"; saving after changing only the quantity sends `{ quantity, purchase_date, notes }` with no `purchase_currency` and no `purchase_price_native`; changing the price to 130 sends `purchase_currency: "CAD", purchase_price_native: 130`; switching to USD sends `purchase_currency: "USD"`; a USD holding stored at `33.333333` shows "33.33" and an untouched save sends no price.
 - `ImportHoldingsModal.test.tsx` and `app/lib/__tests__/import.holdings.test.ts` (update WP05's files): choosing CAD in the preview sends rows with `purchase_currency: "CAD"` and `purchase_price_native` equal to the CSV cost; the default sends `"USD"`; the preview cost shows "C$" after choosing CAD.
 - `PortfolioDashboard.test.tsx` (WP15) and `PortfolioDashboard.addParam.test.tsx` (WP31, if present): replace the `../shared/PortfolioSummaryCard` mock with `../shared/PortfolioSummary`, add `() => null` mocks for `../shared/AllocationPanel` and `../shared/PortfolioChart`, and mock `../hooks/usePortfolioAnalytics` to `{ analytics: null, loading: false, errorText: null, retry: jest.fn() }`. The delete-dialog cases keep their assertions; open the dialog with `getAllByRole("button", { name: /^Delete / })[0]`. Add: with `holdings: []` the empty state renders and "Explore a sample portfolio" mounts the sample (mock `../demo/PortfolioSampleView` to a component that renders "sample view" and wait with `findByText("sample view")`: `next/dynamic` resolves the mocked module asynchronously); "Add holding" opens the add modal; the fee commit calls `updateExitFee` (mock `../../lib/portfolioApi`).
@@ -5096,7 +5186,7 @@ python3 verify_migration.py migrations/0040_portfolio_lot_currency.sql > /tmp/wp
 PGSERVER_URL=postgresql://postgres:postgres@localhost:55432/postgres scripts/db/replay_migrations.sh       # last line "OK: ... replay_twice"
 POKEFIN_TEST_DATABASE_URL=postgresql://postgres:postgres@localhost:55432/replay_once \
   python -m pytest tests/test_wp36_portfolio_currency_db.py tests/test_wp36_portfolio_currency_static.py \
-  tests/test_migration_volatility.py tests/test_db_roles_integration.py -v                                # all passed (13 + 5 + volatility + roles)
+  tests/test_migration_volatility.py tests/test_db_roles_integration.py -v                                # all passed (14 + 5 + volatility + roles)
 python -m pytest tests/ -q                                                                                 # all passed; DB modules skipped without the URL
 ```
 
@@ -5150,6 +5240,8 @@ Block 5, manual (`pnpm dev` against the stub for layout, then the preview deploy
 7. 390 x 844 (DevTools device mode, touch): no horizontal scroll; the summary is two columns with the index figure full width; the range control fills the width; holdings are two-line rows with Edit and Delete 44 px buttons; the sort select does not zoom on focus; the fee input is 44 px tall.
 8. Keyboard only: Tab through the summary links, the fee field (Enter commits), the range radios (arrows), the checkbox, Group by radios, the table headers (Enter sorts, `aria-sort` changes), Edit and Delete; focus rings are visible.
 9. Account page, "Export my data": every holding has `purchase_currency` and `purchase_price_native`; the portfolio has `exit_fee_pct`; the `watchlist` key is still there if WP34 merged.
+10. Layout stability, 1440 x 900, CPU 4x slowdown, a portfolio of 6 or more holdings: DevTools Performance, record a reload. The layout shifts after the analytics response (Experience track) sum to under 0.05, the `/portfolio` CLS budget (WP22). If they do not, the summary's sub-line skeletons no longer match the loaded sub-lines: fix the skeleton, not the budget. Record the number in the PR.
+11. Add a CAD holding dated before the first Bank of Canada rate in `fx_daily` (`SELECT min(day) FROM public.fx_daily;`, for example 2016-06-01 after Owner action 3): the dialog shows "There is no Bank of Canada rate for that purchase date. Enter the price in USD, or pick another date." and nothing is saved.
 
 ## Owner actions
 
@@ -5163,7 +5255,7 @@ Block 5, manual (`pnpm dev` against the stub for layout, then the preview deploy
 ## Acceptance criteria
 
 - [ ] `migrations/0040_portfolio_lot_currency.sql` exists with step 1's content; no other migration changed; `verify_migration.py` exits 3 with the stderr of step 1f; the replay harness passes once and twice.
-- [ ] `tests/test_wp36_portfolio_currency_db.py` passes against `replay_once` (13 cases): CAD converts at the purchase-date rate (including a carried weekend rate), an unchanged CAD edit keeps its USD value exactly, a date change reconverts, no rate raises PF001, CAD without a native price and an unknown currency are refused, the USD price wins for a USD lot, a CAD lot switches to USD, a legacy insert defaults to USD, the fee defaults to 15 and is capped at 50, the export carries the new keys and stays VOLATILE, SECURITY DEFINER and closed to anon, and the trigger function is not callable.
+- [ ] `tests/test_wp36_portfolio_currency_db.py` passes against `replay_once` (14 cases): CAD converts at the purchase-date rate (including a carried weekend rate), the 14-day carry counts from the Bank of Canada date and not from a carried row's day, an unchanged CAD edit keeps its USD value exactly, a date change reconverts, no rate raises PF001, CAD without a native price and an unknown currency are refused, the USD price wins for a USD lot, a CAD lot switches to USD, a legacy insert defaults to USD, the fee defaults to 15 and is capped at 50, the export carries the new keys and stays VOLATILE, SECURITY DEFINER and closed to anon, and the trigger function is not callable.
 - [ ] `tests/test_wp36_portfolio_currency_static.py` passes: 0040 is re-runnable, patches `export_my_data` in place without redefining it, and its fee bounds and FX carry match `portfolioExit.ts` and `fx.ts`.
 - [ ] A lot entered in CAD round-trips exactly: add C$129.99, read it back as 129.99 CAD, edit something else, read it back unchanged (Tests 1 case 2, Tests 12 edit case, Verification block 5 step 3).
 - [ ] A withheld price never feeds value or P/L: its row shows `--` with the reason and clock; it is excluded from market value, P/L, contribution, exit value, allocation and the benchmark comparison, and the coverage counts say so (Tests 3 "never values a withheld price", Tests 12).
@@ -5171,7 +5263,7 @@ Block 5, manual (`pnpm dev` against the stub for layout, then the preview deploy
 - [ ] `PATCH /api/portfolio` stores `exit_fee_pct` in [0, 50] with CSRF and size gates; the summary's fee field applies at once and persists across reloads.
 - [ ] The benchmark is money-matched (Tests 3 "invests each lot's cost ... on its own purchase date") and labelled "Same money in the Pokéfin Sealed Index"; it is withheld with a reason when the index is stale or missing.
 - [ ] CAD cost uses the purchase-date rate from `fx_daily`, CAD P/L = market move + currency move exactly, and the portfolio chart converts CAD by date; `/methodology#limits` no longer says portfolio charts use the latest rate.
-- [ ] The summary shows value, day change, unrealised P/L, exit value after the editable fee, and vs Sealed Index with a `Delta`; the chart overlays the index line; the holdings table has P/L contribution, days to exit and the `AsOf` glyph on desktop and the two-line list on phones; allocation by set, type and era with flags.
+- [ ] The summary shows value, day change, unrealized P/L, exit value after the editable fee, and vs Sealed Index in percentage points ("+5.9 pts", never a `Delta` percent); the chart overlays the index line; the holdings table has P/L contribution, days to exit and the `AsOf` glyph on desktop and the two-line list on phones; allocation by set, type and era with flags.
 - [ ] The add and edit dialogs have "Paid in"; the Collectr import preview has "Costs in this file are in".
 - [ ] An empty portfolio shows Import from Collectr (primary), Add a product, and Explore a sample portfolio; the sample makes no request, saves nothing and is read-only.
 - [ ] `/methodology` has `#portfolio` with its five sub-anchors, the version is bumped with a change-log row, and every new `MetricLabel` key is defined.

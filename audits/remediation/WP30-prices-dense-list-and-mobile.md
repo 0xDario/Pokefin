@@ -2,7 +2,7 @@
 
 - **Goal**: a collector on a phone scans all 306 sealed products as a dense two-line list with the price and the Period's change on every row (at least 8 products on the first 390 px screen instead of 1), and a desktop user gets a one-line 44 px list by default with a visible, URL-backed sort, plus an optional card view whose prices line up in one fixed column.
 - **Why now / value**: `/prices` is the most visited page and still renders 450 px cards on phones (about 135 screens for the catalog) and 430 px cards on desktop whose product type wraps and whose price overflows (research/ui-audit.md `/prices`). WP26 made sparklines free to draw, WP23 shipped `DataList`, `Delta` and `AsOf`, and WP33 needs the phone row this package builds. It is also WP26's planned recovery for the `/prices` document budget ("WP30's list view is the planned recovery (it drops card chrome)", WP26 step 26).
-- **Effort**: L, 14 to 16 hours (URL state, sorting and projection 2.5 h, list row, list view and header 3 h, card rewrite and cards view 2.5 h, toolbar and container wiring 2 h, CSS layout and intrinsic sizes 1 h, scroll anchor 1 h, tests 2.5 h, measurement, Lighthouse and budgets 1.5 h).
+- **Effort**: L, 15 to 17 hours (URL state, sorting and projection 2.5 h, list row with its stale note, list view and header 3.5 h, card rewrite and cards view 2.5 h, optimistic toolbar and container wiring 2.5 h, CSS layout and intrinsic sizes 1 h, scroll anchor 1 h, tests 2.5 h, measurement, Lighthouse and budgets 1.5 h).
 - **Depends on**: WP08 (`urlState.ts`, `updateUrlState`, `useLocationSearch`, the `cardList` memo this package replaces), WP09 (`historyLoadingStore`, `pf-card-grid` and its `content-visibility` rules, replaced here), WP11 (`catalogProjection.ts`, `toVolumeSummaries`, ISR `/prices`, and `app/components/IntentLink.tsx` from its step 13a, which already switched every other product link on the site), WP22 (`perf-budgets.json`, `lighthouserc.json`, the perf fixture, `pnpm perf:budget`, `scripts/perf-serve.mjs`), WP23 (`DataList`, `Delta`, `AsOf` with `STALE_AFTER_DAYS` and `daysBetween`, `PageHeader`, `ProvenanceLine`, `SegmentedControl`, `Badge`, `Skeleton`, tokens, `startToggleTransition` in the container, `uiConventions` ratchet), WP26 (`MiniSparkline series`, `sparklineFor`, `useSparklines`, `FullChartToggle`/`FullChartPanel` in `ProductCard`, Suspense per set group). Also reads WP07 (`format.ts`), WP12 (`ProductImage` `priority`), WP13 (`NoResults`), WP20 (`app/types/market.ts`, `useCurrency`). Soft, with a default for each case in "Before you start": WP24 (`PROVENANCE_SENTENCE`, `METRIC_DEFINITIONS`), WP27 (currency moved to the header; this package works before or after it), WP28 (x MSRP data; the column and sort appear only when it exists). `IntentLink` is expected from WP11; step 1 recreates the same file only if it is missing (WP31 and WP37 point at step 1 for the same fallback).
 - **Unblocks**: WP33 (imports `catalogValues.ts` (`formatDaysOfSupply`), `freshness.ts` (`utcDateKey`), `shared/msrp.ts` and the `list` sparkline size; its phone rows are WP23 `DataListRow`s, not `ProductListRow`), WP28 step 12d (passes its multiples into the prop this package defines), WP34 step 17b (may add an optional `action` slot to `ProductListRow`).
 - **Placement**: Speed lane, after WP26 and WP23 (WP22 -> WP26 -> WP30 -> WP33). It must precede WP33. No migration: the registry (0033 to 0041, 01-PRODUCT-DIRECTION.md §8) is untouched and nothing is numbered after WP21's 0032 by this package.
@@ -92,7 +92,7 @@ SORT BY [3M change v] [v]    [#List#| Cards ]    [ ] Group by set               
      PRODUCT                                     PRICE   3M CHANGE v   TREND        SOLD 30D  DAYS SUPPLY  X MSRP
 [i]  Crown Zenith · Elite Trainer Box  PKC   C$142.10     ^ 38.2%    ___/''''       55        9            2.9x   44
 [i]  Evolving Skies · Booster Box            C$612.40     ^ 4.2%     /\/\_/\        212       18           2.1x   44
-[i]  Silver Tempest · Booster Bundle (c)      C$41.70     v 1.1%     ''\___         40        55           1.4x   44
+[i]  Silver Tempest · Booster Bundle      C$41.70 (c)     v 1.1%     ''\___         40        55           1.4x   44
 [i]  Hidden Fates · Elite Trainer Box              --     --         No history     --        --           --     44
 ```
 
@@ -117,7 +117,7 @@ Evolving Skies   SWSH07 · Sword & Shield · Released Aug 27, 2021
 +--------------------------------------------+ +--------------------------------------------+ +---------...
 ```
 
-Card anatomy, top to bottom inside a 12 px padded bordered box: (ungrouped only) caption line "Set · CODE · Aug 27, 2021" (16 px); title = product type (`h3`, 16/24, truncates with a `title` attribute, never wraps); detail line (13/18): variant, units sold 30D and x MSRP joined by " · ", led by "Last priced Sep 25" (clock, warn colour) when the price is 2 or more days old, or replaced by the withheld-price note; price row: a 112 px right-aligned column holding only the price (20/28) with the change directly under it (`Delta` with the Period label), then the 96 x 40 sparkline beside it (no glyph sits on the price line, so a four-digit CAD price such as "C$1,649.99" fits the column); actions row, a fixed 44 px: "Show full chart" (WP26) and "View on TCGplayer". The chart panel opens under the card body (WP26 states unchanged). Ungrouped cards are 186 px because of the caption line. The text column needs 220 px (112 + 12 + 96), so a card is at least 322 px wide: true for every grid track from a 360 px phone up (the narrowest track, 2 columns at 768 px, leaves 250 px). 320 px phones are out of scope; the sparkline clips there rather than wrapping.
+Card anatomy, top to bottom inside a 12 px padded bordered box: (ungrouped only) caption line "Set · CODE · Aug 27, 2021" (16 px); title = product type (`h3`, 16/24, truncates with a `title` attribute, never wraps); detail line (13/18): variant, units sold 30D and x MSRP joined by " · ", led by "Last priced Sep 25" (clock, warn colour) when the price is 2 or more days old, or replaced by the withheld-price note; price row: a 112 px right-aligned column holding only the price (20/28) with the change directly under it (`Delta` with the Period label), then the 96 x 40 sparkline beside it (no glyph sits on the price line, so a four-digit CAD price such as "C$1,649.99" fits the column); actions row, a fixed 44 px: "Show full chart" (WP26) and "View on TCGplayer". The chart panel opens under the card body (WP26 states unchanged). Ungrouped cards are 186 px because of the caption line. The text column needs 220 px (112 + 12 + 96), so a card is at least 322 px wide: true for every grid track from a 360 px phone up (the narrowest track, 2 columns at 768 px, leaves 250 px). 320 px phones (under 1% of traffic) are out of scope for the cards view; the default list view fits them.
 
 `/prices` at 390, cards view: one column, the same card anatomy and heights.
 
@@ -126,10 +126,10 @@ Card anatomy, top to bottom inside a 12 px padded bordered box: (ungrouped only)
 | State | List row | Card | Page |
 |---|---|---|---|
 | First paint | From server HTML: price, change, 3M sparkline, units | same | `AsOf` "Prices as of Sep 29" |
-| Period switched, series not loaded yet | WP26 flat bar in the trend slot; change already updated | same | list dimmed to 70% while the transition is pending |
-| Currency switched | prices re-render at transition priority, list dimmed | same | |
-| Price 2 to 13 days old | clock glyph after the price, tooltip and sr-only "Last priced Sep 25" | same, next to the price | |
-| Price withheld (14 days, migration 0023) | price "--", change "--" with sr-only "Price withheld", "No history" in the trend slot, clock glyph "Last priced Aug 1" | detail line "No current price, last recorded Aug 1, 2026" (WP07 copy) | |
+| Period switched, series not loaded yet | WP26 flat bar in the trend slot; change already updated | same | list dimmed to 70% only if the transition is still pending after 100 ms (WP23 `delay-100`, no flicker on fast devices) |
+| Currency switched | prices re-render at transition priority, list dimmed as above | same | |
+| Price 2 to 13 days old | phones: "Last priced Sep 25" (clock, warn colour) in the meta slot; from 768 px: clock glyph after the price with tooltip and sr-only "Last priced Sep 25" | "Last priced Sep 25" (clock, warn colour) leads the detail line | |
+| Price withheld (14 days, migration 0023) | price "--", change "--" with sr-only "Price withheld", "No history" in the trend slot, "Last priced Aug 1" as for a stale price (phone meta slot, desktop glyph) | detail line "No current price, last recorded Aug 1, 2026" (WP07 copy) | |
 | Newest price in the catalog 2+ days old (collector stopped) | | | `AsOf` turns amber: "Last priced Sep 25" |
 | Too little history for the Period | change "--" with sr-only "Not enough price history for this period" | same | |
 | No units, supply or MSRP data | "--" in that cell | the part is left out of the detail line | x MSRP column and sort hidden when no product has a multiple |
@@ -151,37 +151,37 @@ All values come from data the page already has; nothing is computed per visitor 
 | Days of supply | `total_quantity_available / (units_sold_30d / 30)`, computed on the server with `getDaysOfSupply` (`app/lib/marketPulse.ts`, the same formula as WP25's `product_daily_stats.days_of_supply` and WP24's `daysOfSupply` definition), sent as 1 decimal under 10 days and whole days above | `null` when nothing sold in 30 days or either input is null (stale listings are nulled by 0022). Printed "<1" below 1, else whole days |
 | x MSRP | WP28's `initialMsrpMultiples[id]` (Market Price / US MSRP) | absent when WP28 has not landed or the product has no MSRP |
 | Price sort | `usd_price` of products with a current price | unchanged from WP08: withheld prices last in both directions |
-| Numeric sorts (change, units, supply, x MSRP) | ascending or descending by the value above | `null` values last in both directions; ties keep the previous order (the filtered list's release-date order), so the result is deterministic |
+| Numeric sorts (change, units, supply, x MSRP) | ascending or descending by the value above | `null` values last in both directions; ties keep the order the page received the catalog in (input index), so the result is deterministic for a given payload |
 | Release date sort | unchanged (WP08: date, then product type order) | |
-| Stale glyph | `daysBetween(price day, referenceDate) >= STALE_AFTER_DAYS` (2), where the price day is the UTC date of `price_recorded_at` and `referenceDate` is the UTC date of the server render | the page sends `price_recorded_at` only for products that are stale at render time or withheld, so fresh rows carry no date |
+| Stale ("Last priced") | `isPriceDayStale(price_recorded_at, referenceDate)`: `daysBetween(price day, referenceDate) >= STALE_AFTER_DAYS` (2), where the price day is the UTC date of `price_recorded_at` and `referenceDate` is the UTC date of the server render | the page sends `price_recorded_at` only for products that are stale at render time or withheld, so fresh rows carry no date. A withheld product with no recorded date shows no note |
 | "Prices as of" | the newest UTC price day among products with a current price | nothing rendered when no product has one |
 
 Rendering the reference date on the server and passing it down means the server HTML and the hydrated client agree even across UTC midnight.
 
 ### D6. Interaction and performance
 
-- **Toggles at transition priority** (research §13.2): Period, currency, sort, direction, view and group updates run inside WP23's `startToggleTransition`; `SegmentedControl` already paints its pressed segment optimistically. Currency set from the header after WP27 reaches the list through a deferred copy (`useDeferredValue`), so the header toggle paints first as well. While either is pending the catalog wrapper has `aria-busy="true"` and `opacity-70`.
-- **Suspense-chunked hydration** (§13.3): each set group, or each run of 24 rows or cards when ungrouped, sits in its own `<Suspense fallback={null}>`. The boundaries never suspend; React hydrates them as separate units and yields between them.
+- **Toggles at transition priority** (research §13.2): Period, currency, sort, direction, view and group updates run inside WP23's `startToggleTransition`. Every control paints its new state on the next frame: `SegmentedControl` (Period, View) is optimistic already, and the sort select, direction button, "Group by set" checkbox and desktop header buttons hold their shown value in `useOptimistic` too. This is required, not cosmetic: a controlled `<select>` or checkbox whose state update runs in a transition is reset by React to the old value until the transition commits, so without it the select visibly snaps back for 100 to 300 ms on a phone. Currency set from the header after WP27 reaches the list through a deferred copy (`useDeferredValue`), so the header toggle paints first as well. While either is pending the catalog wrapper has `aria-busy="true"`, and dims to `opacity-70` after a 100 ms delay (WP23's `delay-100`).
+- **Suspense-chunked hydration** (§13.3): each set group, or each run of 24 rows or cards when ungrouped, sits in its own `<Suspense fallback={null}>`. The boundaries never suspend; React hydrates them as separate units and yields between them. Cost after hydration: on a re-sort, a row that moves to another chunk remounts (React cannot move a keyed child between parents); rows that stay in their chunk are reused. Index keys keep the chunks themselves mounted. The INP trace (step 26 item 8) covers the worst case, a sort that moves every row.
 - **Rows are memoised** (`memo(ProductListRow)`); a Period change re-renders rows (their change and sparkline change), a keystroke does not (WP08's deferred search).
 - **Intrinsic sizes** (§13.4 fix 1): every list row and card has `content-visibility: auto` with a `contain-intrinsic-block-size` read from four CSS custom properties. List rows have a fixed CSS height, so the estimate is exact by construction; cards are sized by fixed line heights. A unit test asserts each custom property is within 10% of the fixture median recorded by `scripts/measure-catalog.mjs`.
-- **Scroll anchor restore** (§13.4 fix 2): a product-link click stores `{ id, offsetFromTop }` in `history.state` (key `pfPricesAnchor`, via `history.replaceState` with the existing state spread, which Next passes through untouched because it carries `__NA`). When `/prices` mounts again (Back) and has applied the URL's state, it scrolls so the anchored row sits at its recorded offset (tolerance 4 px, two passes one frame apart), then removes the key. Next keeps custom history state on traversal (`completeTraverseNavigation` sets `preserveCustomHistoryState: true` in the installed 16.3.6).
-- **No new request**: no fetch is added. Sort, view and group are client-only. The x MSRP map and days of supply are in the page props.
+- **Scroll anchor restore** (§13.4 fix 2): a product-link click stores `{ id, offsetFromTop }` in `history.state` (key `pfPricesAnchor`, via `history.replaceState` with the existing state spread, which Next passes through untouched because it carries `__NA`). When `/prices` mounts again (Back) and has applied the URL's state, it scrolls so the anchored row sits at its recorded offset (tolerance 4 px, two passes one frame apart), then removes the key. Next keeps custom history state on traversal (`completeTraverseNavigation` sets `preserveCustomHistoryState: true` in the installed 16.3.6). Known limit: if WP08's debounced URL write (250 ms) fires between the tap and the product page's commit, its `replaceState(null, ...)` drops the key and Back falls back to the browser's own restoration. Accepted: it needs a filter change less than 250 ms before the tap.
+- **No new request**: no fetch is added. Sort, view and group are client-only. The x MSRP map, days of supply and the column-header definitions are in the page props.
 - **Prefetch**: every product link is an `IntentLink` (80 ms hover dwell, focus, pointerdown; one prefetch per href per page load).
-- **Bytes**: a list row is about 40% of a grouped card's HTML, so the `/prices` document should drop; the flight grows by the days-of-supply numbers (under 1 kB br). Route JS changes by about +3 kB gz (list, toolbar, anchor, `IntentLink`) minus the deleted `ReturnMetrics`, `ProductTypeGroupHeader` and card chrome.
+- **Bytes**: a list row is about 40% of a grouped card's HTML, so the `/prices` document should drop; the flight grows by the days-of-supply numbers and nine one-line header definitions (about 1 kB br together). WP24's `METRIC_DEFINITIONS` table is read on the server only, never imported by a client module (it would add every metric's text to the route JS). Route JS changes by about +3 kB gz (list, toolbar, anchor) minus the deleted `ReturnMetrics`, `ProductTypeGroupHeader` and card chrome; `IntentLink` is already in the route since WP11.
 
 ### D7. Copy (every new or changed user-facing string)
 
-"Sealed product prices" (h1); "{n} products tracked. " + WP24's `PROVENANCE_SENTENCE` + "Prices as of Sep 29." + "Methodology"; "Sort by"; "Release date", "Price", "{Period} change", "Units sold 30D", "Days of supply", "x MSRP"; direction names "Newest first", "Oldest first", "High to low", "Low to high"; "View", "List", "Cards"; "Group by set"; "Found {n} products" (unchanged, WP13 forbids changing it) plus " · {Period} change" on phones; list header "Product", "Price", "{Period} change", "Trend", "Sold 30D", "Days supply", "x MSRP"; row suffixes (sr-only from 768 px) " sold 30D", " days of supply", " MSRP"; missing-change reasons "Price withheld", "Not enough price history for this period"; card "View on TCGplayer" with sr-only " (opens in a new tab)"; set header "Released {date}". Removed: "Updated: ...", "By Type", "By Set", "Flat", "sold/30d" chips, the per-card return rows. No "live", "real-time" or "all-time"; "TCGplayer" spelled that way; no em dashes.
+"Sealed product prices" (h1); "{n} products tracked. " + WP24's `PROVENANCE_SENTENCE` + "Prices as of Sep 29." + "Methodology"; "Sort by"; "Release date", "Price", "{Period} change", "Units sold 30D", "Days of supply", "x MSRP"; direction names "Newest first", "Oldest first", "High to low", "Low to high"; "View", "List", "Cards"; "Group by set"; "Found {n} products" (unchanged: WP08's tests assert it and WP13/WP15 keep the copy) plus " · {Period} change" on phones; list header "Product", "Price", "{Period} change", "Trend", "Sold 30D", "Days supply", "x MSRP", with the header tooltips taken from WP24's one-line definitions and "Price over the selected period, scaled to its own low and high" on "Trend"; row suffixes (sr-only from 768 px) " sold 30D", " days of supply", " MSRP"; missing-change reasons "Price withheld", "Not enough price history for this period"; stale note "Last priced {Mon D}" (WP23 `AsOf` text); card "View on TCGplayer" with sr-only " (opens in a new tab)"; set header "Released {date}". Removed: "Updated: ...", "By Type", "By Set", "Flat", "sold/30d" chips, the per-card return rows. No "live", "real-time" or "all-time"; "TCGplayer" spelled that way; no em dashes.
 
 ### D8. Accessibility
 
-- The list is a `<ul>` (WP23 `DataList`, named "Products" or "{Set} products") of `<li>` rows, each with exactly one link whose text is the whole row: "Evolving Skies · Booster Box Pokemon Center C$612.40 Up 4.2% 212 sold 30D 18 days of supply". The suffixes are visible on phones and `sr-only` from 768 px, where the column header carries them visually.
-- Change direction is never colour only (`Delta`: glyph plus sr-only word). The stale glyph has visible tooltip text and sr-only "Last priced {date}" (`AsOf` table variant).
+- The list is a `<ul>` (WP23 `DataList`, named "Products" or "{Set} products") of `<li>` rows, each with exactly one link whose text is the whole row. From 1024 px: "Evolving Skies · Booster Box Pokemon Center C$612.40 Up 4.2% 212 sold 30D 18 days of supply"; cells hidden with `display: none` at a breakpoint (days of supply below 1024 px, everything but the meta value on phones) drop out of the name, which is correct because they are not on screen. The suffixes are visible on phones and `sr-only` from 768 px, where the column header carries them visually.
+- Change direction is never colour only (`Delta`: glyph plus sr-only word). Staleness is never a lone icon on touch: phones and cards print "Last priced {date}" as text; the desktop glyph has a tooltip and sr-only "Last priced {date}" (`AsOf` table variant). Only one of the two is displayed at any width, so a screen reader hears it once.
 - Thumbnails are decorative (`alt=""`) because the link text names the product; the card's image link is `aria-hidden="true"` and `tabIndex={-1}` so each card has one link in the tab order for the product (the title) plus the TCGplayer link and the chart button.
 - Sort: a native `<select>` labelled "Sort by" (label visible from 640 px, `sr-only` below), a direction button whose name states the current and next order, and header buttons (desktop) whose names include the sort state ("3M change, sorted high to low"). View is WP23's radio group named "View". "Group by set" is a native checkbox with its label.
 - Headings: one `h1`; set group headers `h2`; card titles `h3`; list rows have no heading.
 - Touch targets: select, direction button, checkbox label and segments are 44 px on coarse pointers (`pointer-coarse:`); list rows are 56 px tall on phones. Inputs are 16 px text on phones (no iOS zoom).
-- Focus: `focus-visible:ring-2 ring-action` on rows (inset), links and buttons. `motion-reduce:transition-none` on the dim and hover transitions.
+- Focus: `focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-action` on rows (ring inset), links and buttons, exactly WP23's rule. Never `outline-none`: in Tailwind 4 it removes the outline in Windows forced-colours mode too, leaving no focus indicator. Hover and pressed colours change instantly (no `transition-colors`, WP23 README "Motion"); only the list dim animates opacity, with `motion-reduce:transition-none`.
 - The sparkline stays `aria-hidden` (WP26).
 
 ### D9. Design system use (WP23)
@@ -211,7 +211,8 @@ Read fully (paths from `frontend/`):
 - `app/components/MarketView/MiniSparkline.tsx` (WP26), `app/lib/sparkline.ts`, `app/lib/catalogProjection.ts`, `app/lib/marketPulse.ts` (`getDaysOfSupply`), `app/lib/priceGuard.ts`, `app/lib/format.ts`, `app/types/market.ts`.
 - `app/components/ui/{DataList,Delta,AsOf,PageHeader,ProvenanceLine,SegmentedControl,Badge,Skeleton}.tsx`, `app/components/ui/README.md`.
 - `app/prices/page.tsx`, `app/components/dashboard/RecentlyReleased.tsx` (if it still exists), `app/globals.css` (WP09's `.pf-card-grid` block, WP23 tokens).
-- Tests you will edit: `app/components/ProductPrices/__tests__/{urlState,sorting,ProductPrices.urlSync,ProductCard.format,ProductCard.history,controls.a11y}.test.ts(x)`, `ProductCard.msrp.test.tsx` (WP28, if present), `app/lib/__tests__/catalogProjection.test.ts`, `app/components/MarketView/__tests__/MiniSparkline.test.tsx`, `app/components/ProductPrices/__tests__/ProductImage.test.tsx`, `app/__tests__/uiConventions.test.ts`.
+- `app/lib/metricDefinitions.ts` (WP24: `METRIC_DEFINITIONS`, `isMetricKey`, the `marketPrice`, `return7d` to `return1y`, `unitsSold30d`, `daysOfSupply` keys; `msrpMultiple` once WP28 landed).
+- Tests you will edit: `app/components/ProductPrices/__tests__/{urlState,sorting,ProductPrices.urlSync,ProductCard.format,ProductCard.history,ProductCard.prefetch,controls.a11y}.test.ts(x)` (`ProductCard.prefetch` is WP11's), `ProductCard.msrp.test.tsx` (WP28, if present), `app/lib/__tests__/catalogProjection.test.ts`, `app/components/MarketView/__tests__/MiniSparkline.test.tsx`, `app/components/ProductPrices/__tests__/ProductImage.test.tsx`, `app/__tests__/uiConventions.test.ts`.
 - `frontend/perf-budgets.json`, `frontend/lighthouserc.json`, `frontend/scripts/perf-serve.mjs`, `frontend/scripts/fixtures/perf.mjs`, `frontend/README.md` "Performance budgets".
 - `node_modules/next/dist/client/components/app-router.js` lines 38 to 96 and 233 to 300 (history patches: a `replaceState` whose data carries `__NA` is passed straight to the browser) and `segment-cache/navigation.js` `completeTraverseNavigation` (`preserveCustomHistoryState: true`).
 
@@ -250,11 +251,11 @@ If any of these hard checks fails, stop and report the missing package: this pac
 Soft checks, each with the default to apply:
 
 ```bash
-# (a) IntentLink (01-PRODUCT-DIRECTION.md §9 item 1 assigns it to WP11; no spec wrote it)
-ls app/components/IntentLink.tsx
+# (a) IntentLink (WP11 step 13a creates it; WP31 or WP37 may have created it verbatim from step 1 below)
+ls app/components/IntentLink.tsx app/components/__tests__/IntentLink.test.tsx
 # (b) WP24 copy and definitions
 grep -n "export const PROVENANCE_SENTENCE" app/content/disclosures.ts
-grep -n "export const METRIC_DEFINITIONS" app/lib/metricDefinitions.ts
+grep -n "export const METRIC_DEFINITIONS\|export function isMetricKey" app/lib/metricDefinitions.ts   # 2 lines
 # (c) WP27 currency in the header
 grep -n "useLegacyCurrencyParam" app/components/ProductPrices/index.tsx
 # (d) WP28 x MSRP
@@ -267,8 +268,8 @@ grep -n "getProductTypeLabel" app/components/ProductPrices/utils/filtering.ts
 grep -n "export function getDaysOfSupply" app/lib/marketPulse.ts
 ```
 
-- (a) Missing: create it in step 1. Present: skip step 1, read its props, and use it as step 13 onward shows if it takes `href` and passes other props to `next/link`; if its API differs, adapt the call sites, not the component.
-- (b) `PROVENANCE_SENTENCE` missing: in step 19 use the literal `"TCGplayer Market Price in USD, updated daily. Prices older than 14 days are hidden."` and omit `methodologyHref`; note it in the PR. `METRIC_DEFINITIONS` missing: in step 14 make `metricShort` return `undefined` and delete its import.
+- (a) Present (expected): skip step 1 and Tests item 12, read its props, and use it as step 13 onward shows if it takes `href` and passes other props to `next/link`; if its API differs, adapt the call sites, not the component. Missing (WP11 step 13 did not land): create the component in step 1 and its test as Tests item 12, and say so in the PR.
+- (b) `PROVENANCE_SENTENCE` missing: in step 19 use the literal `"TCGplayer Market Price in USD, updated daily. Prices older than 14 days are hidden."` and omit `methodologyHref`; note it in the PR. `METRIC_DEFINITIONS` or `isMetricKey` missing: in step 19 pass `columnHelp={{}}` (the header buttons then have no tooltip) and delete that import.
 - (c) Either state works. Do not touch currency code: the container keeps using the `selectedCurrency`, `exchangeRate` and `formatPrice` variables it has.
 - (d) Present: `shared/msrp.ts` re-exports WP28's formatter (step 7 variant A) and the container already has `initialMsrpMultiples`; keep its declaration and skip adding it in step 18b. Missing: step 7 variant B and add the prop in step 18b; the page passes nothing, so the column and the sort stay hidden until WP28's step 12d wires it.
 - (e) Lists `app/components/dashboard/RecentlyReleased.tsx`: do step 20. Lists nothing else outside `ProductPrices/`: skip step 20.
@@ -278,9 +279,11 @@ Tooling: Node and pnpm as in WP00. For the measurements in step 26 you need Chro
 
 ## Implementation steps
 
-Order: steps 1 to 17 add or rewrite modules nothing uses yet (tsc stays green after each if you run it with the container untouched, except steps 2, 5 and 6, which change shared types; finish 2 to 8 together), 18 switches the container, 19 and 20 the pages, 21 the CSS, 22 deletes dead files, 23 to 26 measurement, gates and tests. Paths are relative to `frontend/`.
+Order: steps 1 to 17 add or rewrite modules. `tsc` is not green between step 2 and step 20: step 2 changes the `ViewMode` and `SortBy` unions, and steps 15 and 17 change the `ProductCard` and `SortControls` props the container and the home strip still pass; finish 2 to 8 together, and expect the remaining errors to be exactly those call sites until 18 and 20 fix them. 18 switches the container, 19 and 20 the pages, 21 the CSS, 22 deletes dead files, 23 to 26 measurement, gates and tests. Paths are relative to `frontend/`.
 
 ### Step 1. `app/components/IntentLink.tsx` (new, only when soft check (a) found nothing)
+
+This is WP11 step 13a's code, byte for byte; keep the two identical.
 
 ```tsx
 "use client";
@@ -375,7 +378,7 @@ export default function IntentLink({
 }
 ```
 
-`<Link prefetch={false}>` also disables Next's own intent prefetch (research §8), which is why the handlers call `router.prefetch` themselves. Only the `/prices` rows and cards switch to it in this package; the home strip, `/market` and product-page siblings are listed as follow-ups in the PR.
+`<Link prefetch={false}>` also disables Next's own intent prefetch (research §8), which is why the handlers call `router.prefetch` themselves. When this step runs, WP11 step 13b did not land either: switch only the `/prices` rows and cards here, and list the home strip, `/market` and product-page siblings as follow-ups in the PR.
 
 ### Step 2. `app/types/market.ts`: view, group, sort and the volume summary
 
@@ -454,7 +457,7 @@ export function toVolumeSummaries(
 
 If the file imports types from a different module after WP20, keep its import lines; only the function body and the new exports change. `/market`'s call stays `toVolumeSummaries(volumeMetrics)`.
 
-### Step 4. `app/components/ProductPrices/utils/freshness.ts` (new, server-side helpers)
+### Step 4. `app/components/ProductPrices/utils/freshness.ts` (new, pure helpers for the page and the rows)
 
 ```ts
 import { recordedAtDateKey } from "../../../lib/format";
@@ -465,6 +468,21 @@ import { STALE_AFTER_DAYS, daysBetween } from "../../ui/AsOf";
 /** The UTC date (YYYY-MM-DD) of `now`. The page passes it down as referenceDate. */
 export function utcDateKey(now: Date = new Date()): string {
   return now.toISOString().slice(0, 10);
+}
+
+/**
+ * True when the UTC day of `recordedAt` is STALE_AFTER_DAYS (2) or more
+ * before `referenceDate`: the same rule as WP23's AsOf, decided once so a row
+ * can choose between the phone note and the desktop glyph. False without a
+ * reference date or a parseable recordedAt.
+ */
+export function isPriceDayStale(
+  recordedAt: string | null | undefined,
+  referenceDate: string | undefined
+): boolean {
+  if (!referenceDate) return false;
+  const key = recordedAtDateKey(recordedAt ?? null);
+  return key !== null && daysBetween(key, referenceDate) >= STALE_AFTER_DAYS;
 }
 
 /** Newest TCGplayer day among products that have a current price, or null. */
@@ -480,9 +498,9 @@ export function newestPriceDay(products: readonly Product[]): string | null {
 
 /**
  * WP11's projection drops price_recorded_at for priced products to save
- * bytes. The list flags a price that is STALE_AFTER_DAYS or more old (WP23
- * AsOf table variant), so put the date back, as YYYY-MM-DD, for exactly those
- * products. Withheld products keep WP11's value. Fresh products carry no date.
+ * bytes. Rows and cards flag a price that is STALE_AFTER_DAYS or more old, so
+ * put the date back, as YYYY-MM-DD, for exactly those products. Withheld
+ * products keep WP11's value. Fresh products carry no date.
  */
 export function withStalePriceDates(
   projected: Product[],
@@ -492,10 +510,9 @@ export function withStalePriceDates(
   const staleDays = new Map<number, string>();
   for (const product of source) {
     if (!hasCurrentPrice(product)) continue;
+    if (!isPriceDayStale(product.price_recorded_at, referenceDate)) continue;
     const key = recordedAtDateKey(product.price_recorded_at ?? null);
-    if (key !== null && daysBetween(key, referenceDate) >= STALE_AFTER_DAYS) {
-      staleDays.set(product.id, key);
-    }
+    if (key !== null) staleDays.set(product.id, key);
   }
   if (staleDays.size === 0) return projected;
   return projected.map((product) => {
@@ -505,7 +522,7 @@ export function withStalePriceDates(
 }
 ```
 
-`AsOf.tsx` has no `"use client"` directive, so the server page can import this module. Do not move these helpers into `app/lib`: WP20's guard forbids `app/lib` importing from `app/components`.
+`AsOf.tsx` has no `"use client"` directive and the module has no browser or server-only imports, so both the server page and the client rows import it. Do not move these helpers into `app/lib`: WP20's guard forbids `app/lib` importing from `app/components`.
 
 ### Step 5. `app/components/ProductPrices/utils/urlState.ts`: view, group, sort
 
@@ -685,6 +702,27 @@ import { getProductTypeLabel } from "./filtering";
 
 /** Rows or cards per Suspense boundary when ungrouped (research §13.3). */
 export const ITEMS_PER_CHUNK = 24;
+
+/**
+ * WP24 metric keys whose one-line definitions the list header shows as
+ * tooltips. The page (a server component) reads METRIC_DEFINITIONS and
+ * passes only these strings down as `columnHelp`, so the definitions table
+ * never enters the client bundle (step 19). Kept here, in a module without
+ * "use client", because a server component cannot read a plain value
+ * exported from a client module (it receives a client reference instead).
+ */
+export const LIST_HELP_KEYS = [
+  "marketPrice",
+  "return7d",
+  "return1m",
+  "return3m",
+  "return6m",
+  "return1y",
+  "unitsSold30d",
+  "daysOfSupply",
+  "msrpMultiple",
+] as const;
+export type ListHelpKey = (typeof LIST_HELP_KEYS)[number];
 
 export function chunk<T>(items: readonly T[], size: number = ITEMS_PER_CHUNK): T[][] {
   const out: T[][] = [];
@@ -931,22 +969,33 @@ export function useScrollAnchor(): (event: MouseEvent<HTMLElement>) => void {
     if (!hydrated) return;
     const anchor = readScrollAnchor(window.history.state);
     if (!anchor) return;
-    // Clear first: a reload or a later visit must not jump back here.
-    window.history.replaceState(withScrollAnchor(window.history.state, null), "");
+
+    // The key is cleared when the passes end (a reload or a later visit must
+    // not jump back here), not before them: under Strict Mode the effect runs,
+    // is cleaned up and runs again, and a key cleared by the first run would
+    // leave the second run with nothing to restore.
+    const clearAnchor = () =>
+      window.history.replaceState(withScrollAnchor(window.history.state, null), "");
 
     let frame = 0;
     let passes = 0;
     const correct = () => {
       const element = document.querySelector<HTMLElement>(`[data-anchor-id="${anchor.id}"]`);
-      if (!element) return; // filtered out since: keep the browser's position
-      const delta = anchorScrollDelta(element.getBoundingClientRect().top, anchor);
-      if (delta !== 0) {
-        window.scrollTo({ top: window.scrollY + delta, behavior: "instant" });
+      if (element) {
+        const delta = anchorScrollDelta(element.getBoundingClientRect().top, anchor);
+        if (delta !== 0) {
+          window.scrollTo({ top: window.scrollY + delta, behavior: "instant" });
+        }
       }
       // Rows scrolled into view replace their content-visibility estimate
-      // with their real height; one more pass absorbs any difference.
+      // with their real height; one more pass absorbs any difference. A row
+      // filtered out since keeps the browser's own position.
       passes += 1;
-      if (passes < 2) frame = window.requestAnimationFrame(correct);
+      if (element && passes < 2) {
+        frame = window.requestAnimationFrame(correct);
+      } else {
+        clearAnchor();
+      }
     };
     frame = window.requestAnimationFrame(correct);
     return () => window.cancelAnimationFrame(frame);
@@ -960,7 +1009,7 @@ export function useScrollAnchor(): (event: MouseEvent<HTMLElement>) => void {
 }
 ```
 
-The `replaceState` calls pass no URL, so Next's patched `replaceState` never dispatches a router action; the data carries Next's `__NA` because it spreads the current state. WP08's debounced URL writer uses `replaceState(null, ...)`, which would drop the key, but a pending write is cancelled when a navigation lands first (WP08), so a click followed by navigation keeps the anchor.
+The `replaceState` calls pass no URL, so Next's patched `replaceState` never dispatches a router action; the data carries Next's `__NA` because it spreads the current state. This does not contradict WP08's pitfall ("do not call `replaceState` with Next's own state"): that one is about changing the URL behind the router's back, and these calls never change the URL. WP08's debounced URL writer uses `replaceState(null, ...)`, which drops the key; WP08 cancels a pending write once the next page has committed, so only a write that fires between the tap and that commit loses the anchor (D6, known limit). The click handler runs in the capture phase on the catalog wrapper, before `next/link`'s own click handler starts the navigation, so the anchor is in the `/prices` entry before Next pushes the product page's entry; that push uses fresh state, so the key never leaks into the product page's entry.
 
 ### Step 12. `app/components/ProductPrices/views/SetGroupHeader.tsx` (new)
 
@@ -1033,6 +1082,7 @@ import {
   formatUnits,
   periodChange,
 } from "../utils/catalogValues";
+import { isPriceDayStale } from "../utils/freshness";
 import type { ChartTimeframe, Product } from "../../../types/market";
 
 export interface ProductListRowProps {
@@ -1047,7 +1097,7 @@ export interface ProductListRowProps {
   /** Render the x MSRP cell (only when some product has one). */
   showMsrp: boolean;
   formatPrice: (usdPrice: number | null | undefined) => string;
-  /** Server render date (YYYY-MM-DD). Without it no stale glyph is drawn. */
+  /** Server render date (YYYY-MM-DD). Without it no stale note is drawn. */
   referenceDate?: string;
 }
 
@@ -1055,8 +1105,9 @@ export interface ProductListRowProps {
  * One catalog row (WP30). A single grid element that is two lines of 56 px
  * below 768 px (DataListRow anatomy) and one line of 44 px from 768 px. The
  * layout lives in globals.css (.pf-list-row, .pf-a-*); do not add Tailwind
- * display, grid, height or padding utilities to those elements. WP33 reuses
- * this row on phones.
+ * display, grid-placement, height or padding utilities to those elements.
+ * A stale price shows as words on phones (.pf-a-stale, in the meta slot) and
+ * as WP23's clock glyph from 768 px (.pf-a-glyph); CSS displays one of them.
  */
 function ProductListRow({
   product,
@@ -1070,12 +1121,13 @@ function ProductListRow({
   referenceDate,
 }: ProductListRowProps) {
   const { setName, typeLabel } = catalogNames(product);
+  const stale = isPriceDayStale(product.price_recorded_at, referenceDate);
   return (
-    <li data-anchor-id={product.id} className="pf-cv-row">
+    <li data-anchor-id={product.id} data-stale={stale ? "" : undefined} className="pf-cv-row">
       <IntentLink
         href={`/product/${product.id}`}
         data-anchor-link=""
-        className="pf-list-row text-body transition-colors duration-150 hover:bg-surface-alt active:bg-surface-alt focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-action motion-reduce:transition-none"
+        className="pf-list-row text-body hover:bg-surface-alt active:bg-surface-alt focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-action"
       >
         <span className="pf-a-thumb size-10 overflow-hidden rounded-control bg-surface-alt">
           <ProductImage
@@ -1094,13 +1146,17 @@ function ProductListRow({
         </span>
         <span className="pf-a-price whitespace-nowrap text-right font-semibold tabular-nums text-ink">
           {formatPrice(product.usd_price)}
-          {referenceDate && (
-            <AsOf
-              date={product.price_recorded_at}
-              variant="table"
-              referenceDate={referenceDate}
-              className="ml-1"
-            />
+          {stale && (
+            // Wrapper span: globals.css hides it below 768 px. A class on
+            // AsOf's own <time> would lose to its inline-flex utility.
+            <span className="pf-a-glyph">
+              <AsOf
+                date={product.price_recorded_at}
+                variant="table"
+                referenceDate={referenceDate}
+                className="ml-1"
+              />
+            </span>
           )}
         </span>
         <span className="pf-a-delta whitespace-nowrap text-right text-small">
@@ -1123,6 +1179,13 @@ function ProductListRow({
             <span className="pf-meta-suffix"> MSRP</span>
           </span>
         )}
+        {stale && (
+          // Phones only (globals.css): takes the meta slot from units or the
+          // sorted value, because a tooltip glyph says nothing on touch.
+          <span className="pf-a-stale min-w-0 truncate">
+            <AsOf date={product.price_recorded_at} referenceDate={referenceDate} />
+          </span>
+        )}
       </IntentLink>
     </li>
   );
@@ -1131,16 +1194,17 @@ function ProductListRow({
 export default memo(ProductListRow);
 ```
 
-Grid items are blockified, so `truncate` works on these spans. `IntentLink` forwards `data-anchor-link` to the `<a>`.
+Grid items are blockified, so `truncate` works on these spans. `IntentLink` forwards `data-anchor-link` to the `<a>`. `AsOf` without a variant is the inline one: for a stale day it renders the clock icon and "Last priced Sep 25" in `text-warn-text`. `stale` is computed from the same `referenceDate` the server used, so the server HTML and the hydrated row agree.
 
 ### Step 14. `app/components/ProductPrices/views/ListView.tsx` (new)
 
 ```tsx
-import { Suspense } from "react";
+"use client";
+
+import { Suspense, startTransition, useOptimistic } from "react";
 import { DataList } from "../../ui/DataList";
-import { METRIC_DEFINITIONS } from "../../../lib/metricDefinitions";
 import { sparklineFor, type SparklinePayload } from "../../../lib/sparkline";
-import { chunk } from "../utils/catalogValues";
+import { chunk, type ListHelpKey } from "../utils/catalogValues";
 import { DEFAULT_SORT_DIRECTION, directionLabel } from "../utils/sorting";
 import ProductListRow from "./ProductListRow";
 import SetGroupHeader from "./SetGroupHeader";
@@ -1152,7 +1216,7 @@ import type {
   VolumeMetricsSummary,
 } from "../../../types/market";
 
-const RETURN_METRIC: Readonly<Record<ChartTimeframe, string>> = {
+const RETURN_METRIC: Readonly<Record<ChartTimeframe, ListHelpKey>> = {
   "7D": "return7d",
   "1M": "return1m",
   "3M": "return3m",
@@ -1160,17 +1224,13 @@ const RETURN_METRIC: Readonly<Record<ChartTimeframe, string>> = {
   "1Y": "return1y",
 };
 
-/** WP24's one-line definition for a header tooltip; undefined when the key is unknown. */
-function metricShort(key: string): string | undefined {
-  const definitions = METRIC_DEFINITIONS as unknown as Readonly<Record<string, { short: string } | undefined>>;
-  return definitions[key]?.short;
-}
-
 export interface ListHeaderProps {
   period: ChartTimeframe;
   sortKey: SortBy;
   sortDirection: SortDirection;
   showMsrp: boolean;
+  /** WP24 definitions keyed by LIST_HELP_KEYS (catalogValues.ts); a missing key means no tooltip. */
+  columnHelp: Readonly<Record<string, string>>;
   onSort: (key: SortBy, direction: SortDirection) => void;
 }
 
@@ -1200,7 +1260,7 @@ function HeaderSortButton({
       type="button"
       onClick={() => onSort(column, next)}
       title={help}
-      className={`flex w-full items-center justify-end gap-1 rounded-control uppercase tracking-wide focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-action ${
+      className={`flex w-full items-center justify-end gap-1 rounded-control uppercase tracking-wide focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-action ${
         active ? "font-bold text-ink" : "font-semibold text-ink-soft hover:text-ink"
       }`}
     >
@@ -1216,18 +1276,34 @@ function HeaderSortButton({
 /**
  * Column header for the list from 768 px (hidden on phones by CSS). Sticky
  * under the 64 px site header. Cheap to render, so the container renders it
- * outside the memoised list body.
+ * outside the memoised list body. The sorted column is optimistic, like
+ * WP23's SegmentedControl: the bold header and arrow move on the next frame
+ * while the 306 rows re-sort at transition priority.
  */
-export function ListHeader({ period, sortKey, sortDirection, showMsrp, onSort }: ListHeaderProps) {
+export function ListHeader({
+  period,
+  sortKey,
+  sortDirection,
+  showMsrp,
+  columnHelp,
+  onSort,
+}: ListHeaderProps) {
+  const [shown, setShown] = useOptimistic({ sortKey, sortDirection });
+  const sortBy = (key: SortBy, direction: SortDirection) => {
+    startTransition(() => {
+      setShown({ sortKey: key, sortDirection: direction });
+      onSort(key, direction);
+    });
+  };
   const sortable = (area: string, column: SortBy, label: string, help?: string) => (
     <span className={area}>
       <HeaderSortButton
         column={column}
         label={label}
         help={help}
-        sortKey={sortKey}
-        sortDirection={sortDirection}
-        onSort={onSort}
+        sortKey={shown.sortKey}
+        sortDirection={shown.sortDirection}
+        onSort={sortBy}
       />
     </span>
   );
@@ -1235,17 +1311,17 @@ export function ListHeader({ period, sortKey, sortDirection, showMsrp, onSort }:
     <div className="pf-list-row pf-list-head sticky top-16 z-10 border-b border-line bg-surface text-caption text-ink-soft">
       <span className="pf-a-thumb" aria-hidden="true" />
       <span className="pf-a-name font-semibold uppercase tracking-wide">Product</span>
-      {sortable("pf-a-price", "price", "Price", metricShort("marketPrice"))}
-      {sortable("pf-a-delta", "change", `${period} change`, metricShort(RETURN_METRIC[period]))}
+      {sortable("pf-a-price", "price", "Price", columnHelp.marketPrice)}
+      {sortable("pf-a-delta", "change", `${period} change`, columnHelp[RETURN_METRIC[period]])}
       <span
         className="pf-a-trend font-semibold uppercase tracking-wide"
         title="Price over the selected period, scaled to its own low and high"
       >
         Trend
       </span>
-      {sortable("pf-a-units", "units_30d", "Sold 30D", metricShort("unitsSold30d"))}
-      {sortable("pf-a-dos", "days_supply", "Days supply", metricShort("daysOfSupply"))}
-      {showMsrp && sortable("pf-a-msrp", "msrp", "x MSRP", metricShort("msrpMultiple"))}
+      {sortable("pf-a-units", "units_30d", "Sold 30D", columnHelp.unitsSold30d)}
+      {sortable("pf-a-dos", "days_supply", "Days supply", columnHelp.daysOfSupply)}
+      {showMsrp && sortable("pf-a-msrp", "msrp", "x MSRP", columnHelp.msrpMultiple)}
     </div>
   );
 }
@@ -1336,7 +1412,7 @@ export default function ListView({
 }
 ```
 
-If `METRIC_DEFINITIONS` does not exist (soft check (b)), delete its import and make `metricShort` return `undefined`. If WP28 has not landed, `metricShort("msrpMultiple")` returns `undefined`, which is fine (the column is hidden anyway).
+`"use client"` is explicit because `ListHeader` uses hooks and the rows take a `formatPrice` function: render `ListView` only from client components. `columnHelp.msrpMultiple` is undefined until WP28 adds that definition, which is fine (the column is hidden anyway). The header's `onSort` is the container's `handleSortChange`, which starts its own `startToggleTransition` inside this one; React entangles the two, so `isTogglePending` still drives the dim.
 
 ### Step 15. `app/components/ProductPrices/cards/ProductCard.tsx`: fixed anatomy
 
@@ -1361,6 +1437,7 @@ import {
   formatUnits,
   periodChange,
 } from "../utils/catalogValues";
+import { isPriceDayStale } from "../utils/freshness";
 import { formatDateOnly } from "../../../lib/format";
 import { hasCurrentPrice } from "../../../lib/priceGuard";
 import type { ChartTimeframe, Currency, PriceHistoryEntry, Product } from "../../../types/market";
@@ -1381,7 +1458,7 @@ interface ProductCardProps {
   unitsSold30d?: number | null;
   /** WP28: x MSRP; null or absent leaves it out of the detail line. */
   msrpMultiple?: number | null;
-  /** Server render date (YYYY-MM-DD). Without it no stale glyph is drawn. */
+  /** Server render date (YYYY-MM-DD). Without it no "Last priced" note is drawn. */
   referenceDate?: string;
   selectedCurrency: Currency;
   exchangeRate: number;
@@ -1457,6 +1534,8 @@ const ProductCard = memo(function ProductCard({
     product.sets?.release_date ? formatDateOnly(product.sets.release_date) : null,
   ].filter((fact): fact is string => fact !== null);
   const detail = detailLine(product, unitsSold30d, msrpMultiple);
+  // A withheld price already says when it was last recorded (detailLine).
+  const stale = hasCurrentPrice(product) && isPriceDayStale(product.price_recorded_at, referenceDate);
 
   // The article carries no padding or border, so its height is exactly what
   // contain-intrinsic-block-size estimates (globals.css --pf-size-card*).
@@ -1490,27 +1569,30 @@ const ProductCard = memo(function ProductCard({
               <IntentLink
                 href={href}
                 data-anchor-link=""
-                className="rounded-control hover:text-action focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-action"
+                className="rounded-control hover:text-action focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-action"
               >
                 {typeLabel}
               </IntentLink>
             </h3>
-            {/* Always rendered (non-breaking space when empty): fixed height. */}
-            <p className="truncate text-small text-ink-soft">{detail || " "}</p>
+            {/* Always rendered (non-breaking space when empty): fixed height.
+                A stale price leads with WP23's inline "Last priced Sep 25". */}
+            <p className="truncate text-small text-ink-soft">
+              {stale && (
+                <>
+                  <AsOf date={product.price_recorded_at} referenceDate={referenceDate} />
+                  {detail ? " · " : ""}
+                </>
+              )}
+              {detail || (stale ? "" : "\u00a0")}
+            </p>
 
             <div className="mt-2 flex items-center gap-3">
-              {/* One fixed-width price column: prices line up across cards. */}
+              {/* One fixed-width price column: prices line up across cards.
+                  Nothing but the price sits on this line, so "C$1,649.99"
+                  fits the 112 px at 20 px tabular. */}
               <div className="w-28 shrink-0 text-right">
                 <p className="whitespace-nowrap text-h2 font-semibold tabular-nums text-ink">
                   {formatPrice(product.usd_price)}
-                  {referenceDate && (
-                    <AsOf
-                      date={product.price_recorded_at}
-                      variant="table"
-                      referenceDate={referenceDate}
-                      className="ml-1"
-                    />
-                  )}
                 </p>
                 <div className="text-small">
                   <Delta
@@ -1530,7 +1612,7 @@ const ProductCard = memo(function ProductCard({
                 href={product.url}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="rounded-control text-small font-semibold text-action hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-action"
+                className="rounded-control text-small font-semibold text-action hover:underline focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-action pointer-coarse:inline-flex pointer-coarse:min-h-11 pointer-coarse:items-center"
               >
                 View on TCGplayer
                 <span className="sr-only"> (opens in a new tab)</span>
@@ -1568,7 +1650,8 @@ export default ProductCard;
 Notes:
 - `ReactNode` and `Skeleton` are used by the pasted `FullChartPanel`; if the pasted code does not use one of them, drop that import (lint names it).
 - The `LazyPriceChart` props are WP26's; if the current file passes different ones, keep the current file's.
-- Removed on purpose: `viewMode`, `showSetAsPrimary`, `getAccentClass` (the stripe), `VolumeChip`, `ReturnMetrics`, `ExpansionTypeBadge`, `VariantBadge`, the "Updated:" line, the 160 to 192 px image boxes.
+- Removed on purpose: `viewMode`, `showSetAsPrimary`, `getAccentClass` (the stripe), `VolumeChip`, `ReturnMetrics`, `ExpansionTypeBadge`, `VariantBadge`, the "Updated:" line, the 160 to 192 px image boxes, and any `transition-colors` on the card's own elements (WP23 README "Motion"; WP26's pasted `FullChartToggle` keeps its classes).
+- The stale note is a full sentence in the detail line, not a glyph by the price: a card is used on touch screens, where a `title` tooltip never shows (WP23 `AsOf`), and the price column has no room for a glyph next to a four-digit CAD price.
 - Height budget: 12 (padding) + [16 caption, ungrouped only] + 24 (title) + 18 (detail) + 8 + 46 (price 28 and change 18; the 40 px sparkline fits beside) + 4 + 44 (actions) + 12 (padding) + 2 (border) = 170 px grouped, 186 px ungrouped.
 
 ### Step 16. `cards/ProductGrid.tsx` and `views/CardsView.tsx`
@@ -1697,7 +1780,7 @@ Replace the file:
 ```tsx
 "use client";
 
-import { useId } from "react";
+import { startTransition, useId, useOptimistic } from "react";
 import SegmentedControl, { type SegmentedOption } from "../../ui/SegmentedControl";
 import { DEFAULT_SORT_DIRECTION, directionLabel, sortLabel } from "../utils/sorting";
 import type {
@@ -1740,6 +1823,11 @@ interface SortControlsProps {
 /**
  * /prices toolbar (WP30). Phones: row 1 sort select, direction and view;
  * row 2 the group checkbox and the result count. From 768 px: one row.
+ *
+ * The parent applies every change at transition priority. A controlled
+ * <select> or checkbox whose state lands in a transition is put back to the
+ * old value by React until the transition commits, so the shown values are
+ * optimistic (as in WP23's SegmentedControl) and paint on the next frame.
  */
 export default function SortControls({
   sortKey,
@@ -1754,10 +1842,24 @@ export default function SortControls({
   onGroupByChange,
 }: SortControlsProps) {
   const sortId = `${useId()}-sort`;
+  const [shown, setShown] = useOptimistic({ sortKey, sortDirection, groupBy });
   const options = SORT_ORDER.filter((key) => key !== "msrp" || showMsrp);
-  const nextDirection: SortDirection = sortDirection === "asc" ? "desc" : "asc";
-  const current = directionLabel(sortKey, sortDirection);
-  const next = directionLabel(sortKey, nextDirection).toLowerCase();
+  const nextDirection: SortDirection = shown.sortDirection === "asc" ? "desc" : "asc";
+  const current = directionLabel(shown.sortKey, shown.sortDirection);
+  const next = directionLabel(shown.sortKey, nextDirection).toLowerCase();
+
+  const changeSort = (key: SortBy, direction: SortDirection) => {
+    startTransition(() => {
+      setShown({ ...shown, sortKey: key, sortDirection: direction });
+      onSortChange(key, direction);
+    });
+  };
+  const changeGroup = (group: GroupBy) => {
+    startTransition(() => {
+      setShown({ ...shown, groupBy: group });
+      onGroupByChange(group);
+    });
+  };
 
   return (
     <div className="flex flex-col gap-2 md:flex-row md:flex-wrap md:items-center md:gap-x-6 md:gap-y-2">
@@ -1770,12 +1872,12 @@ export default function SortControls({
         </label>
         <select
           id={sortId}
-          value={sortKey}
+          value={shown.sortKey}
           onChange={(event) => {
             const key = event.target.value as SortBy;
-            if (key !== sortKey) onSortChange(key, DEFAULT_SORT_DIRECTION[key]);
+            if (key !== shown.sortKey) changeSort(key, DEFAULT_SORT_DIRECTION[key]);
           }}
-          className="h-9 min-w-0 flex-1 rounded-control border border-line bg-surface px-2 text-base text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-action pointer-coarse:h-11 sm:flex-none sm:text-sm"
+          className="h-9 min-w-0 flex-1 rounded-control border border-line bg-surface px-2 text-base text-ink focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-action pointer-coarse:h-11 sm:flex-none sm:text-sm"
         >
           {options.map((key) => (
             <option key={key} value={key}>
@@ -1785,11 +1887,11 @@ export default function SortControls({
         </select>
         <button
           type="button"
-          onClick={() => onSortChange(sortKey, nextDirection)}
+          onClick={() => changeSort(shown.sortKey, nextDirection)}
           title={`${current}. Click for ${next}.`}
-          className="inline-flex size-9 shrink-0 items-center justify-center rounded-control border border-line bg-surface text-ink hover:bg-surface-alt focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-action pointer-coarse:size-11"
+          className="inline-flex size-9 shrink-0 items-center justify-center rounded-control border border-line bg-surface text-ink hover:bg-surface-alt focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-action pointer-coarse:size-11"
         >
-          <span aria-hidden="true">{sortDirection === "asc" ? "↑" : "↓"}</span>
+          <span aria-hidden="true">{shown.sortDirection === "asc" ? "↑" : "↓"}</span>
           <span className="sr-only">{`Sort order: ${current}. Change to ${next}`}</span>
         </button>
         <SegmentedControl
@@ -1807,8 +1909,8 @@ export default function SortControls({
         <label className="inline-flex items-center gap-2 text-small text-ink pointer-coarse:min-h-11 md:order-2">
           <input
             type="checkbox"
-            checked={groupBy === "set"}
-            onChange={(event) => onGroupByChange(event.target.checked ? "set" : "none")}
+            checked={shown.groupBy === "set"}
+            onChange={(event) => changeGroup(event.target.checked ? "set" : "none")}
             className="size-4 accent-action"
           />
           Group by set
@@ -1823,7 +1925,7 @@ export default function SortControls({
 }
 ```
 
-"Found {resultCount} products" is WP08's exact copy, now inside the toolbar; the element in the container is removed in step 18 (WP13 forbids changing this copy; WP08's server test matches `Found <!-- -->2<!-- --> products`, which this markup still produces).
+"Found {resultCount} products" is WP08's exact copy, now inside the toolbar; the element in the container is removed in step 18 (WP13 and WP15 keep this copy; WP08's server test matches `Found <!-- -->2<!-- --> products`, which this markup still produces). The parent's handlers start their own `startToggleTransition` inside these transitions; React entangles them, so `isTogglePending` still turns on. If the parent does not adopt a change, the optimistic value falls back to the prop when the transition ends, so the control stays controlled.
 
 ### Step 18. `app/components/ProductPrices/index.tsx`: wire the views
 
@@ -1848,13 +1950,15 @@ import type { SortContext } from "./utils/sorting";
 
 ```ts
   /**
-   * The server render's UTC date (YYYY-MM-DD), so the stale-price glyph is
+   * The server render's UTC date (YYYY-MM-DD), so the stale-price note is
    * the same in the HTML and after hydration, even across midnight UTC.
    */
   referenceDate?: string;
+  /** WP24 one-line definitions for the list header tooltips (step 19). */
+  columnHelp?: Readonly<Record<string, string>>;
 ```
 
-and destructure `referenceDate`. Only if soft check (d) found no `initialMsrpMultiples`: add at module level `const NO_MSRP_MULTIPLES: Readonly<Record<number, number>> = {};`, the prop `/** WP28: product id -> x MSRP, for products that have one. */ initialMsrpMultiples?: Readonly<Record<number, number>>;` and destructure `initialMsrpMultiples = NO_MSRP_MULTIPLES` (WP28's exact names, so its step 12a works unchanged).
+and destructure `referenceDate` and `columnHelp = NO_COLUMN_HELP`, with `const NO_COLUMN_HELP: Readonly<Record<string, string>> = {};` at module level (a stable identity, so the header does not re-render for a new `{}`). Only if soft check (d) found no `initialMsrpMultiples`: add at module level `const NO_MSRP_MULTIPLES: Readonly<Record<number, number>> = {};`, the prop `/** WP28: product id -> x MSRP, for products that have one. */ initialMsrpMultiples?: Readonly<Record<number, number>>;` and destructure `initialMsrpMultiples = NO_MSRP_MULTIPLES` (WP28's exact names, so its step 12a works unchanged).
 
 18c. State. Below `const [viewMode, setViewMode] = useState<ViewMode>(initialUrlState.view);` add:
 
@@ -2020,7 +2124,7 @@ and delete the old results-count element (`<div className="text-sm text-slate-60
             aria-busy={catalogPending || undefined}
             onClickCapture={captureScrollAnchor}
             className={`transition-opacity duration-150 motion-reduce:transition-none ${
-              catalogPending ? "opacity-70" : ""
+              catalogPending ? "opacity-70 delay-100" : ""
             }`}
           >
             {viewMode === "list" && (
@@ -2029,6 +2133,7 @@ and delete the old results-count element (`<div className="text-sm text-slate-60
                 sortKey={effectiveSortKey}
                 sortDirection={sortDirection}
                 showMsrp={hasMsrp}
+                columnHelp={columnHelp}
                 onSort={handleSortChange}
               />
             )}
@@ -2052,6 +2157,8 @@ import AsOf from "../components/ui/AsOf";
 import PageHeader from "../components/ui/PageHeader";
 import ProvenanceLine from "../components/ui/ProvenanceLine";
 import { PROVENANCE_SENTENCE } from "../content/disclosures";
+import { METRIC_DEFINITIONS, isMetricKey } from "../lib/metricDefinitions";
+import { LIST_HELP_KEYS } from "../components/ProductPrices/utils/catalogValues";
 import {
   newestPriceDay,
   utcDateKey,
@@ -2062,16 +2169,25 @@ import {
 19b. After the `Promise.all`, replace WP11's two projection lines with:
 
 ```ts
-  // The server render's UTC date: the stale glyph and "Prices as of" are
+  // The server render's UTC date: the stale notes and "Prices as of" are
   // computed against it on both sides of hydration.
   const referenceDate = utcDateKey();
   const newestDay = newestPriceDay(products);
   // Only the fields the client tree reads go into the HTML (WP11). WP30 adds
-  // back the price date for prices 2+ days old (the row glyph) and days of
-  // supply (the list column and sort).
+  // back the price date for prices 2+ days old (the "Last priced" note) and
+  // days of supply (the list column and sort).
   const catalogProducts = withStalePriceDates(toCatalogProducts(products), products, referenceDate);
   const catalogVolumeMetrics = toVolumeSummaries(volumeMetrics, { daysOfSupply: true });
+  // Header tooltips: nine one-line WP24 definitions, read here so the full
+  // definitions table stays out of the client bundle. A key WP24 or WP28
+  // has not defined yet is skipped (no tooltip).
+  const columnHelp: Record<string, string> = {};
+  for (const key of LIST_HELP_KEYS) {
+    if (isMetricKey(key)) columnHelp[key] = METRIC_DEFINITIONS[key].short;
+  }
 ```
+
+If `METRIC_DEFINITIONS[key].short` does not type-check because `isMetricKey` is not a type guard in the landed WP24 file, write `(METRIC_DEFINITIONS as Readonly<Record<string, { short: string }>>)[key].short` inside the `if`.
 
 19c. Replace the page header block (the `<div className="mb-5 md:mb-6">` holding the eyebrow `<p>`, the `<h1>` and the "{products.length} products tracked" paragraph, as WP03, WP15 and WP24 left it) with:
 
@@ -2093,13 +2209,13 @@ import {
       />
 ```
 
-19d. On `<ProductPrices ...>` add `referenceDate={referenceDate}`. Keep every other prop.
+19d. On `<ProductPrices ...>` add `referenceDate={referenceDate}` and `columnHelp={columnHelp}`. Keep every other prop.
 
 Nothing here makes the route dynamic: no `cookies()`, `headers()` or `searchParams`. `pnpm build:stub` must still list `/prices` as static with Revalidate 1d.
 
 ### Step 20. `app/components/dashboard/RecentlyReleased.tsx` (only if soft check (e) listed it)
 
-On its `<ProductCard`: delete `viewMode="flat"` (and `showSetAsPrimary` if present), add `showSet={false}` (the strip is grouped under WP26's set headers). Change the card wrapper `w-[260px]` to `w-[320px]` (the fixed price column and sparkline need 320 px). Do not pass `referenceDate`: without it the home cards draw no stale glyph, so the ISR home page cannot mismatch across midnight UTC. WP32 rebuilds this strip.
+On its `<ProductCard`: delete `viewMode="flat"` (and `showSetAsPrimary` or a leftover `historyLoading` if present), add `showSet={false}` (the strip is grouped under WP26's set headers). Change the card wrapper `w-[260px]` to `w-[328px]`: the card's text column needs 220 px (112 px price column, 12 px gap, 96 px sparkline), plus the 64 px image, its 12 px gap, 24 px of padding and 2 px of border makes 322 px; 328 leaves a little slack. Do not pass `referenceDate`: without it the home cards draw no "Last priced" note, so the ISR home page cannot mismatch across midnight UTC. WP32 rebuilds this strip.
 
 ### Step 21. `app/globals.css`: list layout and intrinsic sizes
 
@@ -2111,9 +2227,11 @@ On its `<ProductCard`: delete `viewMode="flat"` (and `showSetAsPrimary` if prese
 /* ------------------------------------------------------------------------
  * /prices list rows, cards and their intrinsic sizes (WP30).
  *
- * One DOM per row: the grid re-arranges it per breakpoint. Do not put
- * Tailwind display, grid, height or padding utilities on elements that carry
- * pf-list-row, pf-list-head or pf-a-* classes: these rules own them.
+ * One DOM per row: the grid re-arranges it per breakpoint. Do not put a
+ * Tailwind utility for a property these rules set (display, grid placement,
+ * and the row's height and padding) on an element that carries pf-list-row,
+ * pf-list-head, pf-a-* or pf-meta-suffix: utilities sit in a later layer and
+ * would win at every breakpoint.
  *
  * The four --pf-size-* values feed contain-intrinsic-block-size and must stay
  * within 10% of the fixture medians recorded in
@@ -2154,6 +2272,16 @@ On its `<ProductCard`: delete `viewMode="flat"` (and `showSetAsPrimary` if prese
   [data-meta="msrp"] .pf-a-units { display: none; }
   [data-meta="dos"] .pf-a-dos { display: block; grid-area: meta; }
   [data-meta="msrp"] .pf-a-msrp { display: block; grid-area: meta; }
+  /* Stale price (WP23 AsOf): words in the phone meta slot, glyph from 768 px.
+     Exactly one of the two is displayed, so it is read once. */
+  .pf-a-stale { display: none; }
+  @media (width < 48rem) {
+    .pf-a-glyph { display: none; }
+    .pf-cv-row[data-stale] .pf-a-units,
+    .pf-cv-row[data-stale] .pf-a-dos,
+    .pf-cv-row[data-stale] .pf-a-msrp { display: none; }
+    .pf-cv-row[data-stale] .pf-a-stale { display: block; grid-area: meta; }
+  }
 
   .pf-cv-row {
     content-visibility: auto;
@@ -2212,7 +2340,7 @@ On its `<ProductCard`: delete `viewMode="flat"` (and `showSetAsPrimary` if prese
 }
 ```
 
-The catalog wrapper always carries `data-meta` (step 18i), so the `[data-meta]` selectors apply; rows rendered elsewhere without it (WP33 tests) still get the phone default. `48rem` and `64rem` are Tailwind 4's `md` and `lg`.
+The catalog wrapper always carries `data-meta` (step 18i), so the `[data-meta]` selectors apply; a row rendered without it (unit tests) gets the phone default. `48rem` and `64rem` are Tailwind 4's `md` and `lg`; `(width < 48rem)` is the range syntax Tailwind 4's own `max-md` variant emits (Safari 16.4+, Tailwind 4's floor). Specificity, checked: the stale rules (`.pf-cv-row[data-stale] ...`, 0-3-0) beat the sorted-value rules (`[data-meta="dos"] ...`, 0-2-0), and they live only under the phone query, so from 768 px the column rules apply untouched.
 
 ### Step 22. Delete dead code
 
@@ -2340,7 +2468,7 @@ git diff app/__tests__/uiConventions.baseline.json        # only lowered or remo
 
 If any count went up, fix the file; never raise the baseline.
 
-25b. `app/components/ui/README.md`: under the `DataList` entry add one line: "`/prices` rows (`ProductPrices/views/ProductListRow.tsx`, WP30) reproduce `DataListRow`'s phone anatomy in one responsive grid element (layout in `globals.css`, `.pf-list-row`); reuse that row for product lists that also need desktop columns (WP33)."
+25b. `app/components/ui/README.md`: under the `DataList` entry add one line: "`/prices` rows (`ProductPrices/views/ProductListRow.tsx`, WP30) reproduce `DataListRow`'s phone anatomy in one responsive grid element (layout in `globals.css`, `.pf-list-row`); it is specific to the catalog's columns; other pages use `DataListRow` on phones (WP32, WP33)."
 
 ### Step 26. Measure, record, calibrate
 
@@ -2369,17 +2497,22 @@ PW_DIR=/tmp/pw CHROME_PATH="$(command -v google-chrome || command -v chromium)" 
 ## Pitfalls: do not do this
 
 - **Do not render two DOMs** (a phone `DataList` plus a hidden desktop table, or `DataListRow` plus desktop cells). It doubles the row HTML against the 70 kB document budget and doubles hydration. One element per row, re-arranged by CSS.
-- **Do not put Tailwind `hidden`, `block`, `flex`, `grid`, `h-*` or `p-*` utilities on elements with `pf-list-row`, `pf-list-head` or `pf-a-*` classes.** `globals.css` owns display, grid areas, height and padding there; a utility on the same element silently wins (utilities layer) and breaks the column alignment at one breakpoint. Wrap the content in a child element when it needs such a utility (the header buttons do this).
+- **Do not put a Tailwind utility for a property `globals.css` sets (display, grid placement, the row's height and padding) on elements with `pf-list-row`, `pf-list-head`, `pf-a-*`, `pf-a-glyph`, `pf-a-stale` or `pf-meta-suffix` classes.** Utilities sit in a later cascade layer and silently win at every breakpoint, which breaks the column alignment at one of them. Wrap the content in a child element when it needs such a utility (the header buttons and the stale glyph do this). Sizing utilities the CSS never sets (`size-10` on the thumbnail cell, text and colour utilities) are fine.
 - **Do not write the search-params hook name in `ProductPrices/index.tsx`,** not even in a comment (WP08's precheck greps for it).
-- **Do not decide staleness in the browser with today's date.** Pass the server's `referenceDate` down; a client-side `new Date()` makes the glyph differ between the ISR HTML and hydration around midnight UTC.
+- **Do not decide staleness in the browser with today's date.** Pass the server's `referenceDate` down; a client-side `new Date()` makes the note differ between the ISR HTML and hydration around midnight UTC.
+- **Do not show staleness as an icon alone on touch surfaces.** WP23's table glyph explains itself only through a `title` tooltip, which never appears on a phone. Phone rows and cards print "Last priced {date}"; the glyph is for the desktop list only.
+- **Do not use `focus-visible:outline-none` or `transition-colors`.** WP23's rules: `focus-visible:outline-hidden` with the ring (forced-colours mode keeps a focus indicator), and instant colour changes. The conventions test only enforces them inside `components/ui/`, so review new files by eye (Verification greps them).
+- **Do not import `METRIC_DEFINITIONS` (or anything from `metricDefinitions.ts`) in a client module.** The page reads it and passes nine strings as `columnHelp`; a client import ships every definition's text in the route JS.
+- **Do not export plain values that the server page needs from a `"use client"` module.** A server component receives a client reference, not the value: `LIST_HELP_KEYS` lives in `catalogValues.ts` for this reason.
 - **Do not send `price_recorded_at` for every product.** Only stale (2+ days) and withheld products carry it; fresh rows need no date and the flight budget is 22 kB br.
 - **Do not compute days of supply in the browser from raw listing quantities.** The server sends one rounded number per product; `total_quantity_available` stays out of the payload.
 - **Do not use plain `next/link` (default prefetch) for product links in rows or cards.** Product pages are ISR; viewport prefetch would fetch up to 306 of them per scroll (research §8). Use `IntentLink`.
 - **Do not give a list or card thumbnail `priority`.** The list's LCP is text; a preload on a thumbnail hidden on phones downloads bytes nobody sees.
 - **Do not put `isTogglePending` or `displayPending` in the `catalogView` memo's dependencies,** and do not read them inside the memo. The memo must stay keyed on data, or every pressed toggle re-renders 306 rows at urgent priority.
-- **Do not key the ungrouped Suspense chunks by product id.** Index keys keep the boundaries stable across sorts; product-id keys would remount whole chunks on every sort.
+- **Do not key the ungrouped Suspense chunks by product id.** Index keys keep the 13 boundaries mounted across sorts, so rows that stay in their chunk are reused; keys derived from product ids would remount every chunk, and with it every row, on every sort. Rows that move to another chunk remount either way (React cannot move a keyed child between parents); the INP trace measures that worst case.
+- **Do not drop the `useOptimistic` shown values in `SortControls` or `ListHeader`.** Their state changes run in a transition, and React resets a controlled `<select>` or checkbox to its old value until the transition commits.
 - **Do not rename the Period control or the `chart` URL key** (WP26 already renamed the label; `?chart=` links must keep working).
-- **Do not change "Found {n} products"** (WP13) or move it out of a single `<span>` (WP08's and WP13's tests match it).
+- **Do not change "Found {n} products"** (WP08's tests match it; WP13 and WP15 keep the copy) or move it out of a single `<span>`.
 - **Do not pass a URL to `history.replaceState` in the anchor code, and do not use `router.replace` for it.** A URL argument makes Next dispatch a router action; the anchor must be a silent state write.
 - **Do not fetch price history for list rows or on scroll.** Sparklines are baked (WP26); history loads only when a card's chart is opened.
 - **Do not colour the sparkline by direction or the row by return.** The `Delta` carries gain or loss; the stripe is gone for good (01-PRODUCT-DIRECTION.md §3.2, §3.4).
@@ -2390,7 +2523,7 @@ PW_DIR=/tmp/pw CHROME_PATH="$(command -v google-chrome || command -v chromium)" 
 
 ## Tests
 
-All paths under `frontend/`. New component tests run axe through WP23's helper (`import { axeViolations } from "@/test-utils/axe";`, expect `[]`). Tests that render `IntentLink` mock `next/navigation`:
+All paths under `frontend/`. New component tests run axe through WP23's helper (`import { axeViolations } from "@/test-utils/axe";`, then `expect(await axeViolations(container)).toEqual([])`; the helper is async). Tests that render `IntentLink` mock `next/navigation`:
 
 ```ts
 const mockPrefetch = jest.fn();
@@ -2525,6 +2658,7 @@ A harness renders `<ul onClickCapture={capture}>` with `<li data-anchor-id={id}>
 - Restore: with `history.state = { __NA: true, pfPricesAnchor: { id: 4, offsetFromTop: 100 } }`, `window.scrollY` stubbed to 50 and row 4's top returning 900 on the first read and 100 on the second, rendering the harness calls `window.scrollTo` once with `{ top: 850, behavior: "instant" }`, and afterwards `history.state` has no `pfPricesAnchor` but keeps `__NA`.
 - Restore with an anchor whose row is not rendered calls `scrollTo` zero times and still clears the key.
 - Without an anchor in the state, nothing is called.
+- Strict Mode: with `requestAnimationFrame` queued instead of run (callbacks pushed to an array, `cancelAnimationFrame` removing them) and the harness rendered inside `<StrictMode>`, the anchor is still in `history.state` after render; flushing the queue (twice, one frame per pass) calls `scrollTo` exactly once and then clears the key. This is the case a clear-before-restore effect gets wrong.
 
 ### 3. `app/components/ProductPrices/__tests__/layoutMetrics.test.ts` (new, `@jest-environment node`)
 
@@ -2603,6 +2737,7 @@ Keep every existing case. Add, using the file's `makeProduct` with `returns` set
 - `utcDateKey(new Date("2026-09-30T23:59:59Z"))` is `"2026-09-30"`.
 - `newestPriceDay` returns the newest UTC day among priced products, ignores withheld products (`usd_price: null`) even when newer, and returns null for an empty list or when none is priced.
 - `withStalePriceDates` with `referenceDate "2026-09-30"`: a priced product recorded `2026-09-28T23:00:00` gets `price_recorded_at: "2026-09-28"`; one recorded `2026-09-29T01:00:00` gets nothing; a withheld product keeps its projected value; when nothing is stale it returns the same array instance.
+- `isPriceDayStale`: `("2026-09-28T23:00:00", "2026-09-30")` true, `("2026-09-29T01:00:00", "2026-09-30")` false, `("2026-09-28", "2026-09-30")` true (date-only input), `(null, "2026-09-30")`, `("garbage", "2026-09-30")` and `("2026-09-01", undefined)` false.
 
 ### 8. `app/components/ProductPrices/__tests__/ProductListRow.test.tsx` (new, jsdom)
 
@@ -2612,17 +2747,20 @@ Render inside `<ul>` with `period="3M"`, `formatPrice={(v) => formatMoney(v, "US
 - Line text: "Evolving Skies · Booster Box", the variant text when present, "$100.00", a `Delta` with `data-direction="up"` and "4.2%" for `returns["3M"]: 4.2`.
 - `sparkline="ACEG"` draws a `path`; `sparkline={null}` shows "No history"; `undefined` shows the flat bar (`data-testid="sparkline-skeleton"`).
 - Withheld product: price "--", `Delta` `data-direction="missing"` with sr-only "Price withheld".
-- `referenceDate="2026-09-30"` and `price_recorded_at: "2026-09-27"`: a `time[datetime="2026-09-27"]` with title "Last priced Sep 27"; with `price_recorded_at` absent, or with no `referenceDate`, no `time` element.
+- `referenceDate="2026-09-30"` and `price_recorded_at: "2026-09-27"`: the `li` has `data-stale=""`; `.pf-a-price .pf-a-glyph time[datetime="2026-09-27"]` has title "Last priced Sep 27"; `.pf-a-stale` contains a `time[datetime="2026-09-27"]` whose visible text is "Last priced Sep 27" (jsdom applies no CSS, so both are in the DOM; the CSS shows one per breakpoint). With `price_recorded_at: "2026-09-29"`, with it absent, or with no `referenceDate`: no `data-stale`, no `.pf-a-glyph`, no `.pf-a-stale` and no `time` element.
+- Withheld with `price_recorded_at: "2026-08-01T04:00:00"` and `referenceDate="2026-09-30"`: `data-stale=""` and `.pf-a-stale` reads "Last priced Aug 1".
+- Focus classes: the link's class list contains `focus-visible:outline-hidden` and no `outline-none` or `transition-colors`.
 - Cells: units 212 prints "212" plus the suffix " sold 30D"; days of supply 0.4 prints "<1", 18.2 prints "18", null prints "--"; with `showMsrp` and `msrpMultiple={1.378}` the MSRP cell prints "1.4x"; without `showMsrp` there is no `.pf-a-msrp`.
 - No text "Updated" and no element with a `border-l-4` class.
 - Hovering the link for 80 ms (fake timers) calls `mockPrefetch("/product/1")` once; leaving after 50 ms calls nothing.
-- `axeViolations(container)` is `[]`.
+- `expect(await axeViolations(container)).toEqual([])`, for a fresh row and for a stale row.
 
 ### 9. `app/components/ProductPrices/__tests__/ListView.test.tsx` (new, jsdom)
 
 - Ungrouped, 50 products: one list named "Products" with 50 `listitem`s in input order.
 - Grouped (`groups` from `groupProductsBySet`): one `section` per set, labelled by an `h2` with the set name, each with a list named "{set} products"; the header line shows the code, generation and "Released Aug 27, 2021"; a "Special Expansion" set shows that text once, a "Main Series" set shows no badge.
-- `ListHeader` with `sortKey="change"`, `sortDirection="desc"`, `period="1Y"`: the button named "1Y change, sorted high to low" has class `font-bold`; clicking it calls `onSort("change", "asc")`; clicking "Days supply" calls `onSort("days_supply", "asc")`; clicking "Price" calls `onSort("price", "desc")`; "x MSRP" is absent unless `showMsrp`; "Product" and "Trend" are not buttons.
+- `ListHeader` with `sortKey="change"`, `sortDirection="desc"`, `period="1Y"` and `columnHelp={{ marketPrice: "Price help", return1y: "1Y help" }}`: the button named "1Y change, sorted high to low" has class `font-bold` and `title="1Y help"`; the "Price" button has `title="Price help"`, the "Sold 30D" button has no `title`; clicking the change button calls `onSort("change", "asc")`; clicking "Days supply" calls `onSort("days_supply", "asc")`; clicking "Price" calls `onSort("price", "desc")`; "x MSRP" is absent unless `showMsrp`; "Product" and "Trend" are not buttons.
+- Optimistic header: in a harness whose `onSort` stores the new key in state inside `startTransition`, clicking "Sold 30D" makes the button named "Sold 30D, sorted high to low" bold (`await waitFor`).
 - `axeViolations` is `[]` for the grouped list and for the header.
 
 ### 10. `app/components/ProductPrices/__tests__/SortControls.test.tsx` (new, jsdom)
@@ -2645,16 +2783,17 @@ Mock `../shared/LazyPriceChart` as in WP26's history test. Cases:
 - Price "$100.00" and, in the same fixed-width column, a `Delta` with the Period label "3M".
 - No "Updated", no `border-l-4`, no "sold/30d" chip, no text "Loading...".
 - Withheld: "No current price, last recorded Aug 1, 2026" and "--".
-- Stale glyph as in test 8.
-- `axeViolations` is `[]`.
+- Stale: `referenceDate="2026-09-30"` and `price_recorded_at: "2026-09-27"` on a priced product: the detail line starts with a `time[datetime="2026-09-27"]` reading "Last priced Sep 27", followed by " · " and the rest of the line; the price line holds only the price (no `time` inside the `text-h2` element). A withheld product with an old date shows only WP07's note (no "Last priced"). No `referenceDate`: no `time` element.
+- Every link and button class list contains `focus-visible:outline-hidden` and none contains `outline-none`.
+- `expect(await axeViolations(container)).toEqual([])`, grouped and ungrouped.
 
-### 12. `app/components/__tests__/IntentLink.test.tsx` (new, jsdom, fake timers)
+### 12. `app/components/__tests__/IntentLink.test.tsx` (new, only when step 1 created the component; WP11 test 11 is the same file otherwise)
 
-Call `resetIntentPrefetchForTests()` in `beforeEach`. Cases: renders an `<a href="/product/7">` with the children and forwards `className` and `data-anchor-link`; `mouseEnter` then 79 ms: no prefetch, at 80 ms: `mockPrefetch("/product/7")` once; `mouseEnter` then `mouseLeave` at 40 ms, then 200 ms: none; `focus` prefetches immediately; `pointerDown` prefetches immediately; a second hover of the same href after a prefetch calls nothing; the caller's own `onMouseEnter` still runs.
+jsdom, fake timers. Call `resetIntentPrefetchForTests()` in `beforeEach`. Cases: renders an `<a href="/product/7">` with the children and forwards `className` and `data-anchor-link`; `mouseEnter` then 79 ms: no prefetch, at 80 ms: `mockPrefetch("/product/7")` once; `mouseEnter` then `mouseLeave` at 40 ms, then 200 ms: none; `focus` prefetches immediately; `pointerDown` prefetches immediately; a second hover of the same href after a prefetch calls nothing; the caller's own `onMouseEnter` still runs.
 
 ### 13. `app/components/ProductPrices/__tests__/ProductPrices.view.test.tsx` (new, jsdom)
 
-Copy the mocks and `Page` helper from `ProductPrices.urlSync.test.tsx` (WP08, as updated by WP26 and WP27), replacing its `next/navigation` mock with the one at the top of this section plus `useSearchParams` reading `mockRouterSearch`, and do not mock `ProductListRow`, `ProductCard` or `IntentLink`. Pass `initialSparklines` with a series for product 1 and `referenceDate="2026-09-30"`. Cases:
+Copy the mocks and `Page` helper from `ProductPrices.urlSync.test.tsx` (WP08, as updated by WP26 and WP27), replacing its `next/navigation` mock with the one at the top of this section plus `useSearchParams` reading `mockRouterSearch`, and do not mock `ProductListRow`, `ProductCard` or `IntentLink`. Pass `initialSparklines` with a series for product 1, `referenceDate="2026-09-30"`, `columnHelp={{}}` and `initialVolumeMetrics` giving each product `units_sold_30d` and a distinct `days_of_supply` (one null). Cases:
 
 - Server render (`renderToString`): contains `data-view="list"`, one `li.pf-cv-row` per product, "Found N products", no `<article`.
 - Hydrating the server HTML (`hydrateRoot`) produces no recoverable error and no `console.error`.
@@ -2665,13 +2804,15 @@ Copy the mocks and `Page` helper from `ProductPrices.urlSync.test.tsx` (WP08, as
 - Without `initialMsrpMultiples` there is no "x MSRP" option; with `{ 1: 1.4 }` there is, and the wrapper has `data-msrp`.
 - `?sort=msrp` without multiples sorts by release date and the select shows "Release date".
 - Clicking a row link (default prevented by a capturing `document` listener) leaves `history.state.pfPricesAnchor.id` equal to that product id.
-- While a transition is pending (Period change to "1Y" with `fetchPublicSparklines` unresolved), the wrapper has `aria-busy="true"` and `opacity-70`; after resolution neither.
+- After a Period change to "1Y" has settled (`await waitFor`, with `fetchPublicSparklines` mocked to a never-settling promise as WP26 step 25 describes), the wrapper has no `aria-busy` and no `opacity-70`, every trend slot shows the flat bar (`sparkline-skeleton`), and the change header reads "1Y change". The sparkline request is not part of the transition, so the list must not stay dimmed while it is in flight.
+- Pending state wiring, in a separate file `ProductPrices.pending.test.tsx` because it mocks `react`: `jest.mock("react", () => ({ ...jest.requireActual("react"), useTransition: () => [true, (fn: () => void) => fn()] }))`; render the container: the wrapper has `aria-busy="true"` and the classes `opacity-70 delay-100`. If spreading the mocked `react` module fails in this Jest version ("Invalid hook call"), drop this file, say so in the PR, and rely on the INP trace (step 26 item 8) for the dim.
 
 ### 14. Existing tests to update
 
 - `ProductPrices.urlSync.test.tsx` (WP08, WP13): add, next to the `ProductCard` mock, `jest.mock("../views/ProductListRow", () => ({ __esModule: true, default: ({ product }: { product: Product }) => <li data-testid="card">{product.sets?.name}</li> }))`, so `cardNames()` keeps working with the list default. Its URLs that used `view=flat` stay valid (legacy). No assertion changes.
 - `ProductCard.format.test.tsx` (WP07): remove `viewMode` from every render. Case "flat: release date, Eastern timestamp with zone, grouped money" becomes "ungrouped: set caption with release date, grouped money": expect `getByText(/Sep 26, 2026/)` and "$1,649.99", and `queryByText(/Updated:/)` to be null. Case "grouped with set as primary" becomes `showSet` and keeps its `/Sep 26, 2026/` assertion. The two withheld-price cases are unchanged apart from `viewMode` becoming `showSet={false}`.
-- `ProductCard.history.test.tsx` (WP26): replace `viewMode="flat"` with nothing (default `showSet`). Assertions unchanged.
+- `ProductCard.history.test.tsx` (WP26): replace `viewMode="flat"` with nothing (default `showSet`). Assertions unchanged. If the file has no `next/navigation` mock yet (WP26 replaced WP11's edited version), add the one at the top of this section: the card's links are `IntentLink`s.
+- `ProductCard.prefetch.test.tsx` (WP11): replace `viewMode="flat"` with nothing (default `showSet`). The card still has two `a[href="/product/1"]` (the `aria-hidden` image link with `tabindex="-1"`, then the title link), so "focusing the first prefetches once, focusing the other adds no call" holds unchanged; update only the comment that names them.
 - `ProductCard.msrp.test.tsx` (WP28, only if present): "each for `viewMode="flat"` and `viewMode="grouped"`" becomes each for `showSet` true and false; assertions unchanged (`1.4x MSRP`; no `/MSRP/` when null).
 - `controls.a11y.test.tsx` (WP14, WP23): the `SortControls` case renders the new props and asserts a combobox named "Sort by", a button whose name starts with "Sort order:", a radiogroup named "View" and a checkbox named "Group by set".
 - `app/components/MarketView/__tests__/MiniSparkline.test.tsx` (WP26): add `size="list"` renders a box with classes `h-6 w-16 md:h-7 md:w-24`.
@@ -2700,11 +2841,14 @@ Static checks on the tree:
 
 ```bash
 grep -c "useSearchParams" app/components/ProductPrices/index.tsx                                  # 0
-grep -rn "border-l-4\|Updated:\|sold/30d\|type_grouped\|ProductTypeGroupHeader\|ReturnMetrics\b" app/components/ProductPrices app/prices --include=*.tsx --include=*.ts | grep -v __tests__   # nothing
+grep -rn "border-l-4\|Updated:\|sold/30d\|type_grouped\|ProductTypeGroupHeader\|\bReturnMetrics\b" app/components/ProductPrices app/prices --include=*.tsx --include=*.ts | grep -v __tests__ | grep -v "utils/urlState.ts"   # nothing (urlState.ts keeps type_grouped in LEGACY_VIEWS on purpose)
 grep -rn "TCGPlayer\|real-time\|all-time" app/components/ProductPrices app/prices app/components/IntentLink.tsx | grep -v __tests__   # nothing
 grep -rn "$(printf '\xe2\x80\x94')" app/components/ProductPrices app/prices app/components/IntentLink.tsx app/globals.css   # nothing (no em dash)
 grep -rn "slate-\|gray-\|#[0-9a-fA-F]\{6\}" app/components/ProductPrices/views app/components/ProductPrices/utils/catalogValues.ts app/components/ProductPrices/cards/ProductCard.tsx app/components/ProductPrices/controls/SortControls.tsx   # nothing (tokens only)
 grep -n "<Link\b" app/components/ProductPrices/views/*.tsx app/components/ProductPrices/cards/ProductCard.tsx   # nothing: product links are IntentLink
+grep -rn "outline-none\|transition-colors" app/components/ProductPrices/views app/components/ProductPrices/controls/SortControls.tsx | grep -v __tests__   # nothing (WP23 focus and motion rules)
+grep -rn "metricDefinitions" app/components --include=*.ts --include=*.tsx | grep -v __tests__ | grep "ProductPrices"   # nothing: the definitions are read by app/prices/page.tsx only
+grep -n "metricDefinitions\|LIST_HELP_KEYS" app/prices/page.tsx   # 2 lines or more
 ```
 
 Server HTML (with `pnpm build:stub` and `pnpm start` against the stub, or the perf build of step 26):
@@ -2730,11 +2874,12 @@ Manual checks on the perf build (`node scripts/perf-serve.mjs`, Chrome device to
 At 390 x 844 (touch emulation):
 1. First screen: header, title, provenance with "Prices as of {date}", collapsed Filters, toolbar, then at least 8 rows each with price and change.
 2. Rows are 56 px, two lines, no thumbnails; the Network panel shows no request to `product-images` while scrolling the list.
-3. Open Filters, choose Period 1Y: every row's change and sparkline switch to 1Y (flat bars until `/api/public/sparklines/1Y` resolves), the count line says "1Y change", the list dims then undims.
+3. Open Filters, choose Period 1Y: every row's change and sparkline switch to 1Y (flat bars until `/api/public/sparklines/1Y` resolves), the count line says "1Y change"; with CPU 4x slowdown the list dims after about 100 ms and undims when the rows commit, not when the sparklines arrive.
+3b. Pick "Units sold 30D" in the Sort select: the select shows the new label at once (it never flicks back to the old one), then the rows re-sort.
 4. Sort by "Days of supply": the meta slot shows "{n} days of supply", thinnest first, products without data last; the URL has `sort=days_supply&dir=asc`.
 5. Scroll to about row 120, tap a product, press Back: the tapped row is back at the same position (within a few pixels). Repeat in cards view and in grouped mode.
 6. Switch to Cards, tick Group by set: one column of 170 px cards under one-line set headers; "Show full chart" opens the chart under the card (WP26 behaviour).
-7. A stale product (fixture 900300 to 900305): "--", "Price withheld" for screen readers, "No history", clock glyph with "Last priced ...".
+7. A withheld product (fixture 900300 to 900305): "--", "Price withheld" for screen readers, "No history", and "Last priced {date}" in warn colour in the row's second line (no lone clock icon on the phone). At 1440 the same row shows the clock glyph after "--" with that tooltip.
 8. VoiceOver or TalkBack spot check: a row reads as one link with set, type, variant, price, direction and change, and units.
 
 At 1440 x 900:
@@ -2743,7 +2888,7 @@ At 1440 x 900:
 11. Cards grouped: three columns, every card the same height, no type title truncated or wrapped, prices aligned in one column per grid column, no left stripe, no "Updated" line.
 12. Keyboard: Tab reaches Sort by, direction, View, Group by set, then header buttons, then rows; every focus ring is visible; Enter on a row opens the product.
 13. Hover a row for more than 80 ms: one `_rsc` prefetch for that product; scrolling the whole list without hovering makes no product prefetch (DevTools Network, filter `_rsc`).
-14. `/` home page (if step 20 applied): Recently Released cards are 320 px wide with the new anatomy and no stale glyph.
+14. `/` home page (if step 20 applied): Recently Released cards are 328 px wide with the new anatomy, nothing overflows the card edge, and no "Last priced" note appears.
 
 ## Owner actions
 
@@ -2757,14 +2902,16 @@ At 1440 x 900:
 - [ ] At 390 x 844 the first screen shows at least 8 products with price and change (`MEASURED_PHONE_FIRST_SCREEN_ROWS` ≥ 8, measured with `scripts/measure-catalog.mjs`).
 - [ ] Phone rows are two lines of 56 px (set · type and variant; units or the sorted value, price, `Delta`, 64 x 24 sparkline); rows from 768 px are one 44 px line with thumbnail, name with variant, 112 px right-aligned tabular price, Period change, 96 x 28 sparkline and units sold 30D; days of supply and (when WP28 data exists) x MSRP from 1024 px.
 - [ ] Cards: type is the title, variant in the detail line, one fixed-width price column with the change under it and the 96 x 40 sparkline beside it; grouped cards ≤ 180 px (`MEASURED_MAX_GROUPED_CARD_PX`); no type title wraps or truncates at 1440 on the fixture.
-- [ ] No left-edge stripe and no per-card "Updated:" line anywhere in `/prices`; freshness shows once in the provenance line (`AsOf`) and as a clock glyph on rows and cards priced 2 or more days ago.
+- [ ] No left-edge stripe and no per-card "Updated:" line anywhere in `/prices`; freshness shows once in the provenance line (`AsOf`), and for a price 2 or more days old as the words "Last priced {date}" on phone rows and cards and as WP23's clock glyph on desktop list rows (one of the two displayed at any width).
 - [ ] One Period control drives the sparkline window, the single change shown, the "change" sort and the card chart range.
 - [ ] Sort options: release date, price, {Period} change, units sold 30D, days of supply, x MSRP (only when data exists); nulls last in both directions; state visible in the select, the desktop header and the phone meta slot, and in the URL.
 - [ ] Each set group, or each run of 24 ungrouped rows or cards, is its own `<Suspense fallback={null}>`.
 - [ ] Period, currency, sort, direction, view and group changes run at transition priority with the list dimmed (`aria-busy`, `opacity-70`) while pending; the INP trace attached to the PR shows one frame plus input delay per toggle.
 - [ ] `contain-intrinsic-block-size` values come from `--pf-size-*` and `layoutMetrics.test.ts` asserts each is within 10% of the recorded fixture median.
 - [ ] Back from a product page returns to the tapped row (manual check at 390 and 1440, list and cards) and `scrollAnchor.test.ts` plus `useScrollAnchor.test.tsx` pass.
-- [ ] Product links in rows and cards are `IntentLink`; scrolling the list makes no product prefetch.
+- [ ] Product links in rows and cards are WP11's `IntentLink` (step 1 only if it was missing); scrolling the list makes no product prefetch.
+- [ ] The sort select, direction button, "Group by set" checkbox and desktop header show the new choice on the next frame (optimistic), never snapping back while the list re-sorts.
+- [ ] New and rewritten files use `focus-visible:outline-hidden` with the ring and no `transition-colors`; `METRIC_DEFINITIONS` is read only in `app/prices/page.tsx`.
 - [ ] The empty state is WP13's `NoResults`, unchanged.
 - [ ] `pnpm perf:budget`: `/prices` document ≤ 70 kB br and initial JS ≤ 155 kB gz. If the base branch was already above 155 kB gz, this PR does not increase `/prices` JS by more than 3 kB gz and the PR states both numbers and asks the owner (Owner action 2); this line is then marked with the measured value.
 - [ ] Lighthouse CI `/prices` CLS assertion is 0.02 and passes; `/` and `/prices` keep 0 oversized images and 3/3 bf-cache.
@@ -2797,5 +2944,5 @@ PR body:
 - The Lighthouse summary row for `/prices` (CLS, bf-cache, oversized images, script and image KiB) and any `resource-summary` threshold changed.
 - The INP trace file and the Interactions-track screenshot.
 - Which soft dependencies were present (IntentLink created here or reused, WP24, WP27, WP28) and what was done for each.
-- Visible changes elsewhere: the home "Recently Released" cards use the new anatomy at 320 px (if step 20 applied).
-- Noticed, out of scope: `/market`, the home strip and product-page siblings still use default-prefetch links (switch them to `IntentLink` in WP33, WP32 and WP31); the catalog's returns come from `get_market_product_summaries` and still accept an unbounded anchor (WP25 note; the catalog can move to `product_daily_stats` in WP33); column headers use `title` tooltips rather than WP24's `MetricLabel` (WP33 decides the screener header pattern); `GroupHeader.tsx` remains only for the home strip (WP32).
+- Visible changes elsewhere: the home "Recently Released" cards use the new anatomy at 328 px (if step 20 applied).
+- Noticed, out of scope: WP23's `DataListRow` still uses `next/link` with `prefetch={false}` rather than `IntentLink` (WP32 and WP33 rows); the list's days of supply comes from the live volume metrics while WP33's screener reads WP25's D-1 `product_daily_stats.days_of_supply` (same formula, can differ by a day; WP33 can switch `/prices` to the stats column once both pages read it); the catalog's returns come from `get_market_product_summaries` and still accept an unbounded anchor (WP25 note; the catalog can move to `product_daily_stats` in WP33); column headers use `title` tooltips rather than WP24's `MetricLabel` (WP33 decides the screener header pattern); `GroupHeader.tsx` remains only for the home strip (WP32).

@@ -3,7 +3,7 @@
 - **Goal**: a signed-in collector watches any product with one tap from its product page (or a Screener row), sees every watched product in one list with price and as-of stamp, 1D, 7D and 30D change, distance from the 52-week high, x MSRP and days of supply, and sees the biggest 7-day movers among their watched products on the home page. A signed-out visitor who taps Watch signs in and finds the product already watched.
 - **Why now / value**: a watchlist is the largest competitive gap and the retention loop of the whole product (01-PRODUCT-DIRECTION.md §5 item 2, §4.2 steps 5 and 6). WP31 left a `watch` slot in the product page actions and WP32 left the `children` slot of the "Your Pokéfin" home island; WP35's daily alert digest needs this table and this page to exist.
 - **Effort**: L, 12 to 14 hours (migration and its two Python test modules 2.5 h, model, repo, route and browser client with tests 3 h, shared membership store and `WatchButton` with tests 2 h, sign-in round trip 1 h, watchlist page, tabs and home movers with tests 3 h, lint lists, budgets, privacy copy, verification and PR 1.5 h). The plan table says M, 10 to 12 h; the shared store (one request for 300 Screener rows) and the sign-in round trip account for the difference.
-- **Depends on**: WP04 (`useAuth()` with `sessionStatus`, `refreshSession`, `SessionUnavailable`), WP05 (`app/lib/routeAuth.ts` `requireRouteUser` and `jsonNoStore`, `rejectIfNotAppRequest` in `app/lib/csrf.ts`, the route and test patterns, `ANON_CLIENT_FORBIDDEN_FILES` and the user-table `no-restricted-syntax` block in `eslint.config.mjs`), WP13 (`app/lib/redirects.ts` `safeReturnToPath` and `loginPathWithNext`, `app/auth/login/LoginForm.tsx` with its Suspense readers and test, `app/portfolio/layout.tsx`, `productMeta.ts` `getProductDisplayName` and `getProductLabel`, `NO_INDEX`), WP20 (`useCurrency`, `app/types/market.ts`, `pnpm types:db`, generated `app/types/database.ts`), WP21 (`enforce_owner_row_cap()` in migration 0031, `pokefin_scraper` in 0032, `scripts/db/replay_migrations.sh`, CI job "Database replay and Python tests", the DB test fixture pattern), WP23 (`Delta`, `DataList`, `AsOf`, `EmptyState`, `Skeleton`, `Button`/`buttonClasses`, `PageHeader`, `ProvenanceLine`, dense `SortableTable`, tokens, `test-utils/axe.ts`, the conventions ratchet), WP25 (`getCachedProductStats`, `statsFor`, `ProductDailyStats`, `ProductStatsSnapshot`), WP31 (`ProductActions` `watch` prop, product page), WP32 (`YourPokefin` `children` slot, `Price`, `homeStyles.ts`, the home shell source test). Through them: WP07 (`format.ts`), WP11 (`getCachedMarketProductSummaries`), WP18 (`lib/sorting.ts`), WP22 (`perf-budgets.json`, `pnpm perf:budget`), WP24 (`metricHref`, `/privacy`), WP26 (`PUBLIC_ROUTE_CLIENT_FILES`), WP27 (`navConfig.ts` `ACCOUNT_NAV` and `productHref`, `loginCopy.ts`, `MobileNavSheet.tsx`, `Header.tsx`). Soft, with a default in Before you start: WP28 (`msrp_multiple`, `formatMsrpMultiple`, the `msrpMultiple` metric key) and WP33 (Screener rows).
+- **Depends on**: WP04 (`useAuth()` with `sessionStatus`, `refreshSession`, `SessionUnavailable`), WP05 (`app/lib/routeAuth.ts` `requireRouteUser` and `jsonNoStore`, `rejectIfNotAppRequest` in `app/lib/csrf.ts`, the route and test patterns, `ANON_CLIENT_FORBIDDEN_FILES` and the user-table `no-restricted-syntax` block in `eslint.config.mjs`), WP13 (`app/lib/redirects.ts` `safeReturnToPath` and `loginPathWithNext`, `app/auth/login/LoginForm.tsx` with its Suspense readers and test, `app/portfolio/layout.tsx`, `productMeta.ts` `getProductDisplayName` and `getProductLabel`, `NO_INDEX`), WP20 (`useCurrency`, `app/types/market.ts`, `pnpm types:db`, generated `app/types/database.ts`), WP21 (`enforce_owner_row_cap()` in migration 0031, `pokefin_scraper` in 0032, `scripts/db/replay_migrations.sh`, CI job "Database replay and Python tests", the DB test fixture pattern), WP23 (`Delta`, `DataList`, `AsOf`, `EmptyState`, `Skeleton`, `Button`/`buttonClasses`, `PageHeader`, `ProvenanceLine`, dense `SortableTable`, tokens, `test-utils/axe.ts`, the conventions ratchet), WP25 (`getCachedProductStats`, `statsFor`, `ProductDailyStats`, `ProductStatsSnapshot`), WP31 (`ProductActions` `watch` prop, product page), WP32 (`YourPokefin` `children` slot, `Price`, `homeStyles.ts`, the home shell source test). Through them: WP07 (`format.ts`), WP11 (`getCachedMarketProductSummaries`), WP18 (`lib/sorting.ts`, `SortableTable`), WP22 (`perf-budgets.json`, `pnpm perf:budget`), WP24 (`metricHref`, `PROVENANCE_SENTENCE` in `app/content/disclosures.ts`, `/privacy`), WP26 (`PUBLIC_ROUTE_CLIENT_FILES`, `scripts/check-public-cache.mjs`), WP27 (`navConfig.ts` `ACCOUNT_NAV` and `productHref`, `loginCopy.ts`, `SearchTrigger`, `MobileNavSheet.tsx`, `Header.tsx`), WP31 (`priceChange` metric key), WP25 (`range52w` metric key). Soft, with a default in Before you start: WP28 (`msrp_multiple`, `formatMsrpMultiple`, the `msrpMultiple` metric key), WP33 (Screener table and phone rows) and WP36 (migration 0040 patches `export_my_data()` in place; production apply order matters, Owner action 1).
 - **Unblocks**: WP35 (alert rules attach to watched products; `service_role` reads `watchlist_items` through `watchlist_items_product_id_idx`; the alert management UI lives on `/portfolio/watchlist`). WP33, if it merges after this package, adds the row action with `<WatchButton productId={id} productName={name} variant="icon" />` (step 17 says how).
 - **Placement**: Track 2, data lane, after WP31 (action slot) and WP32 (home strip slot). Reserves migration **0038** and keeps it if it merges out of order. Must precede WP35. It can run in parallel with WP36 (0040) and WP37 (0041).
 - **Suggested branch name**: `remediation/wp34-watchlist`
@@ -19,12 +19,12 @@ A collector who wants to follow a product today has to remember it and search fo
 
 1. One watchlist per user, at most 200 products (trigger, SQLSTATE 23514, route answers 409 `watchlist_full`). Named lists are deferred.
 2. `watchlist_items` is reachable only through `app/api/watchlist/route.ts` (cookie client, `requireRouteUser`, CSRF on writes, `jsonNoStore`). No page reads it with `cookies()`.
-3. Public pages stay ISR. `WatchButton` is a client island: it renders the same "Watch" button in the server HTML for everyone, and after hydration reads membership through `GET /api/watchlist?ids=`, only when `sessionStatus === "authenticated"`. All buttons on a page share one store, so 300 Screener rows cost at most two requests.
+3. Public pages stay ISR. `WatchButton` is a client island: it renders the same "Watch" button in the server HTML for everyone, and after hydration reads membership through `GET /api/watchlist?ids=`, only when `sessionStatus === "authenticated"`. All buttons on a page share one store, so 300 Screener rows cost at most two requests. A successful toggle changes only the button (filled star, action-blue border) and is announced to screen readers; only a failure prints visible text, on its own line below the actions row. Nothing next to the button moves on success, so "View on TCGplayer" never jumps under the pointer and the chart below never shifts.
 4. Signed-out tap: `router.push("/auth/login?next=<current path and query>&watch=<id>")`. `LoginForm` reads `watch`, and after a successful sign-in POSTs the watch (4 s cap) before `router.replace(next)`. The destination's `WatchButton` then reads "watched". The `next` path stays clean (no `intent=watch`); WP27's sign-in subtitle also switches to the watch sentence when `watch` is present.
-5. The watchlist page is `/portfolio/watchlist`, a tab next to Holdings (`/portfolio`). `proxy.ts` already protects `/portfolio/:path*`.
+5. The watchlist page is `/portfolio/watchlist`, a tab next to Holdings (`/portfolio`). `proxy.ts` already protects `/portfolio/:path*`. Its one page action is "Find a product" (WP27 `SearchTrigger`, opens the header search), in the page header and as the empty state's action, so a collector can add to the list without leaving to browse.
 6. Home: `WatchlistMovers` renders as `children` of WP32's `YourPokefin`: the 5 watched products with the largest absolute 7D change.
-7. Changes are WP25's USD Market Price returns (`ret_1d`, `ret_7d`, `ret_30d`), shown only when the stats row describes the same price the row shows. Prices convert to CAD at the header's current rate, as on every list page. The page says "Changes are in USD Market Price terms".
-8. A watched product whose price is withheld (migration 0023) or that is no longer tracked shows `--` in every number column, with the reason for screen readers, plus the "Last priced" clock when a last price day is known.
+7. Changes are WP25's USD Market Price returns (`ret_1d`, `ret_7d`, `ret_30d`), shown only when the stats row describes the same price the row shows. Prices convert to CAD at the header's current rate, as on every list page. The provenance line is WP24's `PROVENANCE_SENTENCE` (the site's one wording for source, cadence and the 14-day rule) plus "Changes are measured in USD, through {date} (UTC)."
+8. A watched product whose price is withheld (migration 0023) or that is no longer tracked shows `--` in every number column, with the reason for screen readers, plus the "Last priced" clock when a last price day is known. The reason is also visible where a sighted user would otherwise see only `--`: "No longer tracked" or "Never priced" under the name (desktop) or in the meta line (phone), and "Last priced {date}" in words on phones (a tooltip clock says nothing on touch, WP23 `AsOf`).
 
 ### Metric definitions (computed server-side in `app/lib/server/watchlistModel.ts`)
 
@@ -50,34 +50,38 @@ A collector who wants to follow a product today has to remember it and search fo
 +----------------------------------------------------------------------------------------------------------------+
 | [mark] Pokéfin   Prices  Screener  Sets  Portfolio  Tools v      (o) Prices as of Sep 30   [Q Search /] USD|CAD |
 +----------------------------------------------------------------------------------------------------------------+
-| Watchlist                                                                                          h1 24/32    |
-| 14 of 200 products. TCGplayer Market Price, checked daily. Changes are in USD Market Price terms,              |
-| through Sep 29, 2026 (UTC). How changes are calculated                                          small, ink-soft |
+| Watchlist                                                                        [ Find a product ]  h1 24/32 |
+| 14 of 200 products. TCGplayer Market Price in USD, updated daily. Prices older than 14 days are hidden.        |
+| Changes are measured in USD, through Sep 29, 2026 (UTC). How changes are calculated             small, ink-soft |
 | Holdings   Watchlist                                                                                            |
 | ---------  =========  (tab bar, active tab underlined in action blue, aria-current="page")                     |
 | (status line, only after a removal:) Removed Evolving Skies Booster Box. [Undo]                                 |
 |                                                                                                                |
-| PRODUCT v                           PRICE        1D        7D       30D   VS 52W HIGH   x MSRP  DAYS OF   ADDED   |
+| PRODUCT                             PRICE        1D        7D       30D   VS 52W HIGH   x MSRP  DAYS OF  ADDED ▼ |
 |                                                                                                  SUPPLY         |
 | Evolving Skies Booster Box          C$612.40   ▲ 0.4%   ▲ 3.4%   ▼ 2.0%   16.6% below    1.4x      12   Sep 29 x |
 | Surging Sparks Elite Trainer Box    C$81.30◷   --       ▼ 1.1%   ▲ 4.0%   At high         1.2x      31   Sep 12 x |
 | Lost Origin Booster Bundle (PC)     --  ◷       --       --       --       --              --        --   Aug 30 x |
+| Celebrations Elite Trainer Box      --          --       --       --       --              --        --   Jul 02 x |
+|   No longer tracked (caption)                                                                                  |
 | ...                                                                                                            |
 | How these are calculated: Change · 52-week high · x MSRP · Days of supply                                      |
 +----------------------------------------------------------------------------------------------------------------+
 ```
 
-`◷` is WP23's `AsOf` table variant (clock, `title` and sr-only "Last priced Sep 25"). `x` is the remove button (sr name "Remove {product} from watchlist"). The sorted header is bold with ▲/▼. Default sort: Added, newest first.
+`◷` is WP23's `AsOf` table variant (clock, `title` and sr-only "Last priced Sep 25"). `x` is the remove button (sr name "Remove {product} from watchlist"). The sorted header is bold with ▲/▼. Default sort: Added, newest first. "Find a product" is a secondary button (WP27 `SearchTrigger`); it opens the header search, and the product page it leads to has the Watch button. An untracked or never-priced row prints its reason as a caption under the name, because its `--` cells would otherwise be unexplained to a sighted user.
 
 `/portfolio/watchlist`, 390 px (16 px gutters, WP23 `DataList` rows at least 56 px, no table):
 
 ```
 +--------------------------------------+
 | Watchlist                            |  h1
+| [ Find a product ]                   |  PageHeader actions wrap under the title
 | 14 of 200 products. TCGplayer Market |
-| Price, checked daily. Changes are in |
-| USD Market Price terms, through Sep  |
-| 29, 2026 (UTC). How changes are ...  |
+| Price in USD, updated daily. Prices  |
+| older than 14 days are hidden.       |
+| Changes are measured in USD, through |
+| Sep 29, 2026 (UTC). How changes ...  |
 | Holdings   Watchlist                 |  44 px tab targets
 |            =========                 |
 | SORT BY                              |
@@ -89,21 +93,26 @@ A collector who wants to follow a product today has to remember it and search fo
 | | 12 days     C$612.40 ▲ 3.4% 7D   | |  line 2 right: price + change
 | +----------------------------------+ |
 | | Elite Trainer Box  Surging Sp. x | |
-| | ...                              | |
+| | ◷ Last priced Sep 25  C$81.30 ▼1.1% |  stale price: the meta slot says so in words
+| +----------------------------------+ |
+| | Booster Bundle  Lost Origin    x | |
+| | No longer tracked          --  -- | |  untracked: the reason in words
 +--------------------------------------+
 ```
 
-The row link covers title and both lines; the remove button is a sibling of the link inside the `<li>` (no nested interactive elements). The change shown on phones is the sort's window when sorting by 1D, 7D or 30D, else 7D.
+The row link covers title and both lines; the remove button is a sibling of the link inside the `<li>` (no nested interactive elements). The change shown on phones is the sort's window when sorting by 1D, 7D or 30D, else 7D. Line 2 left shows, in this order of precedence: "Last priced {date}" with the clock when the price day is 2 or more days old (shown or withheld), the visible reason when there is no price and no date ("No longer tracked", "Never priced"), else the sort-dependent meta.
 
 Product page actions (WP31 slot), 1440 px and 390 px:
 
 ```
 [ Add to portfolio ] [ ☆ Watch ] [ Open in Box NAV ]  View on TCGplayer          not watched (aria-pressed=false)
-[ Add to portfolio ] [ ★ Watch ] [ Open in Box NAV ]  View on TCGplayer          watched: filled star, action-blue border
-                     Added to your watchlist.                                     status line (role="status"), after a toggle
+[ Add to portfolio ] [ ★ Watch ] [ Open in Box NAV ]  View on TCGplayer          watched: filled star, action-blue text and border;
+                                                                                  "Added to your watchlist." is announced (sr-only)
+[ Add to portfolio ] [ ☆ Watch ] [ Open in Box NAV ]  View on TCGplayer          a failed toggle rolls back and prints, on its own
+Your watchlist is full: 200 products. Remove one to watch another.                line at the end of the actions row (role="status")
 ```
 
-The label stays "Watch" in every state (the accessible name of a toggle button must not change; `aria-pressed` carries the state and the filled star and blue border show it). Before the session and membership are known the button is `aria-disabled="true"` with the same size, so nothing shifts.
+The label stays "Watch" in every state (the accessible name of a toggle button must not change; `aria-pressed` carries the state and the filled star and blue border show it). Before the session and membership are known the button is `aria-disabled="true"` with the same size, so nothing shifts. Success text is screen-reader only: a visible confirmation beside the button would widen the row after the request returns (often more than 500 ms after the tap, so it counts as layout shift) and push "Open in Box NAV" and "View on TCGplayer" sideways or onto a new line on a 390 px phone. Error text is visible because the rollback alone would look like an ignored tap.
 
 Home, signed in (WP32 island, second column from 768 px, below the fold):
 
@@ -128,19 +137,19 @@ Sign-in page when reached from a Watch tap (`/auth/login?next=%2Fproduct%2F42&wa
 |---|---|---|
 | `WatchButton` | session unknown, or membership loading | "Watch", `aria-disabled="true"`, `aria-pressed="false"`, clicks ignored |
 | `WatchButton` | signed out | "Watch", `aria-pressed="false"`, click goes to sign-in with `next` and `watch` |
-| `WatchButton` | known | `aria-pressed` = watched; click toggles optimistically, status line "Added to your watchlist." / "Removed from your watchlist." |
-| `WatchButton` | write failed | pressed state rolls back; status "Could not update your watchlist. Please try again." (or the server's message) |
-| `WatchButton` | watchlist full | rolls back; status "Your watchlist is full: 200 products. Remove one to watch another." |
-| `WatchButton` | membership read failed | status "Could not check your watchlist. Select Watch to try again."; the next click retries the read |
+| `WatchButton` | known | `aria-pressed` = watched; click toggles optimistically; sr-only status "Added to your watchlist." / "Removed from your watchlist." (no visible text, nothing moves) |
+| `WatchButton` | write failed | pressed state rolls back; visible status "Could not update your watchlist. Please try again." (or the server's message) on its own line below the actions row (button variant), sr-only for the icon variant |
+| `WatchButton` | watchlist full | rolls back; visible status "Your watchlist is full: 200 products. Remove one to watch another." (button variant) |
+| `WatchButton` | membership read failed | visible status "Could not check your watchlist. Select Watch to try again." (button variant); the next click retries the read |
 | Page | session unknown | flat `Skeleton` bars (auth loading) or WP04's `SessionUnavailable` with retry |
 | Page | signed out | "Redirecting to sign in…", client redirect to `/auth/login?next=%2Fportfolio%2Fwatchlist` (proxy.ts normally redirects first) |
 | Page | loading | `role="status"` sr-only "Loading your watchlist" and 6 flat bars of row height |
 | Page | read failed | `EmptyState` "Your watchlist could not be loaded" / "This is usually temporary." / button "Try again" |
-| Page | empty | `EmptyState` "You are not watching any products yet" / "Select Watch on any product page to follow its price, change and supply here. Prices are checked daily." / link "Browse prices" (`/prices`) |
+| Page | empty | `EmptyState` "You are not watching any products yet" / "Select Watch on any product page to follow its price, change and supply here. Prices update daily." / button "Find a product" (opens the header search) |
 | Page | full (200) | provenance starts "200 of 200 products (full)." |
 | Page | removed | status line "Removed {name}." with an Undo button (focus moves to it); Undo re-adds and the line reads "Put back {name}." |
 | Page | remove failed | the row comes back; status line shows the error |
-| Page | stale or untracked row | `--` cells with sr-only reason; clock with "Last priced {date}" when known |
+| Page | stale or untracked row | `--` cells with sr-only reason; desktop: clock with "Last priced {date}" (title and sr-only) when the day is known, else a visible caption "No longer tracked" or "Never priced" under the name; phone: "Last priced {date}" in words with the clock, or the reason, in the meta line |
 | Page | stats unavailable (`statsDay` null) | every change, 52W and supply cell `--`; provenance omits the "through" date |
 | Home movers | session not signed in | nothing (the island itself renders nothing) |
 | Home movers | loading | `role="status"` sr-only "Loading your watchlist" and 2 flat bars |
@@ -150,25 +159,25 @@ Sign-in page when reached from a Watch tap (`/auth/login?next=%2Fproduct%2F42&wa
 
 ### Copy (every new user-facing string)
 
-"Watch", "Watch {product name}" (icon variant name), "In your watchlist" (title when pressed), "Added to your watchlist.", "Removed from your watchlist.", "Could not update your watchlist. Please try again.", "Your watchlist is full: 200 products. Remove one to watch another.", "Could not check your watchlist. Select Watch to try again.", "Watchlist", "Holdings", "Portfolio sections" (nav name), "{n} of 200 products.", "(full)", "TCGplayer Market Price, checked daily.", "Changes are in USD Market Price terms, through {date} (UTC).", "How changes are calculated", "Your watchlist" (table caption, list name), "Product", "Price", "1D", "7D", "30D", "vs 52W high", "x MSRP", "Days of supply", "Added", "Remove", "Remove {name} from watchlist", "At high", "{x}% below", "Sort by", "Date added", "Name", "Change 1D", "Change 7D", "Change 30D", "Distance from 52-week high", "Newest first", "Oldest first", "A to Z", "Z to A", "High to low", "Low to high", "52W high: {x}", "Supply: {n} days", "Added {date}", "Removed {name}.", "Undo", "Put back {name}.", "Price withheld", "Never priced", "No longer tracked", "Not available", "Loading your watchlist", "Redirecting to sign in…", "How these are calculated:", "Change", "52-week high", "Watchlist movers, 7D", "Open watchlist", "Largest 7-day moves among your {n} watched products.", every state string above. No "live", "real-time", "all-time", "undervalued", "buy", "TCGPlayer" or em dash.
+"Watch", "Watch {product name}" (icon variant name), "In your watchlist" (title when pressed), "Added to your watchlist.", "Removed from your watchlist.", "Could not update your watchlist. Please try again.", "Your watchlist is full: 200 products. Remove one to watch another.", "Could not check your watchlist. Select Watch to try again.", "Watchlist", "Holdings", "Portfolio sections" (nav name), "{n} of 200 products.", "(full)", WP24's `PROVENANCE_SENTENCE` (reused, not new copy), "Changes are measured in USD, through {date} (UTC).", "Changes are measured in USD.", "How changes are calculated", "Find a product", "Last priced {date}" (WP23 `AsOf`), "Your watchlist" (table caption, list name), "Product", "Price", "1D", "7D", "30D", "vs 52W high", "x MSRP", "Days of supply", "Added", "Remove", "Remove {name} from watchlist", "At high", "{x}% below", "Sort by", "Date added", "Name", "Change 1D", "Change 7D", "Change 30D", "Distance from 52-week high", "Newest first", "Oldest first", "A to Z", "Z to A", "High to low", "Low to high", ". Switch to {order}" (sr-only, order button), "52W high: {x}", "Supply: {n} days", "Added {date}", "Removed {name}.", "Undo", "Put back {name}.", "Price withheld", "Never priced", "No longer tracked", "Not available", "Loading your watchlist", "Redirecting to sign in…", "How these are calculated:", "Change", "52-week high", "Watchlist movers, 7D", "Open watchlist", "Largest 7-day moves among your {n} watched products.", every state string above. No "live", "real-time", "all-time", "undervalued", "buy", "TCGPlayer" or em dash.
 
 ### Accessibility
 
-- `WatchButton` is a toggle button: constant name ("Watch", or "Watch {product}" for the icon variant), `aria-pressed`, `aria-disabled` while unknown (stays focusable), one polite `role="status"` region per button (visible caption for the labelled variant, sr-only for the icon variant). Star icon `aria-hidden`.
+- `WatchButton` is a toggle button: constant name ("Watch", or "Watch {product}" for the icon variant), `aria-pressed`, `aria-disabled` while unknown (stays focusable), one polite `role="status"` region per button that is in the DOM from the first render (so its first message is announced). Success messages stay sr-only; error messages become visible for the labelled variant only. Star icon `aria-hidden`. Focus ring `focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-action` (WP23 rule: Tailwind 4's `outline-none` hides focus in forced-colours mode). No `transition-colors` anywhere in this package (01-PRODUCT-DIRECTION.md §3.5: colour changes are instant).
 - Tabs are navigation links in `<nav aria-label="Portfolio sections">`, current tab `aria-current="page"`; not ARIA tabs, because they are separate routes.
 - Table: WP23 `SortableTable` (caption "Your watchlist", `aria-sort` on the sorted header). Product names are links; remove buttons have full names.
-- Phone list: `<ul aria-label="Your watchlist">`; each row one link plus one sibling button; sort select has a visible label; the order button's visible text is its name ("Newest first") and changes with the order (it is not a toggle).
-- After a removal focus moves to the Undo button; after Undo it moves to the status line (`tabIndex={-1}`), so focus is never lost to `<body>`.
+- Phone list: `<ul aria-label="Your watchlist">`; each row one link plus one sibling button; sort select has a visible label; the order button's name starts with its visible text and says what a press does ("Newest first. Switch to oldest first", the same pattern as WP33's phone sort), and changes with the order (it is not a toggle, so no `aria-pressed`).
+- After a removal focus moves to the Undo button; after Undo it moves to the status line (`tabIndex={-1}`), so focus is never lost to `<body>`. The status line is rendered (empty) from the moment the list loads, so the first "Removed {name}." is announced.
 - Every change uses WP23 `Delta` (glyph plus sr-only word). "vs 52W high" is neutral text. Touch targets 44 px on coarse pointers (`pointer-coarse:size-11`, `pointer-coarse:min-h-11`). Every new component test runs axe.
 
 ### Design system use
 
-WP23: `Delta`, `DataList`, `AsOf` (table variant), `EmptyState`, `Skeleton`, `Button`/`buttonClasses`, `PageHeader`, `ProvenanceLine`, `SortableTable` (dense), tokens `text-ink`, `text-ink-soft`, `text-action`, `border-action`, `border-line`, `bg-surface`, `bg-surface-alt`, `ring-action`, `rounded-control`, type `text-h1`, `text-body`, `text-small`, `text-caption`. WP24: `metricHref`. WP32: `Price`, `HOME_LINK`. WP28 (soft): `formatMsrpMultiple`. No raw palette class and no hex in any new file (conventions test).
+WP23: `Delta`, `DataList`, `AsOf` (table variant on desktop, inline variant on phones, plus its exported `daysBetween` and `STALE_AFTER_DAYS`), `EmptyState`, `Skeleton`, `Button`/`buttonClasses`, `PageHeader` (with `actions`), `ProvenanceLine`, `SortableTable` (dense), tokens `text-ink`, `text-ink-soft`, `text-action`, `text-warn-text`, `border-action`, `border-line`, `bg-surface`, `bg-surface-alt`, `ring-action`, `rounded-control`, type `text-h1`, `text-body`, `text-small`, `text-caption`. WP24: `metricHref`, `PROVENANCE_SENTENCE`. WP27: `SearchTrigger`. WP32: `Price`, `HOME_LINK`. WP28 (soft): `formatMsrpMultiple`. No raw palette class, no hex, no `transition-colors`/`transition-all` and no `outline-none` in any new file (conventions test plus Tests 15).
 
 ### Performance
 
 - Product page: the island adds `WatchButton`, `watchlistStore.ts`, `watchlistApi.ts` and `watchlist.ts`, about 2 kB gz, no dependency (it does not import `redirects.ts` or `loginCopy.ts`). No request for signed-out visitors. Budget: `/product/900001` JS within its existing limit; the PR reports the delta.
-- Screener rows: all buttons share one store; ids requested in the same macrotask are batched into `GET /api/watchlist?ids=` chunks of 200.
+- Screener rows (step 17, only if WP33 landed): all buttons share one store; ids requested in the same macrotask are batched into `GET /api/watchlist?ids=` chunks of 200. The rows are memoised and the button subscribes to the store itself, so a membership answer re-renders the buttons, not the rows, and a sort still moves rows without re-rendering them. `/screener` JS grows by about the same 2 kB and must stay within its limit.
 - `/` : `WatchlistMovers` is about 1 kB gz, mounts only for signed-in users below the fold, one `GET /api/watchlist?view=movers` (5 rows).
 - `/portfolio/watchlist`: one GET; the route does one primary-key range read of `watchlist_items` plus two `unstable_cache` reads that are already warm (summaries and stats), plus one `products` read only for untracked rows. Payload at 200 items about 60 kB JSON, about 10 kB gz. New route budget (manifest method): target 180 kB gz like `/portfolio`.
 - No charting library and no `/api/public/*` call anywhere in this package.
@@ -192,8 +201,13 @@ grep -n "FUNCTION public.enforce_owner_row_cap()" migrations/0031_*.sql      # 1
 ls migrations/0032_*.sql scripts/db/replay_migrations.sh tests/test_db_roles_integration.py tests/test_migration_volatility.py
 grep -ln "FUNCTION public.export_my_data" migrations/*.sql
 # expect exactly migrations/0011_export_my_data.sql and migrations/0024_export_my_data_volatile.sql.
-# If another file is listed (for example WP36's 0040 merged first), copy THAT file's body into step 1d
-# instead of 0024's and keep every key it adds; say so in the PR.
+# If a third file numbered below 0038 is listed, copy THAT file's body into step 1 section 5 instead
+# of 0024's, keep every key it adds, and say so in the PR. (WP36's 0040 never appears here: it patches
+# the function in place through pg_get_functiondef and never contains that text. WP35's 0039 is
+# written after this package and copies 0038.)
+ls migrations/0040_*.sql 2>/dev/null
+# WP36 landed first if this prints a file. Keep 0038 as written (the replay applies 0038 before 0040,
+# so the chain stays correct), and copy Owner action 1's "if 0040 is already applied" line into the PR.
 
 cd frontend
 # WP04
@@ -219,6 +233,7 @@ ls app/components/ui/Delta.tsx app/components/ui/DataList.tsx app/components/ui/
 grep -n "export function compareSortValues\|export type SortValue\|export type SortDirection" app/lib/sorting.ts   # 3 lines
 # WP24
 grep -n "export function metricHref" app/lib/metricDefinitions.ts                                 # 1 line
+grep -n "export const PROVENANCE_SENTENCE" app/content/disclosures.ts                            # 1 line
 grep -oE 'key: "(priceChange|range52w|daysOfSupply|msrpMultiple)"' app/lib/metricDefinitions.ts   # 3 or 4 keys (msrpMultiple is WP28)
 # WP25
 grep -n "export async function getCachedProductStats" app/lib/serverMarketData.ts                 # 1 line
@@ -226,7 +241,8 @@ grep -n "export function statsFor\|export interface ProductStatsSnapshot" app/li
 # WP27
 grep -n "export const ACCOUNT_NAV\|export function productHref" app/components/nav/navConfig.ts   # 2 lines
 grep -n "export function loginSubtitleFor\|export const WATCH_LOGIN_SUBTITLE" app/lib/loginCopy.ts   # 2 lines
-ls app/components/nav/MobileNavSheet.tsx app/lib/__tests__/loginCopy.test.ts
+ls app/components/nav/MobileNavSheet.tsx app/lib/__tests__/loginCopy.test.ts app/components/search/SearchTrigger.tsx
+grep -n "export function openGlobalSearch" app/components/search/searchEvents.ts                  # 1 line
 # WP31
 grep -n "watch?: ReactNode" "app/product/[id]/ProductActions.tsx"                                # 1 line
 grep -n "<ProductActions" "app/product/[id]/page.tsx"                                            # 1 line
@@ -234,15 +250,19 @@ grep -n "<ProductActions" "app/product/[id]/page.tsx"                           
 grep -n "children?: ReactNode" app/components/home/YourPokefin.tsx                              # 1 line
 grep -n "<YourPokefin" app/page.tsx                                                              # 1 line
 grep -n "export default function Price" app/components/Price.tsx                                 # 1 line
+grep -n "export const HOME_LINK" app/components/home/homeStyles.ts                               # 1 line
+grep -n "export function daysBetween\|export const STALE_AFTER_DAYS" app/components/ui/AsOf.tsx   # 2 lines (WP23)
 grep -n "const PUBLIC_ROUTE_CLIENT_FILES" eslint.config.mjs                                      # 1 line
 # WP22
 grep -n '"/portfolio": {' perf-budgets.json                                                      # 1 or 2 lines (route and rum target)
 
-# Soft: WP28. Record both answers; steps 4b, 10d and 13 branch on them.
+# Soft: WP28. Record both answers; steps 3, 12 and 13 branch on them.
 grep -n "msrp_multiple" app/types/market.ts                                  # WP28 landed: 1 line
 grep -n "export function formatMsrpMultiple" app/lib/productAttributes.ts    # WP28 landed: 1 line
-# Soft: WP33. Record the answer; step 17 branches on it.
-ls -d app/screener 2>/dev/null; grep -rln "SortableColumn<" app/screener app/components/Screener 2>/dev/null
+# Soft: WP33. Record the answer; step 17 branches on it. WP33's table is its own component, not
+# SortableTable, and its phone rows are WP23 DataListRow.
+ls app/components/Screener/ScreenerTableRow.tsx app/components/Screener/ScreenerTable.tsx \
+   app/components/Screener/ScreenerPhoneList.tsx 2>/dev/null                    # WP33 landed: 3 files
 ```
 
 Tooling:
@@ -1477,12 +1497,16 @@ export interface WatchButtonProps {
   productName: string;
   /** "button": labelled secondary button (product page). "icon": star only (list rows). */
   variant?: WatchButtonVariant;
+  /** Extra classes for the <button> itself (both variants). */
   className?: string;
 }
 
 const ADDED = "Added to your watchlist.";
 const REMOVED = "Removed from your watchlist.";
 const READ_FAILED = "Could not check your watchlist. Select Watch to try again.";
+
+const ICON_CLASS =
+  "inline-flex size-9 items-center justify-center rounded-control text-ink-soft hover:bg-surface-alt hover:text-ink aria-pressed:text-action focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-action aria-disabled:cursor-wait pointer-coarse:size-11";
 
 function StarIcon({ filled }: { filled: boolean }) {
   return (
@@ -1529,6 +1553,8 @@ export default function WatchButton({ productId, productName, variant = "button"
   const pressed = signedIn && state.kind === "known" && state.watched;
   const busy = !anonymous && (!signedIn || state.kind === "unknown" || (state.kind === "known" && state.saving));
   const status = signedIn && state.kind === "error" ? READ_FAILED : message;
+  // Success is shown by the button itself; only a failure prints visible text.
+  const visibleError = variant === "button" && status !== null && status !== ADDED && status !== REMOVED;
 
   async function handleClick() {
     if (anonymous) {
@@ -1550,14 +1576,17 @@ export default function WatchButton({ productId, productName, variant = "button"
 
   const buttonClass =
     variant === "icon"
-      ? "inline-flex size-9 items-center justify-center rounded-control text-ink-soft transition-colors duration-150 motion-reduce:transition-none hover:bg-surface-alt hover:text-ink aria-pressed:text-action focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-action aria-disabled:cursor-wait pointer-coarse:size-11"
+      ? `${ICON_CLASS} ${className}`
       : buttonClasses({
           variant: "secondary",
-          className: "aria-pressed:border-action aria-pressed:text-action aria-disabled:cursor-wait",
+          className: `aria-pressed:border-action aria-pressed:text-action aria-disabled:cursor-wait ${className}`,
         });
 
   return (
-    <span className={`inline-flex items-center gap-2 ${variant === "button" ? "flex-wrap" : ""} ${className}`}>
+    // "contents" for the labelled variant: the button and the status line become items of
+    // WP31's flex-wrap actions row, so a visible error can take a full line of its own at
+    // the end of the row (order-last basis-full) instead of widening the row in place.
+    <span className={variant === "button" ? "contents" : "inline-flex items-center"}>
       <button
         type="button"
         onClick={handleClick}
@@ -1571,7 +1600,7 @@ export default function WatchButton({ productId, productName, variant = "button"
         <StarIcon filled={pressed} />
         {variant === "button" && <span>Watch</span>}
       </button>
-      <span role="status" className={variant === "button" && status ? "text-caption text-ink-soft" : "sr-only"}>
+      <span role="status" className={visibleError ? "order-last basis-full text-small text-ink" : "sr-only"}>
         {status}
       </span>
     </span>
@@ -1581,6 +1610,9 @@ export default function WatchButton({ productId, productName, variant = "button"
 
 Notes for the executor:
 - `aria-pressed:` and `aria-disabled:` are Tailwind 4 built-in variants; they are emitted after the base utilities, so they override `border-line` and `text-ink` from `buttonClasses`. Do not add `!important`.
+- The status `<span role="status">` is rendered from the first render, empty, in every state: a live region inserted together with its text is often not announced. `sr-only` is `position: absolute`, so while it is hidden it takes no place in the flex row (no extra gap).
+- `order-last basis-full` only has an effect because WP31's actions row is `flex flex-wrap`. Do not add a wrapper element around `{watch}` in `ProductActions`.
+- No `transition-colors` (01-PRODUCT-DIRECTION.md §3.5) and no `outline-none` (WP23 focus rule) here or in any other file of this package; Tests 15 enforces both.
 - Do not use `useSearchParams` here: on a statically rendered page it forces a Suspense boundary or a client render bailout. `window.location` is read only inside the click handler.
 - State changes come from the store (external) and from `setMessage` in an event handler, so `react-hooks/set-state-in-effect` is satisfied. Do not add an effect that calls `setMessage`.
 
@@ -1702,7 +1734,7 @@ export default function PortfolioTabs({ current, className = "" }: { current: Po
                 href={tab.href}
                 prefetch={false}
                 aria-current={active ? "page" : undefined}
-                className={`-mb-px inline-flex h-10 items-center border-b-2 px-3 text-body font-semibold transition-colors duration-150 motion-reduce:transition-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-action pointer-coarse:min-h-11 ${
+                className={`-mb-px inline-flex h-10 items-center border-b-2 px-3 text-body font-semibold focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-action pointer-coarse:min-h-11 ${
                   active ? "border-action text-ink" : "border-transparent text-ink-soft hover:text-ink"
                 }`}
               >
@@ -1723,7 +1755,29 @@ export default function PortfolioTabs({ current, className = "" }: { current: Po
 
 ```ts
 import { FLAT_BAND_PERCENT, formatDateOnly, formatInteger, formatMonthDay, formatPercent, recordedAtDateKey } from "../../lib/format";
+import { STALE_AFTER_DAYS, daysBetween } from "../ui/AsOf";
 import type { WatchlistEntry } from "../../lib/watchlist";
+
+/** Today's UTC date key. A module function, so component renders stay lint-pure (WP23 AsOf). */
+function todayUtcKey(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
+/**
+ * The price day is known and at least STALE_AFTER_DAYS old: the row shows
+ * "Last priced {date}" (shown price 2 to 14 days old, or a withheld price).
+ * Same rule as WP23's AsOf, so the phone text and the desktop clock agree.
+ */
+export function isStalePriceDay(priceDay: string | null, today: string = todayUtcKey()): boolean {
+  return priceDay !== null && daysBetween(priceDay, today) >= STALE_AFTER_DAYS;
+}
+
+/** The visible reason for a row with no price and no last price day, else null. */
+export function visibleMissingReason(entry: WatchlistEntry): string | null {
+  if (entry.priceStatus === "untracked") return "No longer tracked";
+  if (entry.priceStatus === "never") return "Never priced";
+  return null;
+}
 
 /** "At high" within the flat band, else "16.6% below". Neutral text, not a return. */
 export function formatOffHigh(value: number | null): string {
@@ -1790,7 +1844,7 @@ export default function RemoveButton({
       type="button"
       onClick={() => onRemove(entry)}
       aria-label={`Remove ${entry.name} from watchlist`}
-      className="inline-flex size-9 items-center justify-center rounded-control text-ink-soft transition-colors duration-150 motion-reduce:transition-none hover:bg-surface-alt hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-action pointer-coarse:size-11"
+      className="inline-flex size-9 items-center justify-center rounded-control text-ink-soft hover:bg-surface-alt hover:text-ink focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-action pointer-coarse:size-11"
     >
       <svg viewBox="0 0 20 20" className="size-4" aria-hidden="true" focusable="false">
         <path d="M5 5l10 10M15 5L5 15" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" />
@@ -1815,7 +1869,13 @@ import { useCurrency } from "../../context/CurrencyContext";
 import { productHref } from "../nav/navConfig";
 import { formatMsrpMultiple } from "../../lib/productAttributes";
 import { watchSortValue, type WatchlistEntry, type WatchSort, type WatchSortKey } from "../../lib/watchlist";
-import { formatAddedDate, formatDaysOfSupply, formatOffHigh, missingReasonFor } from "./watchlistFormat";
+import {
+  formatAddedDate,
+  formatDaysOfSupply,
+  formatOffHigh,
+  missingReasonFor,
+  visibleMissingReason,
+} from "./watchlistFormat";
 
 export interface WatchlistViewProps {
   items: readonly WatchlistEntry[];
@@ -1854,15 +1914,21 @@ export default function WatchlistTable({ items, sort, onSortChange, showMsrp, on
         sortKey: "name",
         cellClassName: "px-3 truncate",
         cellTitle: (entry) => entry.name,
-        cell: (entry) => (
-          <Link
-            href={productHref(entry.productId)}
-            prefetch={false}
-            className="rounded-control font-medium text-ink hover:text-action focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-action"
-          >
-            {entry.name}
-          </Link>
-        ),
+        cell: (entry) => {
+          const reason = visibleMissingReason(entry);
+          return (
+            <>
+              <Link
+                href={productHref(entry.productId)}
+                prefetch={false}
+                className="rounded-control font-medium text-ink hover:text-action focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-action"
+              >
+                {entry.name}
+              </Link>
+              {reason && <span className="ml-2 text-caption text-ink-soft">{reason}</span>}
+            </>
+          );
+        },
       },
       {
         id: "price",
@@ -1965,6 +2031,8 @@ export default function WatchlistTable({ items, sort, onSortChange, showMsrp, on
 
 import Link from "next/link";
 import { useId, useMemo } from "react";
+import type { ReactNode } from "react";
+import AsOf from "../ui/AsOf";
 import { DataList } from "../ui/DataList";
 import Delta from "../ui/Delta";
 import RemoveButton from "./RemoveButton";
@@ -1977,7 +2045,14 @@ import {
   type WatchlistEntry,
   type WatchSortKey,
 } from "../../lib/watchlist";
-import { formatAddedDate, formatDaysOfSupply, formatOffHigh, missingReasonFor } from "./watchlistFormat";
+import {
+  formatAddedDate,
+  formatDaysOfSupply,
+  formatOffHigh,
+  isStalePriceDay,
+  missingReasonFor,
+  visibleMissingReason,
+} from "./watchlistFormat";
 import type { WatchlistViewProps } from "./WatchlistTable";
 
 type ChangeKey = "change1d" | "change7d" | "change30d";
@@ -1987,7 +2062,17 @@ function changeKeyFor(key: WatchSortKey): ChangeKey {
   return key === "change1d" || key === "change30d" ? key : "change7d";
 }
 
-/** Line 2, left: the sorted metric when the row has no other place for it. */
+/**
+ * Line 2, left. A stale or withheld price says so in words ("Last priced
+ * Sep 25" with the clock): the desktop table's tooltip clock says nothing on
+ * touch. A row with no price and no date says why. Otherwise the sort's meta.
+ */
+function lineTwoFor(entry: WatchlistEntry, key: WatchSortKey): ReactNode {
+  if (isStalePriceDay(entry.priceDay)) return <AsOf date={entry.priceDay} />;
+  return visibleMissingReason(entry) ?? metaFor(entry, key);
+}
+
+/** The sorted metric when the row has no other place for it. */
 function metaFor(entry: WatchlistEntry, key: WatchSortKey): string {
   if (key === "msrp") return `${formatMsrpMultiple(entry.msrpMultiple) ?? "--"} MSRP`;
   if (key === "added") return `Added ${formatAddedDate(entry.addedAt)}`;
@@ -2021,7 +2106,7 @@ export default function WatchlistPhoneList({ items, sort, onSortChange, showMsrp
               const option = WATCH_SORT_OPTIONS.find((o) => o.key === key) ?? WATCH_SORT_OPTIONS[0];
               onSortChange({ key, direction: option.defaultDirection });
             }}
-            className="h-11 w-full rounded-control border border-line bg-surface px-3 text-base text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-action"
+            className="h-11 w-full rounded-control border border-line bg-surface px-3 text-base text-ink focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-action"
           >
             {options.map((option) => (
               <option key={option.key} value={option.key}>
@@ -2033,9 +2118,12 @@ export default function WatchlistPhoneList({ items, sort, onSortChange, showMsrp
         <button
           type="button"
           onClick={() => onSortChange({ key: sort.key, direction: sort.direction === "asc" ? "desc" : "asc" })}
-          className="h-11 shrink-0 rounded-control border border-line bg-surface px-3 text-small font-semibold text-ink hover:bg-surface-alt focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-action"
+          className="h-11 shrink-0 rounded-control border border-line bg-surface px-3 text-small font-semibold text-ink hover:bg-surface-alt focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-action"
         >
           {current.directionLabels[sort.direction]}
+          <span className="sr-only">
+            {`. Switch to ${current.directionLabels[sort.direction === "asc" ? "desc" : "asc"].toLowerCase()}`}
+          </span>
         </button>
       </div>
       <DataList label="Your watchlist">
@@ -2044,14 +2132,14 @@ export default function WatchlistPhoneList({ items, sort, onSortChange, showMsrp
             <Link
               href={productHref(entry.productId)}
               prefetch={false}
-              className="flex min-h-14 min-w-0 flex-1 flex-col justify-center px-4 py-2 transition-colors duration-150 motion-reduce:transition-none hover:bg-surface-alt active:bg-surface-alt focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-action"
+              className="flex min-h-14 min-w-0 flex-1 flex-col justify-center px-4 py-2 hover:bg-surface-alt active:bg-surface-alt focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-action"
             >
               <span className="flex min-w-0 items-baseline gap-2">
                 <span className="truncate text-body font-medium text-ink">{entry.typeLabel}</span>
                 {entry.setName && <span className="truncate text-small text-ink-soft">{entry.setName}</span>}
               </span>
               <span className="mt-0.5 flex items-baseline justify-between gap-2">
-                <span className="min-w-0 truncate text-small text-ink-soft">{metaFor(entry, sort.key)}</span>
+                <span className="min-w-0 truncate text-small text-ink-soft">{lineTwoFor(entry, sort.key)}</span>
                 <span className="flex shrink-0 items-baseline gap-2 tabular-nums">
                   <span className="text-body font-semibold text-ink">
                     {entry.usdPrice === null ? (
@@ -2107,6 +2195,7 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from "react"
 import { useAuth } from "../../context/AuthContext";
 import SessionUnavailable from "../../components/SessionUnavailable";
 import PortfolioTabs from "../../components/Portfolio/PortfolioTabs";
+import SearchTrigger from "../../components/search/SearchTrigger";
 import PageHeader from "../../components/ui/PageHeader";
 import ProvenanceLine from "../../components/ui/ProvenanceLine";
 import EmptyState from "../../components/ui/EmptyState";
@@ -2116,6 +2205,7 @@ import WatchlistTable from "../../components/watchlist/WatchlistTable";
 import WatchlistPhoneList from "../../components/watchlist/WatchlistPhoneList";
 import { loginPathWithNext } from "../../lib/redirects";
 import { metricHref } from "../../lib/metricDefinitions";
+import { PROVENANCE_SENTENCE } from "../../content/disclosures";
 import { formatDateOnly, formatInteger } from "../../lib/format";
 import { addToWatchlist, fetchWatchlist, removeFromWatchlist } from "../../lib/watchlistApi";
 import { noteWatched } from "../../lib/watchlistStore";
@@ -2135,12 +2225,17 @@ type Notice =
   | { kind: "restored"; entry: WatchlistEntry }
   | { kind: "error"; text: string };
 
-const LINK = "font-medium text-action underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-action rounded-control";
+const LINK = "rounded-control font-medium text-action underline-offset-2 hover:underline focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-action";
 
-function Shell({ children, provenance }: { children: ReactNode; provenance?: ReactNode }) {
+/** "Find a product": opens WP27's header search; the product page it leads to has Watch. */
+function FindProduct() {
+  return <SearchTrigger className={buttonClasses({ variant: "secondary" })}>Find a product</SearchTrigger>;
+}
+
+function Shell({ children, provenance, actions }: { children: ReactNode; provenance?: ReactNode; actions?: ReactNode }) {
   return (
     <div className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
-      <PageHeader title="Watchlist" provenance={provenance} />
+      <PageHeader title="Watchlist" provenance={provenance} actions={actions} />
       <PortfolioTabs current="watchlist" className="mb-5 mt-4 md:mb-6" />
       {children}
     </div>
@@ -2275,42 +2370,37 @@ function WatchlistLoaded() {
   const through = payload.statsDay ? `, through ${formatDateOnly(payload.statsDay)} (UTC)` : "";
   const provenance = (
     <ProvenanceLine methodologyHref={metricHref("priceChange")} methodologyLabel="How changes are calculated">
-      {`${formatInteger(count)} of ${formatInteger(payload.max)} products${full ? " (full)" : ""}. TCGplayer Market Price, checked daily. Changes are in USD Market Price terms${through}.`}
+      {`${formatInteger(count)} of ${formatInteger(payload.max)} products${full ? " (full)" : ""}. ${PROVENANCE_SENTENCE} Changes are measured in USD${through}.`}
     </ProvenanceLine>
   );
 
   return (
-    <Shell provenance={provenance}>
-      {notice && (
-        <div className="mb-4 flex flex-wrap items-center gap-3">
-          <p ref={noticeRef} tabIndex={-1} role="status" className="text-small text-ink focus-visible:outline-none">
-            {notice.kind === "removed" && `Removed ${notice.entry.name}.`}
-            {notice.kind === "restoring" && `Putting back ${notice.entry.name}…`}
-            {notice.kind === "restored" && `Put back ${notice.entry.name}.`}
-            {notice.kind === "error" && notice.text}
-          </p>
-          {notice.kind === "removed" && (
-            <button
-              ref={undoRef}
-              type="button"
-              onClick={undo}
-              aria-disabled={notice.pending ? true : undefined}
-              className={buttonClasses({ variant: "secondary", size: "sm" })}
-            >
-              Undo
-            </button>
-          )}
-        </div>
-      )}
+    <Shell provenance={provenance} actions={count > 0 ? <FindProduct /> : undefined}>
+      {/* The status line exists (empty) from the first loaded render, so its first message is announced. */}
+      <div className={notice ? "mb-4 flex flex-wrap items-center gap-3" : ""}>
+        <p ref={noticeRef} tabIndex={-1} role="status" className="text-small text-ink focus:outline-hidden">
+          {notice?.kind === "removed" && `Removed ${notice.entry.name}.`}
+          {notice?.kind === "restoring" && `Putting back ${notice.entry.name}…`}
+          {notice?.kind === "restored" && `Put back ${notice.entry.name}.`}
+          {notice?.kind === "error" && notice.text}
+        </p>
+        {notice?.kind === "removed" && (
+          <button
+            ref={undoRef}
+            type="button"
+            onClick={undo}
+            aria-disabled={notice.pending ? true : undefined}
+            className={buttonClasses({ variant: "secondary", size: "sm" })}
+          >
+            Undo
+          </button>
+        )}
+      </div>
       {count === 0 ? (
         <EmptyState
           title="You are not watching any products yet"
-          description="Select Watch on any product page to follow its price, change and supply here. Prices are checked daily."
-          action={
-            <Link href="/prices" prefetch={false} className={buttonClasses({ variant: "secondary" })}>
-              Browse prices
-            </Link>
-          }
+          description="Select Watch on any product page to follow its price, change and supply here. Prices update daily."
+          action={<FindProduct />}
         />
       ) : (
         <>
@@ -2346,6 +2436,9 @@ Notes:
 - If `PageHeader` has no `provenance` prop in the tree (WP23 defines it), render the `ProvenanceLine` directly under the header instead.
 - Both the phone list and the table are in the DOM; CSS shows one. Do not choose between them with `matchMedia` in state (WP18's F073 rule: it causes hydration mismatches).
 - State is set only in promise callbacks and event handlers; the focus effect calls no setter.
+- `PROVENANCE_SENTENCE` (WP24, `app/content/disclosures.ts`, import-free) is the site's one source and cadence sentence; do not retype it. `metricHref("priceChange")` is WP31's key and `metricHref("range52w")` WP25's.
+- `FindProduct` uses WP27's `SearchTrigger`, which dispatches the event the header's search launcher listens to and preloads the panel chunk only on hover or focus, so it adds no catalog download to this route. It appears in the header actions when the list has rows and as the empty state's only action; not in the loading or failed states.
+- WP35 adds hooks directly after the two `useRef` lines of `WatchlistLoaded` and props to both views: keep the hook order (all hooks before the first early `return`) and the `WatchlistViewProps` name.
 
 ### Step 14. Home: `frontend/app/components/home/WatchlistMovers.tsx` (new) and `app/page.tsx`
 
@@ -2486,7 +2579,7 @@ Do not add it to `PRIMARY_NAV` or `FOOTER_ACCOUNT` (Portfolio already covers the
 
 16a. `eslint.config.mjs`:
 - Append to `ANON_CLIENT_FORBIDDEN_FILES`: `"app/api/watchlist/**/*.ts",` with the comment `// WP34: watchlist route`. (`app/lib/server/**` and `app/portfolio/**` are already listed.)
-- Append to `PUBLIC_ROUTE_CLIENT_FILES` (WP26): `"app/components/watchlist/**/*.{ts,tsx}", "app/lib/watchlist.ts", "app/lib/watchlistApi.ts", "app/lib/watchlistStore.ts",` with the comment `// WP34: the Watch island runs on /product/[id] and screener rows`.
+- Append to `PUBLIC_ROUTE_CLIENT_FILES` (WP26): `"app/components/watchlist/**/*.{ts,tsx}", "app/lib/watchlist.ts", "app/lib/watchlistApi.ts", "app/lib/watchlistStore.ts",` with the comment `// WP34: the Watch island runs on /product/[id] and screener rows`. None of these four may also be in `ANON_CLIENT_FORBIDDEN_FILES` (WP26's rule: for files both lists match, the later `no-restricted-imports` object replaces the earlier one's options); check with `grep -n "watchlist" eslint.config.mjs` after the edit: only the route glob is in the anon list.
 - In WP05's user-table `no-restricted-syntax` selector, add `watchlist_items` to the alternation, for example `/^(portfolios|portfolio_holdings|portfolio_lots|profiles|box_recipes|watchlist_items)$/` (keep whatever names are there and append).
 
 Then `pnpm lint` must be 0 errors. An error means a watchlist module reaches Supabase or a browser file queries `watchlist_items`: fix the import, never the rule.
@@ -2504,7 +2597,7 @@ Then `pnpm lint` must be 0 errors. An error means a watchlist module reaches Sup
 
 and in `rum.targets` add `"/portfolio/watchlist": { "lcpMs": 2500, "inpMs": 200, "cls": 0.05, "ttfbMs": 900 },`. Then run the perf build and `pnpm perf:budget --write-limits` (Verification block 3). Only the new route's `limit` and `recorded` may change; every other limit must stay the same or go down. If `/product/900001` or `/` goes above its limit, stop and shrink the island (it must not import `redirects.ts`, `loginCopy.ts`, `format.ts` or a component library); never add a raise line for this package.
 
-16d. `app/privacy/page.tsx` (WP24): in "What we collect", after the "Box calculator data" item, add `<li><strong>Watchlist</strong>: the products you watch and when you added them.</li>`; in "How long we keep it", change "portfolios, holdings, lots and box recipes" to "portfolios, holdings, lots, box recipes and watchlist". Set the page's last-updated date constant (`grep -n "LAST_UPDATED" app/privacy/page.tsx`) to the merge day (`date -u +%F`).
+16d. `app/privacy/page.tsx` (WP24): in "What we collect", after the "Box calculator data" item, add `<li><strong>Watchlist</strong>: the products you watch and when you added them.</li>`; in "How long we keep it", change "portfolios, holdings, lots and box recipes" to "portfolios, holdings, lots, box recipes and watchlist" (in WP24's JSX the phrase wraps after "lots"; `grep -n "holdings, lots" app/privacy/page.tsx` finds it). In "How we use it", change "show your portfolio and saved recipes" to "show your portfolio, saved recipes and watchlist". Set the page's last-updated date constant (`grep -n "LAST_UPDATED" app/privacy/page.tsx`) to the merge day (`date -u +%F`).
 
 16e. `app/account/page.tsx`: in the "Your data" sentence (`grep -n "box recipes" app/account/page.tsx`), add "watchlist" to the list of exported records ("profile, portfolios, holdings, lots, box recipes and watchlist"). Change nothing else on the page.
 
@@ -2512,12 +2605,70 @@ and in `rum.targets` add `"/portfolio/watchlist": { "lcpMs": 2500, "inpMs": 200,
 
 ### Step 17. Screener rows (only if WP33 has landed)
 
-If Before you start printed nothing for `app/screener`, skip this step and write in the PR: "WP33 adds the Watch row action when it lands: an unsortable last column `{ id: "watch", label: "Watch", align: "right", widthClassName: "w-14", cellClassName: "px-2 text-right", cell: (row) => <WatchButton productId={row.id} productName={getProductDisplayName(row)} variant="icon" /> }` in the desktop table, and the same button as a sibling of the row link on phones."
+WP33's desktop table is its own component (`ScreenerTable.tsx` and the memoised `ScreenerTableRow.tsx`, sticky rank and product columns, `border-separate`), not `SortableTable`, and its phone rows are WP23 `DataListRow`s. The Watch control is the icon variant in a trailing unsortable column on desktop and a sibling of the row link on phones. Its accessible name carries the product and variant, so 300 "Watch" buttons are distinguishable in a screen reader's controls list.
 
-If it printed files:
-- 17a. Desktop table: in the Screener's column list (the file `grep -rln "SortableColumn<" app/screener app/components/Screener` printed), append that unsortable last column. Use the row type's product id and display name fields (for a `Product` row: `row.id` and `getProductDisplayName(row)` from `app/product/[id]/productMeta`).
-- 17b. Phone rows: if they render WP30's `ProductListRow`, add an optional prop `action?: ReactNode` to `ProductListRowProps`. When it is set, the `<li>` gets `flex items-stretch`, the `IntentLink` gets `min-w-0 flex-1`, and `<span className="flex shrink-0 items-center pr-2">{action}</span>` follows the link inside the `<li>`. When it is not set, the markup stays byte-identical (so `/prices` does not change). Pass `action={<WatchButton productId={product.id} productName={getProductDisplayName(product)} variant="icon" />}` from the Screener only. If the phone rows are another component, apply the same sibling pattern there.
-- 17c. Add `app/screener/**` to nothing: WP33 put its files in `PUBLIC_ROUTE_CLIENT_FILES` already; `app/components/watchlist/**` is covered by step 16a.
+If Before you start printed no Screener files, skip 17a to 17d and put this paragraph in the PR (and ask the owner to file it as a follow-up on WP33): "When WP33 lands, add the Watch row action: a trailing `<td className="border-b border-line px-2 text-right"><WatchButton productId={row.id} productName={row.variant ? `${name} (${row.variant})` : name} variant="icon" /></td>` in `ScreenerTableRow`, a matching `<col style={{ width: 56 }} />`, an `<th scope="col">` with sr-only "Watch" and `+ 56` in `ScreenerTable`'s `minWidth`, and on phones the `DataListRow` `action` slot exactly as WP34 step 17c writes it."
+
+If it printed the three files:
+
+17a. `app/components/Screener/ScreenerTableRow.tsx`: add `import WatchButton from "../watchlist/WatchButton";` and, after the trend `<td>` (the last cell), add:
+
+```tsx
+      <td className="border-b border-line px-2 text-right">
+        <WatchButton productId={row.id} productName={row.variant ? `${name} (${row.variant})` : name} variant="icon" />
+      </td>
+```
+
+The row stays memoised with the same props: the button subscribes to the watchlist store itself.
+
+17b. `app/components/Screener/ScreenerTable.tsx`: add `const WATCH_PX = 56;` next to `TREND_PX`, add `+ WATCH_PX` to `minWidth`, add `<col style={{ width: WATCH_PX }} />` after the trend `<col>`, and after the "Trend 1Y" `<th>` add:
+
+```tsx
+            <th scope="col" className={TH}>
+              <span className="sr-only">Watch</span>
+            </th>
+```
+
+17c. Phone rows: WP23's `DataListRow` gets an optional action slot. In `app/components/ui/DataList.tsx` add to `DataListRowProps`:
+
+```ts
+  /** A control beside the row link (WP34: the Watch star). Never inside the link. */
+  action?: ReactNode;
+```
+
+and destructure `action`. Replace the component's `return (...)` with:
+
+```tsx
+  const row = href ? (
+    <Link
+      href={href}
+      prefetch={prefetch}
+      className={`${ROW} ${action ? "min-w-0 flex-1 " : ""}hover:bg-surface-alt active:bg-surface-alt focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-action`}
+    >
+      {body}
+    </Link>
+  ) : (
+    <div className={action ? `${ROW} min-w-0 flex-1` : ROW}>{body}</div>
+  );
+
+  if (!action) return <li>{row}</li>;
+  return (
+    <li className="flex items-stretch">
+      {row}
+      <span className="flex shrink-0 items-center pr-2">{action}</span>
+    </li>
+  );
+```
+
+Without `action` the rendered markup is byte-identical to before (WP23's DataList test, WP32's home rows and WP33's rows without the prop do not change; the extra space inside the Link's class template is only added with `action`). Check it: `pnpm exec jest app/components/ui` passes unchanged. In `app/components/Screener/ScreenerPhoneList.tsx`, add `import WatchButton from "../watchlist/WatchButton";` and pass to the `DataListRow` in `ScreenerListItem`:
+
+```tsx
+      action={<WatchButton productId={row.id} productName={row.variant ? `${screenerProductName(row)} (${row.variant})` : screenerProductName(row)} variant="icon" />}
+```
+
+Add one case to WP23's `app/components/ui/__tests__/DataList.test.tsx`: with `action={<button type="button">Act</button>}` the `<li>` holds the link and the button as siblings (`link.contains(button)` is false) and axe is clean.
+
+17d. If a WP33 test counts table headers, `<col>` elements or cells per row, add one to its expectation; if it snapshots the phone row, update the snapshot and say so in the PR. `app/components/Screener/**` is already in `PUBLIC_ROUTE_CLIENT_FILES` (WP33); `app/components/watchlist/**` is added by step 16a. Report the `/screener` row of `pnpm perf:budget` in the PR.
 
 ### Step 18. Tests
 
@@ -2534,11 +2685,13 @@ Run Verification blocks 1 to 4, push, open the draft PR `[waiting for DB types] 
 - **Do not fetch membership per button.** All buttons go through `watchlistStore.ts`; 300 Screener rows are at most 2 requests. A per-button fetch would hit the proxy's 60/min limit.
 - **Do not use `useSearchParams` in `WatchButton`.** It forces a Suspense boundary or a client bailout on ISR pages. Read `window.location` in the click handler.
 - **Do not change the Watch button's label with its state.** The name stays "Watch" (or "Watch {product}"); `aria-pressed` carries the state. "Watching" as a label would break the toggle pattern and label-in-name.
+- **Do not print "Added to your watchlist." visibly beside the button, and do not wrap `{watch}` in another element in `ProductActions`.** Visible success text widens the actions row after the request returns, which moves "View on TCGplayer" under the pointer and shifts the chart below (layout shift outside the 500 ms input window). Success is the pressed state plus the sr-only announcement; only errors print, on their own line.
+- **Do not use `transition-colors`, `transition-all` or `outline-none`** in any new file. Colour changes are instant (01-PRODUCT-DIRECTION.md §3.5) and Tailwind 4's `outline-none` removes the focus cue in forced-colours mode (WP23): use `focus-visible:outline-hidden` with the ring. Tests 15 fails on them.
 - **Do not query `watchlist_items` from browser code or through the anonymous client.** Only `app/lib/server/watchlistRepo.ts` (with the cookie client) queries it; the ESLint selector enforces it.
 - **Do not grant UPDATE, add a `FOR ALL` policy, or drop the explicit `user_id` filters.** Rows are insert and delete only; the filters keep reads on the primary key.
 - **Do not add `ON CONFLICT` / `upsert` to the insert.** The cap trigger fires before the conflict check, so an upsert at the cap raises 23514 anyway; the repo's 23505 and 23514 handling is the design.
 - **Do not answer "full" on every 23514.** Re-check existence first (the duplicate-at-cap case), or a user at 200 who re-taps Watch on a watched product sees "full".
-- **Do not edit 0024 or 0011, and do not build 0038's function from memory.** Copy 0024's body (step 1f diff). A later migration that replaces `export_my_data` must keep the `watchlist` key; the static test fails otherwise.
+- **Do not edit 0024 or 0011, and do not build 0038's function from memory.** Copy 0024's body (step 1f diff). A later migration that replaces `export_my_data` must keep the `watchlist` key; the static test fails otherwise. Do not fold WP36's `purchase_currency` keys into 0038 even if 0040 is in the tree: 0040 re-patches the function after 0038 in the replay, and in production the owner re-runs 0040 after 0038 (Owner action 1).
 - **Do not compute changes from `get_market_product_summaries` returns.** Those anchors are unbounded (WP25 note); use `product_daily_stats` and only when it matches the shown price.
 - **Do not show a stale product's supply, changes or 52-week distance.** A withheld price means `--` in every number column; the name, the clock and the remove button remain.
 - **Do not call a high over less than a year "52-week".** `offHigh52wPct` is null below 364 tracked days.
@@ -2581,6 +2734,7 @@ pytestmark = pytest.mark.skipif(not DSN, reason="POKEFIN_TEST_DATABASE_URL not s
 
 psycopg = pytest.importorskip("psycopg")
 from psycopg import errors  # noqa: E402
+from psycopg.types.json import Jsonb  # noqa: E402
 
 TAG = "wp34-" + uuid.uuid4().hex[:8]
 CAP = 200
@@ -2619,7 +2773,7 @@ def new_user(admin):
     name = "u" + uuid.uuid4().hex[:10]
     admin.execute(
         "INSERT INTO auth.users (id, email, raw_user_meta_data) VALUES (%s, %s, %s)",
-        (uid, f"{name}@example.com", psycopg.types.json.Jsonb({"username": name})),
+        (uid, f"{name}@example.com", Jsonb({"username": name})),
     )
     return uid
 
@@ -2980,10 +3134,12 @@ Mock `../../../context/AuthContext` (`useAuth: () => mockAuth`), `next/navigatio
 - Session "unknown": button "Watch" has `aria-disabled="true"` and `aria-pressed="false"`; clicking does nothing; no API call.
 - `renderToString(<WatchButton productId={42} productName="X" />)` contains `aria-pressed="false"` and `Watch` (the ISR HTML).
 - Session "anonymous": `aria-pressed="false"`, no `aria-disabled`; click calls `mockPush("/auth/login?next=%2Fproduct%2F42&watch=42")`; no API call.
-- Authenticated, `fetchWatchedIds` resolves `[42]`: `aria-pressed="true"` after the read, title "In your watchlist"; click calls `removeFromWatchlist(42)`, `aria-pressed` is "false" before it resolves, then the status reads "Removed from your watchlist.".
-- Authenticated, not watched; `addToWatchlist` resolves `{ ok: false, message: "Could not update your watchlist. Please try again.", code: null, status: 500 }`: after the click `aria-pressed` goes "true" then back to "false", and the message is shown.
-- Full: `addToWatchlist` resolves the 409 result; the status shows `WATCHLIST_FULL_MESSAGE`.
-- Read failure: status shows "Could not check your watchlist. Select Watch to try again."; the next click re-reads.
+- The `role="status"` element exists, empty, in the first render of every state (unknown, anonymous, authenticated).
+- Authenticated, `fetchWatchedIds` resolves `[42]`: `aria-pressed="true"` after the read, title "In your watchlist"; click calls `removeFromWatchlist(42)`, `aria-pressed` is "false" before it resolves, then the status reads "Removed from your watchlist." and has the class `sr-only` (success is never visible text).
+- Authenticated, not watched; `addToWatchlist` resolves `{ ok: false, message: "Could not update your watchlist. Please try again.", code: null, status: 500 }`: after the click `aria-pressed` goes "true" then back to "false", and the message is shown in the status element, which no longer has `sr-only` and has `order-last` and `basis-full`. With `variant="icon"` the same failure keeps the status `sr-only`.
+- Full: `addToWatchlist` resolves the 409 result; the status shows `WATCHLIST_FULL_MESSAGE` (visible).
+- Read failure: status shows "Could not check your watchlist. Select Watch to try again." (visible); the next click re-reads.
+- Rendered inside `<div className="flex flex-wrap">` with a sibling link, the labelled variant's outer element has the class `contents` (the button and the status are flex items of that row).
 - Two buttons for product 42 and one for 7 cause exactly one `fetchWatchedIds` call with `[42, 7]`.
 - `variant="icon"`: accessible name "Watch Evolving Skies Booster Box"; no visible "Watch" text.
 - axe clean in the unknown, anonymous and pressed states.
@@ -3005,15 +3161,18 @@ One test that chains the two halves. Mock `next/navigation` with shared `mockPus
 
 ### 12. `frontend/app/portfolio/watchlist/__tests__/WatchlistView.test.tsx` (new, jsdom)
 
-Mock `../../../context/AuthContext`, `next/navigation` (`useRouter: () => ({ push: mockPush })`), `../../../lib/watchlistApi` (`fetchWatchlist`, `addToWatchlist`, `removeFromWatchlist`) and `../../../lib/watchlistStore` (`noteWatched: jest.fn()`). The phone list and the table are both in the jsdom DOM: scope queries with `within(screen.getByRole("table"))` or `within(screen.getByRole("list", { name: "Your watchlist" }))`. Fixture: 3 entries (fresh product 1 with all columns, stale product 2 with `usdPrice null`, `priceStatus "withheld"`, `priceDay "2026-09-05"`, product 3 fresh with `change7d 9`), `statsDay "2026-09-29"`, `msrpMultiple` null on all.
+Mock `../../../context/AuthContext`, `next/navigation` (`useRouter: () => ({ push: mockPush })`), `../../../lib/watchlistApi` (`fetchWatchlist`, `addToWatchlist`, `removeFromWatchlist`), `../../../lib/watchlistStore` (`noteWatched: jest.fn()`) and `../../../components/search/searchEvents` (`openGlobalSearch: jest.fn()`, `loadGlobalSearch: jest.fn(() => Promise.resolve({}))`). Pin the clock to `2026-09-30T12:00:00Z` (`jest.useFakeTimers({ doNotFake: ["nextTick", "setImmediate"] }).setSystemTime(...)`) so the stale checks are deterministic. The phone list and the table are both in the jsdom DOM: scope queries with `within(screen.getByRole("table"))` or `within(screen.getByRole("list", { name: "Your watchlist" }))`. Fixture: 3 entries (fresh product 1 with all columns, stale product 2 with `usdPrice null`, `priceStatus "withheld"`, `priceDay "2026-09-05"`, product 3 fresh with `change7d 9`), `statsDay "2026-09-29"`, `msrpMultiple` null on all.
 
 - Session "unknown" with `loading: true`: skeleton status "Loading your watchlist"; with `loading: false`: `SessionUnavailable`'s retry calls `refreshSession`.
 - Session "anonymous": `mockPush("/auth/login?next=%2Fportfolio%2Fwatchlist")`.
-- Authenticated: loading status first; then the heading "Watchlist", "3 of 200 products.", "through Sep 29, 2026 (UTC)", the tabs with "Watchlist" `aria-current="page"` and "Holdings" linking to `/portfolio`.
+- Authenticated: loading status first; then the heading "Watchlist", "3 of 200 products.", the text of `PROVENANCE_SENTENCE` (import it from `app/content/disclosures`), "Changes are measured in USD, through Sep 29, 2026 (UTC).", the tabs with "Watchlist" `aria-current="page"` and "Holdings" linking to `/portfolio`, and a "Find a product" button whose click calls `openGlobalSearch`.
+- An empty `role="status"` paragraph exists before any removal.
 - Table: caption "Your watchlist"; no "x MSRP" column header; product links go to `/product/1`; the stale row's price cell text is "--" with sr-only "Price withheld" and its 7D cell is "--"; the stale row shows the clock with "Last priced Sep 5".
+- With a fourth entry `priceStatus "untracked"`, `priceDay null`: the table's product cell shows the caption "No longer tracked" and the phone row's second line reads "No longer tracked".
+- Phone list: the stale row's second line reads "Last priced Sep 5" (visible text, not only a title).
 - Sorting: click the "7D" header twice (asc then desc); the first body row is product 3.
-- Phone list: the select "Sort by" defaults to "Date added" and the order button reads "Newest first"; choosing "Change 7D" orders product 3 first and the button reads "High to low".
-- Empty payload: "You are not watching any products yet" and a link to `/prices`.
+- Phone list: the select "Sort by" defaults to "Date added" and the order button's name is "Newest first. Switch to oldest first"; choosing "Change 7D" orders product 3 first and the button's visible text reads "High to low".
+- Empty payload: "You are not watching any products yet", a "Find a product" button (calls `openGlobalSearch`), and no "Find a product" in the page header (one action per view).
 - `fetchWatchlist` rejecting: "Your watchlist could not be loaded"; "Try again" calls `fetchWatchlist` again.
 - Remove (table): click "Remove {name 1} from watchlist"; the row disappears at once; `removeFromWatchlist(1)` called; status "Removed {name 1}."; focus is on "Undo"; after `{ ok: true }` `noteWatched(1, false)` was called; clicking Undo calls `addToWatchlist(1)`, the row returns and the status reads "Put back {name 1}.".
 - Remove failure: the row comes back and the status shows the error message.
@@ -3068,6 +3227,18 @@ describe("watch island keeps public pages static (WP34)", () => {
       expect(read(file)).not.toMatch(/redirects|loginCopy|@supabase|lib\/supabase/);
     }
   });
+
+  it("new files keep colour changes instant and the forced-colours focus cue", () => {
+    const files = [
+      ...fs.readdirSync(path.join(APP, "components/watchlist")).filter((f) => /\.tsx?$/.test(f)).map((f) => `components/watchlist/${f}`),
+      "components/Portfolio/PortfolioTabs.tsx",
+      "components/home/WatchlistMovers.tsx",
+      "portfolio/watchlist/WatchlistView.tsx",
+    ];
+    for (const file of files) {
+      expect(`${file}: ${/\btransition-(?:colors|all)\b|\boutline-none\b/.test(read(file))}`).toBe(`${file}: false`);
+    }
+  });
 });
 ```
 
@@ -3103,6 +3274,7 @@ pnpm exec jest app/lib/__tests__/watchlist.test.ts app/lib/__tests__/watchlistAp
   app/auth/login app/lib/__tests__/loginCopy.test.ts app/portfolio/watchlist \
   app/components/home app/components/Portfolio/__tests__/PortfolioTabs.test.tsx \
   app/components/__tests__/Header.auth.test.tsx                                            # all pass
+pnpm exec jest app/components/ui app/components/Screener                                  # only if step 17 ran: all pass
 pnpm exec jest app/__tests__/uiConventions.test.ts                                         # pass without UPDATE_UI_BASELINE
 pnpm test --ci                                                                              # all pass; count = baseline + new
 pnpm run test:scripts                                                                       # all pass
@@ -3118,38 +3290,40 @@ grep -nE " /portfolio/watchlist| /product/\[id\]| /\s*$" /tmp/wp34-build.log    
 rm -rf .perf && SUPABASE_STUB_FIXTURE=perf pnpm build:stub > /tmp/wp34-perf.log 2>&1; echo "exit=$?"   # exit=0, no unmatched requests
 pnpm perf:budget --write-limits && git diff perf-budgets.json                               # only /portfolio/watchlist limit and recorded added
 pnpm perf:budget; echo "exit=$?"                                                            # exit=0
-pnpm perf:budget | grep -E "^\| (/|/product/900001|/portfolio|/portfolio/watchlist) "      # record JS (gz) for the PR
+pnpm perf:budget | grep -E "^\| (/|/product/900001|/portfolio|/portfolio/watchlist|/screener) "   # record JS (gz) for the PR
 ```
 
-Expected: `/product/900001` JS grows by at most 2.5 kB gz against master (the island), `/` by at most 1.5 kB gz, both within their limits; `/portfolio/watchlist` JS at or under 180 kB gz; CSS within its limit; forbidden chunks ok (no supabase-js or recharts on `/`).
+Expected: `/product/900001` JS grows by at most 2.5 kB gz against master (the island), `/` by at most 1.5 kB gz, `/screener` (if step 17 ran) by at most 2.5 kB gz, all within their limits; `/portfolio/watchlist` JS at or under 180 kB gz (the global search panel stays a lazy chunk: `SearchTrigger` only preloads it on hover or focus); CSS within its limit; forbidden chunks ok (no supabase-js or recharts on `/`, `/product/900001` or `/screener`).
 
 Block 4, cache and ISR (from `frontend/`, perf server running):
 
 ```bash
 node scripts/perf-serve.mjs &   # 127.0.0.1:3100
-node scripts/check-public-cache.mjs --base http://127.0.0.1:3100   # WP26/WP32 checks: "ok" lines only for /, /prices, /product/900001
-curl -s http://127.0.0.1:3100/product/900001 | grep -c 'aria-pressed="false"'   # 1 (the Watch button in the server HTML)
-curl -s http://127.0.0.1:3100/product/900001 | grep -c "watchlist_items\|/api/watchlist"   # 0
+node scripts/check-public-cache.mjs                                  # WP26: no argument = the perf server; last line "[check-public-cache] ok on ..."
+curl -s http://127.0.0.1:3100/product/900001 | grep -o 'data-watch-state="unknown"' | wc -l   # 1 (the Watch button in the server HTML, session unknown)
+curl -s http://127.0.0.1:3100/product/900001 | grep -o '>Watch</span>' | wc -l                   # 1 (the labelled variant's text)
+curl -s http://127.0.0.1:3100/product/900001 | grep -o "watchlist_items\|/api/watchlist" | wc -l   # 0
 kill %1
 ```
 
-If `check-public-cache.mjs` takes other arguments in the tree, run it the way WP32's Verification does.
+Count with `grep -o ... | wc -l`, not `grep -c`: the HTML is a few long lines, and `grep -c` counts lines. Do not count `aria-pressed="false"`: WP31's benchmark toggles are `aria-pressed` buttons too.
 
-Block 5, manual, after phase B on a preview deployment with the owner's production database (or `pnpm dev` with real credentials):
+Block 5, manual, after phase B, with `pnpm dev` and real credentials (localhost passes `csrf.ts`'s origin check outside production) or on production after the deploy. Not on a Vercel preview URL: `rejectIfCsrfFails` allows only `NEXT_PUBLIC_SITE_URL`, `https://pokefin.ca` and `https://www.pokefin.ca`, so every POST and DELETE from a preview origin answers 403 by design (the same holds for WP05's portfolio writes).
 
 1. 1440 px, signed out: `/product/<id>` shows "Watch"; click; the URL is `/auth/login?next=%2Fproduct%2F<id>&watch=<id>` and the subtitle is "Sign in to watch products and get daily alerts."; sign in; you land on `/product/<id>` with the star filled and `aria-pressed="true"` (DevTools), and Network shows one `POST /api/watchlist` (201) during sign-in and one `GET /api/watchlist?ids=<id>` on the product page.
 2. Signed in: click Watch on two more products; open `/portfolio/watchlist`; all three rows show price, as-of clock where aging, 1D/7D/30D, vs 52W high, days of supply; sort by 7D; remove one, press Undo, it returns.
 3. Open `/portfolio/watchlist` in a second browser signed in as the same user: the same rows (persists across devices).
 4. In the Supabase SQL editor, pick a watched product whose last price is 14 or more days old (or watch the stale product WP31's page shows as withheld): its row shows `--` in every number column with the clock "Last priced {date}".
 5. `/` signed in: "Watchlist movers, 7D" in the second column of "Your Pokéfin", at most 5 rows, each linking to its product. Signed out: the island is absent and Network shows no `/api/watchlist` request.
-6. 390 x 844 (DevTools device mode, touch): the product page Watch button is 44 px tall; `/portfolio/watchlist` shows the list (no table, no horizontal scroll), the sort select does not zoom on focus (16 px), the order button flips, each remove button is 44 px and removing moves focus to Undo.
+6. 390 x 844 (DevTools device mode, touch): the product page Watch button is 44 px tall and toggling it moves nothing else in the actions row; `/portfolio/watchlist` shows the list (no table, no horizontal scroll), a stale row reads "Last priced {date}" in words, the sort select does not zoom on focus (16 px), the order button flips, each remove button is 44 px and removing moves focus to Undo.
 7. Account page: "Export my data" downloads JSON with a `watchlist` array of `{ product_id, created_at }`.
-8. Keyboard only: Tab to Watch, Space toggles, the status is announced (VoiceOver or NVDA); the table's sort buttons announce `aria-sort`.
+8. Keyboard only: Tab to Watch, Space toggles, "Added to your watchlist." is announced (VoiceOver or NVDA) with no visible text; the table's sort buttons announce `aria-sort`; "Find a product" opens the header search with focus in its input. Windows High Contrast (or Chrome's forced-colours emulation): every focused control shows an outline.
 9. Chrome Performance panel on `/portfolio/watchlist` with 4x CPU slowdown: a header sort click completes processing and presentation within 200 ms (INP target for `/portfolio`); attach the screenshot of the Interactions track.
 
 ## Owner actions
 
 1. **Apply migration 0038** in production with Supabase MCP `apply_migration` (preferred) or the SQL editor (select nothing before Run): `migrations/0038_watchlist.sql`, after 0031 (WP21) is applied. Then run the query `python3 verify_migration.py migrations/0038_watchlist.sql` prints: every row OK (35 rows). The 0024 query now reports one MISMATCH on the `export_my_data` body; that is expected (0038 superseded it). Run the header's verification queries (expect `true`, `false, false, true`, `watchlist_items_row_cap_trg`). Apply before the phase B code deploys: the route selects the new table by name.
+   **If WP36's 0040 is already applied in production** (check: `SELECT position('purchase_currency' IN pg_get_functiondef('public.export_my_data()'::regprocedure)) > 0;` returns true before you apply 0038), 0038's `CREATE OR REPLACE` removes 0040's three export keys. Right after applying 0038, run `migrations/0040_portfolio_lot_currency.sql` again (idempotent; it only re-adds those keys, WP36 Owner action 5), then check that the same query returns true and that `SELECT position('watchlist_items' IN pg_get_functiondef('public.export_my_data()'::regprocedure)) > 0;` also returns true. In that case the `verify_migration.py` row for the `export_my_data` body reports MISMATCH (0040 patched it after 0038); every other row must be OK.
 2. **Tell the executor** it is applied, so phase B regenerates `app/types/database.ts` (`pnpm types:db` needs the table in production).
 3. After merge, refresh `schema.sql` by WP21's procedure (the drift check reports the new table until then).
 4. After deploy, do Verification block 5 steps 1, 3 and 7 with your own account (5 minutes). No new environment variable, secret, paid service or Vercel setting is needed.
@@ -3161,17 +3335,18 @@ Block 5, manual, after phase B on a preview deployment with the owner's producti
 - [ ] `tests/test_wp34_watchlist_static.py` passes: the SQL cap equals `WATCHLIST_MAX_ITEMS` (200) and the effective `export_my_data` includes the watchlist and is VOLATILE.
 - [ ] `GET /api/watchlist` answers the list, `?view=movers` at most 5 movers, `?ids=` the watched subset; `POST` answers 201/200/404/409/400; `DELETE` answers removed/absent; every route answer is `no-store`; writes need the CSRF header and Origin; anonymous calls get 401, auth outages 503.
 - [ ] A watch persists across devices (Verification block 5 step 3).
-- [ ] A watched product whose price is withheld shows `--` in every number column, with an sr-only reason and the "Last priced" clock.
+- [ ] A watched product whose price is withheld shows `--` in every number column, with an sr-only reason and the "Last priced" clock (desktop), and "Last priced {date}" in words on phones; an untracked or never-priced row shows its reason as visible text.
 - [ ] Changes appear only when the stats row matches the shown price; "vs 52W high" only with at least 364 tracked days; x MSRP column hidden when no row has a value.
-- [ ] `WatchButton` is in WP31's actions row with `aria-pressed`, updates optimistically, rolls back on error, shows the full message at 200, and makes no request for signed-out or unknown sessions; one request serves all buttons on a page.
-- [ ] Public pages stay ISR: `/` static and `/product/[id]` ISR in the build output; the server HTML of a product page contains the unpressed Watch button and no watchlist data; `watchIsland.source.test.ts` passes; the WP26/WP32 cache check prints only "ok".
+- [ ] `WatchButton` is in WP31's actions row with `aria-pressed`, updates optimistically, rolls back on error, shows the full message at 200, and makes no request for signed-out or unknown sessions; one request serves all buttons on a page; a successful toggle adds no visible text and moves no other element in the row.
+- [ ] Public pages stay ISR: `/` static and `/product/[id]` ISR in the build output; the server HTML of a product page contains the Watch button with `data-watch-state="unknown"` and no watchlist data; `watchIsland.source.test.ts` passes; `check-public-cache.mjs` ends with its "ok" line.
 - [ ] Logged-out round trip: the Watch tap goes to `/auth/login?next=<path>&watch=<id>`, the subtitle is the watch sentence, and after sign-in the product is watched and the user lands on `<path>` (`watchRoundTrip.test.tsx` passes).
-- [ ] `/portfolio/watchlist` has the Holdings | Watchlist tab bar (also on `/portfolio`), a dense sortable table from 768 px and a `DataList` with a sort select below 768 px, remove with Undo, and loading, empty, error and full states as specified; it is `noindex`.
+- [ ] `/portfolio/watchlist` has the Holdings | Watchlist tab bar (also on `/portfolio`), WP24's provenance sentence, a "Find a product" action, a dense sortable table from 768 px and a `DataList` with a sort select below 768 px, remove with Undo, and loading, empty, error and full states as specified; it is `noindex`.
 - [ ] The home "Your Pokéfin" island shows "Watchlist movers, 7D" (top 5 by absolute 7D change) for signed-in users only.
 - [ ] Account menu and phone sheet list "Watchlist" for signed-in users; privacy and account export copy mention the watchlist.
 - [ ] `pnpm exec tsc --noEmit` (phase B), `pnpm lint`, `pnpm test --ci`, `pnpm run test:scripts`, `pnpm build:stub`, `pnpm perf:budget` all pass; `perf-budgets.json` has `/portfolio/watchlist` and no raised limit.
-- [ ] Screener rows carry the icon Watch button (if WP33 has landed), or the PR states the one-line contract WP33 follows.
-- [ ] No em dash, "live", "real-time", "all-time" or "TCGPlayer" in any new or changed file; no raw palette class or hex in new files.
+- [ ] Screener rows carry the icon Watch button in a trailing column and beside each phone row link (if WP33 has landed; `DataListRow` without `action` renders byte-identical markup), or the PR states the contract for WP33 as a follow-up.
+- [ ] No em dash, "live", "real-time", "all-time" or "TCGPlayer" in any new or changed file; no raw palette class, hex, `transition-colors`, `transition-all` or `outline-none` in new files.
+- [ ] If WP36's 0040 was applied in production before 0038, the owner re-ran 0040 after 0038 and both export checks in Owner action 1 return true.
 
 ## Rollback
 
@@ -3180,8 +3355,12 @@ Code: revert the frontend commits (2 to 6 of Commit and PR). The Watch buttons, 
 Database, only if the table itself must go (for example before WP35 merges and the owner wants no dormant user data): run, in this order, in the SQL editor:
 
 ```sql
+-- 0. If WP35's 0039 is applied, roll WP35 back first (its export_my_data body and
+--    alert tables reference watchlist_items); follow WP35's Rollback.
 -- 1. Restore 0024's export_my_data (it no longer references watchlist_items).
 --    Paste migrations/0024_export_my_data_volatile.sql in full and run it (idempotent).
+--    If migrations/0040_portfolio_lot_currency.sql exists and is applied, run it again
+--    right after, so the export keeps WP36's purchase_currency keys.
 -- 2. Drop the table (drops its policies, trigger and index with it).
 DROP TABLE IF EXISTS public.watchlist_items;
 ```
@@ -3194,7 +3373,7 @@ Commits (in this order):
 
 1. `feat(db): watchlist_items with owner-only RLS, 200 cap and export (WP34)`: `migrations/0038_watchlist.sql`, `tests/test_wp34_watchlist_db.py`, `tests/test_wp34_watchlist_static.py`.
 2. `feat(watchlist): route handler, model, repo and browser client (WP34)`: `app/lib/watchlist.ts`, `app/lib/server/watchlistModel.ts`, `app/lib/server/watchlistRepo.ts`, `app/api/watchlist/route.ts`, `app/lib/watchlistApi.ts`, their tests.
-3. `feat(watchlist): Watch button, shared store and sign-in round trip (WP34)`: `app/lib/watchlistStore.ts`, `app/components/watchlist/WatchButton.tsx`, `app/lib/loginCopy.ts`, `app/auth/login/LoginForm.tsx`, `app/product/[id]/page.tsx`, the Screener files (step 17, if any), their tests, `watchRoundTrip.test.tsx`, `watchIsland.source.test.ts`.
+3. `feat(watchlist): Watch button, shared store and sign-in round trip (WP34)`: `app/lib/watchlistStore.ts`, `app/components/watchlist/WatchButton.tsx`, `app/lib/loginCopy.ts`, `app/auth/login/LoginForm.tsx`, `app/product/[id]/page.tsx`, the Screener files and `app/components/ui/DataList.tsx` with its test (step 17, if WP33 landed), their tests, `watchRoundTrip.test.tsx`, `watchIsland.source.test.ts`.
 4. `feat(portfolio): watchlist page, tabs and home movers (WP34)`: `app/portfolio/watchlist/*`, `app/components/watchlist/{WatchlistTable,WatchlistPhoneList,RemoveButton,watchlistFormat}.*`, `app/components/Portfolio/PortfolioTabs.tsx`, `app/portfolio/page.tsx`, `app/components/home/WatchlistMovers.tsx`, `app/page.tsx`, `navConfig.ts`, `Header.tsx`, `MobileNavSheet.tsx`, their tests.
 5. `chore(watchlist): lint lists, budgets, privacy and export copy, docs (WP34)`: `eslint.config.mjs`, `perf-budgets.json`, `app/privacy/page.tsx`, `app/account/page.tsx`, `README.md`, `app/__tests__/uiConventions.baseline.json` (only if a count went down).
 6. Phase B: `chore(types): regenerate database types for 0038 (WP34)`: `app/types/database.ts`.
@@ -3204,12 +3383,12 @@ End every commit message with the attribution lines the session's system reminde
 PR title: `WP34: Watchlist`
 
 PR body:
-- What changed and why (the Why section, two sentences), with screenshots at 390 px and 1440 px: product page Watch (unpressed, pressed, status line), `/portfolio/watchlist` (loaded, empty, a stale row), the home island signed in, the sign-in page with the watch subtitle.
+- What changed and why (the Why section, two sentences), with screenshots at 390 px and 1440 px: product page Watch (unpressed, pressed, and the error line from a forced failure), `/portfolio/watchlist` (loaded, empty, a stale row), the home island signed in, the sign-in page with the watch subtitle.
 - **Migration 0038 must be applied by the owner before the phase B deploy** (Owner action 1), with the `verify_migration.py` result pasted once done.
 - Route contract (GET list, `?view=movers`, `?ids=`, POST, DELETE and their status codes).
 - Verification outputs: `verify_migration.py` stderr, the replay harness's last line, pytest summaries with and without `POKEFIN_TEST_DATABASE_URL`, `tsc` (phase A errors listed, phase B clean), lint, Jest counts before and after, the `perf:budget` rows for `/`, `/product/900001`, `/portfolio` and `/portfolio/watchlist` on master and on the branch, the cache check output, the INP screenshot.
 - Soft dependencies: whether WP28 was present (x MSRP column and link) and whether WP33 was present (step 17 applied, or the one-line contract for WP33).
-- Known limits and follow-ups: the watch intent survives password sign-in only, not sign-up with email confirmation; changes are in USD Market Price terms (CAD returns at dated rates would need WP25's `convertDailySeries` per row); named multiple watchlists, CSV export of the watchlist and alert rules are later packages (WP35 for alerts); WP22's production smoke could add `GET /api/watchlist` to its signed-in leg.
+- Known limits and follow-ups: the watch intent survives password sign-in only, not sign-up with email confirmation; changes are in USD Market Price terms (CAD returns at dated rates would need WP25's `convertDailySeries` per row); named multiple watchlists, a "since added" change (needs the price at the add day stored on the row), CSV export of the watchlist and alert rules are later packages (WP35 for alerts); WP22's production smoke could add `GET /api/watchlist` to its signed-in leg.
 - Owner actions 1 to 4 as a checklist.
 
 End the PR description with the attribution lines the session's system reminder specifies.

@@ -3,11 +3,11 @@
 - **Goal**: an investor ranks and filters all 306 sealed products by return, risk, liquidity, supply and value in one dense 44 px table, starts from a ready-made screen such as "Off highs with thin supply", shares any view by copying the URL, and exports what they see as CSV. On a 390 px phone the same screen is a sortable two-line list with a filter sheet and a sort sheet, never a clipped table. `/market` becomes `/screener` with a 308 that keeps the query string.
 - **Why now / value**: `/market` today is a 93 px-row table that shows no sort state, prints CAGR, drawdown and volatility as `--` until each row's history is fetched, and is "unusable on a phone" (research/ui-audit.md `/market`). WP25 made every metric an indexed read of `product_daily_stats`, WP26 made sparklines free, WP30 shipped the phone row helpers and `IntentLink`, and WP23/WP24 shipped the table vocabulary and metric definitions. Supply and liquidity screens are the feature competitors cannot copy (01-PRODUCT-DIRECTION.md §5 item 4; research/competitive-landscape.md §4 item 3, §5 item 2).
 - **Effort**: L, 16 to 18 hours (migration 0042 and its DB test 2.5 h, row builder, stats column and fixture 1.5 h, metrics, URL state, filters and presets 2.5 h, table, phone list and filter UI 5 h, CSV 0.75 h, route move, nav, perf config and smoke 1.5 h, methodology 1 h, tests 2.5 h, measurement 1 h). The migration is the part above the 14 to 16 h of 01-PRODUCT-DIRECTION.md §8: "Max drawdown 1Y" is a decided Risk column and `product_daily_stats` has no such column (see D1 item 9).
-- **Depends on**: WP13 (`NoResults`, `app/sitemap.ts`, the `redirects()` block in `next.config.ts`, per-route `metadata`), WP19 (the column-descriptor pattern this package reuses; its `MarketView` files are deleted here), WP22 (`perf-budgets.json`, `lighthouserc.json`, `scripts/fixtures/perf.mjs`, `prod-smoke-lib.mjs`, `pnpm perf:budget`), WP23 (`DataList`, `DataListRow`, `Delta`, `AsOf`, `Badge`, `Button`, `PageHeader`, `ProvenanceLine`, `SegmentedControl`, `EmptyState`, token utilities, the `uiConventions` ratchet), WP24 (`MetricLabel`, `DecisionNote`, `PROVENANCE_SENTENCE`, `DECISION_NOTE`, `metricDefinitions.ts`, `/methodology` and `content/methodology.ts`), WP25 (`product_daily_stats`, `product_stats_latest`, `getCachedProductStats`, `PRODUCT_STATS_SELECT`, `ProductDailyStats`, the perf fixture's `productStats`), WP26 (`getCachedSparklines`, `sparklineFor`, `MiniSparkline` `series` and sizes, `WARM_PATHS`, `forbiddenChunks`, the public-route ESLint list), WP30 (`IntentLink`, `catalogValues.ts`, `shared/msrp.ts`, `utils/freshness.ts`, the `list` sparkline size). Through them: WP07 (`format.ts`), WP08 (`locationSearch.ts`, `LocationSearchSignal`), WP11 (cached reads and tags), WP14 (`Dialog`), WP18 (`lib/sorting.ts`), WP20 (`useCurrency`, `app/types/market.ts`, `pnpm types:db`), WP21 (replay harness, `pokefin_scraper`). Soft, each with a default in "Before you start": WP27 (`navConfig.ts`, `Dialog` `placement`, currency in the header), WP28 (x MSRP, cost per pack, premium to packs; the Value columns, "Near MSRP" and "Below pack value" appear only when the data exists), WP31 (the `maxDrawdown1y` definition), WP32 (home links through `SCREENER.href`).
+- **Depends on**: WP13 (`NoResults`, `app/sitemap.ts`, the `redirects()` block in `next.config.ts`, per-route `metadata`), WP19 (the column-descriptor pattern this package reuses; its `MarketView` files are deleted here), WP22 (`perf-budgets.json`, `lighthouserc.json`, `scripts/fixtures/perf.mjs`, `prod-smoke-lib.mjs`, `pnpm perf:budget`), WP23 (`DataList`, `DataListRow`, `Delta`, `AsOf`, `Badge`, `Button`, `PageHeader`, `ProvenanceLine`, `SegmentedControl`, `EmptyState`, token utilities, the `uiConventions` ratchet), WP24 (`MetricLabel`, `DecisionNote`, `PROVENANCE_SENTENCE`, `DECISION_NOTE`, `metricDefinitions.ts`, `/methodology` and `content/methodology.ts`), WP25 (`product_daily_stats`, `product_stats_latest`, `getCachedProductStats`, `PRODUCT_STATS_SELECT`, `ProductDailyStats`, the perf fixture's `productStats`), WP26 (`getCachedSparklines`, `sparklineFor`, `MiniSparkline` `series` and sizes, `WARM_PATHS`, `forbiddenChunks`, the public-route ESLint list), WP30 (`IntentLink`, `catalogValues.ts`, `shared/msrp.ts`, `utils/freshness.ts` with `utcDateKey` and `isPriceDayStale`, the `list` sparkline size). Through them: WP07 (`format.ts`), WP08 (`locationSearch.ts`, `LocationSearchSignal`), WP11 (cached reads and tags), WP14 (`Dialog`), WP18 (`lib/sorting.ts`), WP20 (`useCurrency`, `app/types/market.ts`, `pnpm types:db`), WP21 (replay harness, `pokefin_scraper`). Soft, each with a default in "Before you start": WP27 (`navConfig.ts`, `Dialog` `placement`, currency in the header), WP28 (x MSRP, cost per pack, premium to packs; the Value columns, "Near MSRP" and "Below pack value" appear only when the data exists), WP31 (the `maxDrawdown1y` definition), WP32 (home links through `SCREENER.href`).
 - **Unblocks**: WP35 (alert suggestions can link to a screen by URL), WP37 (the set page can deep-link to `/screener?set=<id>`), and the deferred `saved_views` table (the URL format defined here is what it would store).
 - **Placement**: Speed lane, after WP30 and WP25 (WP22 -> WP26 -> WP30 -> WP33). It reserves migration **0042**, the first number after the 0033 to 0041 registry, and keeps it even if it merges before WP34 to WP37. The migration only adds a column, a trigger and re-creates a view with the same query, so it has no ordering constraint with 0038 to 0041.
 - **Suggested branch name**: `remediation/wp33-screener-with-presets`
-- **Risk level**: medium. It moves a public route (a wrong redirect breaks shared links and search results; covered by a smoke check and a curl check), adds a trigger on the table the scraper writes every run (it catches its own errors and never aborts the refresh), and replaces a whole page; there is no user data involved and rollback is a revert plus one optional `DROP TRIGGER`.
+- **Risk level**: medium. It moves a public route (a wrong redirect breaks shared links and search results; covered by a smoke check and a curl check), adds a trigger on the table the scraper writes every run (it catches its own errors and never aborts the refresh), and replaces a whole page; there is no user data involved and rollback is a revert plus one optional `DROP TRIGGER`. Deploy order matters: 0042 must be in production before the frontend ships, because the shared stats select names the new column (Owner action 1; phase B enforces it, since the types are generated from production).
 
 ## Why
 
@@ -24,7 +24,7 @@ A collector-investor cannot answer "which sealed products are 20% off their high
 | 3 | Four column presets (Performance, Risk, Liquidity, Value) replace the key/all toggle. Value appears only when WP28 data exists | task scope; ui-audit.md `/market` improvement 4 |
 | 4 | The inline per-row history chart, the Chart column, CAGR, Price/Day, Release and Days Since columns are removed. Rows link to the product page | task scope; ui-audit.md `/market` ("CAGR -70.17% annualised from 40 days") |
 | 5 | Every metric comes from `product_stats_latest` (WP25) joined on the server to the catalog summaries, the volume metrics and the 1Y baked sparklines (WP26). No client fetch of any kind | task scope; 01-PRODUCT-DIRECTION.md §6.1 |
-| 6 | A product whose price is withheld (not `is_price_fresh`, migration 0023) shows `--` in every metric column, sinks to the bottom of every sort, never matches a preset, and exports blank values | task scope; 01-PRODUCT-DIRECTION.md §2 principle 1 |
+| 6 | A product whose price is withheld (not `is_price_fresh`, migration 0023) shows `--` in every metric column (price included), sinks to the bottom of every metric sort (nulls sort last; the Name sort stays A to Z), never matches a preset, and exports blank values | task scope; 01-PRODUCT-DIRECTION.md §2 principle 1 |
 | 7 | Returns are the USD Market Price returns from `product_daily_stats` (bounded anchors, WP25). They are the same in USD and CAD, as on `/prices` (WP30 D5). A caption says so | WP30 D5; WP25 `#returns` |
 | 8 | "Delta" in the brief means every return cell renders with WP23's `Delta` (glyph plus 1-decimal magnitude, gain/loss colour). Volume trend, supply change, from-high and premium to packs are neutral signed text (they are not returns) | 01-PRODUCT-DIRECTION.md §3.2 |
 | 9 | "Max drawdown 1Y" is stored as `product_daily_stats.max_dd_365d_pct`, written by a BEFORE trigger in migration 0042, with the product page's definition (WP31 `maxDrawdownOverYear`, WP18 `maxDrawdownPercent`). Computing it per request for 306 products would break the "indexed read of a precomputed table" rule | 01-PRODUCT-DIRECTION.md §6.1; data-opportunities.md §3.13 |
@@ -149,7 +149,7 @@ A preset is "active" (its button pressed, "Screen: {name}" shown) when the curre
 ```
 
 - `?` is `MetricHelpLink` (24 px target) next to each metric header's sort button; `v` is the visible ▼ of the sorted column (bold ink header, `aria-sort="descending"`); other sortable headers show a faint ↕.
-- `(c)` is the WP23 table `AsOf` clock (price 2 to 13 days old). The withheld row shows `--` everywhere and the clock with "Last priced Aug 1".
+- `(c)` is the WP23 table `AsOf` clock (price 2 to 13 days old; `title` and `sr-only` "Last priced Sep 25"). The withheld row shows `--` everywhere and the clock with "Last priced Aug 1". Phones print the same fact as words (below).
 - `#` is a CSS counter (not a prop), so re-sorting moves rows without re-rendering them.
 - `#` and Product are sticky on the left; when the table is wider than its container (768 to 1279 px, or extra columns) it scrolls horizontally inside its rounded border. The header is not sticky: a sticky header does not work inside a horizontal scroll container, and 50-row pages keep it within about two screens.
 
@@ -185,7 +185,7 @@ Risk preset with the "Off highs with thin supply" screen applied (1440 px). Days
 | 212 sold 30D        C$612.40 ▲12.0% 1M|
 +--------------------------------------+
 | Booster Bundle · Silver Tempest ''\_ |
-| 40 sold 30D      C$41.70 (c) ▲9.8% 1M|
+| (c) Last priced Sep 25 C$41.70 ▲9.8% 1M|
 +--------------------------------------+
   ... at least 6 rows fully visible (measured, step 28)
         [ Show 50 more ]  Show all 306
@@ -193,7 +193,7 @@ Risk preset with the "Off highs with thin supply" screen applied (1440 px). Days
   Screens describe past prices. ...
 ```
 
-The meta slot shows the sorted metric when it has no other place in the row: "18 days of supply", "Volatility 1Y 12.3%", "Max DD 1Y 18.2%", "From 52W high -23.4%", "Volume trend +12.0%", "Sell-through 38%", "Supply 30D -18.0%", "Liquidity 72", "1.4x MSRP", "Per pack C$5.50", "vs packs -3.1%"; for name, price and return sorts it shows units sold. The Delta shows the sorted return window (7D, 1M, 3M or 1Y), otherwise 1M.
+The meta slot shows the sorted metric when it has no other place in the row: "18 days of supply", "Volatility 1Y 12.3%", "Max DD 1Y 18.2%", "From 52W high -23.4%" (or "At 52-week high"), "Volume trend +12.0%", "Sell-through 38%", "Supply 30D -18.0%", "Liquidity 72", "1.4x MSRP", "Per pack C$5.50", "vs packs -3.1%"; for name, price and return sorts it shows units sold. A row whose price is 2 or more days old, or withheld, shows "Last priced {Mon D}" there instead (warn text with the clock glyph), whatever the sort. The Delta shows the sorted return window (7D, 1M, 3M or 1Y), otherwise 1M.
 
 Phone filter sheet (WP14 `Dialog`, full screen with WP27's `placement="top"`):
 
@@ -239,8 +239,8 @@ Desktop "Metric filters" opens an in-flow panel under the filter bar with the sa
 | First paint | default view, 50 rows, from the server HTML | same | "Prices as of Sep 29" |
 | URL has a view (shared link) | right after hydration the view is applied, rows re-sort or re-filter once, the fixed-height filter line shows the chips (no layout shift above the table) | same | |
 | Sort, filter, preset, columns changed | header arrow, pressed preset, chips paint at once; rows update in a transition, dimmed to 70% with `aria-busy` | same | |
-| Price 2 to 13 days old | clock after the price, `title` and `sr-only` "Last priced Sep 25" | same | |
-| Price withheld | `--` in every metric cell with `sr-only` "Price withheld", clock "Last priced Aug 1", sparkline "No history" | same | |
+| Price 2 to 13 days old | clock after the price, `title` and `sr-only` "Last priced Sep 25" | the meta slot reads "Last priced Sep 25" in warn text (WP23 `AsOf` inline variant: a tooltip never shows on touch) | |
+| Price withheld | `--` in every metric cell with `sr-only` "Price withheld", clock "Last priced Aug 1", sparkline "No history" | `--` price and change, meta "Last priced Aug 1" | |
 | No stats row (new product) | price, returns, units, volume trend, signal; others `--` | same | |
 | Stats read failed (`stats.day` null) | as above for every row | same | warn line: "Risk, supply and value statistics are unavailable right now. Prices and returns come from the catalog." Presets needing them are not offered |
 | No WP28 data | Value preset, Near MSRP, Below pack value, x MSRP and premium filters hidden | same | |
@@ -253,22 +253,22 @@ There is no loading spinner: the rows are in the HTML.
 
 ### D7. Copy (every new user-facing string)
 
-"Screener" (h1, nav, title); `{n} sealed products. ` + `PROVENANCE_SENTENCE` + " Prices as of {Mon D}." + "Methodology"; "Screens"; the six preset names and summaries from D4; "Screens: choose one"; "Search", placeholder "Name, set or code"; "Product type", "All types"; "Era", "All eras"; "Set", "All sets"; "Price (USD)", "Any price", "Under US$50", "US$50 to US$150", "US$150 to US$500", "US$500 and up", "Custom range"; "Market Pulse", "Any signal"; "Current price only"; "Metric filters", "Metric filters ({n})"; "Performance", "Risk", "Liquidity", "Value"; "Return window"; "{W} return"; "Min", "Max"; "Reset", "Clear all"; "No filters. Every tracked product is listed."; "Screen: {name}"; chip texts "{Label} at least {v}", "{Label} at most {v}", "{Label} between {a} and {b}", "Current price only", "Search "{q}"", "Type: {t}", "Era: {e}", "Set: {s}", "Price: {band}", "Market Pulse: {signal}"; "Filters", "Filters ({n})", "Sort: {label}", "Sort by", "General", "Name", "Market Price", "Show {n} products"; "Found {n} products", " · showing {k}"; "Columns"; "Export CSV"; "Show {k} more", "Show all {n}"; "Trend 1Y"; "At high"; the returns caption in D5; "Risk, supply and value statistics are unavailable right now. Prices and returns come from the catalog."; "No products to screen right now."; sr-only: "Rank", "Price withheld", "Not available", "No signal", ", remove filter", "Sort order: high to low. Switch to low to high". CSV headers in D8. No "live", "real-time", "all-time", "undervalued", "buy"; "TCGplayer" spelled that way; no em dashes.
+"Screener" (h1, nav, title); `{n} sealed products. ` + `PROVENANCE_SENTENCE` + " Prices as of {Mon D}." + "Methodology"; "Screens"; the six preset names and summaries from D4; "Screens: choose one"; "Search", placeholder "Name, set or code"; "Product type", "All types"; "Era", "All eras"; "Set", "All sets"; "Price (USD)", "Any price", "Under US$50", "US$50 to US$150", "US$150 to US$500", "US$500 and up", "Custom range"; "Market Pulse", "Any signal"; "Current price only"; "Metric filters", "Metric filters ({n})"; "Performance", "Risk", "Liquidity", "Value"; "Return window"; "{W} return"; "Min", "Max"; "Reset", "Clear all"; "No filters. Every tracked product is listed."; "Screen: {name}"; chip texts "{Label} at least {v}", "{Label} at most {v}", "{Label} between {a} and {b}", "Current price only", "Search "{q}"", "Type: {t}", "Era: {e}", "Set: {s}", "Price: {band}", "Market Pulse: {signal}"; "Filters", "Filters ({n})", "Sort: {label}", "Sort by", "General", "Name", "Market Price", "Show {n} products"; "Found {n} products", " · showing {k}" (every count through `productCount`: "1 product", "{n} products"); "Columns"; "Export CSV"; "Show {k} more", "Show all {n}"; "Trend 1Y"; "At high"; the returns caption in D5; "Risk, supply and value statistics are unavailable right now. Prices and returns come from the catalog."; "No products to screen right now."; "Last priced {Mon D}" (phone meta, WP23 `AsOf`); "At 52-week high" (phone meta); sr-only: "Rank", "Price withheld", "Not available", "No signal", ", remove filter", "Sort order: high to low. Switch to low to high". CSV headers in D8. No "live", "real-time", "all-time", "undervalued", "buy"; "TCGplayer" spelled that way; no em dashes.
 
 ### D8. CSV
 
-`pokefin-screener-{statsDay}.csv`, UTF-8 with BOM, CRLF line ends (RFC 4180). Header row: `Product ID`, `Product type`, `Set`, `Set code`, `Era`, `Variant`, `Market Price ({USD|CAD})`, `Price day`, `Price status` (`current` or `withheld`), then one column per visible metric: `{full label} ({unit})` where the unit is the currency code for money, `%` for percents, `x` for x MSRP, `days` for days of supply, and the definition's `unitLabel` for integers; Signal has no unit. Values: money in the selected currency (converted at the latest rate by `useCurrency().convertPrice`), 2 decimals; percents 1 decimal (sell-through 0); integers whole; days 1 decimal; x MSRP 2 decimals; signal as its label. Withheld rows: price and metrics empty. Text cells that start with `=`, `+`, `-`, `@`, tab or CR are prefixed with `'` (formula injection); cells with a comma, quote or line break are quoted. Last line, after one empty line: `Source: Pokéfin (<page URL>). TCGplayer Market Price data, daily statistics for <statsDay>. [USD converted to CAD at <rate> (Bank of Canada, <rateDate>). ]` + `DECISION_NOTE`. No price history, no raw listings: only the view (01-PRODUCT-DIRECTION.md §7).
+`pokefin-screener-{statsDay}.csv`, UTF-8 with BOM, CRLF line ends (RFC 4180). Header row: `Product ID`, `Product type`, `Set`, `Set code`, `Era`, `Variant`, `Market Price ({USD|CAD})`, `Price day`, `Price status` (`current` or `withheld`), then one column per visible metric: `{full label} ({unit})` where the unit is the currency code for money, `%` for percents, `x` for x MSRP, `days` for days of supply, and the definition's `unitLabel` for integers; Signal has no unit. Values: money in the selected currency (converted at the latest rate by `useCurrency().convertPrice`), 2 decimals; percents 1 decimal (sell-through 0); integers whole; days 1 decimal; x MSRP 2 decimals; signal as its label. Withheld rows: price and metrics empty. Text cells that start with `=`, `+`, `-`, `@`, tab or CR are prefixed with `'` (formula injection); cells with a comma, quote or line break are quoted. Last line, after one empty line: `Source: Pokéfin (<page URL>). TCGplayer Market Price data, daily statistics for <statsDay>. [USD converted to CAD at <rate, 4 decimals> (Bank of Canada, <rateDate>). ]` + `DECISION_NOTE`. No price history, no raw listings: only the view (01-PRODUCT-DIRECTION.md §7).
 
 ### D9. Accessibility
 
-- One `h1`. The table has a `sr-only` caption ("Screener results: 212 products, sorted by 1M change, high to low"); headers are `th scope="col"`; the sorted header carries `aria-sort`. Each sortable header is a `<button>` whose name is its visible short label; the full label and definition are in its `title` and in the adjacent `MetricHelpLink` ("How Volatility 1Y (weekly, annualised) is calculated"). The rank cell is `aria-hidden`; the header says "Rank" to screen readers.
+- One `h1`. The table has a `sr-only` caption ("Screener results: 212 products, sorted by 1M change, high to low"); headers are `th scope="col"`; the sorted header carries `aria-sort`. Each sortable header is a `<button>` whose name is its visible short label; the full label and definition are in its `title` and in the adjacent `MetricHelpLink` ("How Volatility 1Y (weekly, annualised) is calculated"). The rank number is CSS generated content (`::before`), which browsers expose to screen readers; the visible `#` header is `aria-hidden` and the header says "Rank" to screen readers.
 - One link per row (the product name, WP30 `IntentLink`); the variant is part of its text. The phone row is WP23's single-link `DataListRow`.
 - Direction is never colour-only (`Delta` glyph plus `sr-only` word). Missing values say why (`sr-only`).
 - Preset buttons use `aria-pressed`; the phone preset select is labelled "Screen". Chips are buttons named "{text}, remove filter". The "Metric filters" button has `aria-expanded` and `aria-controls="screener-metric-filters"`.
 - Range inputs are `inputMode="decimal"` text inputs named "Min, {full label}" and "Max, {full label}" (visible text "Min"/"Max" is part of the name, WCAG 2.5.3), `aria-invalid` while the text is not a number.
 - Sheets are WP14 `Dialog`s (focus trapped, Escape and backdrop close, focus returns to the trigger). The sort sheet uses buttons with `aria-pressed`, not radios, so arrow keys do not apply and close it.
 - "Found {n} products" is `role="status"` (polite). The results region has `aria-busy` while a transition is pending.
-- Touch targets: every control `pointer-coarse:min-h-11`; phone rows at least 56 px; inputs 16 px text below 640 px. Focus: `focus-visible:ring-2 ring-action` everywhere; `motion-reduce:transition-none` on the dim.
+- Touch targets: every control `pointer-coarse:min-h-11`; phone rows at least 56 px; inputs 16 px text below 640 px. Focus: `focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-action` everywhere (never `outline-none`: in Tailwind 4 it removes the only focus cue in Windows forced-colours mode, and WP24's trust test fails on it in `MetricLabel.tsx` and `MethodologyArticle.tsx`). Colour changes are instant (no `transition-colors`, 01-PRODUCT-DIRECTION.md §3.5); the only transition is the opacity dim, with `motion-reduce:transition-none`.
 - Sparklines stay `aria-hidden` (WP26).
 
 ### D10. Design system use
@@ -346,7 +346,7 @@ grep -n '"/market"' ../revalidate_hook.py eslint.config.mjs                     
 # WP30
 ls app/components/IntentLink.tsx app/components/ProductPrices/utils/catalogValues.ts app/components/ProductPrices/utils/freshness.ts app/components/ProductPrices/shared/msrp.ts
 grep -n 'list: "h-6 w-16 md:h-7 md:w-24"' app/components/MarketView/MiniSparkline.tsx           # 1 line
-grep -n "export function formatDaysOfSupply\|export function utcDateKey" app/components/ProductPrices/utils/catalogValues.ts app/components/ProductPrices/utils/freshness.ts   # 2 lines
+grep -n "export function formatDaysOfSupply\|export function utcDateKey\|export function isPriceDayStale" app/components/ProductPrices/utils/catalogValues.ts app/components/ProductPrices/utils/freshness.ts   # 3 lines
 ```
 
 If any of these hard checks fails, stop and report the missing package: this package edits their files and must not recreate them.
@@ -377,6 +377,8 @@ Tooling: Node and pnpm as in WP00; Python venv and local Postgres for the databa
 Baseline, from `frontend/`: `pnpm exec tsc --noEmit` (exit 0), `pnpm lint` (0 errors), `pnpm test --ci` (all pass), `pnpm test:scripts` (all pass). From the repo root: `python -m pytest tests/ -q`. Record the counts for the PR.
 
 The work has two phases, like WP25 and WP28. **Phase A** (steps 1 to 28) needs nothing from the owner; at its end open a draft PR titled `[waiting for DB types] feat: Screener with presets (WP33)` and hand the owner Owner actions 1 and 2. **Phase B** (step 29) regenerates `app/types/database.ts` once 0042 is in production. Until then `tsc` reports that `max_dd_365d_pct` is not a column of `product_stats_latest` in `serverMarketData.ts`; that is the only allowed `tsc` failure in phase A. Do not cast around it.
+
+`next build` type-checks, so that one error also fails `pnpm build:stub` in phase A, and step 28 needs a build. Two ways, in this order of preference: (1) if the owner can apply 0042 and push the types quickly, do step 29 first and then step 28; (2) otherwise measure on a temporary, uncommitted edit of the generated file: in `app/types/database.ts` add `max_dd_365d_pct: number | null` to the `Row` of `product_daily_stats` and of `product_stats_latest` and `max_dd_365d_pct?: number | null` to the table's `Insert` and `Update`, run step 28, then discard it with `git checkout app/types/database.ts` before any commit (`git status` must not list the file). Never commit a hand edit of `database.ts`; step 29 regenerates it from production. The draft PR's CI build fails until phase B; that is expected.
 
 ## Implementation steps
 
@@ -544,6 +546,7 @@ UPDATE public.product_daily_stats
 Notes:
 - Who executes the helper: the refresh runs as the owner of `refresh_market_analytics` (SECURITY DEFINER, owner `postgres`), the backfill in section 5 runs as the migration runner, and nobody else writes the table (WP25 revoked writes from `anon` and `authenticated`; `pokefin_scraper` only calls the refresh). A direct write by any other role would hit "permission denied" on the helper, which the trigger catches (value NULL).
 - Performance: the helper is an index range scan on `product_price_history (product_id, recorded_at)` (indexes from `20260506_market_performance_functions.sql` and 0023) of at most about 365 rows. The upsert fires the trigger twice per row (BEFORE INSERT on the proposed row, BEFORE UPDATE on conflict): about 612 scans per refresh, well under 100 ms on production size. WP25's 10 s refresh budget test covers it because it calls the full refresh.
+- Checked during review on PostgreSQL 16.13, on a scaffold with 0003's one-row-per-day index, an RLS-enabled `product_daily_stats` and a refresh that upserts with `ON CONFLICT ... DO UPDATE SET usd_price, price_day, ...`: the file applies twice cleanly; a second refresh of the same day recomputes through the BEFORE UPDATE path; an UPDATE that does not name `price_day` or `usd_price` leaves the value alone; a refresh of a past day uses that day's window; and a role without EXECUTE on the helper gets a WARNING and NULL instead of an aborted statement. Values carry float noise (for example `9.999999999999998`); the Screener rounds to 2 decimals and the DB test uses `pytest.approx`.
 - `backfill_daily_stats.py` (WP25) needs no change: every row it writes goes through the trigger. Rewriting 400 days takes a few minutes longer than before; say so in the README (step 26).
 
 Check the file with the repo's migration checker (from the repo root):
@@ -630,8 +633,10 @@ test("WP33: every product stats row has a max drawdown between 0 and 100", () =>
 
 ```ts
   // WP33: Screener
-  def({ key: "fromHigh52w", label: "From 52-week high", unitLabel: "%", window: "52 weeks", short: "Percent between the current Market Price and the 52-week high. Hidden when the price is withheld.", anchor: "range-52w" }),
+  def({ key: "fromHigh52w", label: "From 52-week high", unitLabel: "%", window: "52 weeks", short: `Current Market Price against the 52-week high (held ${TRACKED_HIGH_ROLLING_ROWS} recorded days). Hidden when the price is withheld.`, anchor: "range-52w" }),
 ```
+
+`TRACKED_HIGH_ROLLING_ROWS` is already in scope: WP25's `range52w` entry uses it (if the file imports it under another name, use that). The 52-week high is WP25's robust high, so a one-day spike never sets it and the value can be slightly above 0 right after a new high; the cell prints "At high" from -0.05% up.
 
 5b. Only if soft check (b) found none of WP28's three keys, add below it (WP28 step 15 text with the `"box-nav"` anchor, because `"msrp"` and `"cost-per-pack"` do not exist without WP28):
 
@@ -667,7 +672,7 @@ export function MetricHelpLink({ metric, className = "" }: { metric: MetricKey; 
       prefetch={false}
       title={definition.short}
       aria-label={`How ${definition.label} is calculated`}
-      className={`group inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-control focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-action ${className}`.trim()}
+      className={`group inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-control focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-action ${className}`.trim()}
     >
       <span
         aria-hidden="true"
@@ -680,7 +685,7 @@ export function MetricHelpLink({ metric, className = "" }: { metric: MetricKey; 
 }
 ```
 
-and in `MetricLabel`'s linked branch replace the whole `<Link ...>...</Link>` element with `<MetricHelpLink metric={metric} />`. Copy the class strings from the CURRENT file, not from this snippet, if they differ (WP27 or a later package may have touched them). WP24's `MetricLabel.test.tsx` must pass unchanged. Add one line to `app/components/ui/README.md` under `MetricLabel`: "`MetricHelpLink`: the same "?" link without the label, for a header whose label is inside a sort button (WP33)."
+and in `MetricLabel`'s linked branch replace the whole `<Link ...>...</Link>` element with `<MetricHelpLink metric={metric} />`. Copy the class strings from the CURRENT file, not from this snippet, if they differ (WP27 or a later package may have touched them). WP24's `MetricLabel.test.tsx` must pass unchanged, and so must WP24's trust test in `uiConventions.test.ts`, which fails on `outline-none`, `transition-colors` or a raw palette class anywhere in `MetricLabel.tsx` (it is in `TRUST_FILES`). Add one line to `app/components/ui/README.md` under `MetricLabel`: "`MetricHelpLink`: the same "?" link without the label, for a header whose label is inside a sort button (WP33)."
 
 ### Step 7. `app/screener/types.ts` (new)
 
@@ -737,6 +742,11 @@ export interface ScreenerRow {
 /** "Booster Box · Evolving Skies": the product cell and the phone row title. */
 export function screenerProductName(row: Pick<ScreenerRow, "typeLabel" | "setName">): string {
   return `${row.typeLabel} · ${row.setName}`;
+}
+
+/** "1 product", "28 products": every count the Screener prints. */
+export function productCount(n: number): string {
+  return `${n} ${n === 1 ? "product" : "products"}`;
 }
 ```
 
@@ -1320,7 +1330,7 @@ export interface FilterChip {
   clear: (state: ScreenerState) => ScreenerState;
 }
 
-/** One chip per active filter, in URL key order. Also the rule list on /methodology#screens. */
+/** One chip per active filter: "Current price only" first, then URL key order. Also the rule list on /methodology#screens. */
 export function describeFilters(state: ScreenerState, setNames: ReadonlyMap<number, string>): FilterChip[] {
   const chips: FilterChip[] = [];
   if (state.priced) chips.push({ key: "priced", text: "Current price only", clear: (s) => ({ ...s, priced: false }) });
@@ -1764,7 +1774,7 @@ export function buildScreenerCsv(
   }
   const fx =
     options.currency === "CAD"
-      ? `USD converted to CAD at ${options.exchangeRate} (Bank of Canada${options.exchangeRateDate ? `, ${options.exchangeRateDate}` : ""}). `
+      ? `USD converted to CAD at ${options.exchangeRate.toFixed(4)} (Bank of Canada${options.exchangeRateDate ? `, ${options.exchangeRateDate}` : ""}). `
       : "";
   lines.push("");
   lines.push(
@@ -1781,7 +1791,7 @@ export function csvFilename(day: string): string {
 
 /** Browser download. The BOM makes spreadsheet apps read UTF-8 ("Pokéfin"). */
 export function downloadCsv(filename: string, csv: string): void {
-  const blob = new Blob(["﻿", csv], { type: "text/csv;charset=utf-8" });
+  const blob = new Blob(["\uFEFF", csv], { type: "text/csv;charset=utf-8" }); // write the escape, not a pasted BOM character
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;
@@ -1790,7 +1800,8 @@ export function downloadCsv(filename: string, csv: string): void {
   document.body.appendChild(link);
   link.click();
   link.remove();
-  window.setTimeout(() => URL.revokeObjectURL(url), 0);
+  // Safari can cancel a download whose object URL is revoked in the same tick.
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 ```
 
@@ -1938,6 +1949,7 @@ export function phoneMeta(row: ScreenerRow, sort: SortKey, ctx: CellContext): st
   }
   const metric = METRIC_BY_ID[sort];
   const text = formatMetricValue(metric, row[sort], ctx) ?? "--";
+  if (sort === "off" && text === "At high") return "At 52-week high";
   if (sort === "dos") return `${text} days of supply`;
   if (sort === "msrp") return `${text} MSRP`;
   return `${metric.short} ${text}`;
@@ -1972,7 +1984,9 @@ export interface ScreenerTableRowProps {
   sparkline: string | null | undefined;
 }
 
-const CELL = "whitespace-nowrap px-3 text-right";
+// Borders live on the cells, not the <tr>: the table uses border-separate
+// (step 16b), because collapsed borders do not travel with sticky cells.
+const CELL = "whitespace-nowrap border-b border-line px-3 text-right";
 
 /**
  * One 44 px row. Memoised with primitive or cached props only: a sort moves
@@ -1981,16 +1995,14 @@ const CELL = "whitespace-nowrap px-3 text-right";
 function ScreenerTableRow({ row, columns, ctx, referenceDate, sparkline }: ScreenerTableRowProps) {
   const name = screenerProductName(row);
   return (
-    <tr className="group h-11 border-b border-line bg-surface transition-colors duration-150 hover:bg-surface-alt motion-reduce:transition-none">
-      <td
-        aria-hidden="true"
-        className="pf-screener-rank sticky left-0 z-10 bg-surface px-3 text-right text-small text-ink-soft group-hover:bg-surface-alt"
-      />
-      <td className="sticky left-12 z-10 overflow-hidden border-r border-line bg-surface px-3 group-hover:bg-surface-alt">
+    <tr className="group h-11 bg-surface hover:bg-surface-alt">
+      {/* The number is CSS generated content (step 14); browsers expose it to screen readers, under the "Rank" header. */}
+      <td className="pf-screener-rank sticky left-0 z-10 border-b border-line bg-surface px-3 text-right text-small text-ink-soft group-hover:bg-surface-alt" />
+      <td className="sticky left-12 z-10 overflow-hidden border-b border-r border-line bg-surface px-3 group-hover:bg-surface-alt">
         <IntentLink
           href={`/product/${row.id}`}
           title={row.variant ? `${name}, ${row.variant}` : name}
-          className="block truncate rounded-control font-medium text-ink hover:text-action focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-action"
+          className="block truncate rounded-control font-medium text-ink hover:text-action focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-action"
         >
           {name}
           {row.variant && <span className="ml-2 text-small font-normal text-ink-soft">{row.variant}</span>}
@@ -2005,7 +2017,7 @@ function ScreenerTableRow({ row, columns, ctx, referenceDate, sparkline }: Scree
           {renderMetricCell(metric, row, ctx)}
         </td>
       ))}
-      <td className="px-3">
+      <td className="border-b border-line px-3">
         <MiniSparkline series={sparkline} size="list" className="ml-auto" />
       </td>
     </tr>
@@ -2032,14 +2044,14 @@ import {
   type ScreenerMetric,
   type SortKey,
 } from "../../screener/metrics";
-import type { ScreenerRow } from "../../screener/types";
+import { productCount, type ScreenerRow } from "../../screener/types";
 import type { CellContext } from "./columns";
 import ScreenerTableRow from "./ScreenerTableRow";
 
 const RANK_PX = 48; // = left-12, the product column's sticky offset
 const PRODUCT_MIN_PX = 240;
 const TREND_PX = 120;
-const TH = "h-10 px-3 text-right align-middle text-caption";
+const TH = "h-10 border-b border-line px-3 text-right align-middle text-caption";
 
 function ariaSort(active: boolean, dir: SortDirection): "ascending" | "descending" | undefined {
   if (!active) return undefined;
@@ -2063,7 +2075,7 @@ function SortHeader({ sortKey, label, title, sort, dir, onSort }: SortHeaderProp
       type="button"
       title={title}
       onClick={() => onSort(sortKey)}
-      className={`inline-flex h-10 items-center gap-1 uppercase tracking-wide transition-colors duration-150 hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-action motion-reduce:transition-none pointer-coarse:min-h-11 ${
+      className={`inline-flex h-10 items-center gap-1 uppercase tracking-wide hover:text-ink focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-action pointer-coarse:min-h-11 ${
         active ? "font-bold text-ink" : "font-semibold text-ink-soft"
       }`}
     >
@@ -2098,9 +2110,9 @@ function ScreenerTable({ rows, columns, sort, dir, onSort, ctx, referenceDate, s
   const minWidth = RANK_PX + PRODUCT_MIN_PX + price.widthPx + TREND_PX + columns.reduce((sum, c) => sum + c.widthPx, 0);
   return (
     <div className="overflow-x-auto rounded-card border border-line bg-surface">
-      <table className="w-full table-fixed border-collapse text-body tabular-nums" style={{ minWidth }}>
+      <table className="w-full table-fixed border-separate border-spacing-0 text-body tabular-nums" style={{ minWidth }}>
         <caption className="sr-only">
-          {`Screener results: ${total} products, sorted by ${sortFullLabel(sort)}, ${directionPhrase(sort, dir)}`}
+          {`Screener results: ${productCount(total)}, sorted by ${sortFullLabel(sort)}, ${directionPhrase(sort, dir)}`}
         </caption>
         <colgroup>
           <col style={{ width: RANK_PX }} />
@@ -2112,15 +2124,15 @@ function ScreenerTable({ rows, columns, sort, dir, onSort, ctx, referenceDate, s
           <col style={{ width: TREND_PX }} />
         </colgroup>
         <thead>
-          <tr className="border-b border-line">
-            <th scope="col" className="sticky left-0 z-20 h-10 bg-surface px-3 text-right text-caption font-semibold text-ink-soft">
+          <tr>
+            <th scope="col" className="sticky left-0 z-20 h-10 border-b border-line bg-surface px-3 text-right text-caption font-semibold text-ink-soft">
               <span aria-hidden="true">#</span>
               <span className="sr-only">Rank</span>
             </th>
             <th
               scope="col"
               aria-sort={ariaSort(sort === "name", dir)}
-              className="sticky left-12 z-20 h-10 border-r border-line bg-surface px-3 text-left align-middle text-caption"
+              className="sticky left-12 z-20 h-10 border-b border-r border-line bg-surface px-3 text-left align-middle text-caption"
             >
               <SortHeader sortKey="name" label="Product" title="Sort by name" sort={sort} dir={dir} onSort={onSort} />
             </th>
@@ -2153,7 +2165,7 @@ function ScreenerTable({ rows, columns, sort, dir, onSort, ctx, referenceDate, s
             </th>
           </tr>
         </thead>
-        <tbody className="pf-screener-body">
+        <tbody className="pf-screener-body [&>tr:last-child>td]:border-b-0">
           {rows.map((row) => (
             <ScreenerTableRow
               key={row.id}
@@ -2188,6 +2200,7 @@ import Delta from "../ui/Delta";
 import { sparklineFor, type SparklinePayload } from "../../lib/sparkline";
 import { METRIC_BY_ID, isReturnMetric, type SortKey } from "../../screener/metrics";
 import { screenerProductName, type ScreenerRow } from "../../screener/types";
+import { isPriceDayStale } from "../ProductPrices/utils/freshness";
 import { Missing, missingReason, phoneMeta, type CellContext } from "./columns";
 
 interface ItemProps {
@@ -2198,21 +2211,21 @@ interface ItemProps {
   sparkline: string | null | undefined;
 }
 
-/** WP23 DataListRow: title and variant, then meta | price, Delta, and the 64x24 1Y trend. */
+/**
+ * WP23 DataListRow: title and variant, then meta | price, Delta, and the 64x24 1Y trend.
+ * A price 2 or more days old (or withheld) prints "Last priced Sep 25" in words in the
+ * meta slot: a tooltip glyph says nothing on touch (WP23 AsOf, WP30 D1 item 7).
+ */
 const ScreenerListItem = memo(function ScreenerListItem({ row, sort, ctx, referenceDate, sparkline }: ItemProps) {
   const deltaId = isReturnMetric(sort) ? sort : "r1m";
+  const stale = isPriceDayStale(row.priceDay, referenceDate);
   return (
     <DataListRow
       href={`/product/${row.id}`}
       title={screenerProductName(row)}
       subtitle={row.variant ?? undefined}
-      meta={phoneMeta(row, sort, ctx)}
-      value={
-        <>
-          {row.price === null ? <Missing reason={missingReason(row)} /> : ctx.formatPrice(row.price)}
-          <AsOf date={row.priceDay} variant="table" referenceDate={referenceDate} className="ml-1" />
-        </>
-      }
+      meta={stale ? <AsOf date={row.priceDay} referenceDate={referenceDate} /> : phoneMeta(row, sort, ctx)}
+      value={row.price === null ? <Missing reason={missingReason(row)} /> : ctx.formatPrice(row.price)}
       delta={<Delta value={row[deltaId]} period={METRIC_BY_ID[deltaId].short} missingReason={missingReason(row)} />}
       sparkline={<MiniSparkline series={sparkline} size="row" />}
     />
@@ -2262,7 +2275,7 @@ import { parseNumber, type Range } from "../../screener/urlState";
 export const FIELD_LABEL =
   "flex min-w-0 flex-col gap-1 text-caption font-semibold uppercase tracking-wide text-ink-soft";
 export const FIELD_CONTROL =
-  "h-10 rounded-control border border-line bg-surface px-3 text-base normal-case tracking-normal text-ink sm:text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-action pointer-coarse:h-11";
+  "h-10 rounded-control border border-line bg-surface px-3 text-base normal-case tracking-normal text-ink sm:text-sm focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-action pointer-coarse:h-11";
 
 export interface SelectOption {
   value: string;
@@ -2653,6 +2666,7 @@ import Button from "../ui/Button";
 import Dialog from "../ui/Dialog";
 import type { FilterOptions } from "../../screener/filters";
 import type { Availability } from "../../screener/metrics";
+import { productCount } from "../../screener/types";
 import CategoricalFilters, { type FilterProps } from "./CategoricalFilters";
 import MetricFilterFields from "./MetricFilterFields";
 
@@ -2678,14 +2692,16 @@ export default function FilterSheet({
       title="Filters"
       placement="top"
       footer={
-        <div className="flex gap-3 border-t border-line p-4">
+        // A fragment: WP14's Dialog already wraps the footer in a flex row with
+        // gap-3, a top border and p-4. A second wrapper doubles both.
+        <>
           <Button variant="secondary" onClick={onReset}>
             Reset
           </Button>
           <Button className="flex-1" onClick={onClose}>
-            {`Show ${resultCount} products`}
+            {`Show ${productCount(resultCount)}`}
           </Button>
-        </div>
+        </>
       }
     >
       <div className="space-y-6 p-4">
@@ -2743,7 +2759,7 @@ export default function SortSheet({
                       type="button"
                       aria-pressed={sort === key}
                       onClick={() => onSelect(key)}
-                      className="flex min-h-11 w-full items-center justify-between px-1 text-left text-body text-ink hover:bg-surface-alt focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-action"
+                      className="flex min-h-11 w-full items-center justify-between px-1 text-left text-body text-ink hover:bg-surface-alt focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-action"
                     >
                       <span>{key === "price" ? "Market Price" : sortFullLabel(key)}</span>
                       {sort === key && (
@@ -2794,7 +2810,7 @@ export default function PresetBar({
             aria-pressed={activeId === preset.id}
             title={preset.summary}
             onClick={() => onApply(preset)}
-            className="h-9 rounded-control border border-line bg-surface px-3 text-small font-medium text-ink transition-colors duration-150 hover:bg-surface-alt focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-action motion-reduce:transition-none pointer-coarse:min-h-11 aria-pressed:border-action aria-pressed:bg-action aria-pressed:text-white"
+            className="h-9 rounded-control border border-line bg-surface px-3 text-small font-medium text-ink hover:bg-surface-alt focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-action pointer-coarse:min-h-11 aria-pressed:border-action aria-pressed:bg-action aria-pressed:text-white"
           >
             {preset.name}
           </button>
@@ -2807,7 +2823,7 @@ export default function PresetBar({
           const picked = presets.find((p) => p.id === event.target.value);
           if (picked) onApply(picked);
         }}
-        className="h-11 w-full rounded-control border border-line bg-surface px-3 text-base text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-action md:hidden"
+        className="h-11 w-full rounded-control border border-line bg-surface px-3 text-base text-ink focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-action md:hidden"
       >
         <option value="">Screens: choose one</option>
         {presets.map((p) => (
@@ -2859,7 +2875,7 @@ export default function ActiveFilters({
               key={chip.key}
               type="button"
               onClick={() => onChange(chip.clear(state))}
-              className="inline-flex h-7 shrink-0 items-center gap-1 rounded-control border border-line bg-surface px-2 text-ink hover:bg-surface-alt focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-action pointer-coarse:h-11"
+              className="inline-flex h-7 shrink-0 items-center gap-1 rounded-control border border-line bg-surface px-2 text-ink hover:bg-surface-alt focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-action pointer-coarse:h-11"
             >
               <span>{chip.text}</span>
               <span aria-hidden="true">×</span>
@@ -2869,7 +2885,7 @@ export default function ActiveFilters({
           <button
             type="button"
             onClick={onReset}
-            className="h-7 shrink-0 rounded-control px-2 font-medium text-action hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-action pointer-coarse:h-11"
+            className="h-7 shrink-0 rounded-control px-2 font-medium text-action hover:underline focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-action pointer-coarse:h-11"
           >
             Clear all
           </button>
@@ -2926,7 +2942,7 @@ import {
   serializeScreenerState,
   type ScreenerState,
 } from "../../screener/urlState";
-import type { ScreenerRow } from "../../screener/types";
+import { productCount, type ScreenerRow } from "../../screener/types";
 import ActiveFilters from "./ActiveFilters";
 import FilterBar from "./FilterBar";
 import PresetBar from "./PresetBar";
@@ -3118,7 +3134,7 @@ export default function Screener({ rows, sparklines, referenceDate, statsDay }: 
 
       <div className="flex flex-wrap items-center justify-between gap-3">
         <p role="status" className="text-small text-ink-soft">
-          {`Found ${matched.length} products`}
+          {`Found ${productCount(matched.length)}`}
           {matched.length > shown.length ? ` · showing ${shown.length}` : ""}
         </p>
         <div className="flex items-center gap-3">
@@ -3268,13 +3284,17 @@ export default async function ScreenerPage() {
   const pricesAsOf = newestFreshPriceDay(rows);
 
   return (
-    <main className="mx-auto w-full max-w-screen-2xl space-y-4 px-4 py-4 md:px-6 md:py-6">
+    <main className="mx-auto w-full max-w-[96rem] space-y-4 px-4 py-4 md:px-6 md:py-6">
       <PageHeader
         title="Screener"
         provenance={
           <ProvenanceLine methodologyHref="/methodology#screens">
             {`${rows.length} sealed products. ${PROVENANCE_SENTENCE} `}
-            {pricesAsOf && <AsOf date={pricesAsOf} referenceDate={referenceDate} prefix="Prices as of" />}
+            {pricesAsOf && (
+              <>
+                <AsOf date={pricesAsOf} referenceDate={referenceDate} prefix="Prices as of" />.
+              </>
+            )}
           </ProvenanceLine>
         }
       />
@@ -3287,6 +3307,7 @@ export default async function ScreenerPage() {
 - Before deleting `app/market/page.tsx` (step 21a), look at what it renders after WP15 and WP24 besides the header and `<MarketView>` (normally the store promotion with its disclosure, `CardRinkPromo`). Copy that element verbatim as the last child of `<main>` here, below the Screener. The promotion never sits between the filters and the results (WP15).
 - If `ProvenanceLine` does not accept a `ReactNode` child mix, pass the sentence as its child and put `AsOf` in `PageHeader`'s `provenance` next to it in a fragment; keep the visible text identical.
 - The page sends every row (about 306) and the 1Y series map in the RSC payload. Nothing else: no history, no listings, no images.
+- `max-w-[96rem]` (1536 px, the width `/compare` uses) lets the Liquidity view fit without a sideways scroll at 1440 px. Do not write `max-w-screen-2xl`: Tailwind 4 does not generate the `max-w-screen-*` utilities.
 
 ### Step 21. Move the route: `/market` to `/screener`
 
@@ -3316,7 +3337,7 @@ Change each link target to `/screener` (home page buttons if WP32 has not replac
 
 ### Step 22. Delete the Market View
 
-Delete from `app/components/MarketView/`: `MarketView.tsx`, `MarketTableRow.tsx`, `columns.tsx`, `buildRows.ts`, `sorting.ts` (if it still exists after WP19 step 6), and their tests in `__tests__/`: `columns.test.ts`, `buildRows.test.ts`, `buildRows.reuse.test.ts`, `MarketTableRow.test.tsx`, `MarketView.table.test.tsx`, `MarketView.emptyState.test.tsx`, `sorting.test.ts` (whichever exist). Keep `MiniSparkline.tsx`, `__tests__/MiniSparkline*.test.tsx` and `__tests__/useProductData.test.tsx` (it tests the `/prices` hook). Moving `MiniSparkline` out of this folder is out of scope (many importers).
+Delete every file in `app/components/MarketView/` and its `__tests__/` except these, which stay: `MiniSparkline.tsx`, `__tests__/MiniSparkline*.test.tsx` and `__tests__/useProductData.test.tsx` (it tests the `/prices` hook). Expected deletions (whichever exist after WP17, WP19, WP24 and WP26): `MarketView.tsx`, `MarketTableRow.tsx`, `columns.tsx`, `buildRows.ts`, `sorting.ts`, any other component or hook WP19 split out of `MarketView.tsx`, and every other test in `__tests__/` (`columns.test.ts`, `buildRows*.test.ts`, `MarketTableRow.test.tsx`, `MarketView*.test.tsx`, `sorting.test.ts`). Before deleting a file that is not on this list, `grep -rn` its module name in `app/`: if anything outside `MarketView/` imports it, stop and report it. Afterwards `ls app/components/MarketView app/components/MarketView/__tests__` shows only the kept files. Moving `MiniSparkline` out of this folder is out of scope (many importers).
 
 Then confirm nothing imports what was deleted:
 
@@ -3409,7 +3430,7 @@ import { SCREENER_PRESETS, presetHref } from "../screener/presets";
                   <Link
                     href={presetHref(preset)}
                     prefetch={false}
-                    className="font-medium text-action underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-action"
+                    className="font-medium text-action underline-offset-2 hover:underline focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-action"
                   >
                     Open this screen
                   </Link>
@@ -3450,7 +3471,7 @@ import { SCREENER_PRESETS, presetHref } from "../screener/presets";
 
 - In `rum.targets`, rename the key `"/market"` to `"/screener"` (same values: LCP 2000, INP 150, CLS 0.05, TTFB 400).
 - In `forbiddenChunks["supabase-js"].routes` (WP26), replace `"/market"` with `"/screener"`.
-- Recharts guard: `grep -n "Object.entries(budgets.forbiddenChunks)\|forbiddenChunks)" scripts/perf-budget.mjs`. If the script iterates every entry of `forbiddenChunks`, add:
+- Recharts guard. WP26's `checkForbiddenChunks` iterates every entry of `forbiddenChunks` (`for (const [name, rule] of Object.entries(rules))`) and WP26's `reachabilityControl` already proves `recharts-wrapper` is in a built chunk, so add, next to `"supabase-js"`:
 
 ```json
     "recharts": {
@@ -3460,7 +3481,7 @@ import { SCREENER_PRESETS, presetHref } from "../screener/presets";
     }
 ```
 
-  If it reads only the `supabase-js` key, skip this entry and rely on the Pitfalls grep in Verification.
+  Confirm with `grep -n "Object.entries(rules)" scripts/perf-measure.mjs` (1 line; WP26 put `checkForbiddenChunks` there and `perf-budget.mjs` calls it). If that grep finds nothing (the script was rewritten), stop and report it rather than skipping the rule.
 - Do not run `pnpm perf:budget --write-limits` (it rewrites every route). Set the two `/screener` limits by hand in step 28.
 
 25b. `lighthouserc.json`: in `collect.url` replace `"http://127.0.0.1:3100/market"` with `"http://127.0.0.1:3100/screener"`; in `assertMatrix` change the `/market` entry's `matchingUrlPattern` to `"^http://127\\.0\\.0\\.1:3100/screener$"`, set its `uses-responsive-images` to `["error", { "maxLength": 0 }]` (the Screener loads no product images), and set both `resource-summary` entries back to the placeholder `["warn", { "maxNumericValue": 1, "aggregationMethod": "median" }]` until step 28 calibrates them (a new URL, not a loosened one; WP22 D11). Keep CLS 0.05 and bf-cache as they are.
@@ -3502,7 +3523,7 @@ export function judgeRedirect({ from, to, status, location }) {
     }
 ```
 
-25f. `revalidate_hook.py` (repo root): in `WARM_PATHS` replace `"/market",` with `"/screener",` and delete the comment line "WP33 must update "/market" when it moves the screener." In `tests/test_revalidate_hook.py`, update any assertion that lists `"/market"` among the warmed paths to `"/screener"`.
+25f. `revalidate_hook.py` (repo root): in `WARM_PATHS` replace `"/market",` with `"/screener",`, and in the comment above it change the line `# render. WP33 must update "/market" when it moves the screener.` to `# render.` (keep the two lines before it). In `tests/test_revalidate_hook.py`, update any assertion that lists `"/market"` among the warmed paths to `"/screener"`.
 
 ### Step 26. Documentation
 
@@ -3530,7 +3551,7 @@ export function judgeRedirect({ from, to, status, location }) {
   Additive; `refresh_market_analytics` is not replaced.
 ```
 
-26d. `audits/remediation/01-PRODUCT-DIRECTION.md` §8, in the WP33 row of the table, change the Migrations cell from `none` to `0042`, and at the end of the "Migration registry" paragraph add: "WP33 adds 0042 (1-year maximum drawdown), the first number after the registry." No other edit to that file.
+26d. `audits/remediation/01-PRODUCT-DIRECTION.md` §8, in the WP33 row of the table, change the Migrations cell from `none` to `0042` and the Effort cell from `L, 14 to 16 h` to `L, 16 to 18 h`, and at the end of the "Migration registry" paragraph add: "WP33 adds 0042 (1-year maximum drawdown), the first number after the registry." No other edit to that file.
 
 ### Step 27. Conventions, copy and dead-code checks
 
@@ -3546,11 +3567,19 @@ grep -rnP '\x{2014}' app/components/Screener app/screener                       
 grep -rniE "\blive\b|real[- ]?time|all[- ]time|undervalued|\bbuy\b" app/components/Screener app/screener   # no output
 grep -rn "TCGPlayer" app/components/Screener app/screener                                                   # no output (case-sensitive)
 grep -rnE "recharts|ChartBundle|PriceChart|supabase" app/components/Screener app/screener                # no output
+grep -rnE "outline-none|transition-colors|transition-all" app/components/Screener app/screener app/components/ui/MetricLabel.tsx app/methodology/MethodologyArticle.tsx   # no output
+# Repo-wide: the only /market strings left are the allowed ones (step 21d)
+cd /home/user/Pokefin && git grep -nE '"/market|/market"|/market\?' -- ':!audits' ; cd frontend
+# expect only: next.config.ts (redirect source), navConfig.ts (match array), prod-smoke-lib.mjs (REDIRECT_CHECKS),
+# tests that exercise the redirect or mock a pathname. Anything in .github/, perf-budgets.json, lighthouserc.json,
+# revalidate_hook.py, README files or app code is a missed link: fix it.
 ```
 
 If a new file raised a count, fix the file; never raise the baseline.
 
 ### Step 28. Measure, set limits, calibrate
+
+Needs a passing `next build`: run it after step 29, or on the temporary types edit described in "Before you start" (discarded before committing).
 
 28a. `scripts/measure-screener.mjs` (new; manual tool, not run in CI):
 
@@ -3679,7 +3708,7 @@ pkill -f scripts/perf-serve.mjs
 - `documentBrKb`: if the measured value is at most 60, set `limit` and `recorded` the same way. If it is above 60: set `PAGE_SIZE` to 40 in `metrics.ts`, rebuild and measure again; if still above, set `limit = ceil(measured x 1.05)`, leave the target at 60 (the gate then shows "over target"), and write `Perf budget raise: routes./screener.documentBrKb <measured and the reason>` in the PR body.
 - Re-run `pnpm perf:budget`: exit 0, every row `ok` or `over target`, the `forbiddenChunks` line reports "supabase-js not reachable" for `/screener`.
 
-28d. Lighthouse: push the branch; in the CI job summary read the `/screener` row of the Lighthouse table (CLS ≤ 0.05, bf-cache 3/3, 0 oversized images) and set its `resource-summary:script:size` and `resource-summary:image:size` to `["error", { "maxNumericValue": <Suggested limit>, "aggregationMethod": "median" }]` from the summary's "Suggested script limit" and "Suggested image limit" (image: never below 1024). Push again; the Lighthouse step must pass with no placeholder left.
+28d. Lighthouse (after step 29: CI cannot build the branch before the generated types exist): push the branch; in the CI job summary read the `/screener` row of the Lighthouse table (CLS ≤ 0.05, bf-cache 3/3, 0 oversized images) and set its `resource-summary:script:size` and `resource-summary:image:size` to `["error", { "maxNumericValue": <Suggested limit>, "aggregationMethod": "median" }]` from the summary's "Suggested script limit" and "Suggested image limit" (image: never below 1024). Push again; the Lighthouse step must pass with no placeholder left.
 
 28e. If `measure-screener.mjs` exits 1:
 - Desktop sort over 150 ms: open the trace. If each `ScreenerTableRow` renders on a sort, a prop is unstable (check `columns` comes from `columnsFor`, `ctx` from `useMemo`, `sparkline` is a string); if the long task is style and layout, confirm `PAGE_SIZE` rows only are in the DOM and the phone list is unmounted at 1440 (`md === true`).
@@ -3717,6 +3746,9 @@ Do not edit the generated file. Then mark the PR ready for review and remove `[w
 - **Do not run `pnpm perf:budget --write-limits`**, and never raise the `/screener` JS target of 165 kB.
 - **Do not use raw palette classes, hex values, `text-muted`, "live", "real-time", "all-time", "undervalued", "buy" or em dashes** in any new file (WP23/WP24 conventions). Preset names are fixed as written in D4.
 - **Do not change `MetricLabel`'s rendered output** when extracting `MetricHelpLink`; WP24's test must pass unchanged.
+- **Do not write `focus-visible:outline-none` or `transition-colors`** in any new or edited file. Use `focus-visible:outline-hidden` (Tailwind 4: `outline-none` hides focus in forced-colours mode; WP24's trust test fails on it in `MetricLabel.tsx` and `MethodologyArticle.tsx`), and keep colour changes instant (01-PRODUCT-DIRECTION.md §3.5).
+- **Do not use `border-collapse` on the table or put row borders on `<tr>`.** Collapsed borders do not move with sticky cells, so the Product divider and row rules would slide off the pinned columns; the table is `border-separate border-spacing-0` with borders on the cells (step 16).
+- **Do not use the `AsOf` table variant in the phone list.** Its clock has only a tooltip, which never shows on touch; phone rows print "Last priced {date}" (step 17).
 - **Do not edit `ControlBar.tsx`, `ProductPrices/index.tsx` or `MiniSparkline.tsx`.** `/prices` is out of scope; this package only reuses WP30's helpers.
 
 ## Tests
@@ -3840,12 +3872,18 @@ def test_window_is_the_365_days_ending_at_the_price_day(admin, catalog, today):
     assert max_dd(admin, today, pid) == pytest.approx(10.0)   # the 200 is outside the window
 
 
-def test_first_reading_of_each_day(admin, catalog, today):
-    # Day -3 has 100 at 03:00 and 60 at 20:00. toDailyPoints keeps the first: no drawdown.
-    pid = make_product(admin, catalog, [(d(today, 5), 100, 3), (d(today, 3), 100, 3), (d(today, 3), 60, 20),
-                                        (d(today, 1), 100, 3)])
+def test_past_day_refresh_uses_that_days_window(admin, catalog, today):
+    # The nightly D-1 job and backfill_daily_stats.py rebuild past days: the
+    # window ends at that day's price_day, so later prices never leak in.
+    # (One row per product per day: 0003's unique index on (product_id,
+    # recorded_at::date) makes a second same-day row impossible, so the
+    # helper's DISTINCT ON is only a guard.)
+    pid = make_product(admin, catalog, [(d(today, 10), 100, 3), (d(today, 8), 120, 3), (d(today, 6), 90, 3),
+                                        (d(today, 2), 60, 3)])
+    refresh(admin, d(today, 5))
+    assert max_dd(admin, d(today, 5), pid) == pytest.approx(25.0)   # 120 -> 90; the 60 comes after day -5
     refresh(admin, today)
-    assert max_dd(admin, today, pid) == pytest.approx(0.0)
+    assert max_dd(admin, today, pid) == pytest.approx(50.0)         # 120 -> 60
 
 
 def test_withheld_price_keeps_the_series_value(admin, catalog, today):
@@ -3912,7 +3950,7 @@ If `products` has another NOT NULL column without a default in the replayed sche
 
 ### 3. `app/screener/__tests__/filters.test.ts` (new)
 
-A `row(overrides)` factory returning a full fresh `ScreenerRow` (all metrics set to mid values). Cases:
+A `row(overrides)` factory returning a full fresh `ScreenerRow` (all metrics set to mid values, `priceDay: "2026-09-29"`; put it in `frontend/test-utils/screenerRows.ts` and import it as `@/test-utils/screenerRows`, so tests 7 and 8 reuse it; not under `__tests__/`, where Jest's default `testMatch` would run it as an empty suite). Cases:
 - Ranges: min and max inclusive (`volmax=15` keeps 15, drops 15.01); an active range drops a row whose value is null; an inactive range keeps it.
 - Price band: `pmin=50&pmax=150` keeps 50 and 149.99, drops 150 and a null price.
 - `priced` drops a row with `fresh: false`; without it the stale row stays and sorts last in both directions for `r1m`, `vol` and `price`.
@@ -4090,13 +4128,13 @@ If `mapMarketSummaryRowToProduct` takes more arguments after WP10/WP11, call it 
 - A fresh row: values with the D8 precision; `Price status` "current"; money converted with the passed `convertPrice` (use `(v) => v === null || v === undefined ? null : v * 1.37`).
 - A withheld row: empty price, "withheld", empty metric cells.
 - Text safety: a variant `=HYPERLINK("x")` becomes `"'=HYPERLINK(""x"")"`; a set name with a comma is quoted.
-- The last line starts with `Source: Pokéfin (` and contains the page URL, the stats day, `DECISION_NOTE`, and "USD converted to CAD at 1.37" only when the currency is CAD.
+- The last line starts with `Source: Pokéfin (` and contains the page URL, the stats day, `DECISION_NOTE`, and "USD converted to CAD at 1.3700" only when the currency is CAD (exchangeRate 1.37).
 - Lines end with `\r\n`; there is exactly one empty line before the attribution line.
 - `csvFilename("2026-09-29")` is `"pokefin-screener-2026-09-29.csv"`.
 
 ### 8. `app/components/Screener/__tests__/Screener.test.tsx` (new, jsdom, fake timers)
 
-Mocks: `next/navigation` (`useRouter` with `prefetch: jest.fn()`, `useSearchParams` returning `new URLSearchParams()`, `usePathname` returning `"/screener"`); `../../LocationSearchSignal` returning `null`; `../../../context/CurrencyContext` with `useCurrency` returning `{ currency: "USD", formatPrice: (v) => (v == null ? "--" : "$" + Number(v).toFixed(2)), convertPrice: (v) => v ?? null, exchangeRate: 1.37, exchangeRateDate: "2026-09-29" }`; `window.matchMedia` stubbed per test (`matches: true` for desktop). Rows: 60 synthetic `ScreenerRow`s (the factory from test 3) with distinct `r1m`, plus 1 withheld row. Before each test `window.history.replaceState(null, "", "/screener")`.
+Mocks: `next/navigation` (`useRouter` with `prefetch: jest.fn()`, `useSearchParams` returning `new URLSearchParams()`, `usePathname` returning `"/screener"`); `../../LocationSearchSignal` returning `null`; `../../../context/CurrencyContext` with `useCurrency` returning `{ currency: "USD", formatPrice: (v) => (v == null ? "--" : "$" + Number(v).toFixed(2)), convertPrice: (v) => v ?? null, exchangeRate: 1.37, exchangeRateDate: "2026-09-29" }`; `window.matchMedia` stubbed per test (`matches: true` for desktop). Rows: 60 synthetic `ScreenerRow`s (the factory from test 3) with distinct `r1m`, plus 1 withheld row (`fresh: false`, every metric null, `priceDay: "2026-08-01"`); render with `referenceDate="2026-09-29"` and `statsDay="2026-09-29"`. Before each test `window.history.replaceState(null, "", "/screener")`.
 
 - Desktop default: one `table`; 50 body rows; the first row's link is the product with the highest `r1m`; the `1M` header cell has `aria-sort="descending"` and its button shows "▼"; "Found 61 products · showing 50" is in the status; the withheld row is not in the first 50.
 - Sort: click the `3M` header button; after `act(() => jest.runAllTimers())`, `aria-sort` moved to 3M, the rows are ordered by `r3m` descending, and `window.location.search` is `"?sort=r3m"`. Click it again: ascending, URL `"?sort=r3m&dir=asc"`.
@@ -4109,7 +4147,9 @@ Mocks: `next/navigation` (`useRouter` with `prefetch: jest.fn()`, `useSearchPara
 - Seed from the URL on a client mount: set `window.history.replaceState(null, "", "/screener?sort=vol&cols=risk")` before rendering: the `Volatility 1Y` header has `aria-sort="ascending"` on the first render and nothing is written to the URL.
 - Phone: `matchMedia` false: no `table`; a list named "Screener results" with 50 items; a row's text contains "sold 30D"; the "Sort: 1M change" and "Filters" buttons exist; with the sort set to `dos` (URL seed `?sort=dos`), row meta reads "{n} days of supply".
 - Stats unavailable (`statsDay={null}`): the warn sentence is shown.
-- axe: run WP23's helper from `test-utils/axe.ts` (the same call `app/components/ui/__tests__/DataList.test.tsx` uses) on the desktop render and on the phone render: no violations.
+- axe: `import { axeViolations } from "@/test-utils/axe";` (WP23) and `expect(await axeViolations(container)).toEqual([])` on the desktop render and on the phone render.
+- Phone staleness: a fresh row whose `priceDay` is 3 days before `referenceDate` shows the visible text "Last priced {Mon D}" in its list item (not only a `title`), and the withheld row shows "Last priced" with its own date.
+- Counts: with one matching row the status reads "Found 1 product" (`productCount`).
 
 ### 9. `app/components/Screener/__tests__/sheets.test.tsx` (new, jsdom)
 
@@ -4125,7 +4165,7 @@ Render `FilterSheet` and `SortSheet` directly (no dynamic import). WP14's jsdom 
 - `app/methodology/__tests__/MethodologyArticle.test.tsx`: add: the `#screens` section has six `h3`s with the preset names and each has an "Open this screen" link equal to `presetHref(preset)`; the version and change-log assertions use the new version.
 - `app/lib/__tests__/serverMarketData.stats.test.ts` (WP25): the select string contains `max_dd_365d_pct`.
 - `scripts/perf-fixture.test.mjs`: step 4b's test.
-- `scripts/prod-smoke-lib.test.mjs`: `judgeRedirect` passes for `{ status: 308, location: "/screener?sort=r1y&cols=risk" }` and for the absolute `https://www.pokefin.ca/screener?sort=r1y&cols=risk`; fails for 307, for 200 with no location, and for a location without the query. `PUBLIC_CHECKS` contains `/screener` and not `/market`.
+- `scripts/prod-smoke-lib.test.mjs`: `judgeRedirect` passes for `{ status: 308, location: "/screener?sort=r1y&cols=risk" }` and for the absolute `https://pokefin.ca/screener?sort=r1y&cols=risk`; fails for 307, for 200 with no location, and for a location without the query. `PUBLIC_CHECKS` contains `/screener` and not `/market`.
 - `tests/test_revalidate_hook.py`: `"/screener" in WARM_PATHS` and `"/market" not in WARM_PATHS`.
 - Tests removed with the Market View (step 22) are not replaced one for one: tests 3, 5 and 8 cover the new table.
 
@@ -4141,7 +4181,7 @@ pnpm exec jest app/screener app/components/Screener app/components/ui/__tests__/
   app/__tests__/uiConventions.test.ts                   # all pass
 pnpm test --ci                                           # all pass; count = baseline - deleted MarketView tests + new tests
 pnpm test:scripts                                        # all pass (fixture, smoke lib, public-route imports)
-pnpm build:stub; echo "exit=$?"                          # exit 0; the route list shows ○ /screener and no /market page
+pnpm build:stub; echo "exit=$?"                          # phase B (or the temporary types edit): exit 0; the route list shows ○ /screener and no /market page
 # The default stub has no products (the page renders its EmptyState). Check the HTML on the perf fixture:
 SUPABASE_STUB_FIXTURE=perf pnpm build:stub > /tmp/wp33-perf-build.log 2>&1; echo "exit=$?"   # exit 0
 grep -c "BAILOUT_TO_CLIENT_SIDE_RENDERING" .next/server/app/screener.html   # at most 1 (the empty LocationSearchSignal leaf)
@@ -4155,7 +4195,9 @@ Repo root, database (after `bash scripts/db/replay_migrations.sh`):
 ```bash
 POKEFIN_TEST_DATABASE_URL=postgresql://postgres:postgres@localhost:55432/replay_once python -m pytest \
   tests/test_wp33_max_drawdown_db.py tests/test_wp25_market_analytics_db.py -q     # all pass
-python -m pytest tests/test_revalidate_hook.py -q                                  # all pass
+python -m pytest tests/test_revalidate_hook.py tests/test_migration_volatility.py -q   # all pass (WP01's check: the
+#   STABLE helper writes nothing; the trigger function is VOLATILE)
+bash scripts/db/replay_migrations.sh                                                # replay_once and replay_twice, exit 0
 ```
 
 Performance (step 28): `pnpm perf:budget` exit 0 with `/screener` JS ≤ 165 kB gz and document ≤ 60 kB br (or the stated raise), supabase-js not reachable; `measure-screener.mjs` exit 0 (desktop sort ≤ 150 ms, phone pick ≤ 150 ms, ≥ 6 phone rows); `curl -sI .../market?sort=r1y&cols=risk` shows 308 and `location: /screener?sort=r1y&cols=risk`; Lighthouse `/screener` CLS ≤ 0.05, bf-cache pass, no placeholder threshold left.
@@ -4174,16 +4216,19 @@ Manual, on the perf server (`node scripts/perf-serve.mjs`, `http://127.0.0.1:310
 
 ## Owner actions
 
-1. **Apply migration 0042** in the Supabase SQL editor after every earlier numbered migration that is in production (0033 at least): paste `migrations/0042_product_max_drawdown.sql`, run it, then run its three verification queries (expect `0`, `0`, and `true, false`). It is additive: no existing object changes, `refresh_market_analytics` is untouched.
+1. **Apply migration 0042 before this PR merges or deploys.** The PR changes the shared `PRODUCT_STATS_SELECT`, which `/prices`, product pages and the Screener all read: deployed against a database without the column, PostgREST rejects the select, `getCachedProductStats` returns its empty fallback, and every page loses its risk, supply and value statistics until the column exists. Apply in number order: every earlier numbered migration that exists in `migrations/` must already be in production (0033 at least; if 0036 is merged but not yet applied, apply 0036 first, so the view's column order matches the replay). In the Supabase SQL editor paste `migrations/0042_product_max_drawdown.sql`, run it, then run its three verification queries (expect `0`, `0`, and `true, false`). It is additive: no existing object changes, `refresh_market_analytics` is untouched. Then refresh `schema.sql` from production as README "Database" describes (WP21 Owner action C), so CI's drift step reads clean, and change the `audits/HARDENING_FOLLOWUPS.md` bullet "**Migration 0042: pending apply**" to "**Migration 0042 applied** (date, via Supabase MCP or SQL editor)".
 2. **Generated types**: run `SUPABASE_ACCESS_TOKEN=... pnpm types:db` in `frontend/` and push `app/types/database.ts` to the PR branch, or give the executor a token for it (step 29).
-3. **After deploy**: open `https://www.pokefin.ca/market?sort=r1y&cols=risk` once and confirm it lands on `/screener?sort=r1y&cols=risk`; the daily smoke test checks it from then on. Nothing to do in Search Console: the sitemap lists `/screener` and the 308 transfers the old URL.
+3. **After deploy**: open `https://pokefin.ca/market?sort=r1y&cols=risk` once (the apex is the canonical host, WP02/WP13) and confirm it lands on `/screener?sort=r1y&cols=risk`; the daily smoke test checks it from then on. Nothing to do in Search Console: the sitemap lists `/screener` and the 308 transfers the old URL.
 4. **Optional review of the screen thresholds** in D4 (defaults are set; a change later is a methodology change with a version bump). The Value columns, "Near MSRP" and "Below pack value" appear as soon as WP28's curation (D7) has data; nothing else is needed.
 
 ## Acceptance criteria
 
 - [ ] `/market` and `/market?<any query>` answer 308 to `/screener?<same query>`; `app/market/` no longer exists; nav, footer, home, 404 panel and product page link to `/screener`; the sitemap lists `/screener` and not `/market`.
 - [ ] `/screener` renders 50 rows in the server HTML with no client fetch after load, from `product_stats_latest`, the catalog summaries, the volume metrics and the 1Y baked sparklines.
-- [ ] Desktop table: 44 px one-line rows, product cell "{Type} · {Set}" with the variant as secondary text, a visible arrow and `aria-sort` on the sorted column, a `MetricHelpLink` on every metric header, sticky # and Product columns.
+- [ ] Desktop table: 44 px one-line rows, product cell "{Type} · {Set}" with the variant as secondary text, a visible arrow and `aria-sort` on the sorted column, a `MetricHelpLink` on every metric header, sticky # and Product columns whose divider and row rules stay with them while the table scrolls sideways (borders on cells, `border-separate`).
+- [ ] Phone rows: a price 2 or more days old, or withheld, reads "Last priced {Mon D}" as visible text; no phone row relies on a tooltip.
+- [ ] Every focusable control in the new files uses `focus-visible:outline-hidden` with the action ring; no `outline-none` or `transition-colors` anywhere in the diff; WP24's trust test passes.
+- [ ] 0042 was applied in production before the frontend deployed; `schema.sql` refreshed; `HARDENING_FOLLOWUPS.md` records the apply.
 - [ ] Column presets Performance, Risk, Liquidity and Value (Value only with WP28 data) replace the key/all toggle; a filtered or sorted column is always visible.
 - [ ] Every filter in D3 works, is in the URL, round-trips on reload and on a shared link, and appears as a removable chip.
 - [ ] Six presets live in `app/screener/presets.ts`, each documented on `/methodology#screens` from the same constants, and `presets.fixture.test.ts` has one passing test per preset on the WP22 perf fixture.
@@ -4211,7 +4256,7 @@ Commits, in order (each builds; the first two are phase A's database part):
 
 1. `feat(db): max drawdown 1Y in product_daily_stats (WP33, migration 0042)`: `migrations/0042_product_max_drawdown.sql`, `tests/test_wp33_max_drawdown_db.py`.
 2. `feat(data): screener stats column, fixture and definitions (WP33)`: `app/types/market.ts`, `serverMarketData.ts` select, `scripts/fixtures/perf.mjs`, `scripts/perf-fixture.test.mjs`, `metricDefinitions.ts`, `MetricLabel.tsx` (`MetricHelpLink`), `ui/README.md`.
-3. `feat(screener): URL state, filters, presets, row builder and CSV (WP33)`: `app/screener/{types,metrics,urlState,filters,presets,screenerData,exportCsv}.ts` and their tests.
+3. `feat(screener): URL state, filters, presets, row builder and CSV (WP33)`: `app/screener/{types,metrics,urlState,filters,presets,screenerData,exportCsv}.ts`, `test-utils/screenerRows.ts` and their tests.
 4. `feat(screener): table, phone list, filter and sort sheets, page (WP33)`: `app/components/Screener/*`, `app/screener/page.tsx`, `globals.css`, component tests.
 5. `feat(nav): move /market to /screener with a 308 (WP33)`: `next.config.ts`, nav, links, sitemap, deleted `app/market/` and Market View files, ESLint list, updated tests.
 6. `docs(methodology): screens and 1-year drawdown (WP33)`: `content/methodology.ts`, `MethodologyArticle.tsx` and its test.

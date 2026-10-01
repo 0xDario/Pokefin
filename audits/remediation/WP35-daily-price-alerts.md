@@ -32,11 +32,11 @@ A collector who wants to buy a box when it dips under a price, or sell when it r
    Hysteresis: 2% of the level for price rules, 2 percentage points for the others. A value exactly on the level fires. A CAD rule on a day without an `fx_daily` row for the price's day is skipped for that day (the 0034 principle: no CAD value rather than a guessed one). The rate is that of the price's day, the same rate the product page uses for that price, which is the evaluation day itself in the normal daily cadence.
 4. **New rules start armed.** If the condition is already true at creation, the rule fires in the next digest; the dialog says so before saving.
 5. **One digest per user per day**, listing every rule that fired. Users without a confirmed email (`auth.users.email_confirmed_at` null) or with the digest turned off get nothing, but their rules keep being evaluated and re-armed.
-6. **Idempotency by claim.** `get_due_alert_digests` claims each firing rule in `alert_deliveries (alert_id, day)` before the email is sent; `record_alert_digest_sent` marks it sent and disarms the rule; `release_alert_digest` drops the claim when Brevo refuses the email. A second run the same day, or a duplicated cron event, sends nothing. A claim left unsent for 30 minutes (crashed run) can be claimed again by a manual re-run. Evaluation never goes backwards: a rule already evaluated for a later day ignores an earlier one.
+6. **Idempotency by claim.** `get_due_alert_digests` claims each firing rule in `alert_deliveries (alert_id, day)` before the email is sent; `record_alert_digest_sent` marks it sent and disarms the rule; `release_alert_digest` drops the claim when Brevo refuses the email. A second run the same day, or a duplicated cron event, sends nothing. A claim left unsent for 30 minutes (crashed run) can be claimed again by a manual re-run; a fresher unsent claim belongs to a run still sending, so it is skipped and takes none of the run's `p_max_users` slots. Evaluation never goes backwards: a rule already evaluated for a later day ignores an earlier one.
 7. **No service-role key in Vercel.** The cron route and the unsubscribe route use the publishable (anon) key with no session. The four cron functions are SECURITY DEFINER, executable by `anon`, and each one first checks `p_token` against the Vault secret `pokefin_cron_token` with a constant-time comparison of SHA-256 digests; a wrong, short or missing token, or a missing Vault secret, raises 42501 before any read (`research/trust-seo-brand.md` §10.1 pattern). `unsubscribe_alerts(p_token uuid)` is authorised by the unguessable per-user token alone.
 8. **Two secrets, two hops.** Vercel calls the route with `Authorization: Bearer $CRON_SECRET` (Vercel's own cron mechanism); the route calls the database with `POKEFIN_CRON_TOKEN`, which equals the Vault secret. They are different values so a leaked request log never unlocks the database functions.
 9. **At most 200 digests a run** (`p_max_users`), oldest rule first; Brevo's free tier is 300 emails a day and auth emails may share it. A truncated run is logged and the remaining users' rules stay armed for the next day.
-10. **Mailing address gate (CASL).** Every email carries the sender identity and a postal address (owner decision D4, `MAILING_ADDRESS` in `app/content/disclosures.ts`). While it is `null`, `POST /api/alerts` answers 503, the product page renders no "Alert me" button, the watchlist page hides the alert controls, and the cron route answers 503 and sends nothing.
+10. **Mailing address gate (CASL).** Every email carries the sender identity and a postal address (owner decision D4, `MAILING_ADDRESS` in `app/content/disclosures.ts`). While it is `null`, `POST /api/alerts` answers 503, the product page renders no "Alert me" button, the watchlist page hides the alert controls, and the cron route answers 200 `{"status":"disabled"}` and sends nothing (a deliberate dark launch must not raise a 503 and a Sentry event every morning).
 11. **Alerting watches the product.** Saving a rule also adds the product to the watchlist (best effort, through WP34's `addWatch`; a full watchlist does not block the alert). Rules are managed in a "Price alerts" section of `/portfolio/watchlist` (`#alerts`) and from a bell button on each watchlist row. Removing a product from the watchlist does not delete its rules.
 12. **Unsubscribe.** The email body links to `/alerts/unsubscribe?t=<token>`, a page whose GET only shows a button; the POST acts, so link scanners that prefetch GETs cannot unsubscribe anyone. The `List-Unsubscribe: <https://…/api/alerts/unsubscribe?t=<token>>` and `List-Unsubscribe-Post: List-Unsubscribe=One-Click` headers let mail clients unsubscribe in one click (RFC 8058). Unsubscribing turns the digest off; it never deletes rules. The watchlist page can turn it back on.
 
@@ -138,7 +138,7 @@ Moves 10% or more in 7 days
 ▼ Down 11.2% over 7 days (USD Market Price)
 TCGplayer Market Price as of Sep 29, 2026
 
-Manage your alerts: https://www.pokefin.ca/portfolio/watchlist#alerts
+Manage your alerts: https://pokefin.ca/portfolio/watchlist#alerts
 ---
 Market data for information only, not financial advice. Past prices do not predict future prices.
 You get this email because you set price alerts on Pokéfin. Stop alert emails: https://…/alerts/unsubscribe?t=…
@@ -160,7 +160,8 @@ Subject: one alert "Price alert: Evolving Skies Booster Box"; several "3 price a
 | Dialog | `available` false | "Price alerts are not available yet."; Save disabled |
 | Dialog | price withheld or never priced | current line "No current Market Price: the last price is older than 14 days." (or "This product has not been priced yet."); price suggestions hidden; saving allowed, help adds "This alert waits until a current price exists." |
 | Dialog | product no longer tracked | "This product is no longer tracked, so its alerts are not checked."; Save disabled |
-| Dialog | condition already true | help adds "Already true at the latest price: it will be in your next digest." |
+| Dialog | price current but older than 3 days | help adds "The latest price is more than 3 days old, so this alert waits for a newer one."; the "already true" line never shows (0039 would not fire on that price) |
+| Dialog | condition already true | help adds "Already true at the latest price: it will be in your next digest." (only when the price is at most 3 days old) |
 | Dialog | 50 rules | `ALERTS_FULL_MESSAGE`; Save disabled |
 | Dialog | digest off | help adds "Alert emails are off. Turn them back on from your watchlist." |
 | Dialog | invalid threshold | error under the input (`aria-invalid`, `aria-describedby`), focus returns to the input |
@@ -186,15 +187,15 @@ Subject: one alert "Price alert: Evolving Skies Booster Box"; several "3 price a
 
 ### Copy (every new user-facing string)
 
-All strings above, plus: "Alert me", "Alerts for {product name}", "{n} alerts set" (sr-only on the bell), "Alert me when", "Price", "Price (C$)", "Price (US$)", "Move of at least (%)", "Below Market Price by at least (%)", "Drop of at least (%)", "Currency", "Suggestions", "10% below now: {money}", "10% above now: {money}", "Back to Canadian MSRP: {money}", "Back to US MSRP: {money}", "{n}%", "Market Price {money} ({usd} USD), {date}", "Now: {sentence}", "Checked once a day after prices update.", "One email each morning lists every alert that fired, sent to {email}.", "How alerts work", "Save alert", "Saving…", "Close", "Your alerts for this product", "Pause", "Resume", "Delete", "Pause alert: {rule}", "Resume alert: {rule}", "Delete alert: {rule}", "Alert paused.", "Alert resumed.", "Alert deleted.", "Price alerts", "{n} of 50 alerts.", "Daily digest on, sent to {email}.", "Turn off emails", "Turn on emails", "Alert emails turned off.", "Alert emails turned on.", "Stop price alert emails", "Stop alert emails", "Go to your watchlist", and the rule and value sentences of `describeRule`, `describeValue` and `rearmText` (step 2). No "live", "real-time", "instant", "undervalued", "buy now", "TCGPlayer" or em dash anywhere (WP15 and WP24 tests).
+All strings above, plus: "Alert me", "Alerts for {product name}", ", {n} alerts set" (end of the bell's accessible name), "Alert me when", "Price", "Price (C$)", "Price (US$)", "Move of at least (%)", "Below Market Price by at least (%)", "Drop of at least (%)", "Currency", "Suggestions", "10% below now: {money}", "10% above now: {money}", "Back to Canadian MSRP: {money}", "Back to US MSRP: {money}", "{n}%", "Market Price {money} ({usd} USD), {date}", "Now: {sentence}", "Checked once a day after prices update.", "The latest price is more than {n} days old, so this alert waits for a newer one.", "TCGplayer listings as of {date}", "One email each morning lists every alert that fired, sent to {email}.", "How alerts work", "Save alert", "Saving…", "Close", "Your alerts for this product", "Pause", "Resume", "Delete", "Pause alert: {rule}", "Resume alert: {rule}", "Delete alert: {rule}", "Alert paused.", "Alert resumed.", "Alert deleted.", "Deleted alert: {rule} for {product name}.", "Price alerts", "{n} of 50 alerts.", "Daily digest on, sent to {email}.", "Turn off emails", "Turn on emails", "Alert emails turned off.", "Alert emails turned on.", "Stop price alert emails", "Stop alert emails", "Go to your watchlist", and the rule and value sentences of `describeRule`, `describeValue` and `rearmText` (step 2). No "live", "real-time", "instant", "undervalued", "buy now", "TCGPlayer" or em dash anywhere (WP15 and WP24 tests).
 
 ### Accessibility
 
-- "Alert me" is a plain button that opens a modal dialog (`aria-haspopup="dialog"`); WP14's `Dialog` gives focus containment, Escape, focus restore. Initial focus goes to the threshold input.
+- "Alert me" is a plain button that opens a modal dialog (`aria-haspopup="dialog"`); WP14's `Dialog` gives focus containment, Escape, focus restore. The dialog always opens in its loading state (it fetches on mount), so initial focus is WP14's default, the Close button in the header; the first radio is the next Tab stop. Focus is never moved when the data arrives, so a keyboard user who has started tabbing is not interrupted.
 - Kinds are a native radio group inside `<fieldset>` with `<legend>Alert me when</legend>`; each radio row is at least 44 px on coarse pointers.
 - The threshold input has a visible label, `inputMode="decimal"`, 16 px text on phones, `aria-invalid` and `aria-describedby` pointing at the help and the error.
 - Status messages use one polite `role="status"` region per surface. After a delete in the dialog or panel, focus moves to that status line (`tabIndex={-1}`), never to `<body>`.
-- Rule action buttons carry the full rule in their names ("Pause alert: Price at or below C$250.00 for Evolving Skies Booster Box"). The watchlist bell is "Alerts for {product name}" with an sr-only count.
+- Rule action buttons carry the full rule in their names ("Pause alert: Price at or below C$250.00 for Evolving Skies Booster Box"). The watchlist bell is named "Alerts for {product name}", plus ", {n} alerts set" when it has rules (the visible count is `aria-hidden`; an `aria-label` replaces descendant text, so an sr-only span inside the button would never be read).
 - Gain and loss in the email use the glyph plus a word ("▼ Down 11.2%"), never colour alone. Every new component test runs axe.
 
 ### Design system use
@@ -230,6 +231,11 @@ grep -ln "FUNCTION public.export_my_data" migrations/*.sql
 # If a file numbered 0040 or above is listed (WP36 merged first and replaced export_my_data), STOP and
 # report it: the replay applies files in number order, so 0039's version would be overwritten in CI
 # while production keeps whichever was applied last. The owner decides how to reconcile.
+ls migrations/0040_*.sql 2>/dev/null
+# WP36's 0040 patches export_my_data in place (it never contains the text above, so the grep
+# cannot see it). If it is listed, WP36 merged first: the replay is still right (0039 runs before
+# 0040), but in production 0039's full definition drops WP36's keys, so Owner action 1 re-runs
+# 0040 after 0039. Record "WP36 merged first: yes/no" for the PR.
 grep -n "is_price_fresh\|qty_change_30d_pct\|ask_premium_pct\|ret_7d " migrations/0033_*.sql | head -4   # 4 lines
 grep -n "CREATE TABLE IF NOT EXISTS public.fx_daily" migrations/0034_*.sql                                # 1 line
 grep -n "FUNCTION public.enforce_owner_row_cap()" migrations/0031_*.sql                                  # 1 line
@@ -280,7 +286,7 @@ Two defaults when a soft check fails:
 - `globals.css` defines a token as an alias (`var(...)`) instead of a hex value: in step 9 use the hex the alias resolves to and make the theme test resolve one level of `var()` (step 23, test 5 says how).
 
 Tooling:
-- Local Postgres for the database tests and the replay (WP21): Docker `postgres:17`, or the PostgreSQL 16 binaries at `/usr/lib/postgresql/16/bin`. Every statement of step 1 was applied twice in a row to PostgreSQL 16.13 on a Supabase-shaped scaffold (WP21's `ci_bootstrap.sql`, the Vault stand-in of step 3, and the tables 0039 reads), `verify_migration.py`'s generated query returned 135 OK rows, and the 29 cases of Tests 1 passed twice in a row against it.
+- Local Postgres for the database tests and the replay (WP21): Docker `postgres:17`, or the PostgreSQL 16 binaries at `/usr/lib/postgresql/16/bin`. Every statement of step 1 was applied twice in a row to PostgreSQL 16.13 on a Supabase-shaped scaffold (WP21's `ci_bootstrap.sql`, the Vault stand-in of step 3, and the tables 0039 reads), `verify_migration.py`'s generated query returned 135 OK rows, and the 30 cases of Tests 1 passed twice in a row against it (re-checked after the review edits: the `listings_day` output and the claimable-rule filter in `due`).
 - A Python venv with `requirements.txt` plus `pytest` (WP21 added `psycopg[binary]`).
 
 Baseline (from `frontend/`): `pnpm exec tsc --noEmit` (exit 0), `pnpm lint` (0 errors), `pnpm test --ci` (all pass), `pnpm run test:scripts` (all pass). From the repo root: `python -m pytest tests/ -q`. Record the counts for the PR.
@@ -620,6 +626,7 @@ RETURNS TABLE (
   usd_price  double precision,
   price_day  date,
   usd_to_cad double precision,
+  listings_day date,
   fires      boolean,
   rearms     boolean
 )
@@ -629,7 +636,7 @@ SET search_path = public, pg_temp
 AS $$
   WITH base AS (
     SELECT a.id, a.user_id, a.product_id, a.kind, a.threshold, a.currency, a.armed,
-           s.usd_price, s.price_day, fx.usd_to_cad,
+           s.usd_price, s.price_day, fx.usd_to_cad, s.listings_snapshot_date AS listings_day,
            CASE
              WHEN a.kind IN ('price_below', 'price_above') THEN
                CASE a.currency
@@ -652,7 +659,7 @@ AS $$
        AND (a.last_evaluated_day IS NULL OR a.last_evaluated_day <= p_day)
   )
   SELECT b.id, b.user_id, b.product_id, b.kind, b.threshold, b.currency, b.armed,
-         b.value, b.usd_price, b.price_day, b.usd_to_cad,
+         b.value, b.usd_price, b.price_day, b.usd_to_cad, b.listings_day,
          CASE b.kind
            WHEN 'price_below' THEN b.value <= b.threshold
            WHEN 'price_above' THEN b.value >= b.threshold
@@ -681,8 +688,10 @@ REVOKE ALL ON FUNCTION public.alert_evaluations(date) FROM PUBLIC, anon, authent
 --    "digests": [{"user_id", "email", "unsubscribe_token",
 --                 "alerts": [{"alert_id", "product_id", "kind", "threshold",
 --                   "currency", "value", "usd_price", "price_day",
---                   "usd_to_cad", "set_name", "type_name", "type_label",
---                   "variant"}]}]}
+--                   "usd_to_cad", "listings_day", "set_name", "type_name",
+--                   "type_label", "variant"}]}]}
+-- due_users counts users with at least one claimable firing rule (rules
+-- already sent for p_day, or claimed less than 30 minutes ago, are skipped).
 -- jsonb, not a row set, so PostgREST's max-rows limit cannot truncate it.
 -- Only users with digest_enabled and a confirmed email are claimed. A claim
 -- not marked sent within 30 minutes can be claimed again (a crashed run).
@@ -734,7 +743,11 @@ BEGIN
    WHERE a.id = e.alert_id;
   GET DIAGNOSTICS v_evaluated = ROW_COUNT;
 
-  -- 2. Claim what fires and build the digests in one statement.
+  -- 2. Claim what fires and build the digests in one statement. A rule
+  --    whose claim for p_day is already sent, or still fresh (another run
+  --    is sending it), is not due: it must not take one of the p_max_users
+  --    slots or count towards "truncated". ON CONFLICT below still guards
+  --    the race between two runs.
   WITH due AS (
     SELECT e.*
       FROM public.alert_evaluations(p_day) e
@@ -742,7 +755,11 @@ BEGIN
       JOIN auth.users u ON u.id = e.user_id
                        AND u.email IS NOT NULL
                        AND u.email_confirmed_at IS NOT NULL
+      LEFT JOIN public.alert_deliveries prior
+        ON prior.alert_id = e.alert_id AND prior.day = p_day
      WHERE e.armed AND e.fires
+       AND (prior.alert_id IS NULL
+            OR (prior.sent_at IS NULL AND prior.claimed_at < now() - interval '30 minutes'))
   ),
   chosen AS (
     SELECT d.user_id
@@ -777,6 +794,7 @@ BEGIN
                'usd_price', d.usd_price,
                'price_day', d.price_day,
                'usd_to_cad', d.usd_to_cad,
+               'listings_day', d.listings_day,
                'set_name', st.name,
                'type_name', pt.name,
                'type_label', pt.label,
@@ -1193,6 +1211,15 @@ function round2(value: number): number {
   return Math.round(value * 100) / 100;
 }
 
+const DAY_MS = 86_400_000;
+
+/** Whole days from one "YYYY-MM-DD" (or ISO timestamp) to another; null when either is malformed. */
+export function daysBetweenDayKeys(from: string, to: string): number | null {
+  const a = Date.parse(`${from.slice(0, 10)}T00:00:00Z`);
+  const b = Date.parse(`${to.slice(0, 10)}T00:00:00Z`);
+  return Number.isFinite(a) && Number.isFinite(b) ? Math.round((b - a) / DAY_MS) : null;
+}
+
 /** Money keeps cents, percents one decimal (what the email and the database compare). */
 export function roundThreshold(kind: AlertKind, value: number): number {
   return ALERT_KIND_META[kind].unit === "money" ? round2(value) : Math.round(value * 10) / 10;
@@ -1368,6 +1395,12 @@ export interface AlertContext {
   priceStatus: AlertPriceStatus;
   usdPrice: number | null;
   priceDay: string | null;
+  /**
+   * The price is at most ALERT_MAX_PRICE_AGE_DAYS old today (UTC), so the
+   * next daily check can use it (0039: price_day >= p_day - 3). A price
+   * that is current by 0023's 14-day rule but older than this never fires.
+   */
+  priceRecent: boolean;
   /** usdPrice at fx_daily of priceDay; null without that rate. */
   cadPrice: number | null;
   change7d: number | null;
@@ -1475,7 +1508,7 @@ export function currentValueText(kind: AlertKind, currency: AlertCurrency, ctx: 
 
 /** Whether the rule would fire on today's values (same comparisons as 0039). */
 export function ruleIsTrueNow(rule: AlertRule, ctx: AlertContext | null): boolean {
-  if (!ctx || ctx.priceStatus !== "priced") return false;
+  if (!ctx || ctx.priceStatus !== "priced" || !ctx.priceRecent) return false;
   const t = rule.threshold;
   switch (rule.kind) {
     case "price_below": {
@@ -1622,6 +1655,8 @@ import {
 import { getProductDisplayName } from "../../product/[id]/productMeta";
 import { statsMatchPrice } from "./watchlistModel";
 import {
+  ALERT_MAX_PRICE_AGE_DAYS,
+  daysBetweenDayKeys,
   isAlertKind,
   productNameFromParts,
   type AlertContext,
@@ -1846,6 +1881,7 @@ export async function loadAlertContext(productId: number): Promise<AlertContext 
   const s = statsFor(stats, productId);
   const match = usd !== null && priceDay !== null && statsMatchPrice(s, priceDay, usd);
   const attrs = attributes.byProductId[productId] ?? null;
+  const age = priceDay !== null ? daysBetweenDayKeys(priceDay, new Date().toISOString()) : null;
 
   return {
     productId,
@@ -1853,6 +1889,7 @@ export async function loadAlertContext(productId: number): Promise<AlertContext 
     priceStatus: usd !== null ? "priced" : priceDay !== null ? "withheld" : "never",
     usdPrice: usd,
     priceDay,
+    priceRecent: usd !== null && age !== null && age <= ALERT_MAX_PRICE_AGE_DAYS,
     cadPrice: usd !== null && priceDay !== null ? usdToCadOn(fx, priceDay, usd) : null,
     change7d: match && s ? num(s.ret_7d) : null,
     askPremiumPct: match && s ? num(s.ask_premium_pct) : null,
@@ -2302,6 +2339,8 @@ export interface DueAlert {
   /** The TCGplayer day the price describes. */
   price_day: string;
   usd_to_cad: number | null;
+  /** The listings snapshot behind ask_below_market and supply_drop_30d (WP25 listings_snapshot_date). */
+  listings_day: string | null;
   set_name: string | null;
   type_name: string | null;
   type_label: string | null;
@@ -2352,6 +2391,7 @@ function parseAlert(value: unknown): DueAlert | null {
   const currency = value.currency;
   if (alertId === null || productId === null || threshold === null || compared === null || usd === null) return null;
   if (day === null || !DAY_RE.test(day) || (currency !== "USD" && currency !== "CAD")) return null;
+  const listingsDay = text(value.listings_day);
   return {
     alert_id: alertId,
     product_id: productId,
@@ -2362,6 +2402,7 @@ function parseAlert(value: unknown): DueAlert | null {
     usd_price: usd,
     price_day: day,
     usd_to_cad: num(value.usd_to_cad),
+    listings_day: listingsDay !== null && DAY_RE.test(listingsDay) ? listingsDay : null,
     set_name: text(value.set_name),
     type_name: text(value.type_name),
     type_label: text(value.type_label),
@@ -2485,8 +2526,21 @@ function itemFor(alert: DueAlert): DigestItem {
     rule: describeRule(alert),
     result: `${glyph}${value}${detail ? ` (${detail})` : ""}`,
     direction,
-    asOf: `TCGplayer Market Price as of ${formatDateOnly(alert.price_day)}`,
+    asOf: asOfLine(alert),
   };
+}
+
+/**
+ * The day each value describes. Listing kinds name the listings snapshot,
+ * which can be older than the price (WP25's 0022 gate), so the email never
+ * dates a supply figure with the price's day.
+ */
+function asOfLine(alert: DueAlert): string {
+  const price = `Market Price as of ${formatDateOnly(alert.price_day)}`;
+  const listings = alert.listings_day ? `TCGplayer listings as of ${formatDateOnly(alert.listings_day)}` : null;
+  if (alert.kind === "supply_drop_30d" && listings) return listings;
+  if (alert.kind === "ask_below_market" && listings) return `${listings}, ${price}`;
+  return `TCGplayer ${price}`;
 }
 
 export function digestSubject(items: readonly { name: string }[], day: string): string {
@@ -2800,6 +2854,7 @@ import { ALERT_DIGESTS_PER_RUN } from "../../../lib/alerts";
 import { ALERT_EMAIL_SENDER } from "../../../content/disclosures";
 import { CONTACT_EMAILS } from "../../../content/contact";
 import { bearerMatches, MIN_CRON_SECRET_LENGTH } from "../../../lib/server/cronAuth";
+import { alertsAvailable } from "../../../lib/server/alertsConfig";
 import { createAnonRpcClient } from "../../../lib/server/anonRpcSupabase";
 import { alertEvaluationDay } from "../../../lib/server/dueDigests";
 import { readAlertSendConfig, runAlertDigestJob, type AlertDigestRpc } from "../../../lib/server/alertDigestJob";
@@ -2820,6 +2875,9 @@ export async function GET(req: NextRequest) {
   if (!bearerMatches(req.headers.get("authorization"), cronSecret)) {
     return jsonNoStore({ error: "Unauthorized" }, 401);
   }
+  // Owner decision D4 still open: the feature is hidden on purpose, so this
+  // is a quiet success, not an error. Nothing is read or sent.
+  if (!alertsAvailable()) return jsonNoStore({ status: "disabled" });
 
   const config = readAlertSendConfig();
   if (!config.ok) {
@@ -3055,7 +3113,7 @@ function first(value: string | string[] | undefined): string | null {
 }
 
 const LINK =
-  "font-medium text-action underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-action rounded-control";
+  "font-medium text-action underline-offset-2 hover:underline focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-action rounded-control";
 
 /**
  * The page the email links to (WP35). GET only shows a button; the form POSTs
@@ -3157,7 +3215,7 @@ export interface AlertRuleListProps {
 }
 
 const PRODUCT_LINK =
-  "rounded-control font-medium text-ink hover:text-action focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-action";
+  "rounded-control font-medium text-ink hover:text-action focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-action";
 
 export default function AlertRuleList({
   alerts,
@@ -3242,6 +3300,7 @@ import {
   ALERTS_UNAVAILABLE_MESSAGE,
   ALERT_CADENCE_SENTENCE,
   ALERT_KINDS,
+  ALERT_MAX_PRICE_AGE_DAYS,
   ALERT_KIND_META,
   contextLine,
   currentValueText,
@@ -3273,7 +3332,7 @@ const CURRENCY_OPTIONS = [
 ] as const;
 
 const LINK =
-  "font-medium text-action underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-action rounded-control";
+  "font-medium text-action underline-offset-2 hover:underline focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-action rounded-control";
 
 /**
  * "Alert me" (WP35): create a rule for one product, see and manage its rules.
@@ -3397,6 +3456,9 @@ export default function AlertDialog({ productId, productName, onClose, onChanged
   const help: string[] = [ALERT_CADENCE_SENTENCE];
   if (data?.email) help.push(`One email each morning lists every alert that fired, sent to ${data.email}.`);
   if (context !== null && context.priceStatus !== "priced") help.push("This alert waits until a current price exists.");
+  if (context !== null && context.priceStatus === "priced" && !context.priceRecent) {
+    help.push(`The latest price is more than ${ALERT_MAX_PRICE_AGE_DAYS} days old, so this alert waits for a newer one.`);
+  }
   if (trueNow) help.push("Already true at the latest price: it will be in your next digest.");
   if (data !== null && data.prefs.exists && !data.prefs.digestEnabled) {
     help.push("Alert emails are off. Turn them back on from your watchlist.");
@@ -3433,7 +3495,14 @@ export default function AlertDialog({ productId, productName, onClose, onChanged
     body = (
       <div className="mt-4 space-y-3">
         <p className="text-body text-ink">{loadError}</p>
-        <button type="button" onClick={() => setReload((n) => n + 1)} className={buttonClasses({ variant: "secondary" })}>
+        <button
+          type="button"
+          onClick={() => {
+            setLoadError(null); // back to the skeleton while the retry runs
+            setReload((n) => n + 1);
+          }}
+          className={buttonClasses({ variant: "secondary" })}
+        >
           Try again
         </button>
       </div>
@@ -3485,7 +3554,7 @@ export default function AlertDialog({ productId, productName, onClose, onChanged
                 }}
                 aria-invalid={error ? true : undefined}
                 aria-describedby={error ? `${helpId} ${errorId}` : helpId}
-                className="h-11 w-full rounded-control border border-line bg-surface px-3 text-base tabular-nums text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-action aria-invalid:border-warn-text md:h-10 md:text-body"
+                className="h-11 w-full rounded-control border border-line bg-surface px-3 text-base tabular-nums text-ink focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-action aria-invalid:border-warn-text md:h-10 md:text-body"
               />
             </div>
             {isPriceKind(kind) && (
@@ -3532,7 +3601,7 @@ export default function AlertDialog({ productId, productName, onClose, onChanged
           {full && <p className="text-small font-medium text-warn-text">{ALERTS_FULL_MESSAGE}</p>}
         </form>
 
-        <p ref={statusRef} tabIndex={-1} role="status" className="mt-3 text-small text-ink focus-visible:outline-none">
+        <p ref={statusRef} tabIndex={-1} role="status" className="mt-3 text-small text-ink focus-visible:outline-hidden">
           {status}
         </p>
 
@@ -3556,7 +3625,7 @@ export default function AlertDialog({ productId, productName, onClose, onChanged
   }
 
   return (
-    <Dialog open onClose={onClose} title="Alert me" descriptionId={descId} initialFocusRef={inputRef} footer={footer}>
+    <Dialog open onClose={onClose} title="Alert me" descriptionId={descId} footer={footer}>
       <p id={descId} className="text-body font-medium text-ink">
         {productName}
       </p>
@@ -3569,7 +3638,7 @@ export default function AlertDialog({ productId, productName, onClose, onChanged
 Notes for the executor:
 - State is set only in promise callbacks and event handlers (`react-hooks/set-state-in-effect`).
 - `aria-invalid:` is a Tailwind 4 built-in variant; `accent-action` comes from WP23's `--color-action` theme token. If `tsc` or the build says `accent-action` is unknown (no such utility), use `accent-[var(--pf-action)]`.
-- When the dialog opens before the data arrives, `initialFocusRef` points at an input that is not rendered yet; WP14's `Dialog` then focuses its close button, which is correct.
+- No `initialFocusRef`: the input does not exist while the dialog loads, so WP14's `Dialog` focuses its Close button (Design, Accessibility). `inputRef` is only used to return focus to the input after a validation or save error.
 - `SegmentedControl`'s `onChange` receives the option value type (`"CAD" | "USD"`); if its generic signature differs, wrap: `onChange={(v) => chooseCurrency(v as AlertCurrency)}`.
 
 ### Step 20. `frontend/app/components/alerts/AlertButton.tsx` (new) and the product page
@@ -3751,8 +3820,8 @@ export default function AlertRowButton({
       type="button"
       onClick={onClick}
       aria-haspopup="dialog"
-      aria-label={`Alerts for ${productName}`}
-      className="inline-flex h-9 min-w-9 items-center justify-center gap-1 rounded-control px-2 text-ink-soft transition-colors duration-150 motion-reduce:transition-none hover:bg-surface-alt hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-action pointer-coarse:size-11"
+      aria-label={`Alerts for ${productName}${count > 0 ? `, ${count} ${count === 1 ? "alert" : "alerts"} set` : ""}`}
+      className="inline-flex h-9 min-w-9 items-center justify-center gap-1 rounded-control px-2 text-ink-soft hover:bg-surface-alt hover:text-ink focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-action pointer-coarse:min-h-11 pointer-coarse:min-w-11"
     >
       <BellIcon />
       {count > 0 && (
@@ -3760,7 +3829,6 @@ export default function AlertRowButton({
           {count}
         </span>
       )}
-      {count > 0 && <span className="sr-only">{`, ${count} ${count === 1 ? "alert" : "alerts"} set`}</span>}
     </button>
   );
 }
@@ -3921,7 +3989,7 @@ export default function AlertsPanel({ list }: { list: AlertList }) {
       <h2 id={`${ALERTS_SECTION_ID}-title`} className="mb-2 text-h2 font-semibold text-ink">
         Price alerts
       </h2>
-      <p ref={statusRef} tabIndex={-1} role="status" className="mb-2 text-small text-ink focus-visible:outline-none">
+      <p ref={statusRef} tabIndex={-1} role="status" className="mb-2 text-small text-ink focus-visible:outline-hidden">
         {status}
       </p>
       {content}
@@ -3999,10 +4067,14 @@ Add `alertCounts` and `onAlert` to the `useMemo` dependency list. The column has
   ```tsx
   const alertList = useAlertList();
   const [alertTarget, setAlertTarget] = useState<{ productId: number; name: string } | null>(null);
-  const alertsReady = alertList.state.kind === "ready" && alertList.state.payload.available;
+  // Key the memo on the payload, not on alertList.state: useAlertList builds a
+  // new state object on every render while reloading, and a new alertCounts
+  // object would rebuild WatchlistTable's columns each time.
+  const alertPayload = alertList.state.kind === "ready" ? alertList.state.payload : null;
+  const alertsReady = alertPayload !== null && alertPayload.available;
   const alertCounts = useMemo(
-    () => (alertList.state.kind === "ready" ? countAlertsByProduct(alertList.state.payload.alerts) : {}),
-    [alertList.state]
+    () => (alertPayload !== null ? countAlertsByProduct(alertPayload.alerts) : {}),
+    [alertPayload]
   );
   const openAlert = useCallback((entry: WatchlistEntry) => setAlertTarget({ productId: entry.productId, name: entry.name }), []);
   ```
@@ -4095,9 +4167,9 @@ If `Sub` is named differently in the tree (WP25 uses `Sub`), use that component.
 
 24a. `frontend/app/privacy/page.tsx` (WP24, WP34):
 - "What we collect", after WP34's Watchlist item: `<li><strong>Price alerts</strong>: the levels you set, when each alert last fired, and whether you get alert emails.</li>`
-- "How we use it": after "answer your messages," insert "send the daily price alert email you asked for, ".
+- "How we use it": after "answer your messages," insert "send the daily price alert email you asked for, ". In WP24's JSX the phrase wraps after "answer" (`grep -n "your messages," app/privacy/page.tsx` finds the second line); insert at the start of the text that follows "your messages," on that line, keeping one space on each side.
 - "Service providers", replace the Brevo item with `<li><strong>Brevo</strong>: email delivery, including the daily price alert digest (your email address and the alerts that fired).</li>`. If WP24 shipped a placeholder in this line, this replaces it; tell the owner in the PR (Owner action 8).
-- "How long we keep it": change "box recipes and watchlist" to "box recipes, watchlist and price alerts".
+- "How long we keep it": in the deletion sentence WP34 edited ("removes your profile, portfolios, holdings, lots, box recipes and watchlist in one step"; `grep -n "watchlist in one step\|and watchlist" app/privacy/page.tsx`, the phrase may wrap), change "box recipes and watchlist" to "box recipes, watchlist and price alerts". Deleting the account removes them: `delete_my_account()` deletes the `auth.users` row and 0039's foreign keys cascade (Tests 1 `test_account_deletion_removes_everything`).
 - Add one sentence at the end of "Your rights", as a new `<li>`: `<li><strong>Alert emails</strong>: every alert email has a link that turns them off in one step, without signing in.</li>`
 - Set the page's last-updated constant (`grep -n "LAST_UPDATED" app/privacy/page.tsx`) to the merge day.
 
@@ -4176,7 +4248,7 @@ Route, repo and job tests start with `/** @jest-environment node */`; mock `serv
 
 ### 1. `tests/test_wp35_price_alerts_db.py` (new, needs the replayed database)
 
-All 29 cases passed, twice in a row on the same database, against 0039 on PostgreSQL 16.13 with WP21's bootstrap and the Vault stand-in while this spec was written.
+All 30 cases passed, twice in a row on the same database, against 0039 on PostgreSQL 16.13 with WP21's bootstrap and the Vault stand-in while this spec was written.
 
 ```python
 """
@@ -4460,12 +4532,15 @@ class TestEvaluation:
         ask = add_alert(admin, user, p2, "ask_below_market", 5)
         supply = add_alert(admin, user, p3, "supply_drop_30d", 20)
         stats(admin, d(today, 1), p1, 50, ret_7d=-11.24)
-        stats(admin, d(today, 1), p2, 50, ask_premium_pct=-5.04)
+        stats(admin, d(today, 1), p2, 50, ask_premium_pct=-5.04, listings_snapshot_date=d(today, 2))
         stats(admin, d(today, 1), p3, 50, qty_change_30d_pct=-19.9)
-        got = due(admin, d(today, 1))[0]
+        got, doc = due(admin, d(today, 1))
         assert got[move] == pytest.approx(-11.2)
         assert got[ask] == pytest.approx(-5.0)
         assert supply not in got
+        sent = {a["alert_id"]: a for x in doc["digests"] for a in x["alerts"]}
+        assert sent[ask]["listings_day"] == d(today, 2).isoformat()  # the email's listings as-of date
+        assert sent[move]["listings_day"] is None
 
     def test_paused_rule_does_not_fire_and_resume_rearms(self, admin, catalog, user, today):
         pid = product(admin, catalog)
@@ -4536,6 +4611,23 @@ class TestEvaluation:
             got, doc = due(admin, d(today, 1), max_users=1)
             assert doc["truncated"] is True
             assert len(doc["digests"]) == 1
+        finally:
+            for uid in users:
+                admin.execute("DELETE FROM auth.users WHERE id = %s", (uid,))
+
+    def test_pending_claims_do_not_take_a_slot(self, admin, catalog, today):
+        pid = product(admin, catalog)
+        users = [new_user(admin), new_user(admin)]
+        try:
+            first = add_alert(admin, users[0], pid, "price_below", 500)
+            second = add_alert(admin, users[1], pid, "price_below", 500)
+            stats(admin, d(today, 1), pid, 180)
+            got, doc = due(admin, d(today, 1), max_users=1)
+            assert list(got) == [first] and doc["truncated"] is True
+            # first is claimed and not yet sent (another run is sending it): the
+            # next run gives the only slot to second and is no longer truncated.
+            got, doc = due(admin, d(today, 1), max_users=1)
+            assert list(got) == [second] and doc["truncated"] is False
         finally:
             for uid in users:
                 admin.execute("DELETE FROM auth.users WHERE id = %s", (uid,))
@@ -4901,8 +4993,10 @@ def test_cron_schedule():
 - `formatThresholdInput`: money `551.1` gives `"551.10"`, percent `7.56` gives `"7.6"`, percent `10` gives `"10"`.
 - `describeRule`, `describeValue`, `rearmText`: the exact strings of the Design section for each kind, including `price_below` 250 CAD re-arm "C$255.00", `price_above` 250 CAD "C$245.00", `ask_below_market` with threshold 1 "1% or more above Market Price" and threshold 2 "at or above Market Price".
 - `productNameFromParts` equals WP13's `getProductDisplayName` for the same product with and without a variant and with a missing type label.
+- Every `AlertContext` fixture in Tests 3, 9 and 12 sets `priceRecent: true` unless a case says otherwise.
 - `suggestionsFor`: the ctx of the Design screen (CAD 612.40, MSRP CAD 215.99) gives `[{ label: "10% below now: C$551.16", value: 551.16 }, { label: "Back to Canadian MSRP: C$215.99", value: 215.99 }]`; USD with `msrpUsd: null` gives only the 10% chip; `price_above` gives "10% above now"; MSRP above the current price gives no MSRP chip; percent kinds give their presets in order; `ctx` null gives `[]` for money kinds.
-- `ruleIsTrueNow`: true at exactly the level (rounded to cents), false one cent away; uses `cadPrice` for CAD; false when `priceStatus` is not `priced`.
+- `ruleIsTrueNow`: true at exactly the level (rounded to cents), false one cent away; uses `cadPrice` for CAD; false when `priceStatus` is not `priced` and when `priceRecent` is false.
+- `daysBetweenDayKeys("2026-09-26", "2026-09-29T11:05:00Z")` is 3; a malformed key gives `null`.
 - `contextLine`: priced with and without `cadPrice`, withheld, never, `null`.
 - `alertStatusText`: untracked, paused, fired (with the re-arm sentence), checked, never checked.
 - `isAlertsPayload` accepts a valid payload and rejects `null`, an entry with `kind: "x"`, a missing `available`, `prefs: null`.
@@ -4910,7 +5004,7 @@ def test_cron_schedule():
 
 ### 4. `frontend/app/lib/server/__tests__/dueDigests.test.ts` (new, node)
 
-- `parseDueDigests` keeps a valid document (the one in Test 7) unchanged, coerces numeric strings (`"244.80"`), drops an alert with an unknown kind or a bad `price_day`, drops a digest without `@` in the email, with a non-UUID token or with no valid alert, and returns `null` for `null`, a missing `day` or a `digests` that is not an array.
+- `parseDueDigests` keeps a valid document (the one in Test 7) unchanged, coerces numeric strings (`"244.80"`), drops an alert with an unknown kind or a bad `price_day`, turns a malformed `listings_day` (`"Sep 28"`) into `null`, drops a digest without `@` in the email, with a non-UUID token or with no valid alert, and returns `null` for `null`, a missing `day` or a `digests` that is not an array.
 - `alertEvaluationDay(new Date("2026-09-30T11:05:00Z"))` is `"2026-09-29"`; `new Date("2026-10-01T00:10:00Z")` gives `"2026-09-30"`; `new Date("2027-01-01T03:00:00Z")` gives `"2026-12-31"`.
 
 ### 5. `frontend/app/lib/email/__tests__/emailTheme.test.ts` (new, node)
@@ -4919,11 +5013,12 @@ Read `app/globals.css` with `fs`; for each `[key, token]` of `EMAIL_THEME_TOKENS
 
 ### 6. `frontend/app/lib/email/__tests__/alertDigest.test.ts` (new, node)
 
-Set `process.env.NEXT_PUBLIC_SITE_URL = "https://www.pokefin.ca"` before importing. Use the document of Test 7 plus a second alert `{ alert_id: 8, product_id: 43, kind: "pct_move_7d", threshold: 10, currency: "USD", value: -11.2, usd_price: 50, price_day: "2026-09-29", usd_to_cad: 1.36, set_name: "Scarlet & Violet 151", type_name: "etb", type_label: "Elite Trainer Box", variant: "<b>PC</b>" }`.
+Set `process.env.NEXT_PUBLIC_SITE_URL = "https://pokefin.ca"` before importing. Use the document of Test 7 plus a second alert `{ alert_id: 8, product_id: 43, kind: "pct_move_7d", threshold: 10, currency: "USD", value: -11.2, usd_price: 50, price_day: "2026-09-29", usd_to_cad: 1.36, listings_day: null, set_name: "Scarlet & Violet 151", type_name: "etb", type_label: "Elite Trainer Box", variant: "<b>PC</b>" }`.
 
 - Two alerts: subject `"2 price alerts for Sep 29"`; one alert: `"Price alert: Evolving Skies Booster Box"`.
-- Text contains, in order: "Your price alerts for Sep 29, 2026", "Checked once a day after prices update, against TCGplayer Market Price for Sep 29, 2026 (UTC).", "Evolving Skies Booster Box", "Price at or below C$250.00", "Market Price C$244.80 ($180.00 USD at the Bank of Canada rate of Sep 29)", "TCGplayer Market Price as of Sep 29, 2026", "https://www.pokefin.ca/product/42", "▼ Down 11.2% over 7 days (USD Market Price)", "Manage your alerts: https://www.pokefin.ca/portfolio/watchlist#alerts", `FOOTER_DISCLAIMER`, "Stop alert emails: https://www.pokefin.ca/alerts/unsubscribe?t=6df8849b-e42c-418f-809e-928afc16e65d", "Pokéfin, PO Box 123, Station A, Toronto ON M5W 1A2, Canada. Contact: hello@pokefin.ca".
-- `headers` equal `{ "List-Unsubscribe": "<https://www.pokefin.ca/api/alerts/unsubscribe?t=6df8849b-e42c-418f-809e-928afc16e65d>", "List-Unsubscribe-Post": "List-Unsubscribe=One-Click" }`.
+- Text contains, in order: "Your price alerts for Sep 29, 2026", "Checked once a day after prices update, against TCGplayer Market Price for Sep 29, 2026 (UTC).", "Evolving Skies Booster Box", "Price at or below C$250.00", "Market Price C$244.80 ($180.00 USD at the Bank of Canada rate of Sep 29)", "TCGplayer Market Price as of Sep 29, 2026", "https://pokefin.ca/product/42", "▼ Down 11.2% over 7 days (USD Market Price)", "Manage your alerts: https://pokefin.ca/portfolio/watchlist#alerts", `FOOTER_DISCLAIMER`, "Stop alert emails: https://pokefin.ca/alerts/unsubscribe?t=6df8849b-e42c-418f-809e-928afc16e65d", "Pokéfin, PO Box 123, Station A, Toronto ON M5W 1A2, Canada. Contact: hello@pokefin.ca".
+- A third alert `{ alert_id: 9, product_id: 44, kind: "supply_drop_30d", threshold: 20, currency: "USD", value: -22, usd_price: 90, price_day: "2026-09-29", usd_to_cad: 1.36, listings_day: "2026-09-28", ... }` renders "Units on the market down 22.0% over 30 days" and "TCGplayer listings as of Sep 28, 2026" (never "Market Price as of" for a supply rule); an `ask_below_market` alert with `listings_day: "2026-09-28"` renders "TCGplayer listings as of Sep 28, 2026, Market Price as of Sep 29, 2026"; either kind with `listings_day: null` falls back to "TCGplayer Market Price as of Sep 29, 2026".
+- `headers` equal `{ "List-Unsubscribe": "<https://pokefin.ca/api/alerts/unsubscribe?t=6df8849b-e42c-418f-809e-928afc16e65d>", "List-Unsubscribe-Post": "List-Unsubscribe=One-Click" }`.
 - HTML contains `&lt;b&gt;PC&lt;/b&gt;` and never `<b>PC</b>`; contains every link of the text part as an `href`; contains no `var(--` and no `class=`.
 - Neither part contains "live", "real-time", "instant", "TCGPlayer" or an em dash (regex `/\u2014/`).
 - Snapshot: `expect(message.html).toMatchSnapshot()` and `expect(message.text).toMatchSnapshot()`. Create the snapshot once locally without `--ci` (`pnpm exec jest app/lib/email/__tests__/alertDigest.test.ts`), read it, and commit `__snapshots__/alertDigest.test.ts.snap`; CI runs with `--ci` and fails on a missing snapshot.
@@ -4935,7 +5030,9 @@ Set `process.env.NEXT_PUBLIC_SITE_URL = "https://www.pokefin.ca"` before importi
 import { NextRequest } from "next/server";
 
 const rpc = jest.fn();
+const mockAvailable = jest.fn(() => true);
 jest.mock("../../../../lib/server/anonRpcSupabase", () => ({ createAnonRpcClient: () => ({ rpc }) }));
+jest.mock("../../../../lib/server/alertsConfig", () => ({ alertsAvailable: () => mockAvailable() }));
 jest.mock("../../../../content/disclosures", () => ({
   ...jest.requireActual("../../../../content/disclosures"),
   MAILING_ADDRESS: "PO Box 123, Station A, Toronto ON M5W 1A2, Canada",
@@ -4968,6 +5065,7 @@ const DOC = {
           usd_price: 180,
           price_day: "2026-09-29",
           usd_to_cad: 1.36,
+          listings_day: null,
           set_name: "Evolving Skies",
           type_name: "booster_box",
           type_label: "Booster Box",
@@ -4984,7 +5082,7 @@ const realFetch = global.fetch;
 
 function call(authorization?: string) {
   return GET(
-    new NextRequest("https://www.pokefin.ca/api/cron/alerts", {
+    new NextRequest("https://pokefin.ca/api/cron/alerts", {
       headers: authorization ? { authorization } : {},
     })
   );
@@ -5007,10 +5105,11 @@ beforeEach(() => {
   process.env.CRON_SECRET = SECRET;
   process.env.POKEFIN_CRON_TOKEN = "k".repeat(64);
   process.env.BREVO_API_KEY = "xkeysib-test";
-  process.env.NEXT_PUBLIC_SITE_URL = "https://www.pokefin.ca";
+  process.env.NEXT_PUBLIC_SITE_URL = "https://pokefin.ca";
   jest.useFakeTimers({ now: new Date("2026-09-30T11:05:00Z"), doNotFake: ["setTimeout", "setImmediate", "nextTick", "queueMicrotask"] });
   rpc.mockReset();
   fetchMock.mockReset();
+  mockAvailable.mockReturnValue(true);
   getDue(DOC);
   fetchMock.mockResolvedValue(new Response(JSON.stringify({ messageId: "<m1@brevo>" }), { status: 201 }));
 });
@@ -5033,6 +5132,17 @@ it("answers 401 without the right bearer", async () => {
   expect((await call(SECRET)).status).toBe(401);
   expect(rpc).not.toHaveBeenCalled();
   expect(fetchMock).not.toHaveBeenCalled();
+});
+
+it("answers 200 disabled, reads nothing and logs nothing while the mailing address is unset", async () => {
+  mockAvailable.mockReturnValue(false);
+  const res = await call(`Bearer ${SECRET}`);
+  expect(res.status).toBe(200);
+  expect(await res.json()).toEqual({ status: "disabled" });
+  expect(rpc).not.toHaveBeenCalled();
+  expect(fetchMock).not.toHaveBeenCalled();
+  // and an unauthenticated call still gets 401, not "disabled"
+  expect((await call()).status).toBe(401);
 });
 
 it("answers 503 when the Brevo key or the cron token is missing", async () => {
@@ -5067,7 +5177,7 @@ it("a fixture day with one crossing sends exactly one email and records it", asy
   expect(sent.replyTo).toEqual({ email: "hello@pokefin.ca" });
   expect(sent.subject).toBe("Price alert: Evolving Skies Booster Box");
   expect(sent.headers["List-Unsubscribe-Post"]).toBe("List-Unsubscribe=One-Click");
-  expect(sent.headers["List-Unsubscribe"]).toBe(`<https://www.pokefin.ca/api/alerts/unsubscribe?t=${TOKEN}>`);
+  expect(sent.headers["List-Unsubscribe"]).toBe(`<https://pokefin.ca/api/alerts/unsubscribe?t=${TOKEN}>`);
   expect(rpc).toHaveBeenCalledWith("record_alert_digest_sent", { p_day: "2026-09-29", p_alert_ids: [7], p_token: "k".repeat(64) });
   expect(rpc).not.toHaveBeenCalledWith("release_alert_digest", expect.anything());
 });
@@ -5126,7 +5236,7 @@ With an injected `fetchImpl`: the request is `POST` to `BREVO_SEND_URL` with `ap
 Mock `routeSupabase` (WP05 pattern, a chainable query builder), `alertsConfig` (`alertsAvailable` returns `true` unless a case sets `false`), `serverMarketData` (one priced product 42, stats matching its price with `ret_7d` 3.4, an fx series with 1.36 on its price day, attributes with `msrp_cad` 215.99) and `watchlistRepo.addWatch`.
 
 - GET without `x-pokefin-request` is 403; signed out is 401; `?product_id=abc` is 400.
-- GET lists the caller's rules mapped by `toAlertEntry` (a row with `kind: "x"` is skipped), `count`, `max: 50`, `prefs` (no row gives `{ exists: false, digestEnabled: true, unsubscribedAt: null }`), `email`, `available`; with `?product_id=42` only that product's rules and `context` (`cadPrice` 244.8 for USD 180 at 1.36, `change7d` 3.4, `msrpCad` 215.99); an unknown product gives `context: null`; a summaries failure gives 500. Every query filters `user_id` (assert the `.eq("user_id", ...)` call) and the prefs select is `"digest_enabled, unsubscribed_at"`.
+- GET lists the caller's rules mapped by `toAlertEntry` (a row with `kind: "x"` is skipped), `count`, `max: 50`, `prefs` (no row gives `{ exists: false, digestEnabled: true, unsubscribedAt: null }`), `email`, `available`; with `?product_id=42` only that product's rules and `context` (`cadPrice` 244.8 for USD 180 at 1.36, `change7d` 3.4, `msrpCad` 215.99, `priceRecent` true with fake timers one day after `price_recorded_at`, false four days after); an unknown product gives `context: null`; a summaries failure gives 500. Every query filters `user_id` (assert the `.eq("user_id", ...)` call) and the prefs select is `"digest_enabled, unsubscribed_at"`.
 - POST without CSRF headers is 403; a 600-byte body is 413; `alertsAvailable` false is 503 with `ALERTS_UNAVAILABLE_MESSAGE`; invalid bodies are 400 with the parser's message; created is 201 `{ status: "created", id, watched: "added" }` and calls `addWatch` once; `addWatch` returning `"full"` gives `watched: "skipped"` and still 201; 23505 is 200 `{ status: "exists" }`; 23503 is 404; 23514 with "price_alerts row limit reached" and no same rule is 409 with `code: "alerts_full"`; the same with the rule present is 200 exists; 23514 with another message is 400.
 - PATCH `{ id: 7, active: false }` updates with `.eq("id", 7).eq("user_id", ...)`, 200; not found 404; `{ digest_enabled: false }` returns `prefs`; no prefs row is 404 "Set an alert first."; `{ id: 7, active: false, extra: 1 }` and `{ digest_enabled: "no" }` are 400.
 - DELETE `?id=7` is 200 `{ status: "deleted" }`; a missing row is `{ status: "absent" }`; `?id=0` is 400.
@@ -5154,13 +5264,14 @@ Render the async page with `await AlertUnsubscribePage({ searchParams: Promise.r
 
 Mock `fetch` with a payload of 1 existing rule, `count: 1`, `available: true`, `email: "collector@example.com"`, and the ctx of the Design screen; mock `useCurrency` to `{ currency: "CAD" }` and `watchlistStore.noteWatched`.
 
-- While loading: `role="status"` "Loading your alerts"; Save is disabled.
+- While loading: `role="status"` "Loading your alerts"; Save is disabled; focus is on the dialog's Close button and stays there after the data arrives.
+- A first GET answering 500 shows "Your alerts could not be loaded. Please try again." and "Try again"; clicking it shows the loading status again, then the loaded form.
 - Loaded: the product name, "Market Price C$612.40 ($446.10 USD), Sep 29", the radio "Price falls to or below" checked, the input labelled "Price (C$)" with value "551.16", the chips "10% below now: C$551.16" and "Back to Canadian MSRP: C$215.99", the help with "Checked once a day after prices update." and the email, the link "How alerts work" to `/methodology#alerts`, and the existing rule under "Your alerts for this product".
 - Selecting "Price moves up or down within 7 days" shows the input "Move of at least (%)" with "10", hides the currency control, shows chips "10%", "5%", "20%" and "Now: Up 3.4% over 7 days.".
 - Typing "abc" and saving shows "Enter a number." with `aria-invalid="true"`, and focus is on the input; with the 7-day kind selected, "2" shows "Enter a percentage from 3 to 100.".
 - Clicking the MSRP chip then Save posts `{ product_id: 42, kind: "price_below", threshold: 215.99, currency: "CAD" }` with `x-pokefin-request: 1`; on `{ status: "created", watched: "added" }` the status reads "Alert saved. Checked once a day after prices update. The product is now on your watchlist.", `noteWatched(42, true)` was called, the list reloads (a second GET).
 - A 409 answer shows `ALERTS_FULL_MESSAGE` under the input; `count: 50` in the payload disables Save and shows it upfront.
-- A threshold above the current CAD price for `price_below` shows "Already true at the latest price: it will be in your next digest.".
+- A threshold above the current CAD price for `price_below` shows "Already true at the latest price: it will be in your next digest."; with `priceRecent: false` it shows "The latest price is more than 3 days old, so this alert waits for a newer one." instead.
 - `available: false` shows "Price alerts are not available yet." and disables Save; `context: null` shows the untracked line and disables Save.
 - Pause and Delete on the existing rule send PATCH and DELETE and show "Alert paused." and "Alert deleted."; after Delete focus is on the status line.
 - axe: no violations (loading and loaded).
@@ -5191,10 +5302,11 @@ Read the sources with `fs`:
 - `app/api/cron/alerts/route.ts` contains `export const dynamic = "force-dynamic"` and `bearerMatches(`.
 - No file under `app/` outside `app/lib/server/alertsRepo.ts` and `__tests__` contains `from("price_alerts")` or `from("alert_email_prefs")`; no file contains `from("alert_deliveries")`.
 - No file under `app/` except `app/content/disclosures.ts` assigns `MAILING_ADDRESS`.
+- No file under `app/components/alerts/`, `app/alerts/` or `app/lib/email/` contains `outline-none`, `transition-colors` or `transition-all` (WP23 focus rule, `01-PRODUCT-DIRECTION.md` §3.5), the same check as WP34's Tests 15.
 
 ### 15. WP34 tests to extend
 
-- `app/portfolio/watchlist/__tests__/WatchlistView.test.tsx`: mock the alerts `fetch` (GET `/api/alerts`) with two rules on product 42; the table shows an "Alerts" column whose button "Alerts for Evolving Skies Booster Box" shows "2"; clicking it opens the dialog (mock `next/dynamic` as in Test 13); the "Price alerts" section renders below the watchlist and also when the watchlist is empty; with `available: false` neither the column nor the section renders.
+- `app/portfolio/watchlist/__tests__/WatchlistView.test.tsx`: mock the alerts `fetch` (GET `/api/alerts`) with two rules on product 42; the table shows an "Alerts" column whose button is named "Alerts for Evolving Skies Booster Box, 2 alerts set" and shows "2"; clicking it opens the dialog (mock `next/dynamic` as in Test 13); the "Price alerts" section renders below the watchlist and also when the watchlist is empty; with `available: false` neither the column nor the section renders.
 - `app/components/watchlist/__tests__/WatchlistTable.test.tsx` and the phone list test, if WP34 has them: without `onAlert` the markup is unchanged (no "Alerts" header, no bell).
 
 ## Verification
@@ -5221,7 +5333,7 @@ pnpm exec jest --ci app/api/cron app/api/alerts app/alerts app/components/alerts
 cd .. && python -m pytest tests/test_wp35_price_alerts_static.py -q        # 13 passed
 # Database (WP21 harness, local Postgres):
 PGSERVER_URL=postgresql://postgres:postgres@localhost:55432/postgres scripts/db/replay_migrations.sh   # OK: ... replayed once and twice
-POKEFIN_TEST_DATABASE_URL=postgresql://postgres:postgres@localhost:55432/replay_once python -m pytest tests/test_wp35_price_alerts_db.py -v   # 29 passed
+POKEFIN_TEST_DATABASE_URL=postgresql://postgres:postgres@localhost:55432/replay_once python -m pytest tests/test_wp35_price_alerts_db.py -v   # 30 passed
 POKEFIN_TEST_DATABASE_URL=postgresql://postgres:postgres@localhost:55432/replay_once python -m pytest tests/ -q   # all pass (WP34's export test still passes)
 ```
 
@@ -5237,7 +5349,7 @@ pnpm perf:budget                                # exit 0
 Expected: `/product/900001` JS gz grows by at most about 1.5 kB (the island; report the number), every lazy chunk stays under 120 kB gz (the dialog chunk is about 6 to 9 kB gz), `/portfolio/watchlist` stays within its limit, CSS within 14 kB gz.
 
 Block 4, manual (`pnpm dev` against the stub or a branch database, signed in as a test user, with `MAILING_ADDRESS` set locally to a test string; do not commit it):
-- 1440 px, `/product/<id>`: "Alert me" sits after Watch; hover preloads one chunk (Network); click opens the dialog with focus in the input; Escape closes it and focus returns to the button. Save a "Price falls to or below" alert at the 10% chip; the status line and the rule appear; the Watch star is now filled.
+- 1440 px, `/product/<id>`: "Alert me" sits after Watch; hover preloads one chunk (Network); click opens the dialog with focus on its Close button and Tab reaching the first radio; Escape closes it and focus returns to the button. Save a "Price falls to or below" alert at the 10% chip; the status line and the rule appear; the Watch star is now filled.
 - 390 px, same page: the actions wrap without overflow, the dialog fits with 16 px gutters, radio rows and chips are at least 44 px tall (DevTools, touch emulation), the keyboard does not zoom (16 px input).
 - 1440 px, `/portfolio/watchlist`: the Alerts column shows the bell with "1"; the "Price alerts" section lists the rule; Pause shows "Paused", Resume shows "Waiting..."; "Turn off emails" shows the warn line; "Turn on emails" restores it; `/portfolio/watchlist#alerts` scrolls to the section after load.
 - 390 px, `/portfolio/watchlist`: each row has the bell and the remove button as siblings of the row link; the section stacks with 44 px buttons; no horizontal scroll.
@@ -5251,16 +5363,16 @@ Block 5, phase B and production (after Owner actions 1 to 7):
 pnpm types:db && pnpm exec tsc --noEmit      # exit 0
 ```
 
-Then, on production, with a test account that has a confirmed email: create a "Price falls to or below" alert above the current price of any product (it is already true), and trigger the run by hand: `curl -sS -H "Authorization: Bearer $CRON_SECRET" https://www.pokefin.ca/api/cron/alerts`. Expect JSON with `"sent": 1`; the email arrives with the product, the price, the as-of date, the manage link and the footer. Run the same curl again: `"sent": 0`. In the received message ("Show original" in Gmail), check `List-Unsubscribe: <https://www.pokefin.ca/api/alerts/unsubscribe?t=...>`, `List-Unsubscribe-Post: List-Unsubscribe=One-Click`, and SPF, DKIM and DMARC "PASS". Use the mail client's own unsubscribe button: the watchlist then shows "Alert emails are off". Turn emails back on. The scheduled run the next morning appears in Vercel, Logs, filtered by `/api/cron/alerts`, with status 200.
+Then, on production, with a test account that has a confirmed email: create a "Price falls to or below" alert above the current price of any product (it is already true), and trigger the run by hand: `curl -sS -H "Authorization: Bearer $CRON_SECRET" https://pokefin.ca/api/cron/alerts`. Expect JSON with `"sent": 1`; the email arrives with the product, the price, the as-of date, the manage link and the footer. Run the same curl again: `"sent": 0`. In the received message ("Show original" in Gmail), check `List-Unsubscribe: <https://pokefin.ca/api/alerts/unsubscribe?t=...>`, `List-Unsubscribe-Post: List-Unsubscribe=One-Click`, and SPF, DKIM and DMARC "PASS", with the `d=pokefin.ca` `DKIM-Signature` whose `h=` list includes `list-unsubscribe` and `list-unsubscribe-post` (RFC 8058 section 4: mailbox providers offer one-click only when a valid DKIM signature covers both headers; if they are missing, record it in the PR thread and raise it with Brevo before relying on one-click). Use the mail client's own unsubscribe button: the watchlist then shows "Alert emails are off". Turn emails back on. The scheduled run the next morning appears in Vercel, Logs, filtered by `/api/cron/alerts`, with status 200.
 
 ## Owner actions
 
-1. **Apply migration 0039** after 0038 is in production: Supabase MCP `apply_migration` (preferred) or the SQL editor with `migrations/0039_price_alerts.sql`. Then run the verification query the PR attaches (`/tmp/wp35_0039.sql`): 135 rows, all OK. Record it in `audits/HARDENING_FOLLOWUPS.md` section 7 ("Migration 0039 applied (YYYY-MM-DD)") and commit to master as `docs: record migration 0039 as applied`.
+1. **Apply migration 0039** after 0038 is in production: Supabase MCP `apply_migration` (preferred) or the SQL editor with `migrations/0039_price_alerts.sql`. Then run the verification query the PR attaches (`/tmp/wp35_0039.sql`): 135 rows, all OK. If `migrations/0040_portfolio_lot_currency.sql` (WP36) is already applied in production, re-apply 0040 right after 0039 (WP36 Owner action 5: it is idempotent and only re-adds its keys), then check `SELECT position('purchase_currency' IN pg_get_functiondef('public.export_my_data()'::regprocedure)) > 0, position('price_alerts' IN pg_get_functiondef('public.export_my_data()'::regprocedure)) > 0;` prints `t | t`. Record it in `audits/HARDENING_FOLLOWUPS.md` section 7 ("Migration 0039 applied (YYYY-MM-DD)"), refresh `schema.sql` from production as README "Database" describes (WP21: `pg_dump --schema-only --schema=public ... | python3 scripts/db/normalize_dump.py -`) so CI's informational drift step stops reporting the three tables, and commit both to master as `docs: record migration 0039 as applied`.
 2. **Create the Vault secret and the matching Vercel variable.** Generate a value with `openssl rand -hex 32`. In the SQL editor: `SELECT vault.create_secret('<value>', 'pokefin_cron_token', 'WP35 price alert cron');`. In Vercel, Settings, Environment Variables, Production only, Sensitive: `POKEFIN_CRON_TOKEN=<the same value>`. To rotate later: `SELECT vault.update_secret((SELECT id FROM vault.secrets WHERE name = 'pokefin_cron_token'), '<new value>');`, then update the Vercel variable and redeploy.
 3. **Create `CRON_SECRET`** in Vercel (Production only, Sensitive) with a different `openssl rand -hex 32` value. Vercel sends it to the cron route automatically.
 4. **Brevo** (free plan): create the account; in Senders, Domains and Dedicated IPs, add and authenticate `pokefin.ca` with the DNS records Brevo shows (a `brevo-code` TXT and the DKIM records); add `include:spf.brevo.com` to the existing SPF TXT record (keep a single SPF record); add `_dmarc.pokefin.ca TXT "v=DMARC1; p=none; rua=mailto:privacy@pokefin.ca"` and move it to `p=quarantine` after two clean weeks of reports; add the sender `alerts@pokefin.ca` ("Pokéfin alerts") and make `alerts@` forward to `hello@` like the other addresses (WP24). Create an API key (SMTP and API, API keys) and set `BREVO_API_KEY` in Vercel (Production only, Sensitive). If Supabase Auth also sends through Brevo SMTP, the 300 a day are shared; the alert run caps itself at 200.
 5. **Decision D4, the mailing address** for every email (Canada's anti-spam law): a street address, a PO box or a virtual mailbox. Answer in the PR thread; the executor sets `MAILING_ADDRESS` in `app/content/disclosures.ts`. Until then alerts stay hidden and nothing is sent.
-6. **Confirm `NEXT_PUBLIC_SITE_URL`** in Vercel Production is the canonical origin (for example `https://www.pokefin.ca`): every email link is built from it.
+6. **Confirm `NEXT_PUBLIC_SITE_URL`** in Vercel Production is exactly `https://pokefin.ca`, the apex canonical origin, with `www` redirecting to it (WP02 owner action 4, WP13 decision 1): every email link, including the RFC 8058 one-click POST target, is built from it, and a mail client's POST must not hit a redirect.
 7. **Confirm the Vercel Root Directory is `frontend`** (Settings, General), where `vercel.json` lives. After the merge deploy, Settings, Cron Jobs lists `/api/cron/alerts` at `5 11 * * *`. On the Hobby plan it runs once a day within the 11:00 UTC hour.
 8. **Privacy page sub-processor line**: WP24 already names Brevo; this PR extends that line to the alert digest. If WP24 shipped a placeholder there, confirm the new wording in the PR.
 9. After the first scheduled morning, run Verification block 5's checks once and reply in the PR or in an issue.
@@ -5268,9 +5380,9 @@ Then, on production, with a test account that has a confirmed email: create a "P
 ## Acceptance criteria
 
 - [ ] `migrations/0039_price_alerts.sql` applies twice in a row (`replay_twice`), `verify_migration.py` prints exactly the four column-grant REFUSED lines, and its query returns 135 OK rows after apply.
-- [ ] `tests/test_wp35_price_alerts_db.py` passes (29 cases), including: a crossing fires once and a re-run the same day returns nothing; a withheld price (`is_price_fresh` false) never fires and is not even evaluated; a price more than 3 days old never fires; hysteresis re-arms only at 2% past the level; a CAD level uses the rate of the price's day and is skipped without it; a stale claim is retried and a released claim is re-claimed; an older day is never evaluated after a newer one; a wrong, short or missing token and a missing Vault secret raise 42501; `unsubscribe_alerts` is idempotent and token-only; RLS owner-only, column grants, the 50 cap, the CHECKs, the export keys without the token, and account deletion cascade.
+- [ ] `tests/test_wp35_price_alerts_db.py` passes (30 cases), including: a crossing fires once and a re-run the same day returns nothing; a claim another run is still sending takes no `p_max_users` slot; the listing kinds carry `listings_day`; a withheld price (`is_price_fresh` false) never fires and is not even evaluated; a price more than 3 days old never fires; hysteresis re-arms only at 2% past the level; a CAD level uses the rate of the price's day and is skipped without it; a stale claim is retried and a released claim is re-claimed; an older day is never evaluated after a newer one; a wrong, short or missing token and a missing Vault secret raise 42501; `unsubscribe_alerts` is idempotent and token-only; RLS owner-only, column grants, the 50 cap, the CHECKs, the export keys without the token, and account deletion cascade.
 - [ ] `tests/test_wp35_price_alerts_static.py` passes: the cap, kinds, ranges, hysteresis and age constants match `alerts.ts`; the cron functions check the token first; the effective `export_my_data` keeps `watchlist`, `price_alerts` and `alert_email`; the Vault stand-in is in `ci_bootstrap.sql`; `vercel.json` schedules `/api/cron/alerts` at `5 11 * * *`.
-- [ ] The cron route test proves: 503 without a long `CRON_SECRET`, 401 without the exact bearer, 503 without the Brevo key or the cron token; a fixture day with one crossing sends exactly one Brevo email with the List-Unsubscribe headers and records it; re-running the same day sends none; a refused send releases the claim; a 429 is retried once; no response contains an email address.
+- [ ] The cron route test proves: 503 without a long `CRON_SECRET`, 401 without the exact bearer, 200 `disabled` with no read while `MAILING_ADDRESS` is unset, 503 without the Brevo key or the cron token; a fixture day with one crossing sends exactly one Brevo email with the List-Unsubscribe headers and records it; re-running the same day sends none; a refused send releases the claim; a 429 is retried once; no response contains an email address.
 - [ ] The email snapshot is committed; the text and HTML contain the product, the rule, the price with its CAD and USD values, the TCGplayer as-of date, the product link, the manage link, the disclaimer, the reason and unsubscribe link, the sender and mailing address, and the trademark notice; HTML is escaped.
 - [ ] `/api/alerts/unsubscribe` has no GET, accepts the RFC 8058 one-click POST without CSRF headers, answers 200 for unknown tokens, and redirects the page form with a status; the page's GET only renders a POST form.
 - [ ] The product page shows "Alert me" after Watch (when `MAILING_ADDRESS` is set), stays ISR (Test 14), and loads the dialog lazily; the dialog creates rules with the suggestions of the Design section and lists and manages the product's rules.
@@ -5284,7 +5396,7 @@ Then, on production, with a test account that has a confirmed email: create a "P
 ## Rollback
 
 - **Stop sending at once, no deploy:** Vercel, Settings, Cron Jobs, disable `/api/cron/alerts`; or delete `CRON_SECRET` (the route answers 503). Both are reversible.
-- **Hide the feature:** set `MAILING_ADDRESS` back to `null` and deploy: the button, the column and the section disappear, `POST /api/alerts` answers 503 and the cron sends nothing. Rules stay stored.
+- **Hide the feature:** set `MAILING_ADDRESS` back to `null` and deploy: the button, the column and the section disappear, `POST /api/alerts` answers 503 and the cron answers `{"status":"disabled"}` and sends nothing. Rules stay stored.
 - **Code:** revert the frontend commits (2 to 5 of Commit and PR). Keep commit 1 (the migration, the bootstrap stand-in and the Python tests): production has applied 0039, and removing the file would make the replay and `schema.sql` drift. The tables are inert without the routes.
 - **Database, only if the owner wants the data gone** (for example before any real user set an alert): in the SQL editor, in this order, then re-run section 5 of `migrations/0038_watchlist.sql` (its `CREATE OR REPLACE FUNCTION public.export_my_data()` and the three grant lines) to restore the export without the alert keys:
 

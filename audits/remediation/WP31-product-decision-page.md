@@ -3,15 +3,15 @@
 - **Goal**: on one screen of `/product/[id]`, a collector sees whether a sealed product is cheap relative to its own history (52-week range, tracked high, CAGR only when a year exists), its MSRP (x MSRP, cost per pack, pack NAV) and the market (Sealed Index or set index overlay), and whether they could sell it (units sold, sell-through, days of supply, liquidity percentile). Every number carries the TCGplayer day it describes, CAD is shown at the Bank of Canada rate of that day, and the page ends in actions: Add to portfolio, Watch (slot for WP34), Open in Box NAV, View on TCGplayer.
 - **Why now / value**: this is signature feature 1 of `01-PRODUCT-DIRECTION.md` §5. Every input now exists: `product_daily_stats` and `fx_daily` (WP25), MSRP and pack contents (WP28), the index route (WP29), `Stat`/`Delta`/`RangeBar`/`AsOf` (WP23), `MetricLabel`/`ReportLink` (WP24). Today the page is a dead end with a type-only H1, a USD-only price with no date and no change, contradictory CAGR and drawdown figures, and the chart 1.5 screens down on phones.
 - **Effort**: L, about 15 to 16 hours (page model and chart model with tests 5 h, header, stats, pulse, siblings and actions components 4 h, chart panel and Recharts implementation 3.5 h, portfolio add flow and proxy 1.5 h, methodology, definitions, verification and PR 1.5 h).
-- **Depends on**: WP05 (`AddHoldingModal` mounted only while open, `portfolioApi.ts`), WP12 (`ProductImage` `priority` hero), WP13 (`productMeta.ts`: `parseProductId`, `productPath`, `getProductLabel`, `getProductDisplayName`, JSON-LD, `loading.tsx`, `not-found.tsx`; `redirects.ts`), WP18 (`lib/marketMath.ts`), WP20 (`useCurrency`, `app/types/market.ts`), WP22 (`perf-budgets.json` route `/product/900001`, `pnpm perf:budget`, perf fixture), WP23 (`Stat`, `Delta`, `RangeBar`, `AsOf`, `Skeleton`, `EmptyState`, `SegmentedControl`, `Badge`, `buttonClasses`, tokens), WP24 (`MetricLabel`, `ReportLink`, `metricDefinitions.ts`, `/methodology`), WP25 (`getCachedProductStats`, `getCachedFxDaily`, `fetchAllRows`, `lib/fx.ts`, `lib/marketStats.ts`), WP28 (soft: `getCachedProductAttributes`, `boxCalculatorHref`, `NAV_STATUS_TEXT`, stats columns `msrp_multiple` to `nav_status`), WP29 (soft: `GET /api/public/index/[code]`). Through them: WP07 (`format.ts`), WP11 (ISR product page, `getCachedProductDetailRows`, `getCachedExchangeRate`), WP14 (contrast tokens), WP15 (promo last in `<main>`), WP17 (blocking lint and tests). Optional, with a default for each case in Before you start: WP26 (`getCachedProductHistory`), WP27 (header currency toggle), WP30 (`IntentLink`).
+- **Depends on**: WP05 (`AddHoldingModal` mounted only while open, `portfolioApi.ts`), WP12 (`ProductImage` `priority` hero), WP13 (`productMeta.ts`: `parseProductId`, `productPath`, `getProductLabel`, `getProductDisplayName`, JSON-LD, `loading.tsx`, `not-found.tsx`; `redirects.ts`), WP18 (`lib/marketMath.ts`), WP20 (`useCurrency`, `app/types/market.ts`), WP22 (`perf-budgets.json` route `/product/900001`, `pnpm perf:budget`, perf fixture), WP23 (`Stat`, `Delta`, `RangeBar`, `AsOf`, `Skeleton`, `EmptyState`, `SegmentedControl`, `Badge`, `buttonClasses`, tokens), WP24 (`MetricLabel`, `ReportLink`, `metricDefinitions.ts`, `/methodology`), WP25 (`getCachedProductStats`, `getCachedFxDaily`, `fetchAllRows`, `lib/fx.ts`, `lib/marketStats.ts`), WP28 (soft: `getCachedProductAttributes`, `boxCalculatorHref`, `NAV_STATUS_TEXT`, stats columns `msrp_multiple` to `nav_status`), WP29 (soft: `GET /api/public/index/[code]`, `getCachedIndexSummary`, index codes `sealed` and `set-<sets.id>`). Through them: WP07 (`format.ts`), WP11 (ISR product page, `getCachedProductDetailRows`, `getCachedExchangeRate`, `app/components/IntentLink.tsx` from its step 13a), WP14 (contrast tokens), WP15 (promo last in `<main>`), WP17 (blocking lint and tests). Optional, with a default for each case in Before you start: WP26 (`getCachedProductHistory`), WP27 (header currency toggle), WP33 (may have added the `maxDrawdown1y` definition first), WP36 (may have rewritten the `#limits` bullet first).
 - **Unblocks**: WP34 (fills the `watch` slot of `ProductActions`), WP37 (breadcrumbs and the dynamic share card read `buildQuote` from `productModel.ts`), and the deferred "compare up to 5 products" overlay (reuses `lib/productChart.ts`).
-- **Placement**: Track 2, after WP29 and WP28, so the overlays and x MSRP exist. Both are soft: the benchmark toggles are hidden while WP29's route is absent (a test forces the flag on when it lands), and every WP28 figure hides when its data is absent, so this package can start after WP25 if curation lags. It must precede WP34 and WP37. No migration.
+- **Placement**: Track 2, after WP29 and WP28, so the overlays and x MSRP exist. Both are soft: the benchmark toggles are hidden while WP29's route is absent (a test forces the flag on when it lands), and every WP28 figure hides when its data is absent, so this package can start after WP25 if curation lags. It must precede WP34 and WP37. No migration (the last reserved number is WP37's 0041 and WP33's 0042; this package adds none).
 - **Suggested branch name**: `remediation/wp31-product-decision-page`
 - **Risk level**: medium. It rewrites the page behind every product URL and changes one shared read (full price history instead of 367 days) and the auth redirect's `next` value; URL, canonical, metadata and JSON-LD are untouched, and every rule has a unit test.
 
 ## Why
 
-A collector who lands on a product page today cannot answer the one question the site exists for: is this cheap, and could I get out of it? The H1 is only the product type ("Booster Bundle"), the price has no date, no change and no CAD, "CAGR -38.73%" on the tile and "CAGR -25.56%" on the chart chip use different windows, drawdown and volatility stay visible for a stale product whose returns are withheld, Market Pulse says "Not enough volume history yet" when the missing input is price, there is no MSRP multiple, no action besides the TCGplayer link, and on a phone the chart is the seventh block (`research/ui-audit.md` `/product/[id]`, top-10 items 4 and 8). The competitive research ranks the product page as a decision page first among Pokéfin's gaps (`research/competitive-landscape.md` §4 item 2) and names x MSRP "the lingua franca" of sealed investing (§2); the data audit gives the exact metrics and gates this page needs: tracked high "since {first date}", never all-time (`research/data-opportunities.md` §3.3), liquidity as exit risk (§3.4), weekly annualised volatility (§3.13) and CAD at the rate of each day (§3.14). After this package the page leads with a dated quote and change chips, puts the chart directly under it with a legend, a volume pane, round ticks and an index overlay, shows one key-stats grid whose every label links to its definition, withholds every price-anchored figure together, and gives signed-in users a path to their portfolio (`research/trust-seo-brand.md` §5.1 for as-of stamps; `research/performance-excellence.md` §7.1 for keeping Recharts lazy).
+A collector who lands on a product page today cannot answer the one question the site exists for: is this cheap, and could I get out of it? The H1 is only the product type ("Booster Bundle"), the price has no date, no change and no CAD, "CAGR -38.73%" on the tile and "CAGR -25.56%" on the chart chip use different windows, drawdown and volatility stay visible for a stale product whose returns are withheld, Market Pulse says "Not enough volume history yet" when the missing input is price, there is no MSRP multiple, no action besides the TCGplayer link, and on a phone the chart is the seventh block (`research/ui-audit.md` `/product/[id]`, top-10 items 4 and 8). The competitive research ranks the product page as a decision page first among Pokéfin's gaps (`research/competitive-landscape.md` §4 item 2) and names x MSRP "the lingua franca" of sealed investing (§2); the data audit gives the exact metrics and gates this page needs: tracked high "since {first date}", never all-time (`research/data-opportunities.md` §3.3), liquidity as exit risk (§3.4), weekly annualised volatility (§3.13) and CAD at the rate of each day (§3.14). After this package the page leads with a dated quote and change chips, puts the chart directly under it with a legend, a volume pane, round ticks and an index overlay, measures the chart's range change with the same anchor rule as the chips (so the page never shows two different "1Y" numbers), shows one key-stats grid whose every label links to its definition, withholds every price-anchored figure together, and gives signed-in users a path to their portfolio (`research/trust-seo-brand.md` §5.1 for as-of stamps; `research/performance-excellence.md` §7.1 for keeping Recharts lazy).
 
 ## Design
 
@@ -26,7 +26,7 @@ A collector who lands on a product page today cannot answer the one question the
 7. The moving average is a fixed 30-calendar-day window, computed on daily-collected points only, needing at least 20 of them; the legend says "30-day average".
 8. Volume has its own pane with its own axis, daily bars up to 92 days, weekly bars beyond.
 9. Benchmark overlays are rebased to the product's price on the first day of the visible range where both exist, so both lines start at the same point. Only one overlay at a time.
-10. Default chart range 1Y; ranges 7D, 1M, 3M, 6M, 1Y, Max.
+10. Default chart range 1Y; ranges 7D, 1M, 3M, 6M, 1Y, Max. A range of N days starts at the same anchor the change chips use (WP25 and WP10's rule): the newest point on or before `end - N` and no older than `end - N - tol` (`tol` 7 up to 1M, 14 beyond, `returnAnchorToleranceDays`). Without such a point it starts at `max(first point, end - N + 1)`. The summary line always prints the start date ("1Y change ▲ 18.5% since Sep 29, 2025"), so the chart's change and the 1Y chip agree, and when they cannot (stats computed for a later day than the last price) the dates say why.
 11. Points recorded before daily collection began are weekly points drawn dashed, footnoted "Dashed: weekly points before {date}." Daily collection is detected per product: backfilled rows carry the timestamp `12:00:00` exactly (`backfill_historical_prices.py:816`, `"recorded_at": f"{entry['date']} 12:00:00"`), rows written by the scraper carry the scrape time with microseconds.
 12. No URL, canonical, metadata or JSON-LD change (WP13 owns them). The breadcrumb block stays exactly as it is (WP37 changes it).
 13. `app/components/PriceChart.tsx` is not edited: cards and `/market` still use it. The product page gets its own chart implementation in the lazy `ChartBundle`.
@@ -49,13 +49,13 @@ Market View / Evolving Skies                                            (breadcr
 |                      |  From $59.99 USD at the Bank of Canada rate of Sep 29
 |                      |  Change (?)  ▲ 1.2% 1D   ▲ 3.4% 7D   ▼ 2.0% 30D   ▲ 18.5% 1Y
 |                      |  In CAD at each day's Bank of Canada rate
-|                      |  Lowest listing (?) C$78.60 before shipping . 42 listings . as of Sep 29
+|                      |  Lowest listing (?) C$78.60 before shipping, 4.3% below Market Price . 42 listings . as of Sep 29
 +----------------------+  Price look wrong? Report it
                           [ Add to portfolio ] [ Open in Box NAV ]  View on TCGplayer
 +---------------------------------------------------------------------------------------------+
-| Price history          [ 7D | 1M | 3M | 6M |#1Y#| Max ]     ( vs Sealed Index ) ( vs Evolving Skies index ) |
+| Price history          [ 7D | 1M | 3M | 6M |#1Y#| Max ]     ( vs Sealed Index ) ( vs Evolving Skies Index ) |
 | ━ Price  ━ 30-day average (light)  ▮ Units sold  - - Sealed Index                         |
-| 1Y change ▲ 12.4%                                                                           |
+| 1Y change ▲ 18.5% since Sep 29, 2025                                                        |
 | C$120 +----------------------------------------------------------------------------------+ |
 | C$100 |                                              ___/\__/\___          Sep 29 •       | |
 |  C$80 |- - - - - - -_ _ _ _ _ /\____/\___/----'                    \___/                 | |
@@ -67,7 +67,7 @@ Market View / Evolving Skies                                            (breadcr
 | Sealed Index rebased to this product's price on Sep 30, 2025. Units sold: weekly totals.   |
 +---------------------------------------------------------------------------------------------+
 +---------------------------------------------------------------------------------------------+
-| Key stats                                  In CAD, prices here use the Bank of Canada rate of Sep 29. |
+| Key stats                                     CAD at the Bank of Canada rate of Sep 29 (CAD only)     |
 | 52-week range (?)                              Tracked high (?)     CAGR since first tracked (?)     |
 | |--------------------------|-------|           C$98.40              ▲ 8.1%                            |
 | C$61.20                      C$98.40           Reached Mar 3, 2026   per year since Sep 1, 2024       |
@@ -80,7 +80,7 @@ Market View / Evolving Skies                                            (breadcr
 | Risk                                                                                          |
 | Volatility 1Y (weekly, annualised) (?) 18.2%     Max drawdown (1Y) (?) 21.4%  Sep 30, 2025 to Sep 29, 2026 |
 +---------------------------------------------------------------------------------------------+
-| Market Pulse (?)  Demand surge  Price and volume both up over 30 days                        |
+| Market Pulse (?)  Demand surge  Price and volume rising together: buyers are absorbing supply |
 | Units sold (7d) 58 | Volume trend +22.0% | Active listings 42 | Units on market 96 | Supply change (30d) -8.0% | Orders (30d) 140 |
 +---------------------------------------------------------------------------------------------+
 Other products in Evolving Skies   (5 cards per row: image, name, price, ▲ 4.2% 30D)
@@ -114,9 +114,9 @@ Other products in Evolving Skies   (5 cards per row: image, name, price, ▲ 4.2
 | Price history                        |
 | [7D|1M|3M|6M|#1Y#|Max]               |  full width, 44 px
 | (vs Sealed Index) (vs Evolving Skies |
-| index)                               |
+| Index)                               |
 | ━ Price ━ 30-day avg ▮ Units sold    |
-| 1Y change ▲ 12.4%                    |
+| 1Y change ▲ 18.5% since Sep 29, 2025 |
 | [ price pane 220 px ]                |
 | [ volume pane 76 px ]                |
 | Dashed: weekly points before Jul 7...|
@@ -163,7 +163,7 @@ Withheld price (stale fixture 900300 or any product priced 14 or more days ago):
 
 Chips (1D, 7D, 30D, 1Y) come from the product's `product_daily_stats` row only when that row agrees with the page's price: `is_price_fresh`, `price_day === priceDay` and `|stats.usd_price - usd_price| < 0.005`. Otherwise every chip is `--` with the screen-reader reason "Not available". In CAD mode each chip is a CAD return computed from the same anchor the SQL uses (see Metric definitions); if any non-null chip cannot be converted (no rate for its anchor day, or the recomputed USD return disagrees with the stats value by more than 0.05 points), the whole row falls back to the USD values with the caption "In USD Market Price terms".
 
-The listing line appears only when the listings snapshot is fresh (`isListingsSnapshotFresh`, 3 days): "Lowest listing C$78.60 before shipping · 42 listings · as of Sep 29". It is omitted in the withheld and never states.
+The listing line appears only when the listings snapshot is fresh (`isListingsSnapshotFresh`, 3 days): "Lowest listing C$78.60 before shipping, 4.3% below Market Price · 42 listings · as of Sep 29". Its numbers come from one source: the stats row's listing columns when that row has a `listings_snapshot_date`, otherwise the page's own latest snapshot (never a mix of the two). The "below/above Market Price" clause is `stats.ask_premium_pct`, neutral text, shown only when the stats row agrees with the page price (same rule as the chips). The date is plain text "as of {Mon D}", not `AsOf`: `AsOf` would print "Last priced" on a 2 to 3 day old snapshot, which is a listing, not a price. It is omitted in the withheld and never states.
 
 ### Metric definitions (all computed in `productModel.ts`, all USD before conversion)
 
@@ -188,25 +188,26 @@ Gain and loss colour appears only on the change chips, CAGR and the chart's rang
 ### Chart (`ProductChartPanel.tsx` and `components/charts/ProductPriceChartImpl.tsx`)
 
 - **Payload** (server, `buildChartPayload`): full price history as compact columns `{ d, v }`. Points before `dailySince` are thinned to one per week (every Monday, plus the first point and the last point before `dailySince`). `dailySince` = the earliest day with a non-backfill timestamp, `null` when the product has none (then every point is weekly and dashed, footnote "Dashed: weekly points only."). Daily and weekly sales buckets as two compact series (null quantities dropped: unknown is not zero, migrations 0018 to 0021). `fx_daily` sliced from the first price day. About 4 to 6 kB br in the RSC payload for a product with a year and a half of history.
-- **Range**: end = the last recorded price day (never "today"). Start = `max(first day, end - N + 1)`; Max = first day. The x-domain is `[first visible point, end]`, clamped to data. When the range asks for more than exists, the summary says "since {first day}" instead of the range name. If fewer than 2 points fall in the range, the last 2 points are shown.
+- **Range**: end = the last recorded price day (never "today"). Start = the anchor of decision 10 (newest point in `[end - N - tol, end - N]`), else `max(first day, end - N + 1)`; Max = first day. The x-domain is `[first visible point, end]`, clamped to data. When the range asks for more than exists, the summary says "Change ... since {first day}" without the range name. If fewer than 2 points fall in the range, the last 2 points are shown.
 - **Axes**: numeric time axis (UTC day numbers). X ticks: days or Mondays up to 62 days, month starts beyond (every 1, 2, 3, 6 or 12 months, at most 5 ticks), labelled "Sep 1" or "Sep", with the year on January and on the first tick. Y ticks: 5 round numbers from a 1, 2, 2.5, 5 x 10^k step, domain extended to the outer ticks, floor at 0.
 - **Series**: price solid (`--pf-chart-line`, 2 px) from `dailySince`, dashed (4 4) before it, with the first daily point repeated in the dashed series so the two join. A gap longer than 14 days (`PRICE_STALENESS_TOLERANCE_DAYS`) breaks the line. 30-day average: same colour at 45% opacity, 1.5 px. Benchmark: `--pf-chart-bench`, dashed 6 4. Last price point: a dot labelled with its date ("Sep 29"), text anchored to its left so it never clips at the right edge. Release date: a dashed ink-soft reference line labelled "Release" when inside the domain.
 - **Volume pane**: its own chart, 76 px, same x-domain and left axis width (64 px) so bars line up; y axis with two ticks (0 and a round max). Daily bars when the visible span is at most 92 days, interior days zero-filled (TCGplayer writes explicit zero buckets); otherwise weekly bars on Mondays: 7 daily buckets summed, else the TCGplayer weekly row, else a partial sum flagged in the tooltip. Price and volume charts share `syncId="product-chart"` with `syncMethod="value"`.
-- **Currency**: CAD converts each point at its own day's rate (`rateOn`). A day without a rate is a gap, never today's rate. If `fx_daily` is empty, the chart shows USD with the note "Shown in USD: Bank of Canada rates are unavailable."
-- **Benchmark**: the toggles "vs Sealed Index" and "vs {Set} index" are `aria-pressed` buttons, mutually exclusive. The first press fetches `/api/public/index/<code>` once per page load (module-level promise cache). A 404 disables that toggle with the text "No {Set} index yet". A network error shows "Index unavailable. Select again to retry." in a `role="status"` line. The toggles are not rendered while `BENCHMARKS_ENABLED` is false (WP29 absent).
+- **Currency**: CAD converts each point at its own day's rate (`rateOn`). A day without a rate is a gap, never today's rate. If `fx_daily` is empty, the chart shows USD with the note "Shown in USD: Bank of Canada rates are unavailable." Points before the first rate add "CAD starts {date}: earlier points have no Bank of Canada rate."; a missing rate inside the series adds "Days without a Bank of Canada rate are left blank." The notes render inside the chart box, under the summary line.
+- **Benchmark**: the toggles "vs Sealed Index" and "vs {Set} Index" are `aria-pressed` buttons, mutually exclusive. The server decides which exist: WP29 creates a set index only for a set with at least 3 qualifying constituents, so the page reads `getCachedIndexSummary()` and renders the set toggle only when `set-<sets.id>` is in it (`availableBenchmarks`). The first press fetches `/api/public/index/<code>` once per page load (module-level promise cache). A 404 (an index dropped after the page was cached) disables that toggle with the text "No {Set} Index yet". A network error shows "Index unavailable. Select again to retry." in an always-present `role="status"` line, and the next press on that toggle retries (it does not switch the toggle off). The toggles are not rendered while `BENCHMARKS_ENABLED` is false (WP29 absent).
 - **Tooltip**: date ("Sep 29, 2026", "(weekly point)" when dashed), price with currency code, 30-day average, units sold ("58 sold that week" or "12 sold that day", "partial week" when flagged), and "{Index name} +4.2% since Sep 30".
 - **Legend** (HTML above the chart, server-rendered in the panel): Price, 30-day average, Units sold (when the product has sales data), the active benchmark name.
-- **Summary line** (inside the reserved chart height): "{range} change ▲ 12.4%" with `Delta`, or "since {date}" for a short history. When withheld: "No price since Sep 5, 2026. The chart shows recorded history only." in warn text, no change.
+- **Summary line** (inside the reserved chart height): "{range} change ▲ 18.5% since Sep 29, 2025" with `Delta`, or "Change ▲ 4.0% since {first day}" for a history shorter than the range. When withheld: "No price since Sep 5, 2026. The chart shows recorded history only." in warn text, no change. Chart notes (currency gaps, an index with no values in range) follow on the same wrapped line in caption size.
 - **Footnotes** (below the chart, `min-h` reserved): the dashed note, "CAD at the Bank of Canada rate of each day." (CAD only), the benchmark rebasing note, the volume resolution note, and a "How the chart is drawn" link to `/methodology#market-price`.
 - **States**: loading is a flat `Skeleton` of the exact reserved height (no fake chart shape); fewer than 2 recorded prices renders `EmptyState` "No history" with "Pokéfin has fewer than two recorded prices for this product."; a chart chunk that fails to load leaves the skeleton (Next's dynamic loader) and the rest of the page works.
 
-### Assumed WP29 contract (verify in Before you start)
+### WP29 contract (from WP29's spec, "Public contracts for later packages" and steps 11 and 12)
 
-- Route `GET /api/public/index/[code]`, ISR, 404 for an unknown code.
-- Body: `{ "code": string, "name": string, "d": ["YYYY-MM-DD", ...], "l": [level, ...] }`, oldest first, one entry per published day (D-1).
-- Codes: `sealed` for the headline index, `set-<set code lowercased>` for set indices.
+- Route `GET /api/public/index/[code]`: ISR (`force-static`, `revalidate = 86400`, empty `generateStaticParams`), 404 for a malformed or unknown code, 500 (never cached) on a read failure.
+- Body (`CompactIndexSeries` in `lib/marketIndex.ts`): `{ code, name, asOf, base: 100, weeklyUntil, d: ["YYYY-MM-DD", ...], l: [level to 4 decimals, ...], p: [positions of provisional points] }`, oldest first, one entry per published day (D-1); weekly (Mondays only) up to `weeklyUntil`, daily after.
+- Codes: `sealed` (name "Pokéfin Sealed Index") for the headline index, `set-<sets.id>` (numeric set id, name "<set name> Index") for set indices, created only for a set with at least 3 qualifying constituents.
+- `getCachedIndexSummary(): Promise<IndexSummary[] | null>` in `serverMarketData.ts` lists every published index (`code`, `name`, ...); `null` means the read failed.
 
-If WP29 differs, change only `parseIndexPayload`, `SEALED_INDEX_CODE` and `setIndexCode` in `app/product/[id]/benchmark.ts` and say so in the PR.
+This package keeps its own 30-line loader in `benchmark.ts` instead of WP29's `fetchPublicIndexSeries` (that helper exists only when WP26's `publicMarketApi.ts` does), so it compiles in every merge order. If soft check (b) shows a body that differs from the above, change only `parseIndexPayload`, `SEALED_INDEX_CODE` and `setIndexCode` and say so in the PR.
 
 ### Actions row (`ProductActions.tsx`)
 
@@ -232,20 +233,21 @@ Same signal logic and inputs as today (`getPulseSignal(product.returns["1M"], vo
 
 ### Siblings
 
-One DOM for both breakpoints: a list of 56 px rows on phones (40 px thumbnail, name, price, `Delta` 30D) and a 3 to 5 column card grid from 768 px. Each item is one `IntentLink` (prefetch after an 80 ms hover, on focus or pointerdown, never on viewport entry). Name is the product type plus variant (the set is in the heading). Price in the visitor's currency at the sibling's own price-day rate; withheld siblings show `--` and "Price withheld" to screen readers.
+One DOM for both breakpoints: a list of 56 px rows on phones (40 px thumbnail, name, price, `Delta` 30D) and a 3 to 5 column card grid from 768 px. Each item is one `IntentLink` (WP11 step 13a: prefetch after an 80 ms hover, on focus or pointerdown, never on viewport entry). Hover changes the background instantly: no `transition-colors` (`01-PRODUCT-DIRECTION.md` §3.5 allows only opacity and transform transitions). Name is the product type plus variant (the set is in the heading). Price in the visitor's currency at the sibling's own price-day rate; withheld siblings show `--` and "Price withheld" to screen readers.
 
 ### Accessibility
 
 - One H1. Sections are `<section aria-labelledby>` with H2 headings ("Price history", "Key stats", "Market Pulse", "Other products in {set}"); the quote header is `<section aria-label="Price">`.
 - Every key-stats and Market Pulse label is a `MetricLabel` (24 px "?" link with an accessible name).
 - `Delta` carries direction in words; `AsOf` carries staleness in words; `RangeBar` gives a sentence.
-- Range control is WP23's `SegmentedControl` (APG radio group). Benchmark toggles are buttons with `aria-pressed`; a disabled one uses `aria-disabled="true"` and keeps focus.
+- Range control is WP23's `SegmentedControl` (APG radio group). Benchmark toggles are buttons with `aria-pressed`; a disabled one uses `aria-disabled="true"` and keeps focus. The benchmark `role="status"` element is rendered empty from the first paint, so its loading and error text is announced when it appears.
 - The chart is `aria-hidden` apart from its heading, summary line and footnotes; the summary line and the key stats carry the same information in text.
 - 44 px targets on coarse pointers for every button and link in the actions row, toolbar and sibling rows.
 
 ### Performance
 
-- Recharts and `lib/productChart.ts` stay in the lazy `ChartBundle` chunk. The route's initial JS gains `QuoteClient.tsx` (currency pickers, about 1 kB gz), `ProductChartPanel.tsx` and `benchmark.ts` (about 2 kB gz), and `IntentLink` (about 0.5 kB gz). Budget: initial JS at or under 145 kB gz, document at or under 30 kB br.
+- Recharts and `lib/productChart.ts` stay in the lazy `ChartBundle` chunk. The route's initial JS gains `QuoteClient.tsx` (currency pickers, about 1 kB gz), `ProductChartPanel.tsx` and `benchmark.ts` (about 2 kB gz); `IntentLink` is already there (WP11). Budget: initial JS at or under 145 kB gz, document at or under 30 kB br, and the `ChartBundle` chunk (which now also carries `ProductPriceChartImpl` and `productChart.ts`, about 5 kB gz) at or under WP22's `lazyChunkGzKb` (120 kB gz).
+- Server reads: six cached reads side by side (`getCachedProductDetail`, `getCachedProductStats`, `getCachedFxDaily`, `getCachedExchangeRate`, `getCachedProductAttributes`, `getCachedIndexSummary`), none nested. The only new database read is the paged full history inside the existing per-product `product-detail-rows` entry (about 1 to 2 PostgREST pages for a product with two years of daily rows).
 - The price history in the RSC payload is compact columns with the pre-daily part thinned to weekly points, replacing today's 367 row objects: the document should shrink or stay level.
 - No client fetch on page load. The index route is fetched only on a toggle press.
 - LCP: at 1440 px the LCP element stays WP12's hero `<img>` (preload, `fetchpriority="high"`). At 390 px the brief makes the image a 96 px thumbnail, so the LCP element becomes server-rendered text in the header (the H1 or the price), which paints with the first HTML; it must never be the chart, a skeleton or a client-only node. The thumbnail keeps `priority`.
@@ -258,7 +260,7 @@ Paths are relative to `frontend/` unless they start with `migrations/` or `audit
 Read:
 - `audits/remediation/01-PRODUCT-DIRECTION.md` (§2, §3, §5 item 1, §6).
 - `audits/remediation/research/ui-audit.md` section `/product/[id]`; `research/data-opportunities.md` §2, §3.3, §3.4, §3.13, §3.14.
-- Specs: WP23 steps 8, 9, 14, 15, 17 (component APIs); WP24 steps 5, 6, 17 (definitions, `MetricLabel`, `ReportLink`, product page labels); WP25 Design, steps 8 to 12, 14; WP28 Design, steps 5 to 8; WP13 step 7 (`productMeta.ts`); WP11 steps 4 and 7; WP12 steps 6 and 7; WP05 steps 15 and 16; WP30 step 1 (`IntentLink`).
+- Specs: WP23 steps 8, 9, 11, 14, 15, 16, 17 (component APIs); WP24 steps 5, 6, 17 (definitions, `MetricLabel`, `ReportLink`, product page labels); WP25 Design, steps 8 to 12, 14 and its `#limits` and `#currency` methodology edits; WP28 Design, steps 5 to 8; WP29 "Public contracts for later packages", steps 11 and 12; WP13 step 7 (`productMeta.ts`); WP11 steps 4, 7 and 13 (`IntentLink`); WP12 steps 6 and 7; WP05 steps 15 and 16; WP33 step 5 (it may add `maxDrawdown1y` before you); WP36 step 22d (the `#limits` bullet both packages edit).
 - Current code: `app/product/[id]/page.tsx`, `app/product/[id]/ProductDetailChart.tsx`, `app/product/[id]/loading.tsx`, `app/product/[id]/productMeta.ts`, `app/components/charts/ChartBundle.tsx`, `app/lib/serverMarketData.ts` (`fetchProductDetailRows`, `fetchAllRows`, the cached exports), `app/lib/marketPulse.ts`, `app/lib/fx.ts`, `app/lib/marketStats.ts`, `app/lib/marketMath.ts`, `app/context/CurrencyContext.tsx`, `app/components/Portfolio/PortfolioDashboard.tsx`, `app/components/Portfolio/cards/AddHoldingModal.tsx`, `app/lib/portfolio.ts` (`searchProducts`, `applyFreshPricesToSearchResults`), `app/portfolio/page.tsx`, `proxy.ts`, `app/content/methodology.ts`, `app/methodology/MethodologyArticle.tsx`, `app/lib/metricDefinitions.ts`.
 
 Find every call site you will affect:
@@ -290,10 +292,11 @@ cd frontend
 # WP05: modal mounted only while open
 grep -n "isAddModalOpen && (" app/components/Portfolio/PortfolioDashboard.tsx            # 1 line
 ls app/lib/portfolioApi.ts
-# WP11: ISR product page and the per-product rows cache
+# WP11: ISR product page, the per-product rows cache, intent-only product links
 grep -n "export const revalidate = 86400" "app/product/[id]/page.tsx"                   # 1 line
 grep -n "const getCachedProductDetailRows = unstable_cache" app/lib/serverMarketData.ts # 1 line
 grep -n "export async function getCachedExchangeRate" app/lib/serverMarketData.ts      # 1 line
+grep -n "export default function IntentLink" app/components/IntentLink.tsx              # 1 line
 # WP12: hero image priority
 grep -n "priority" "app/product/[id]/page.tsx"                                          # 1 line (hero)
 # WP13: product helpers, loading skeleton, redirects
@@ -315,7 +318,8 @@ ls app/components/ui/MetricLabel.tsx app/components/ui/ReportLink.tsx app/lib/me
 # WP25
 grep -n "export async function getCachedProductStats\|export async function getCachedFxDaily\|async function fetchAllRows" app/lib/serverMarketData.ts   # 3 lines
 grep -n "export function cadReturnPercent\|export function rateOn\|export function sliceFxSeries" app/lib/fx.ts   # 3 lines
-grep -n "export const RETURN_ANCHOR_WINDOWS\|export const ONE_DAY_PREVIOUS_MAX_GAP_DAYS\|export function statsFor" app/lib/marketStats.ts   # 3 lines
+grep -n "export const RETURN_ANCHOR_WINDOWS\|export const ONE_DAY_PREVIOUS_MAX_GAP_DAYS\|export function statsFor\|export function returnAnchorToleranceDays" app/lib/marketStats.ts   # 4 lines
+grep -n "WP31 and WP36 remove this bullet\|WP31 removes this bullet" app/methodology/MethodologyArticle.tsx   # 1 line (step 2b says what each means; 0 lines: skip that bullet)
 grep -n "volatilityWeekly52w\|range52w\|trackedHigh\|sellThrough30d\|liquidityScore\|supplyChange30d\|transactions30d" app/lib/metricDefinitions.ts | wc -l   # 7 or more
 ```
 
@@ -326,15 +330,17 @@ cd frontend
 # (a) WP28 code. Present: use it as written. Absent: see "WP28 absent" in step 6 and step 11.
 grep -n "export async function getCachedProductAttributes" app/lib/serverMarketData.ts
 grep -n "export function boxCalculatorHref\|export const NAV_STATUS_TEXT\|export function isNavStatus\|export function formatMsrpMultiple" app/lib/productAttributes.ts
-# (b) WP29 index route. Present: BENCHMARKS_ENABLED = true in step 13. Absent: false.
+# (b) WP29 index route and summary read. Present (both lines): BENCHMARKS_ENABLED = true in step 13
+#     and the page reads getCachedIndexSummary in step 16. Absent: false, and step 16's "WP29 absent".
 ls "app/api/public/index/[code]/route.ts"
-#     If present, read it and its payload builder; compare with "Assumed WP29 contract" above.
+grep -n "export async function getCachedIndexSummary" app/lib/serverMarketData.ts
+#     If present, read toCompactIndexSeries in app/lib/marketIndex.ts; compare with "WP29 contract" above.
 # (c) WP26 history accessor. Present: step 4c slices it. Absent: skip step 4c.
 grep -n "export async function getCachedProductHistory" app/lib/serverMarketData.ts
 # (d) WP27 header currency toggle. Present: skip ProductCurrencyToggle in step 11. Absent: add it.
 ls app/components/nav/HeaderCurrencyToggle.tsx
-# (e) IntentLink. Absent: create it in step 12a, verbatim from WP30 step 1.
-ls app/components/IntentLink.tsx
+# (e) WP33 may already define maxDrawdown1y (its step 5c). Present: step 1 skips that entry.
+grep -n 'key: "maxDrawdown1y"' app/lib/metricDefinitions.ts
 # (f) Methodology version, for step 2.
 grep -n "METHODOLOGY_VERSION = \|METHODOLOGY_EFFECTIVE_DATE = " app/content/methodology.ts
 ```
@@ -343,22 +349,21 @@ Also note the current product-route numbers from the latest `master` CI job summ
 
 ## Implementation steps
 
-### Step 1. `app/lib/metricDefinitions.ts`: five new definitions
+### Step 1. `app/lib/metricDefinitions.ts`: four new definitions
 
-1a. Extend the `./marketStats` import (WP25 added it) with `ONE_DAY_PREVIOUS_MAX_GAP_DAYS`.
+1a. Extend the `./marketStats` import (WP25 added it) with `ONE_DAY_PREVIOUS_MAX_GAP_DAYS` if it is not imported yet.
 
-1b. In `DEFINITIONS`, directly after the last WP28 product-level entry (`premiumToPacks`; if WP28 is absent, after WP25's `distinctPrices365d`), add:
+1b. In `DEFINITIONS`, directly after the last product-level entry (WP28's `premiumToPacks`, WP33's `fromHigh52w` or WP25's `distinctPrices365d`, whichever is last), add:
 
 ```ts
   // WP31: product decision page
-  def({ key: "return1d", label: "1D", unitLabel: "%", window: "1 day", short: `Percent change from the previous recorded day, at most ${ONE_DAY_PREVIOUS_MAX_GAP_DAYS} days earlier, to the latest price.`, anchor: "returns" }),
-  def({ key: "priceChange", label: "Change", unitLabel: "%", window: "1D, 7D, 30D, 1Y", short: "Market Price change over 1 day, 7 days, 30 days and 1 year, from the daily statistics.", anchor: "returns" }),
+  def({ key: "priceChange", label: "Change", unitLabel: "%", window: "1D, 7D, 30D, 1Y", short: `To the latest Market Price from the previous recorded day (at most ${ONE_DAY_PREVIOUS_MAX_GAP_DAYS} days back) and from 7, 30 and 365 days earlier.`, anchor: "returns" }),
   def({ key: "cagrSinceTracked", label: "CAGR since first tracked", unitLabel: "% per year", window: "first tracked price to latest, 365 days or more", short: "Compound annual growth from the first tracked price to the latest. Shown only with 365 or more days of history.", anchor: "cagr" }),
   def({ key: "maxDrawdown1y", label: "Max drawdown (1Y)", unitLabel: "%", window: "365 days to the latest price", short: "Largest fall from a peak to a later low in the recorded prices of the last 365 days.", anchor: "drawdown" }),
   def({ key: "lowestListing", label: "Lowest listing", unitLabel: "USD", window: "latest snapshot", short: "Cheapest active TCGplayer listing in the latest daily snapshot, item price before shipping.", anchor: "ask-premium" }),
 ```
 
-If `tsc` reports that `"ask-premium"` is not a `MethodologyTarget` (WP25 named the subsection differently), use the anchor WP25's `askPremium` definition uses. Do not change existing entries: `cagr`, `maxDrawdown` and `volatility30dAnnualised` still describe other pages.
+If soft check (e) printed a line, WP33 already defined `maxDrawdown1y` with this exact text: leave out that line (a duplicate key fails WP24's uniqueness test). If `tsc` reports that `"ask-premium"` is not a `MethodologyTarget` (WP25 named the subsection differently), use the anchor WP25's `askPremium` definition uses. Do not change existing entries: `cagr`, `maxDrawdown` and `volatility30dAnnualised` still describe other pages. Every `short` stays at or under 120 characters (WP24's test).
 
 ### Step 2. Methodology: version bump, CAGR rule, chart figures
 
@@ -369,7 +374,7 @@ If `tsc` reports that `"ask-premium"` is not a `MethodologyTarget` (WP25 named t
     version: METHODOLOGY_VERSION,
     date: METHODOLOGY_EFFECTIVE_DATE,
     summary:
-      "Product pages: CAGR is measured from the first tracked price and shown only with 365 or more days of history; volatility uses the weekly annualised figure; max drawdown covers the last 365 days; the chart adds a 30-day average, a weekly segment before daily collection and index overlays rebased to the start of the range.",
+      "Product pages: CAGR is measured from the first tracked price and shown only with 365 or more days of history; volatility uses the weekly annualised figure; max drawdown covers the last 365 days; CAD figures use the Bank of Canada rate of the price's day; the chart's range change uses the return anchor rule and the chart adds a 30-day average, a weekly segment before daily collection and index overlays rebased to the start of the range.",
   },
 ```
 
@@ -384,16 +389,31 @@ If `tsc` reports that `"ask-premium"` is not a `MethodologyTarget` (WP25 named t
 ```
 
   Keep "It is withheld with the price." at the end of the paragraph.
-- `#volatility`: in `tr[data-vol="product"]`, change the first cell from "Product pages and the Market table" to "The Market table". In `tr[data-vol="weekly"]` (WP25), prefix the first cell with "Product pages and " (so it reads "Product pages and daily statistics (from version 1.1)", keeping WP25's wording after the prefix, lower-casing its first letter).
+- `#volatility`: in `tr[data-vol="product"]`, change the first cell from "Product pages and the Market table" to "The Market table". In `tr[data-vol="weekly"]` (WP25), change the first cell from "Pages built on the daily statistics" to "Product pages and other pages built on the daily statistics" (if WP25's text differs, prefix it with "Product pages and " and lower-case its first letter).
+- `#currency` (WP25's version): append a paragraph at the end of the section:
+
+```tsx
+            <p>
+              Product pages convert the headline price, the key statistics and the lowest listing at the Bank of
+              Canada rate of the day the price describes, and say which rate they used. Their change chips and
+              chart are CAD returns at each day&apos;s rate.
+            </p>
+```
+
+- `#limits`: the CAD history bullet WP25 wrote. Three cases (soft check above):
+  - Comment `{/* WP31 removes this bullet */}` (WP36 merged first and left only product charts): delete the comment and its `<li>`.
+  - Comment `{/* WP31 and WP36 remove this bullet */}` (WP36 not merged): keep the comment unchanged (WP36 step 22d finds it by this text) and change the bullet's text to `Portfolio charts still convert CAD history at the latest rate until they move to the daily rates described under Canadian dollars.`
+  - Neither comment: change nothing here and say so in the PR.
 - `#market-price`: append three rows to the "Figure / Meaning" table body:
 
 ```tsx
                 <tr><td className={TD}>30-day average (chart)</td><td className={TD}>Mean of the daily Market Prices recorded in the 30 days ending on each day. Drawn only where at least 20 of those days have a price.</td></tr>
                 <tr><td className={TD}>Dashed line (chart)</td><td className={TD}>Weekly points from TCGplayer&apos;s history, before Pokéfin began recording the product daily. Daily steps in that period are not real moves.</td></tr>
                 <tr><td className={TD}>Index overlay (chart)</td><td className={TD}>A Pokéfin index rebased to the product&apos;s price on the first day of the visible range, so both lines start together. Index days are published for the previous day.</td></tr>
+                <tr><td className={TD}>Range change (chart)</td><td className={TD}>From the price at the start of the range to the latest price. The start is found with the same rule as the returns above, so the 1Y range change and the 1Y chip agree.</td></tr>
 ```
 
-2c. Update WP24's methodology test: the `#changes` row-count assertion becomes the previous count plus one, and the first row has `METHODOLOGY_VERSION`. Add assertions: `#cagr` contains "at least 365 days apart"; `tr[data-vol="product"]` still contains `String(PRODUCT_VOLATILITY_LOOKBACK_POINTS)`.
+2c. Update WP24's methodology test: the `#changes` row-count assertion becomes the previous count plus one (count with `METHODOLOGY_CHANGES.length`, not a literal), and the first row has `METHODOLOGY_VERSION`. Add assertions: `#cagr` contains "at least 365 days apart"; `tr[data-vol="product"]` still contains `String(PRODUCT_VOLATILITY_LOOKBACK_POINTS)`; `tr[data-vol="weekly"]` contains "Product pages"; `#currency` contains "rate of the day the price describes"; `#limits` does not contain "Product and portfolio charts".
 
 ### Step 3. `app/lib/marketPulse.ts`: the missing-input reason
 
@@ -476,6 +496,7 @@ import { rateOn, sliceFxSeries, type FxDailySeries } from "./fx";
 import { formatDateOnly, formatMonthDay, recordedAtDateKey } from "./format";
 import { dateKeyUtcMs, DAY_MS, recordedDayKey, toDailyPoints, type HistoryRow } from "./marketMath";
 import { PRICE_STALENESS_TOLERANCE_DAYS } from "./marketPulse";
+import { returnAnchorToleranceDays } from "./marketStats";
 import type { SalesHistoryEntry } from "../types/market";
 
 export const CHART_RANGES = ["7D", "1M", "3M", "6M", "1Y", "MAX"] as const;
@@ -825,9 +846,25 @@ export function buildChartView({
 
   const firstN = all[0].n;
   const endN = all[all.length - 1].n;
-  const requestedStart = range === "MAX" ? firstN : endN - RANGE_DAYS[range] + 1;
-  const startN = Math.max(firstN, requestedStart);
-  const trackedSince = range !== "MAX" && requestedStart < firstN ? all[0].dateKey : null;
+  // The range starts at the anchor the change chips use (WP25 / WP10 rule):
+  // the newest point on or before end - N, no older than end - N - tol.
+  // Without one, at end - N + 1 clamped to the first point.
+  let startN = firstN;
+  let trackedSince: string | null = null;
+  if (range !== "MAX") {
+    const days = RANGE_DAYS[range];
+    const anchorMax = endN - days;
+    const anchorMin = anchorMax - returnAnchorToleranceDays(days);
+    let anchor: number | null = null;
+    for (let i = all.length - 1; i >= 0; i -= 1) {
+      if (all[i].n > anchorMax) continue;
+      if (all[i].n >= anchorMin) anchor = all[i].n;
+      break;
+    }
+    const requestedStart = endN - days + 1;
+    startN = anchor ?? Math.max(firstN, requestedStart);
+    trackedSince = anchor === null && requestedStart < firstN ? all[0].dateKey : null;
+  }
 
   // 30-day average of daily-collected points, in the display currency.
   const ma = new Map<number, number>();
@@ -884,7 +921,8 @@ export function buildChartView({
   const benchBase = base;
   const rows: ChartRow[] = [];
   let prev: (typeof visible)[number] | null = null;
-  let cadGap = false;
+  let cadGapBeforeStart = false;
+  let cadGapInside = false;
   for (const p of visible) {
     if (prev !== null && p.n - prev.n > PRICE_STALENESS_TOLERANCE_DAYS) {
       // A gap longer than the price guard's tolerance breaks the line.
@@ -894,7 +932,10 @@ export function buildChartView({
       });
     }
     const value = convert(p.dateKey, p.usd);
-    if (value === null) cadGap = true;
+    if (value === null) {
+      if (payload.fx.start !== null && p.dateKey < payload.fx.start) cadGapBeforeStart = true;
+      else cadGapInside = true;
+    }
     const coarse = isCoarse(p.dateKey);
     // The first daily point is repeated in the dashed series so the two join.
     const joinsDashed = !coarse && prev !== null && isCoarse(prev.dateKey);
@@ -919,9 +960,10 @@ export function buildChartView({
     prev = p;
   }
 
-  if (cadGap && payload.fx.start !== null) {
+  if (cadGapBeforeStart && payload.fx.start !== null) {
     notes.push(`CAD starts ${formatDateOnly(payload.fx.start)}: earlier points have no Bank of Canada rate.`);
   }
+  if (cadGapInside) notes.push("Days without a Bank of Canada rate are left blank.");
 
   const values = rows.flatMap((r) => [r.weekly, r.daily, r.ma30, r.bench]).filter((v): v is number => v !== null);
   const ticks = values.length > 0 ? niceTicks(Math.min(...values), Math.max(...values)) : { ...EMPTY_Y, step: 1 };
@@ -1025,7 +1067,13 @@ export interface QuoteModel {
   price: MoneyPair | null;
   rate: QuoteRate | null;
   changes: { usd: ChangeRow; cad: ChangeRow | null } | null;
-  listing: { lowest: MoneyPair | null; count: number | null; snapshotDay: string } | null;
+  listing: {
+    lowest: MoneyPair | null;
+    count: number | null;
+    snapshotDay: string;
+    /** Lowest ask vs Market Price in percent points (stats.ask_premium_pct); null unless the stats row agrees. */
+    askPremiumPct: number | null;
+  } | null;
 }
 
 export interface LatestRate {
@@ -1175,13 +1223,23 @@ export function buildQuote({ product, stats, points, listings, fx, latestRate, t
       ? buildChanges(stats, points, fx, priceDay, usd)
       : { usd: { ...NO_CHANGES }, cad: null };
 
-  const snapshotDay = (stats?.listings_snapshot_date ?? listings?.snapshot_date ?? null)?.slice(0, 10) ?? null;
+  // One source for the whole line: the stats row when it carries a snapshot,
+  // else the page's own latest snapshot. Never a date from one and a price
+  // from the other.
+  const fromStats = typeof stats?.listings_snapshot_date === "string";
+  const snapshotDay = (fromStats ? stats?.listings_snapshot_date : listings?.snapshot_date)?.slice(0, 10) ?? null;
   let listing: QuoteModel["listing"] = null;
   if (snapshotDay !== null && isListingsSnapshotFresh(snapshotDay, referenceDateFor(today))) {
-    const lowest = stats ? stats.lowest_ask_usd : listings?.lowest_listing_price ?? null;
-    const count = stats ? stats.active_listings : listings?.active_listings ?? null;
+    const lowest = fromStats ? stats?.lowest_ask_usd ?? null : listings?.lowest_listing_price ?? null;
+    const count = fromStats ? stats?.active_listings ?? null : listings?.active_listings ?? null;
     if (lowest !== null || count !== null) {
-      listing = { lowest: lowest === null ? null : money(lowest, rate), count, snapshotDay };
+      listing = {
+        lowest: lowest === null ? null : money(lowest, rate),
+        count,
+        snapshotDay,
+        askPremiumPct:
+          fromStats && priceDay !== null && statsAgree(stats, priceDay, usd) ? stats.ask_premium_pct : null,
+      };
     }
   }
 
@@ -1523,6 +1581,13 @@ function rateText(rate: QuoteRate, referenceYear: string): string {
   return rate.kind === "dated" ? `the Bank of Canada rate of ${when}` : `the latest Bank of Canada rate (${when})`;
 }
 
+/** Key stats caption, CAD only: "CAD at the Bank of Canada rate of Sep 29". */
+export function CadRateNote({ rate, referenceYear }: { rate: QuoteRate | null; referenceYear: string }) {
+  const { currency } = useCurrency();
+  if (currency !== "CAD" || rate === null) return null;
+  return <p className="text-caption text-ink-soft">CAD at {rateText(rate, referenceYear)}</p>;
+}
+
 /** "≈ C$82.10 at the Bank of Canada rate of Sep 29" or "From $59.99 USD at ...". */
 export function QuoteSecondaryLine({
   price,
@@ -1611,13 +1676,19 @@ import Link from "next/link";
 import AsOf from "../../components/ui/AsOf";
 import MetricLabel from "../../components/ui/MetricLabel";
 import ReportLink from "../../components/ui/ReportLink";
-import { formatDateOnly, formatInteger } from "../../lib/format";
+import { formatDateOnly, formatInteger, formatMonthDay, formatPercent } from "../../lib/format";
 import { productPath } from "./productMeta";
 import type { QuoteModel } from "./productModel";
 import { CurrencyAmount, QuoteChanges, QuoteSecondaryLine } from "./QuoteClient";
 
 const LINK =
   "font-medium text-action underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-action";
+
+/** Neutral text (not a return): "4.3% below Market Price". Flat band as Delta's (0.05 points). */
+function premiumText(pct: number): string {
+  if (Math.abs(pct) < 0.05) return "at Market Price";
+  return `${formatPercent(Math.abs(pct))} ${pct < 0 ? "below" : "above"} Market Price`;
+}
 
 export default function ProductQuoteHeader({
   quote,
@@ -1674,9 +1745,12 @@ export default function ProductQuoteHeader({
           <MetricLabel metric="lowestListing" />{" "}
           <span className="text-ink">{quote.listing.lowest ? <CurrencyAmount pair={quote.listing.lowest} /> : "--"}</span>{" "}
           before shipping
+          {quote.listing.askPremiumPct !== null &&
+            `, ${premiumText(quote.listing.askPremiumPct)}`}
           {quote.listing.count !== null && ` · ${formatInteger(quote.listing.count)} listings`}
           {" · "}
-          <AsOf date={quote.listing.snapshotDay} variant="inline" referenceDate={today} />
+          {/* Plain date, not AsOf: AsOf says "Last priced" from 2 days, and this is a listing snapshot. */}
+          <time dateTime={quote.listing.snapshotDay}>as of {formatMonthDay(quote.listing.snapshotDay)}</time>
         </p>
       )}
       <div>{report}</div>
@@ -1696,7 +1770,7 @@ import Stat from "../../components/ui/Stat";
 import { formatDateOnly, formatInteger, formatMoney, formatPercent, formatSignedPercent } from "../../lib/format";
 import { formatMsrpMultiple } from "../../lib/productAttributes";
 import type { KeyStatsModel } from "./productModel";
-import { CurrencyAmount, QuoteRangeBar } from "./QuoteClient";
+import { CadRateNote, CurrencyAmount, QuoteRangeBar } from "./QuoteClient";
 
 const GROUP = "mt-6 border-t border-line pt-4";
 const GROUP_TITLE = "text-small font-semibold text-ink";
@@ -1706,7 +1780,7 @@ function count(value: number | null): string {
   return value === null ? "--" : formatInteger(Math.round(value));
 }
 
-export default function KeyStats({ model }: { model: KeyStatsModel }) {
+export default function KeyStats({ model, today }: { model: KeyStatsModel; today: string }) {
   const { range, trackedHigh, cagr, structure, liquidity, risk, rate } = model;
   return (
     <section
@@ -1716,12 +1790,8 @@ export default function KeyStats({ model }: { model: KeyStatsModel }) {
     >
       <div className="flex flex-wrap items-baseline justify-between gap-2">
         <h2 id="key-stats-heading" className="text-h3 font-semibold text-ink">Key stats</h2>
-        {rate && (
-          <p className="text-caption text-ink-soft">
-            In CAD, prices here use the {rate.kind === "dated" ? "Bank of Canada rate of" : "latest Bank of Canada rate,"}{" "}
-            {formatDateOnly(rate.day)}.
-          </p>
-        )}
+        {/* Rendered only while CAD is selected; one rate for the whole panel. */}
+        <CadRateNote rate={rate} referenceYear={today.slice(0, 4)} />
       </div>
 
       <div className="mt-4 grid gap-6 md:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
@@ -1984,11 +2054,11 @@ export default function ProductCurrencyToggle() {
 
 and pass `currencyToggle={<ProductCurrencyToggle />}` from the page. Note it in the PR ("delete when WP27 lands").
 
-### Step 12. Siblings: `IntentLink` and `app/product/[id]/SiblingList.tsx`
+### Step 12. Siblings: `app/product/[id]/SiblingList.tsx`
 
-12a. Only when soft check (e) found nothing: create `app/components/IntentLink.tsx` verbatim from WP30 step 1 (and its test from WP30's Tests section if WP30 specifies one). WP30 then skips its own step 1.
+`IntentLink` exists (WP11 step 13a, checked in Before you start); do not create or copy it.
 
-12b. `SiblingList.tsx` (server):
+`SiblingList.tsx` (server):
 
 ```tsx
 import IntentLink from "../../components/IntentLink";
@@ -2007,7 +2077,7 @@ export default function SiblingList({ setName, rows }: { setName: string; rows: 
           <li key={row.id}>
             <IntentLink
               href={row.href}
-              className="flex min-h-14 items-center gap-3 px-4 py-2 transition-colors duration-150 hover:bg-surface-alt focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-action motion-reduce:transition-none md:h-full md:flex-col md:items-stretch md:rounded-card md:border md:border-line md:bg-surface md:p-3"
+              className="flex min-h-14 items-center gap-3 px-4 py-2 hover:bg-surface-alt focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-action md:h-full md:flex-col md:items-stretch md:rounded-card md:border md:border-line md:bg-surface md:p-3 md:hover:bg-surface-alt"
             >
               <ProductImage imageUrl={row.imageUrl} productName={row.name} preferThumbnail className="size-10 shrink-0 md:h-28 md:w-full" />
               <div className="min-w-0 flex-1">
@@ -2037,12 +2107,40 @@ Keep whatever props WP12 gave the sibling `ProductImage` today (`preferThumbnail
  * The chart's index overlays (WP29's GET /api/public/index/[code]).
  * Client-safe and tiny: ProductChartPanel imports it.
  */
-export const BENCHMARKS_ENABLED = true; // false when app/api/public/index/[code]/route.ts does not exist (test enforces)
+export const BENCHMARKS_ENABLED: boolean = true; // false when app/api/public/index/[code]/route.ts does not exist (test enforces)
 export const SEALED_INDEX_CODE = "sealed";
+/** Short label for toggles and the legend (WP29's full name is "Pokéfin Sealed Index"). */
 export const SEALED_INDEX_NAME = "Sealed Index";
 
-export function setIndexCode(setCode: string): string {
-  return `set-${setCode.toLowerCase()}`;
+/** WP29 set index code: "set-<sets.id>". */
+export function setIndexCode(setId: number): string {
+  return `set-${setId}`;
+}
+
+export interface BenchmarkChoice {
+  /** Offer the Sealed Index toggle. */
+  sealed: boolean;
+  /** The set index code to offer, or null. */
+  set: string | null;
+}
+
+/**
+ * Which toggles the page offers. `codes` are the published index codes
+ * (getCachedIndexSummary), or null when that read failed: then both are
+ * offered and a 404 on press disables the missing one.
+ */
+export function availableBenchmarks(
+  enabled: boolean,
+  codes: readonly string[] | null,
+  setId: number | null
+): BenchmarkChoice {
+  if (!enabled) return { sealed: false, set: null };
+  const setCode = setId === null ? null : setIndexCode(setId);
+  if (codes === null) return { sealed: true, set: setCode };
+  return {
+    sealed: codes.includes(SEALED_INDEX_CODE),
+    set: setCode !== null && codes.includes(setCode) ? setCode : null,
+  };
 }
 
 export interface IndexSeries {
@@ -2054,10 +2152,15 @@ export interface IndexSeries {
 
 const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
 
-/** WP29 body { code, name, d: [...], l: [...] } to an IndexSeries, or null. */
+/**
+ * WP29 body { code, name, asOf, base, weeklyUntil, d, l, p } to an
+ * IndexSeries, or null. Only d and l are drawn; p (provisional positions)
+ * and the rest are ignored here.
+ */
 export function parseIndexPayload(code: string, json: unknown): IndexSeries | null {
   if (typeof json !== "object" || json === null) return null;
-  const { d, l, name } = json as { d?: unknown; l?: unknown; name?: unknown };
+  const { d, l, name, code: bodyCode } = json as { d?: unknown; l?: unknown; name?: unknown; code?: unknown };
+  if (bodyCode !== undefined && bodyCode !== code) return null;
   if (!Array.isArray(d) || !Array.isArray(l) || d.length !== l.length || d.length === 0) return null;
   const days: string[] = [];
   const levels: number[] = [];
@@ -2099,7 +2202,7 @@ export function resetIndexCacheForTests(): void {
 }
 ```
 
-Set `BENCHMARKS_ENABLED` from soft check (b). If WP29's contract differs (Before you start), adjust `parseIndexPayload`, `SEALED_INDEX_CODE` and `setIndexCode` only.
+Set `BENCHMARKS_ENABLED` from soft check (b). If WP29's body differs from "WP29 contract" (Before you start), adjust `parseIndexPayload`, `SEALED_INDEX_CODE` and `setIndexCode` only.
 
 ### Step 14. `app/components/charts/ProductPriceChartImpl.tsx` (new) and `ChartBundle.tsx`
 
@@ -2207,7 +2310,7 @@ function ProductPriceChartImpl({ payload, range, rangeLabel, currency, benchmark
   if (view.empty) return null;
   const volumeY = view.volumeY;
   const hasVolume = view.volume.length > 0 && volumeY !== null;
-  const moneyTick = (v: number) => formatMoney(v, view.currency, { decimals: view.y.decimals === 0 ? 0 : 2 });
+  const moneyTick = (v: number) => formatMoney(v, view.currency, { decimals: view.y.decimals });
   const xLabel = new Map(view.xTicks.map((tick) => [tick.t, tick.label]));
   const xAxis = (hide: boolean) => (
     <XAxis
@@ -2235,9 +2338,15 @@ function ProductPriceChartImpl({ payload, range, rangeLabel, currency, benchmark
           <>
             <span className="text-ink-soft">{view.trackedSince ? "Change" : `${rangeLabel} change`}</span>
             <Delta value={view.change.pct} />
-            {view.trackedSince && <span className="text-ink-soft">since {formatDateOnly(view.trackedSince)}</span>}
+            {/* Always dated: the start is the return anchor, so this matches the chip of the same window. */}
+            <span className="text-ink-soft">since {formatDateOnly(view.change.fromKey)}</span>
           </>
         ) : null}
+        {view.notes.map((note) => (
+          <span key={note} className="text-caption text-ink-soft">
+            {note}
+          </span>
+        ))}
       </p>
       <div className="min-h-0 flex-1" aria-hidden="true">
         <ResponsiveContainer width="100%" height="100%">
@@ -2327,7 +2436,8 @@ If Recharts 3's types reject `syncMethod="value"` on `ComposedChart`, check `nod
 "use client";
 
 import dynamic from "next/dynamic";
-import { useState, type ReactNode } from "react";
+import Link from "next/link";
+import { useMemo, useState, type ReactNode } from "react";
 import EmptyState from "../../components/ui/EmptyState";
 import SegmentedControl from "../../components/ui/SegmentedControl";
 import Skeleton from "../../components/ui/Skeleton";
@@ -2335,11 +2445,10 @@ import { useCurrency } from "../../context/CurrencyContext";
 import { formatDateOnly } from "../../lib/format";
 import type { ChartPayload, ChartRange } from "../../lib/productChart";
 import {
-  BENCHMARKS_ENABLED,
   loadIndexSeries,
   SEALED_INDEX_CODE,
   SEALED_INDEX_NAME,
-  setIndexCode,
+  type BenchmarkChoice,
   type IndexSeries,
 } from "./benchmark";
 
@@ -2359,7 +2468,11 @@ const RANGE_OPTIONS = [
   { value: "MAX", label: "Max", ariaLabel: "All tracked history" },
 ] as const satisfies ReadonlyArray<{ value: ChartRange; label: string; ariaLabel?: string }>;
 
+// Local copies (importing productChart or marketStats at runtime would pull
+// them into the initial bundle). The tolerance makes the dashed-footnote
+// check cover the earliest start the range can have (its return anchor).
 const RANGE_DAYS_LOCAL: Record<Exclude<ChartRange, "MAX">, number> = { "7D": 7, "1M": 30, "3M": 90, "6M": 180, "1Y": 365 };
+const anchorToleranceLocal = (days: number) => (days <= 30 ? 7 : 14);
 
 type BenchKey = "sealed" | "set";
 type BenchState =
@@ -2375,19 +2488,21 @@ function minusDays(key: string, n: number): string {
   return new Date(Date.UTC(y, m - 1, d) - n * 86_400_000).toISOString().slice(0, 10);
 }
 
+// Colour changes are instant (01-PRODUCT-DIRECTION.md §3.5): no transition-colors.
 const TOGGLE =
-  "inline-flex items-center rounded-control border border-line px-3 text-small font-medium text-ink h-8 pointer-coarse:min-h-11 transition-colors duration-150 motion-reduce:transition-none hover:bg-surface-alt focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-action aria-pressed:border-action aria-pressed:text-action aria-disabled:cursor-not-allowed aria-disabled:opacity-60";
+  "inline-flex items-center rounded-control border border-line px-3 text-small font-medium text-ink h-8 pointer-coarse:min-h-11 hover:bg-surface-alt focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-action aria-pressed:border-action aria-pressed:text-action aria-disabled:cursor-not-allowed aria-disabled:opacity-60";
 
 export default function ProductChartPanel({
   payload,
   setName,
-  setCode,
+  benchmarks,
   hasVolume,
   children,
 }: {
   payload: ChartPayload;
   setName: string;
-  setCode: string | null;
+  /** Which index toggles to offer (availableBenchmarks, decided on the server). */
+  benchmarks: BenchmarkChoice;
   hasVolume: boolean;
   /** RecordedHistory for a withheld price (server-rendered). */
   children?: ReactNode;
@@ -2397,44 +2512,59 @@ export default function ProductChartPanel({
   const [active, setActive] = useState<BenchKey | null>(null);
   const [bench, setBench] = useState<Record<BenchKey, BenchState>>({ sealed: { status: "idle" }, set: { status: "idle" } });
   const hasHistory = payload.price.d.length >= 2;
-  const setIndexName = `${setName} index`;
+  const setIndexName = `${setName} Index`;
+
+  /** One typed write per toggle, so every state literal is checked against BenchState. */
+  function put(key: BenchKey, next: BenchState) {
+    setBench((b) => ({ ...b, [key]: next }));
+  }
 
   function toggle(key: BenchKey) {
-    if (bench[key].status === "missing") return;
-    if (active === key) {
+    const state = bench[key];
+    if (state.status === "missing") return;
+    // A press on the active toggle switches it off, except after an error:
+    // then it retries ("Select again to retry").
+    if (active === key && state.status !== "error") {
       setActive(null);
       return;
     }
     setActive(key);
-    const state = bench[key];
     if (state.status === "ready" || state.status === "loading") return;
-    const code = key === "sealed" ? SEALED_INDEX_CODE : setIndexCode(setCode ?? "");
-    setBench((b) => ({ ...b, [key]: { status: "loading" } }));
+    const code = key === "sealed" ? SEALED_INDEX_CODE : benchmarks.set;
+    if (code === null) return;
+    put(key, { status: "loading" });
     loadIndexSeries(code).then(
       (result) => {
         if (result === "missing") {
-          setBench((b) => ({ ...b, [key]: { status: "missing" } }));
+          put(key, { status: "missing" });
           setActive((a) => (a === key ? null : a));
         } else {
-          setBench((b) => ({ ...b, [key]: { status: "ready", series: result } }));
+          put(key, { status: "ready", series: result });
         }
       },
-      () => setBench((b) => ({ ...b, [key]: { status: "error" } }))
+      () => put(key, { status: "error" })
     );
   }
 
   const activeState = active ? bench[active] : null;
-  const benchmark =
-    activeState?.status === "ready"
-      ? {
-          name: active === "sealed" ? SEALED_INDEX_NAME : setIndexName,
-          days: activeState.series.days,
-          levels: activeState.series.levels,
-        }
-      : null;
+  const readySeries = activeState?.status === "ready" ? activeState.series : null;
+  const benchmarkName = active === "sealed" ? SEALED_INDEX_NAME : setIndexName;
+  // Memoised so the memo()'d chart only recomputes its view when the overlay really changes.
+  const benchmark = useMemo(
+    () => (readySeries ? { name: benchmarkName, days: readySeries.days, levels: readySeries.levels } : null),
+    [readySeries, benchmarkName]
+  );
 
   const lastKey = payload.price.d[payload.price.d.length - 1] ?? null;
-  const startKey = lastKey === null ? null : range === "MAX" ? payload.price.d[0] : minusDays(lastKey, RANGE_DAYS_LOCAL[range] - 1);
+  // Earliest start the range can have (its return anchor may sit up to the
+  // tolerance before end - N), so the footnote is never missing when a dashed
+  // segment is drawn.
+  const startKey =
+    lastKey === null
+      ? null
+      : range === "MAX"
+        ? payload.price.d[0]
+        : minusDays(lastKey, RANGE_DAYS_LOCAL[range] + anchorToleranceLocal(RANGE_DAYS_LOCAL[range]));
   const showsDashed =
     hasHistory && startKey !== null && (payload.dailySince === null || payload.dailySince > startKey);
   const cadShown = currency === "CAD" && payload.fx.start !== null;
@@ -2443,7 +2573,7 @@ export default function ProductChartPanel({
       ? "Index unavailable. Select again to retry."
       : activeState?.status === "loading"
         ? "Loading the index."
-        : null;
+        : "";
 
   const toggleButton = (key: BenchKey, label: string) => {
     const state = bench[key];
@@ -2456,7 +2586,7 @@ export default function ProductChartPanel({
         aria-disabled={missing || undefined}
         onClick={() => toggle(key)}
       >
-        {missing ? `No ${setName} index yet` : label}
+        {missing ? `No ${setName} Index yet` : label}
       </button>
     );
   };
@@ -2468,10 +2598,10 @@ export default function ProductChartPanel({
         {hasHistory && (
           <div className="flex flex-col gap-2 md:flex-row md:items-center">
             <SegmentedControl label="Range" ariaLabel="Chart range" hideLabel options={RANGE_OPTIONS} value={range} onChange={setRange} />
-            {BENCHMARKS_ENABLED && (
+            {(benchmarks.sealed || benchmarks.set !== null) && (
               <div className="flex flex-wrap gap-2">
-                {toggleButton("sealed", `vs ${SEALED_INDEX_NAME}`)}
-                {setCode && toggleButton("set", `vs ${setIndexName}`)}
+                {benchmarks.sealed && toggleButton("sealed", `vs ${SEALED_INDEX_NAME}`)}
+                {benchmarks.set !== null && toggleButton("set", `vs ${setIndexName}`)}
               </div>
             )}
           </div>
@@ -2496,7 +2626,8 @@ export default function ProductChartPanel({
             />
           </div>
           <div className="mt-2 min-h-12 text-caption text-ink-soft">
-            {status && <p role="status">{status}</p>}
+            {/* Always mounted, so screen readers announce the text when it appears. */}
+            <p role="status">{status}</p>
             {showsDashed && (
               <p>{payload.dailySince ? `Dashed: weekly points before ${formatDateOnly(payload.dailySince)}.` : "Dashed: weekly points only."}</p>
             )}
@@ -2504,7 +2635,9 @@ export default function ProductChartPanel({
             {benchmark && <p>{benchmark.name} rebased to this product&apos;s price on the first day of the range. Index days are published for the previous day.</p>}
             {hasVolume && <p>Units sold on TCGplayer; bars are daily up to 3 months and weekly totals beyond.</p>}
             <p>
-              <a href="/methodology#market-price" className="font-medium text-action underline-offset-2 hover:underline">How the chart is drawn</a>
+              <Link href="/methodology#market-price" prefetch={false} className="font-medium text-action underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-action">
+                How the chart is drawn
+              </Link>
             </p>
           </div>
         </>
@@ -2517,7 +2650,7 @@ export default function ProductChartPanel({
 }
 ```
 
-Heights: the price pane is the chart box minus the 24 px summary line minus the 76 px volume pane when present (220 px phone, 280 px desktop). If the token utilities `bg-chart-line`, `bg-chart-volume` or `border-chart-bench` do not exist (WP23 defines `stroke-chart-line`, `fill-chart-volume`, `stroke-chart-bench`), add the missing utilities to WP23's `@theme` block in `globals.css` as colour aliases of the same variables (`--color-chart-line: var(--pf-chart-line);` and so on); never write a hex value. Use `next/link` with `prefetch={false}` instead of `<a>` for the methodology link if the conventions test requires internal links to be `Link`.
+Heights: the price pane is the chart box minus the 24 px summary line minus the 76 px volume pane when present (220 px phone, 280 px desktop); a wrapped summary line (notes) takes its height from the price pane, never from the page. `bg-chart-line`, `bg-chart-volume` and `border-chart-bench` come from WP23 step 3c (`--color-chart-line`, `--color-chart-volume`, `--color-chart-bench` in `@theme inline`); if `grep -c "color-chart-line\|color-chart-volume\|color-chart-bench" app/globals.css` prints less than 3, stop and report (WP23 is incomplete); never write a hex value.
 
 Then delete `app/product/[id]/ProductDetailChart.tsx` (`git rm`). `grep -rn "ProductDetailChart" app` must print nothing.
 
@@ -2531,12 +2664,14 @@ export default async function ProductPage({ params }: { params: Promise<{ id: st
   const productId = parseProductId(id);
   if (productId === null) notFound();
 
-  const [detail, statsSnapshot, fx, latestRate, attributes] = await Promise.all([
+  // Six cached reads side by side, none nested (WP11 rule).
+  const [detail, statsSnapshot, fx, latestRate, attributes, indexSummaries] = await Promise.all([
     getCachedProductDetail(productId),
     getCachedProductStats(),
     getCachedFxDaily(),
     getCachedExchangeRate(),
     getCachedProductAttributes(),
+    getCachedIndexSummary(),
   ]);
   if (!detail) notFound();
 
@@ -2549,6 +2684,7 @@ export default async function ProductPage({ params }: { params: Promise<{ id: st
 
   const setName = product.sets?.name ?? "Unknown Set";
   const setCode = product.sets?.code ?? null;
+  const setId = product.sets?.id ?? null;
   const generation = product.sets?.generations?.name ?? null;
   const releaseDate = attributes.byProductId[productId]?.release_date ?? product.sets?.release_date ?? null;
   const hasContents = (attributes.contentsByProductId[productId]?.length ?? 0) > 0;
@@ -2566,6 +2702,11 @@ export default async function ProductPage({ params }: { params: Promise<{ id: st
   });
   const hasVolume = chartPayload.volumeDaily.d.length > 0 || chartPayload.volumeWeekly.d.length > 0;
   const siblingRows = buildSiblingRows(siblings, fx, latestRate);
+  const benchmarks = availableBenchmarks(
+    BENCHMARKS_ENABLED,
+    indexSummaries ? indexSummaries.map((summary) => summary.code) : null,
+    setId
+  );
 
   return (
     <main className="mx-auto max-w-6xl px-4 py-4 md:px-6 md:py-6">
@@ -2605,14 +2746,14 @@ export default async function ProductPage({ params }: { params: Promise<{ id: st
       </div>
 
       <div className="mt-6">
-        <ProductChartPanel payload={chartPayload} setName={setName} setCode={setCode} hasVolume={hasVolume}>
+        <ProductChartPanel payload={chartPayload} setName={setName} benchmarks={benchmarks} hasVolume={hasVolume}>
           {recorded && <RecordedHistory model={recorded} />}
         </ProductChartPanel>
       </div>
 
       {keyStats && (
         <div className="mt-6">
-          <KeyStats model={keyStats} />
+          <KeyStats model={keyStats} today={today} />
         </div>
       )}
 
@@ -2630,12 +2771,13 @@ export default async function ProductPage({ params }: { params: Promise<{ id: st
 }
 ```
 
-Imports to add (keep the ones `generateMetadata` needs): `ProductImage`, `ExpansionTypeBadge` (already imported), `getCachedProductDetail`, `getCachedProductStats`, `getCachedFxDaily`, `getCachedExchangeRate`, `getCachedProductAttributes` from `../../lib/serverMarketData`; `statsFor` from `../../lib/marketStats`; `formatDateOnly` from `../../lib/format`; `toDailyPoints` from `../../lib/marketMath`; `boxCalculatorHref` from `../../lib/productAttributes`; `buildChartPayload` from `../../lib/productChart`; `getProductDisplayName`, `parseProductId` from `./productMeta`; `buildKeyStats`, `buildPulse`, `buildQuote`, `buildRecordedHistory`, `buildSiblingRows`, `todayUtcKey` from `./productModel`; the six new components. Remove imports nothing uses any more (`VariantBadge`, `marketPulse` helpers, `priceGuard`, WP18 helpers, `Link` if the breadcrumb does not use it).
+Imports to add (keep the ones `generateMetadata` needs): `ProductImage`, `ExpansionTypeBadge` (already imported), `getCachedProductDetail`, `getCachedProductStats`, `getCachedFxDaily`, `getCachedExchangeRate`, `getCachedProductAttributes`, `getCachedIndexSummary` from `../../lib/serverMarketData`; `availableBenchmarks`, `BENCHMARKS_ENABLED` from `./benchmark`; `statsFor` from `../../lib/marketStats`; `formatDateOnly` from `../../lib/format`; `toDailyPoints` from `../../lib/marketMath`; `boxCalculatorHref` from `../../lib/productAttributes`; `buildChartPayload` from `../../lib/productChart`; `getProductDisplayName`, `parseProductId` from `./productMeta`; `buildKeyStats`, `buildPulse`, `buildQuote`, `buildRecordedHistory`, `buildSiblingRows`, `todayUtcKey` from `./productModel`; the six new components. Remove imports nothing uses any more (`VariantBadge`, `marketPulse` helpers, `priceGuard`, WP18 helpers, `Link` if the breadcrumb does not use it).
 
 Adjustments:
 - If the existing main wrapper class differs (WP15 may have set it), keep WP15's padding classes and add `mx-auto max-w-6xl` only if no max width is set yet.
 - If `parseProductId` is already applied differently in the current page (WP13), keep that form.
 - WP28 absent: remove `getCachedProductAttributes` from the `Promise.all` and use `const attributes = null;`, `releaseDate = product.sets?.release_date ?? null`, `hasContents = false`, and delete the `boxCalculatorHref` import.
+- WP29 absent (soft check (b)): remove `getCachedIndexSummary` from the `Promise.all` and its import, and use `const indexSummaries = null;` (`BENCHMARKS_ENABLED` is false, so `availableBenchmarks` offers nothing). When WP29 lands later, the flag test fails; the fix is to set the flag and restore this read.
 - `getCachedExchangeRate()` returns `{ rate, date }` (WP11); pass it as `latestRate`. If its field names differ, map them to `{ rate, date }` inline.
 - The hero keeps WP12's `priority` prop; do not add `priority` anywhere else.
 
@@ -2649,6 +2791,7 @@ import Skeleton from "../../components/ui/Skeleton";
 export default function Loading() {
   return (
     <main className="mx-auto max-w-6xl px-4 py-4 md:px-6 md:py-6" aria-busy="true">
+      <p role="status" className="sr-only">Loading the product</p>
       <Skeleton className="h-5 w-48" />
       <div className="mt-2 grid grid-cols-[96px_minmax(0,1fr)] gap-x-3 gap-y-4 md:grid-cols-[300px_minmax(0,1fr)] md:gap-x-6">
         <Skeleton className="size-24 md:h-80 md:w-full md:row-span-3" />
@@ -2719,15 +2862,21 @@ Use the same client (`supabase` or WP12's lazy loader call) and logger helper `s
   useEffect(() => {
     if (!initialProductId) return;
     let cancelled = false;
-    getProductForAdd(initialProductId).then((product) => {
-      if (cancelled) return;
-      if (product) {
-        setSelectedProduct(product);
-        setInitialStatus("idle");
-      } else {
-        setInitialStatus("missing");
+    getProductForAdd(initialProductId).then(
+      (product) => {
+        if (cancelled) return;
+        if (product) {
+          setSelectedProduct(product);
+          setInitialStatus("idle");
+        } else {
+          setInitialStatus("missing");
+        }
+      },
+      // A network failure (fetch rejects) degrades to the search field.
+      () => {
+        if (!cancelled) setInitialStatus("missing");
       }
-    });
+    );
     return () => {
       cancelled = true;
     };
@@ -2816,11 +2965,21 @@ with
 
 ### Step 21. Budgets
 
-No new route. Run the perf commands in Verification. `/product/[id]` JS must stay at or under its recorded limit (at most 145 kB gz) and the document at or under 30 kB br. Do not raise either. If JS is over:
-1. `grep -l "weekly points before" .next/static/chunks/*.js` and confirm the matching chunk is not listed in the route's initial scripts; if `productChart.ts` leaked, find the runtime (non-`import type`) import that pulled it in and make it type-only.
-2. Confirm `recharts` is not in an initial chunk (`grep -l "recharts" .next/static/chunks/app/product/*.js` prints nothing).
-3. Remove `ProductCurrencyToggle` if it was added (the header toggle replaces it).
-Report the before and after numbers in the PR.
+No new route. Run the perf commands in Verification. `/product/[id]` JS must stay at or under its recorded limit (at most 145 kB gz), the document at or under 30 kB br, and the largest lazy chunk at or under `lazyChunkGzKb` (120 kB gz; the `ChartBundle` chunk grows by about 5 kB gz). Do not raise any of them. The two leak checks below run on every PR, not only when a number is over:
+
+```bash
+cd frontend
+# Initial scripts of the product page (from the perf server's HTML).
+grep -o 'src="/_next/static/chunks/[^"]*\.js"' /tmp/p1.html | sed 's/src="\/_next\///;s/"$//' | sort -u > /tmp/p1-initial.txt
+# Chunks that carry lib/productChart.ts (a string only that file contains) and Recharts.
+grep -rl --include="*.js" "Bank of Canada rates are unavailable" .next/static/chunks | sed 's/^\.next\///' | sort -u > /tmp/chart-lib.txt
+grep -rl --include="*.js" "recharts-wrapper" .next/static/chunks | sed 's/^\.next\///' | sort -u > /tmp/recharts.txt
+comm -12 /tmp/p1-initial.txt /tmp/chart-lib.txt      # nothing
+comm -12 /tmp/p1-initial.txt /tmp/recharts.txt       # nothing
+test -s /tmp/chart-lib.txt && test -s /tmp/recharts.txt && echo "markers found"   # proves the checks above checked something
+```
+
+If a `comm` line prints a file: find the runtime (non-`import type`) import that pulled `productChart.ts`, `productModel.ts` or `recharts` into a client component of the initial bundle and make it type-only. If JS is still over: remove `ProductCurrencyToggle` if it was added (the header toggle replaces it), then stop and report. Report the before and after numbers in the PR.
 
 ## Pitfalls: do not do this
 
@@ -2836,8 +2995,14 @@ Report the before and after numbers in the PR.
 - **Do not change the URL, canonical, metadata, JSON-LD or breadcrumb.** WP13 and WP37 own them.
 - **Do not put `priority` on any image other than the hero**, and do not remove it from the hero.
 - **Do not fetch the index on page load or on hover.** Only on the first toggle press, once per code.
+- **Do not build a set index code from the set's code.** WP29's codes are `set-<sets.id>` (numeric id); `set-swsh07` never exists and every press would 404.
+- **Do not offer a set toggle the server knows is missing.** WP29 publishes a set index only for sets with 3 or more qualifying constituents; `availableBenchmarks` hides the rest.
+- **Do not measure the chart's range change from `end - N + 1` when an anchor exists.** It must use the return anchor rule, or the "1Y change" under the chart contradicts the 1Y chip above it.
+- **Do not use `AsOf` for the listing snapshot date.** It prints "Last priced" from 2 days old; a listing is not a price.
+- **Do not add `transition-colors` (or any colour transition)** to toggles, rows or links on this page (`01-PRODUCT-DIRECTION.md` §3.5).
+- **Do not create `IntentLink`.** WP11 created it; this package only imports it.
 - **Do not zero-fill volume outside the covered span, or treat a NULL bucket as zero.**
-- **Do not call `getCachedProductStats`, `getCachedFxDaily` or `getCachedProductAttributes` inside another cached function's callback** (WP11's nested-cache rule). The page calls them side by side.
+- **Do not call `getCachedProductStats`, `getCachedFxDaily`, `getCachedProductAttributes` or `getCachedIndexSummary` inside another cached function's callback** (WP11's nested-cache rule). The page calls them side by side.
 - **Do not cast Supabase clients to `any`** to get past type errors in `fetchAllRows`.
 - **Do not add an em dash anywhere**, in code comments or copy.
 
@@ -2908,10 +3073,20 @@ describe("chart domain is clamped to data", () => {
     expect(view.last?.dateKey).toBe("2026-09-29");
     expect(view.last?.label).toBe("Sep 29");
   });
-  it("1M starts 29 days before the last point and never extends past it", () => {
+  it("1M starts at the return anchor (newest point on or before end - 30) and never extends past the end", () => {
     const view = buildChartView({ payload: payload(), range: "1M", currency: "USD", benchmark: null });
-    expect(view.domain).toEqual([dayNumber("2026-08-31"), dayNumber("2026-09-29")]);
+    expect(view.domain).toEqual([dayNumber("2026-08-30"), dayNumber("2026-09-29")]);
     expect(view.trackedSince).toBeNull();
+    expect(view.change?.fromKey).toBe("2026-08-30");
+    expect(view.change?.pct).toBeCloseTo((139 / 109 - 1) * 100, 6);
+  });
+  it("1Y uses the anchor window [end - 379, end - 365] like ret_365d, else end - 364", () => {
+    const d = days("2025-08-26", 400); // ends 2026-09-29
+    const long = payload({ price: { d, v: d.map((_, i) => 50 + i) }, dailySince: d[0] });
+    expect(buildChartView({ payload: long, range: "1Y", currency: "USD", benchmark: null }).change?.fromKey).toBe("2025-09-29");
+    const gap = d.filter((k) => k < "2025-09-15" || k > "2025-09-29");
+    const holed = payload({ price: { d: gap, v: gap.map(() => 50) }, dailySince: gap[0] });
+    expect(buildChartView({ payload: holed, range: "1Y", currency: "USD", benchmark: null }).domain[0]).toBe(dayNumber("2025-09-30"));
   });
   it("Max starts at the first point", () => {
     const view = buildChartView({ payload: payload(), range: "MAX", currency: "USD", benchmark: null });
@@ -2971,6 +3146,8 @@ describe("currency and benchmark", () => {
     expect(view.rows.find((r) => r.dateKey === "2026-09-01")?.price).toBeCloseTo(111 * 1.3, 6);
     expect(view.rows.find((r) => r.dateKey === "2026-09-29")?.price).toBeCloseTo(139 * 1.4, 6);
     expect(view.rows.find((r) => r.dateKey === "2026-08-25")?.price).toBeNull();
+    expect(view.notes).toContain("CAD starts Sep 1, 2026: earlier points have no Bank of Canada rate.");
+    expect(view.notes).toContain("Days without a Bank of Canada rate are left blank."); // Sep 2 to Sep 28 have no row
   });
   it("falls back to USD with a note when fx is empty", () => {
     const view = buildChartView({ payload: payload(), range: "1M", currency: "CAD", benchmark: null });
@@ -2978,17 +3155,28 @@ describe("currency and benchmark", () => {
     expect(view.notes).toContain("Shown in USD: Bank of Canada rates are unavailable.");
   });
   it("rebases the index to the first visible day", () => {
-    const d = days("2026-08-31", 30);
+    const d = days("2026-08-30", 31);
     const view = buildChartView({
       payload: payload(),
       range: "1M",
       currency: "USD",
       benchmark: { name: "Sealed Index", days: d, levels: d.map((_, i) => 1000 + 10 * i) },
     });
-    expect(view.benchmarkStart).toBe("2026-08-31");
-    expect(view.rows[0].bench).toBeCloseTo(110, 6);
-    expect(view.rows[29].bench).toBeCloseTo(110 * (1290 / 1000), 6);
-    expect(view.rows[29].benchChange).toBeCloseTo(29, 6);
+    expect(view.benchmarkStart).toBe("2026-08-30");
+    expect(view.rows[0].bench).toBeCloseTo(109, 6);
+    expect(view.rows[30].bench).toBeCloseTo(109 * (1300 / 1000), 6);
+    expect(view.rows[30].benchChange).toBeCloseTo(30, 6);
+  });
+  it("starts the overlay at the first day both series have (the index is published for D-1)", () => {
+    const d = days("2026-09-01", 28); // index ends 2026-09-28, the product on 2026-09-29
+    const view = buildChartView({
+      payload: payload(),
+      range: "1M",
+      currency: "USD",
+      benchmark: { name: "Sealed Index", days: d, levels: d.map(() => 1000) },
+    });
+    expect(view.benchmarkStart).toBe("2026-09-01");
+    expect(view.rows.find((r) => r.dateKey === "2026-09-29")?.bench).toBeNull();
   });
 });
 
@@ -3031,16 +3219,16 @@ Adjust the MA expectation arithmetic if you change `MOVING_AVERAGE_MIN_POINTS`; 
 
 ### 2. `app/product/[id]/__tests__/productModel.test.ts` (new, node)
 
-Build fixtures with a `makeProduct(overrides)` (id 42, `usd_price: 59.99`, `price_recorded_at: "2026-09-29T05:10:00"`, `returns` with `"1M": 2`, `sets` with name "Evolving Skies", code "SWSH07", `product_types` label "Booster Bundle"), a `makeStats(overrides)` (all WP25 columns; `day: "2026-09-30"`, `price_day: "2026-09-29"`, `usd_price: 59.99`, `is_price_fresh: true`, `ret_1d: 1.2`, `ret_7d: 3.4`, `ret_30d: -2`, `ret_365d: 18.5`, `low_52w: 50`, `high_52w: 72`, `tracked_high_usd: 72`, `tracked_high_day: "2026-03-03"`, `first_tracked_day: "2025-09-01"`, `vol_weekly_52w: 18.2`, `units_sold_30d: 212`, `sell_through_30d: 34`, `days_of_supply: 12.4`, `liquidity_score: 71`, `listings_snapshot_date: "2026-09-29"`, `lowest_ask_usd: 57.5`, `active_listings: 42`, others null) and `dailyPoints(start, n, priceFn)`. `today = "2026-09-30"`, `latestRate = { rate: 1.37, date: "2026-09-29" }`, an fx series with `1.3686` on every day from 2025-08-01 to 2026-09-30.
+Build fixtures with a `makeProduct(overrides)` (id 42, `usd_price: 59.99`, `price_recorded_at: "2026-09-29T05:10:00"`, `returns` with `"1M": 2`, `sets` with id 12, name "Evolving Skies", code "SWSH07", `product_types` label "Booster Bundle"), a `makeStats(overrides)` (all WP25 columns; `day: "2026-09-30"`, `price_day: "2026-09-29"`, `usd_price: 59.99`, `is_price_fresh: true`, `ret_1d: 1.2`, `ret_7d: 3.4`, `ret_30d: -2`, `ret_365d: 18.5`, `low_52w: 50`, `high_52w: 72`, `tracked_high_usd: 72`, `tracked_high_day: "2026-03-03"`, `first_tracked_day: "2025-09-01"`, `vol_weekly_52w: 18.2`, `units_sold_30d: 212`, `sell_through_30d: 34`, `days_of_supply: 12.4`, `liquidity_score: 71`, `listings_snapshot_date: "2026-09-29"`, `lowest_ask_usd: 57.5`, `active_listings: 42`, `ask_premium_pct: -4.2`, others null; with WP28 merged, the five WP28 columns are null too) and `dailyPoints(start, n, priceFn)`. `today = "2026-09-30"`, `latestRate = { rate: 1.37, date: "2026-09-29" }`, an fx series with `1.3686` on every day from 2025-08-01 to 2026-09-30.
 
 Cases (each an `it`):
 
-1. **fresh**: `buildQuote` gives `state "fresh"`, `ageDays 1`, `price.cad` = 59.99 x 1.3686, `rate.kind "dated"`, `rate.day "2026-09-29"`, `changes.usd` equal to the stats values, and `listing` with `count 42` and `snapshotDay "2026-09-29"`.
-2. **aging 2 days and 13 days**: `price_recorded_at` `2026-09-28...` and `2026-09-17...`, stats `price_day` matching: `state "aging"`, price present, key stats not null.
+1. **fresh**: `buildQuote` gives `state "fresh"`, `ageDays 1`, `price.cad` = 59.99 x 1.3686, `rate.kind "dated"`, `rate.day "2026-09-29"`, `changes.usd` equal to the stats values, and `listing` with `count 42`, `lowest.usd 57.5`, `askPremiumPct -4.2` and `snapshotDay "2026-09-29"`. With `stats: null` and a page snapshot `{ active_listings: 7, total_quantity_available: 9, lowest_listing_price: 61, snapshot_date: "2026-09-28" }`, `listing` is `{ count 7, lowest.usd 61, snapshotDay "2026-09-28", askPremiumPct null }` (one source, never mixed).
+2. **aging 2 days and 13 days**: `price_recorded_at` `2026-09-28...` and `2026-09-17...`, stats `price_day` matching and `ret_1d: null` (WP25 nulls it unless `price_day >= D - 1`): `state "aging"`, price present, `changes.usd["1D"]` null, key stats not null.
 3. **withheld**: `usd_price: null`, `price_recorded_at: "2026-09-05T05:00:00"`: `state "withheld"`, `price`, `changes`, `listing` all null; `buildKeyStats` returns null; `buildRecordedHistory` returns `lastDay` of the points and a tracked high converted with the rate of `tracked_high_day`.
 4. **never**: no `price_recorded_at`: `state "never"`, `priceDay null`.
 5. **stats disagree**: stats `usd_price: 58` gives every chip null and `cad null`.
-6. **CAD chips**: with an fx series that is 1.30 until 2026-08-30 and 1.40 after, and points whose anchors exist, `changes.cad["30D"]` equals `((59.99 x 1.40) / (anchorPrice x 1.30) - 1) x 100` to 6 places; removing the anchor point for 7D makes `changes.cad` null (whole-row fallback).
+6. **CAD chips**: fx 1.30 on every day from 2025-08-01 through 2026-08-31 and 1.40 from 2026-09-01 through 2026-09-30; daily points from 2025-09-01 to 2026-09-29 with price `40 + 0.05 x i`, the last one 59.99 (set it explicitly). Build the stats row's `ret_1d`, `ret_7d`, `ret_30d` and `ret_365d` from those points with the SQL anchor rule (anchors 2026-09-28, 2026-09-23, 2026-08-31 and 2025-09-30 for `D = 2026-09-30`), so every recomputed USD return agrees. Then `changes.cad["30D"]` equals `((59.99 x 1.40) / (P(2026-08-31) x 1.30) - 1) x 100` to 6 places and `changes.cad["7D"]` equals the USD value (same rate at both ends). Removing every point from 2026-09-16 to 2026-09-23 (the 7D anchor window) while keeping `ret_7d` makes `changes.cad` null (whole-row fallback); setting `ret_30d` 0.2 points away from the recomputed value also makes it null.
 7. **stale snapshot**: `listings_snapshot_date: "2026-09-20"` gives `listing null`.
 8. **CAGR rule**: 40 daily points ending 2026-09-29: `cagrSinceFirstTracked` null and `buildKeyStats(...).cagr` null; 365 days (first point 2025-09-29): not null and equal to `cagrPercent(first, last, ...)`; 364 days: null; withheld: null.
 9. **range label**: `first_tracked_day: "2026-06-01"` gives `windowLabel "tracked"` and `since "2026-06-01"`; `"2025-09-01"` gives `"52-week"`.
@@ -3058,30 +3246,54 @@ Assert the four strings of the Market Pulse table exactly, and `null` when both 
 
 Render inside WP20's `CurrencyProvider` (`initialRate={{ rate: 1.37, date: "2026-09-29" }}`), after `_resetCurrencyPreferenceForTests()` and `localStorage.clear()`. Build `quote` with `buildQuote` from test 2's fixtures.
 
-- fresh, default CAD: text "C$82.10" (59.99 x 1.3686 rounded) and "CAD"; "TCGplayer Market Price for Sep 29, 2026"; "From $59.99 USD at the Bank of Canada rate of Sep 29"; a list named "Price change" with four items; "before shipping"; "Price look wrong? Report it"; axe clean.
+- fresh, default CAD: text "C$82.10" (59.99 x 1.3686 rounded) and "CAD"; "TCGplayer Market Price for Sep 29, 2026"; "From $59.99 USD at the Bank of Canada rate of Sep 29"; a list named "Price change" with four items; the listing line (`data-testid="quote-listing"`) contains "C$78.69", "before shipping, 4.2% below Market Price", "42 listings" and "as of Sep 29", and does not contain "Last priced"; "Price look wrong? Report it"; axe clean.
 - fresh, USD stored (`localStorage.setItem("pokefin.currency", "USD")` before render, then `await` a tick): "$59.99" with "USD" and "≈ C$82.10 at the Bank of Canada rate of Sep 29".
-- aging (5 days): the `time` element reads "Last priced Sep 25, 2026" and has the warn class; the 1D chip reads "--".
+- aging (5 days, stats `price_day` 2026-09-25 and `ret_1d: null`): `screen.getByText("Last priced Sep 25, 2026").closest("time")` has the `text-warn-text` class; the first item of the "Price change" list has `data-direction="missing"`.
 - withheld: exact text "No current price. Last recorded Sep 5, 2026."; a link "Why prices are hidden" to `/methodology#freshness`; no list named "Price change"; no element matching `/\d%/`; `data-quote-state="withheld"`.
 - never: "No current price. This product has never been priced."
 
 ### 5. `app/product/[id]/__tests__/KeyStats.test.tsx` (new, jsdom)
 
-- Fresh model: headings "Key stats", "Liquidity", "Risk"; `MetricLabel` links for `range52w`, `trackedHigh`, `unitsSold30d`, `sellThrough30d`, `daysOfSupply`, `liquidityScore`, `volatilityWeekly52w`, `maxDrawdown1y` (by accessible name "How {label} is calculated"); "16.7% below the tracked high"; axe clean.
+Render inside `CurrencyProvider` as in test 4 (`CurrencyAmount`, `QuoteRangeBar` and `CadRateNote` read `useCurrency`), with `today="2026-09-30"`; build the model with `buildKeyStats` from test 2's fixtures.
+
+- Fresh model: headings "Key stats", "Liquidity", "Risk"; `MetricLabel` links for `range52w`, `trackedHigh`, `unitsSold30d`, `sellThrough30d`, `daysOfSupply`, `liquidityScore`, `volatilityWeekly52w`, `maxDrawdown1y` (by accessible name "How {label} is calculated"); "16.7% below the tracked high"; "CAD at the Bank of Canada rate of Sep 29"; axe clean.
+- USD stored (`localStorage.setItem("pokefin.currency", "USD")` before render): no text matching `/CAD at the Bank of Canada/`.
 - 40-day model (`cagr null`): no text "CAGR".
 - `structure null`: no heading "Retail and packs".
 - Every `a[href^="/methodology#"]` target anchor is in `METHODOLOGY_SECTIONS` or `METHODOLOGY_SUBSECTIONS`.
 
 ### 6. `app/product/[id]/__tests__/ProductChartPanel.test.tsx` (new, jsdom)
 
-Mock `../../../components/charts/ChartBundle` so `ProductPriceChartImpl` is `(props) => <div data-testid="chart" data-range={props.range} data-bench={props.benchmark?.name ?? ""} />`, and mock `next/dynamic` to render the imported component synchronously (follow the pattern existing chart-wrapper tests use; if none exists, mock it as `(loader) => { const C = React.lazy(() => loader().then((Component) => ({ default: Component }))); return (props) => <React.Suspense fallback={null}><C {...props} /></React.Suspense>; }` and `await screen.findByTestId("chart")`).
+Mock `../../../components/charts/ChartBundle` so `ProductPriceChartImpl` renders `<div data-testid="chart" data-range={props.range} data-bench={props.benchmark?.name ?? ""} />` (write it with `require("react").createElement` inside the factory, for the reason given below), and mock `next/dynamic` to render the imported component through `React.lazy` (follow the pattern existing chart-wrapper tests use; if none exists, use the block below and `await screen.findByTestId("chart")`). A `jest.mock` factory cannot use imports from the test file, so it requires React itself:
+
+```tsx
+jest.mock("next/dynamic", () => {
+  const React = require("react");
+  return {
+    __esModule: true,
+    default: (loader: () => Promise<React.ComponentType<Record<string, unknown>>>) => {
+      const Lazy = React.lazy(() => loader().then((Component) => ({ default: Component })));
+      // createElement, not JSX: the automatic JSX runtime's helper is an
+      // out-of-scope variable, which jest.mock factories may not reference.
+      return function DynamicMock(props: Record<string, unknown>) {
+        return React.createElement(React.Suspense, { fallback: null }, React.createElement(Lazy, props));
+      };
+    },
+  };
+});
+```
+
+Render inside `CurrencyProvider` (test 4). Default props: a 40-day payload, `setName="Evolving Skies"`, `benchmarks={{ sealed: true, set: "set-12" }}`, `hasVolume`.
 
 - The range group "Chart range" has six radios, "1Y" checked, "Max" named "All tracked history".
 - Choosing "Max" passes `range="MAX"`.
-- With `BENCHMARKS_ENABLED` false (`jest.mock("../benchmark", () => ({ ...jest.requireActual("../benchmark"), BENCHMARKS_ENABLED: false }))`), no button named "vs Sealed Index".
-- Enabled: pressing "vs Sealed Index" calls `fetch` once with `/api/public/index/sealed` (mock `global.fetch` resolving `{ ok: true, status: 200, json: async () => ({ code: "sealed", name: "Sealed Index", d: ["2026-09-28"], l: [1000] }) }`), sets `aria-pressed="true"`, passes the benchmark to the chart and adds a legend item "Sealed Index"; pressing it off and on again makes no second request.
-- A 404 for the set index turns that button into "No Evolving Skies index yet" with `aria-disabled="true"`.
+- `benchmarks={{ sealed: false, set: null }}`: no button named "vs Sealed Index" or "vs Evolving Skies Index".
+- `benchmarks={{ sealed: true, set: null }}`: "vs Sealed Index" present, no "vs Evolving Skies Index".
+- Pressing "vs Sealed Index" calls `fetch` once with `/api/public/index/sealed` (mock `global.fetch` resolving `{ ok: true, status: 200, json: async () => ({ code: "sealed", name: "Pokéfin Sealed Index", asOf: "2026-09-28", base: 100, weeklyUntil: null, d: ["2026-09-28"], l: [1000], p: [] }) }`), sets `aria-pressed="true"`, passes the benchmark to the chart (`data-bench="Sealed Index"`) and adds a legend item "Sealed Index"; pressing it off and on again makes no second request.
+- A 404 for `/api/public/index/set-12` turns the set button into "No Evolving Skies Index yet" with `aria-disabled="true"`.
+- A rejected `fetch` for the sealed index: the `role="status"` element (present from the first render, empty) reads "Index unavailable. Select again to retry." and the button stays `aria-pressed="true"`; the next press calls `fetch` again (second call) and, with a 200 answer, the status element is empty again.
 - Payload with one price point: "No history" and no radio group.
-- Footnote "Dashed: weekly points before Jul 7, 2026." appears when `dailySince` is inside the default 1Y range.
+- Footnote "Dashed: weekly points before Jul 7, 2026." appears when `dailySince` is inside the default 1Y range; the "How the chart is drawn" link has `href="/methodology#market-price"`.
 
 Call `resetIndexCacheForTests()` in `beforeEach`.
 
@@ -3091,18 +3303,31 @@ Call `resetIndexCacheForTests()` in `beforeEach`.
 /** @jest-environment node */
 import fs from "node:fs";
 import path from "node:path";
-import { BENCHMARKS_ENABLED, parseIndexPayload } from "../benchmark";
+import { availableBenchmarks, BENCHMARKS_ENABLED, parseIndexPayload, setIndexCode } from "../benchmark";
 
 it("BENCHMARKS_ENABLED matches whether WP29's index route exists", () => {
   const route = path.join(__dirname, "..", "..", "..", "api", "public", "index", "[code]", "route.ts");
+  // When this fails after WP29 lands: set the flag to true and restore the
+  // getCachedIndexSummary read in page.tsx (WP31 step 16).
   expect(BENCHMARKS_ENABLED).toBe(fs.existsSync(route));
 });
 
-it("parses the compact index body and rejects malformed ones", () => {
-  expect(parseIndexPayload("sealed", { name: "Sealed Index", d: ["2026-09-28"], l: [1000] })?.levels).toEqual([1000]);
+it("parses WP29's compact index body and rejects malformed ones", () => {
+  const body = { code: "sealed", name: "Pokéfin Sealed Index", asOf: "2026-09-28", base: 100, weeklyUntil: null, d: ["2026-09-28"], l: [1000], p: [] };
+  expect(parseIndexPayload("sealed", body)?.levels).toEqual([1000]);
+  expect(parseIndexPayload("set-12", body)).toBeNull(); // code mismatch
   expect(parseIndexPayload("sealed", { d: ["2026-09-28"], l: [0] })).toBeNull();
   expect(parseIndexPayload("sealed", { d: ["x"], l: [1] })).toBeNull();
   expect(parseIndexPayload("sealed", null)).toBeNull();
+});
+
+it("uses WP29's set-<sets.id> codes and offers only published indices", () => {
+  expect(setIndexCode(12)).toBe("set-12");
+  expect(availableBenchmarks(false, ["sealed", "set-12"], 12)).toEqual({ sealed: false, set: null });
+  expect(availableBenchmarks(true, ["sealed", "set-12"], 12)).toEqual({ sealed: true, set: "set-12" });
+  expect(availableBenchmarks(true, ["sealed"], 12)).toEqual({ sealed: true, set: null });
+  expect(availableBenchmarks(true, null, 12)).toEqual({ sealed: true, set: "set-12" }); // summary unreadable
+  expect(availableBenchmarks(true, ["sealed"], null)).toEqual({ sealed: true, set: null });
 });
 ```
 
@@ -3129,6 +3354,8 @@ This test fails the day WP29's route lands while the flag is still false, so the
 - WP24's methodology test: step 2c.
 - WP23's `uiConventions.test.ts`: must pass without raising any ratchet; the new files are token-only.
 - Any test that asserted the old product page copy ("Return Metrics", "Price History", "View on TCGPlayer", "Not enough volume history yet"): update to the new copy. Find them with `grep -rn "Return Metrics\|Not enough volume history\|Price History" app --include=*.test.*`.
+- Tests that render or read the product page or its chart (WP11's sibling `IntentLink` case, WP12's hero `priority` case, WP13's metadata and JSON-LD cases, WP24's product label cases): `grep -rln "product/\[id\]\|ProductDetailChart" app --include=*.test.* --include=*.test.tsx`. Keep every metadata, JSON-LD, canonical, hero `priority` and sibling-`IntentLink` assertion passing unchanged (they guard behaviour this package must not change); update only assertions about markup this package replaces, and list each changed assertion in the PR.
+- WP11's `serverMarketData` tests that mock `product_price_history` with a single `query({...})` result: the history read is now paged (`range(0, 999)`, newest first), so give the mock a `range` method that returns the same result; assertions on the returned `history` stay as they are (it is re-sorted ascending).
 
 ## Verification
 
@@ -3144,7 +3371,8 @@ pnpm test --ci app/lib/__tests__/productChart.test.ts "app/product/[id]/__tests_
 pnpm test --ci                                 # everything green
 grep -rn "ProductDetailChart" app              # nothing
 grep -rn "TCGPlayer\|all-time\|real-time" "app/product/[id]" app/lib/productChart.ts app/components/charts/ProductPriceChartImpl.tsx   # nothing
-grep -rnP "\x{2014}" "app/product/[id]" app/lib/productChart.ts app/components/charts/ProductPriceChartImpl.tsx   # nothing (no em dash)
+LC_ALL=C.UTF-8 grep -rnP "\x{2014}" "app/product/[id]" app/lib/productChart.ts app/components/charts/ProductPriceChartImpl.tsx app/methodology/MethodologyArticle.tsx   # nothing (no em dash; the locale makes \x{2014} a code point)
+grep -rn "transition-colors" "app/product/[id]"   # nothing
 ```
 
 Build and budgets (WP00, WP22):
@@ -3152,11 +3380,14 @@ Build and budgets (WP00, WP22):
 ```bash
 SUPABASE_STUB_FIXTURE=perf pnpm build:stub     # exit 0; /product/[id] still ISR (Revalidate 1d), not ƒ
 node scripts/perf-serve.mjs &                  # wait for .perf/ready
-pnpm perf:budget                               # "/product/[id] JS (gz)" <= its limit (<= 145), document br <= 30, status ok or "over target", never FAIL
+pnpm perf:budget                               # "/product/[id] JS (gz)" <= its limit (<= 145), document br <= 30, largest lazy chunk <= 120, status ok or "over target", never FAIL
 curl -s http://127.0.0.1:3100/product/900001 -o /tmp/p1.html
 grep -c 'data-section="quote"' /tmp/p1.html              # 1 or more
 grep -c 'data-section="key-stats"' /tmp/p1.html          # 1 or more
 grep -c 'TCGplayer Market Price for' /tmp/p1.html        # 1 or more
+grep -c 'data-section="chart"' /tmp/p1.html              # 1 or more (the panel is server-rendered; only the plot is lazy)
+grep -c 'role="status"' /tmp/p1.html                     # 1 or more (the benchmark status region exists before any press)
+# Step 21's chunk checks run here, against /tmp/p1.html.
 curl -s http://127.0.0.1:3100/product/900300 -o /tmp/p300.html   # the stale fixture product
 grep -c 'data-section="key-stats"' /tmp/p300.html        # 0
 grep -c 'No current price. Last recorded' /tmp/p300.html # 1 or more
@@ -3177,11 +3408,11 @@ Manual checks against the perf server (`http://127.0.0.1:3100`):
 
 - 390 px, `/product/900001`: order is thumbnail and title, price, change chips, listing line, report link, actions, chart, key stats, Market Pulse, siblings. No horizontal scroll. Range and toggle controls are 44 px tall on a touch emulation. Switching the header currency (or the fallback toggle) changes the price, secondary line, chips caption, key-stats money and chart axis together.
 - 1440 px, same page: image left spanning three rows, header right; chart full width with legend, a dated last point, round y ticks, a volume pane aligned with the price pane; tooltip shows date, price with code, 30-day average and units sold.
-- Range: 7D, 1M, 3M, 6M, 1Y, Max each re-draw without layout shift; on a product with under a year of history, 1Y shows "Change ... since {first day}".
+- Range: 7D, 1M, 3M, 6M, 1Y, Max each re-draw without layout shift; the summary always ends "since {date}"; on a product with a year of history the 1Y range change equals the 1Y chip in the header (same currency); on a product with under a year of history, 1Y shows "Change ... since {first day}".
 - Withheld (`/product/900300`): the quote shows only the sentence, link and report link; no Key stats section; Market Pulse reason names the price.
 - Keyboard: Tab reaches the metric "?" links, report link, actions, range radios (arrow keys move), benchmark toggles; focus rings visible.
 - Logged out: "Add to portfolio" goes to `/auth/login?next=%2Fportfolio%3Fadd%3D900001`; after signing in (real credentials only; otherwise rely on tests 8 and say so) the add dialog opens with the product selected and the price pre-filled.
-- If WP29 has landed: "vs Sealed Index" draws a dashed grey line starting at the product's first visible price; a second press removes it with no new request (Network panel).
+- If WP29 has landed: "vs Sealed Index" draws a dashed grey line starting at the product's first visible price; a second press removes it with no new request (Network panel). A product whose set has a published index (look one up on `/indices/sealed`) shows "vs {Set} Index"; a product whose set has none shows no set toggle.
 
 ## Owner actions
 
@@ -3192,19 +3423,19 @@ Manual checks against the perf server (`http://127.0.0.1:3100`):
 ## Acceptance criteria
 
 - [ ] H1 is `getProductDisplayName(product)`; URL, canonical, metadata, JSON-LD and breadcrumb are byte-identical to before for the same product.
-- [ ] Fresh price: display price in the visitor's currency with its code, "TCGplayer Market Price for {Mon D, YYYY}", the other currency at the Bank of Canada rate of the price's day, 1D/7D/30D/1Y `Delta` chips, a lowest-listing line only with a fresh snapshot ("before shipping"), and a `ReportLink`.
+- [ ] Fresh price: display price in the visitor's currency with its code, "TCGplayer Market Price for {Mon D, YYYY}", the other currency at the Bank of Canada rate of the price's day, 1D/7D/30D/1Y `Delta` chips, a lowest-listing line only with a fresh snapshot ("before shipping", the gap to Market Price as neutral text, numbers from one source, dated "as of"), and a `ReportLink`.
 - [ ] Price 2 to 13 days old: `AsOf` shows "Last priced {date}" in warn text; figures still shown.
 - [ ] Withheld price (the stale fixture 900300): the header shows only "No current price. Last recorded {date}." with the methodology link and report link; the page renders no key-stats section and no return, CAGR, drawdown, volatility or NAV in the header or stats (Verification node check passes).
 - [ ] A product with 40 days of history shows no CAGR; CAGR appears only with 365 or more days from the first tracked price.
 - [ ] Key stats: 52-week (or tracked) range bar with the percent off the high, tracked high with its date and "tracked since", x MSRP, MSRP (USD), cost per pack and pack NAV when present, liquidity row, weekly annualised volatility and 1Y max drawdown with its dates; every label is a `MetricLabel` to a defined `/methodology` anchor.
 - [ ] Market Pulse "No signal" text names the missing input (price change or volume trend).
-- [ ] Chart: directly under the header; legend; own volume pane and axis; round y ticks; x-domain clamped to data; last point labelled with its date; dashed weekly segment with its footnote; ranges 7D to Max; CAD at dated rates; index toggles fetch once on first press and are hidden without WP29; Recharts only in the lazy `ChartBundle` chunk.
+- [ ] Chart: directly under the header; legend; own volume pane and axis; round y ticks; x-domain clamped to data; last point labelled with its date; dashed weekly segment with its footnote; ranges 7D to Max starting at the return anchor, with a dated summary that matches the chip of the same window; CAD at dated rates with visible notes for missing rates; index toggles use WP29's `sealed` and `set-<sets.id>` codes, appear only for published indices, fetch once on first press, retry after an error, and are hidden without WP29; Recharts and `productChart.ts` only in the lazy `ChartBundle` chunk (step 21's `comm` checks print nothing).
 - [ ] Actions: Add to portfolio (`/portfolio?add=<id>`, pre-filled dialog; logged-out users reach sign-in with `next` keeping the query), an empty `watch` slot, Open in Box NAV when contents exist, View on TCGplayer.
 - [ ] Phone order: title, price header, chart, key stats, Market Pulse, siblings; 96 px thumbnail; siblings show price and 30D `Delta` and use `IntentLink`.
 - [ ] Tests cover the header states (fresh, 2 to 13 days, withheld, never), the CAGR rule and the chart domain clamp, and all tests pass.
 - [ ] `/product/[id]` initial JS at or under 145 kB gz and document at or under 30 kB br in `pnpm perf:budget`; no budget raised.
 - [ ] LCP element at 1440 px is the WP12 hero image; at 390 px it is server-rendered header text or the hero thumbnail.
-- [ ] `tsc`, lint and the full Jest suite pass; methodology version bumped with a change-log row.
+- [ ] `tsc`, lint and the full Jest suite pass; methodology version bumped with a change-log row; `#limits` no longer says product charts use the latest rate; no `transition-colors` in any file this package creates (`grep -rn "transition-colors" "app/product/[id]"` prints nothing).
 
 ## Rollback
 
@@ -3219,7 +3450,7 @@ Commits, in order:
 
 1. `feat(methodology): product-page CAGR, drawdown and chart definitions (WP31)`: `metricDefinitions.ts`, `methodology.ts`, `MethodologyArticle.tsx`, `marketPulse.ts`, their tests.
 2. `feat(data): full product price history and chart payload (WP31)`: `serverMarketData.ts`, `lib/productChart.ts`, `productChart.test.ts`.
-3. `feat(product): decision page model, quote header, key stats, pulse, siblings, actions (WP31)`: `productModel.ts`, `QuoteClient.tsx`, `ProductQuoteHeader.tsx`, `KeyStats.tsx`, `RecordedHistory.tsx`, `MarketPulseSection.tsx`, `ProductActions.tsx`, `SiblingList.tsx` (and `IntentLink.tsx`, `ProductCurrencyToggle.tsx` when created), `page.tsx`, `loading.tsx`, tests 2, 4, 5.
+3. `feat(product): decision page model, quote header, key stats, pulse, siblings, actions (WP31)`: `productModel.ts`, `QuoteClient.tsx`, `ProductQuoteHeader.tsx`, `KeyStats.tsx`, `RecordedHistory.tsx`, `MarketPulseSection.tsx`, `ProductActions.tsx`, `SiblingList.tsx` (and `ProductCurrencyToggle.tsx` when created), `page.tsx`, `loading.tsx`, tests 2, 4, 5.
 4. `feat(product): honest price chart with volume pane and index overlays (WP31)`: `benchmark.ts`, `ProductChartPanel.tsx`, `ProductPriceChartImpl.tsx`, `ChartBundle.tsx`, deletion of `ProductDetailChart.tsx`, tests 6 and 7.
 5. `feat(portfolio): open the add flow from a product page (WP31)`: `portfolio.ts`, `AddHoldingModal.tsx`, `PortfolioDashboard.tsx`, `portfolio/page.tsx`, `proxy.ts`, test 8.
 6. `docs: product page chart and pulse notes (WP31)`.
@@ -3235,7 +3466,8 @@ PR body:
 - /product/[id] leads with a dated quote: price in the visitor's currency, "TCGplayer Market Price for {date}", the other currency at the Bank of Canada rate of that day, 1D/7D/30D/1Y changes (CAD returns at dated rates), lowest listing before shipping, report link.
 - Chart directly under the header: legend, own volume pane, round ticks, domain clamped to data, dated last point, dashed weekly segment before daily collection, 7D to Max, index overlays rebased to the range start (fetched on first toggle).
 - Key stats: 52-week range, tracked high since first tracked day, CAGR only with 365+ days, x MSRP / MSRP / cost per pack / pack NAV (WP28), liquidity row, weekly volatility and 1Y drawdown. Withheld prices withhold all of it; history metrics move under the chart, dated.
-- Market Pulse names the missing input. Siblings show price and 30D change with intent-only prefetch.
+- Market Pulse names the missing input. Siblings show price and 30D change with intent-only prefetch (WP11's IntentLink).
+- The chart's range change starts at the return anchor, so it matches the header chip of the same window.
 - Actions: Add to portfolio (/portfolio?add=<id> opens a pre-filled dialog; sign-in keeps the query), Watch slot for WP34, Open in Box NAV, View on TCGplayer.
 
 ## Soft checks
@@ -3243,7 +3475,8 @@ PR body:
 - WP29 index route: present (BENCHMARKS_ENABLED = true) / absent (false; the flag test will force it on)
 - WP26 getCachedProductHistory: present (sliced to 367 days) / absent
 - WP27 header toggle: present / absent (ProductCurrencyToggle added; delete with WP27)
-- IntentLink: existed / created from WP30 step 1
+- WP33 maxDrawdown1y definition: already present (skipped) / added here
+- Methodology #limits bullet: deleted (WP36 merged first) / rewritten to portfolio charts only (comment kept for WP36) / not found
 
 ## Budgets
 | | before | after | limit |

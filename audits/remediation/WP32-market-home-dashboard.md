@@ -3,7 +3,7 @@
 - **Goal**: in five seconds, a visitor to `/` sees what Pokéfin is (one line: 306 sealed products, TCGplayer Market Price, updated daily, stale prices hidden), whether the sealed market is up (Pokéfin Sealed Index level with 1D, 7D, 30D and 1Y changes, breadth, a 1Y chart), what moved (5 gainers and 5 losers over 7D or 30D, screened for liquidity, each with a sparkline) and what was just released (compact rows per new set). A signed-in collector also sees their portfolio value in their currency and its 1-day change, without the page losing its CDN cache.
 - **Why now / value**: the home page is the first screen of every visit and still leads with a generic 350 px banner, two competing buttons, six unscreened mover cards and 430 px catalog cards (research/ui-audit.md "`/` Dashboard"). WP29 publishes the index and breadth, WP25 the screened daily statistics, WP26 the baked sparklines and WP27 the search and header: this package turns them into the daily reason to open Pokéfin (01-PRODUCT-DIRECTION.md §5 item 3, §4.2 step 2).
 - **Effort**: M, 12 to 14 hours (pure helpers and their tests 2 h, three cached reads, fixture and fixture test 1.5 h, summary route, repo function and tests 1.5 h, eight home components and the page 4 h, methodology and definitions 1 h, budgets, Lighthouse, cache check and measurements 2 h, docs and cleanup 1 h).
-- **Depends on**: WP05 (`app/lib/server/portfolioRepo.ts` with `findPortfolioId`, `HOLDING_SELECT`, `loadGuardedProducts`, `guardHoldings`; `app/lib/routeAuth.ts` `requireRouteUser` and `jsonNoStore`; `rejectIfNotAppRequest` in `app/lib/csrf.ts`), WP22 (`perf-budgets.json`, `lighthouserc.json`, `scripts/fixtures/perf.mjs`, `pnpm perf:budget`, `scripts/perf-serve.mjs`, `scripts/prod-smoke-lib.mjs`), WP23 (`Stat`, `Delta`, `DataList`/`DataListRow`, `SegmentedControl`, `Skeleton`, `Badge`, `AsOf`, `ProvenanceLine`, `buttonClasses`, `WarnIcon`, tokens, `test-utils/axe.ts`, the conventions ratchet), WP24 (`PROVENANCE_SENTENCE`, `MetricLabel`, `DecisionNote`, `app/content/methodology.ts`, `app/lib/metricDefinitions.ts`, `MethodologyArticle.tsx`), WP25 (`product_daily_stats`, `ProductDailyStats`, `getCachedProductStats`, `fetchAllRows`, `statsFor`), WP26 (`getCachedSparklines`, `sparklineFor`, `MiniSparkline size="row"`, `scripts/check-public-cache.mjs` with `isrProblems`, `PUBLIC_ROUTE_CLIENT_FILES`, `forbiddenChunks`), WP27 (`SearchTrigger`, `SearchIcon`, `navConfig.ts` with `SCREENER`, `productHref`, `setSearchHref`, `getCachedPipelineStatus`), WP29 (`getCachedIndexSummary`, `getCachedIndexSeries`, `currentSummaries`, `sliceIndexRange`, `INDEX_TYPE_FAMILY`, `INDEX_RULES`, `INDEX_CHANGE_WINDOWS`, `IndexChart`, the `index_constituents` table, the index perf fixture, the `#index-breadth` methodology anchor and the `breadth7d`/`newHighs52w` definitions). Through them: WP04 (`useAuth().sessionStatus`), WP07 (`format.ts`), WP11 (`cacheTags.ts`, `DAILY_BACKSTOP_SECONDS`, ISR), WP15 (`CardRinkPromo` last in `<main>`), WP20 (`useCurrency`, `app/types/*`, generated `database.ts`). Not used: WP28 (per-product release dates stay a follow-up; the page groups by set release date) and WP30 (the home rows are WP23 `DataListRow`s, not `ProductListRow`).
+- **Depends on**: WP05 (`app/lib/server/portfolioRepo.ts` with `findPortfolioId`, `HOLDING_SELECT`, `loadGuardedProducts`, `guardHoldings`; `app/lib/routeAuth.ts` `requireRouteUser` and `jsonNoStore`; `rejectIfNotAppRequest` in `app/lib/csrf.ts`), WP22 (`perf-budgets.json`, `lighthouserc.json`, `scripts/fixtures/perf.mjs`, `pnpm perf:budget`, `scripts/perf-serve.mjs`, `scripts/prod-smoke-lib.mjs`), WP23 (`Stat`, `Delta`, `DataList`/`DataListRow`, `SegmentedControl`, `Skeleton`, `Badge`, `AsOf`, `ProvenanceLine`, `buttonClasses`, `WarnIcon`, tokens, `test-utils/axe.ts`, the conventions ratchet), WP24 (`PROVENANCE_SENTENCE`, `MetricLabel`, `DecisionNote`, `app/content/methodology.ts`, `app/lib/metricDefinitions.ts`, `MethodologyArticle.tsx`), WP25 (`product_daily_stats`, `ProductDailyStats`, `getCachedProductStats`, `fetchAllRows`, `statsFor`), WP26 (`getCachedSparklines`, `sparklineFor`, `MiniSparkline size="row"`, `scripts/check-public-cache.mjs` with `isrProblems`, `PUBLIC_ROUTE_CLIENT_FILES`, `forbiddenChunks`), WP27 (`SearchTrigger`, `SearchIcon`, `navConfig.ts` with `SCREENER`, `productHref`, `setSearchHref`, `getCachedPipelineStatus`), WP29 (`getCachedIndexSummary`, `getCachedIndexSeries`, `INDEX_REFRESH_SECONDS` in `serverMarketData.ts`, `currentSummaries`, `sliceIndexRange`, `INDEX_TYPE_FAMILY`, `INDEX_RULES`, `INDEX_CHANGE_WINDOWS`, `IndexChart`, the `index_constituents` table, the index perf fixture, the `#index-breadth` methodology anchor and the `breadth7d`/`newHighs52w` definitions). Through them: WP04 (`useAuth().sessionStatus`), WP07 (`format.ts`), WP11 (`cacheTags.ts`, `DAILY_BACKSTOP_SECONDS`, ISR), WP15 (`CardRinkPromo` last in `<main>`), WP20 (`useCurrency`, `app/types/*`, generated `database.ts`). Not used: WP28 (per-product release dates stay a follow-up; the page groups by set release date) and WP30 (the home rows are WP23 `DataListRow`s, not `ProductListRow`).
 - **Unblocks**: WP34 (renders its watchlist movers as the `children` of `YourPokefin`, the slot this package leaves), WP36 (can extend `GET /api/portfolio/summary` instead of adding a second summary route), WP37 (its `setSearchHref()` change makes "All {n} products" in Recently released open the set page with no edit here).
 - **Placement**: after WP29 (index data) and WP27 (search trigger, header). Must precede WP34. No migration: the registry (0033 to 0041, 01-PRODUCT-DIRECTION.md §8) is untouched; every read is an indexed read of a table WP25 or WP29 created.
 - **Suggested branch name**: `remediation/wp32-market-home-dashboard`
@@ -40,7 +40,7 @@ Notation: `r(p)` is product `p`'s `product_daily_stats` row for day `S` (the sta
 | Losers | Screened products with change `<= -0.05`, by change ascending | Same ties |
 | Up over 30D | Among headline constituents of the index day's month (`index_constituents`, code `sealed`, month = first day of the headline day's month) whose row on the headline day has `is_price_fresh` and a non-null `ret_30d`: `100 x count(ret_30d > 0.5) / count(*)`, 0 decimals | 0.5 is `INDEX_RULES.breadthFlatBandPct`, the dead band of WP29's 7D breadth. No member with a change: `--` with the reason |
 | Advancers 7D, Decliners 7D, New 52-week highs / lows | WP29's `adv_7d`, `dec_7d`, `new_high_52w`, `new_low_52w` of the headline row; shares = count / (adv + dec + flat), 0 decimals | Sum 0: "No constituent has a 7-day change for this day." |
-| Since first tracked | `(r.usd_price / f - 1) x 100`, `f` = `usd_price` of the product's `product_daily_stats` row on `r.first_tracked_day` | NULL when the current price is withheld, `f` is missing or not positive, or `first_tracked_day >= S` |
+| Since first tracked | `(r.usd_price / f - 1) x 100`, `f` = `usd_price` of the product's `product_daily_stats` row on `r.first_tracked_day` | NULL when the current price is withheld, `f` is missing or not positive, or `first_tracked_day >= S`. Label "since {Mon D}" when `first_tracked_day` is in the same year as `S`, else "since {Mon D, YYYY}" |
 | Recently released | The 2 sets with the newest `sets.release_date <= S` that have active products; per set up to 8 products, current price descending, withheld prices last, then type label A to Z | "All {n} {set} products" link when a set has more than 8 |
 | Portfolio value (island) | Sum over holdings with a guarded price of `quantity x products.usd_price` (WP05's freshness verdict) | No priced holding: `--` |
 | Portfolio 1D change | Over holdings whose latest stats row has `is_price_fresh` and `ret_1d`: `prev = usd_price / (1 + ret_1d/100)`; change = `sum(q x (usd_price - prev))`; percent = change / `sum(q x prev)` x 100, 1 decimal | No such holding: `--` "No 1-day change for your holdings". The amount and value convert at the header's current rate |
@@ -72,6 +72,7 @@ Desktop, 1440 px, signed out (content `max-w-7xl`, 12-column grid from 1024 px):
 | 58%  of 204             11 / 0                |                                                              |
 +-----------------------------------------------+--------------------------------------------------------------+
 | Movers   Through Oct 13, 2026 (UTC)                                                            [#7D#| 30D ]  |
+| Ranked among 182 products that passed the screen with a 7-day change.                                       |
 | Gainers 7D                                             | Losers 7D                                           |
 | Booster Box  Surging Sparks                   /\_/‾    | Elite Trainer Box  Scarlet & Violet 151      ‾\_/   |  56 px rows
 | 212 sold 30D                  C$612.40  ▲ 12.4% 7D     | 88 sold 30D                  C$81.30  ▼ 9.8% 7D    |
@@ -86,7 +87,7 @@ Desktop, 1440 px, signed out (content `max-w-7xl`, 12-column grid from 1024 px):
 +--------------------------------------------------------------------------------------------------------------+
 | Recently released   Through Oct 13, 2026 (UTC)                                                              |
 | Phantasmal Flames   ME02 · Released Nov 14, 2025      | Mega Evolution   ME01 · Released Sep 26, 2025        |
-| Booster Box                 C$412.10  ▲ 8.1% since Nov 14 | Elite Trainer Box        C$96.20  ▼ 3.0% since Sep 26 |
+| Booster Box        C$412.10  ▲ 8.1% since Nov 14, 2025 | Elite Trainer Box   C$96.20  ▼ 3.0% since Sep 26, 2025 |
 | 64 sold 30D                                           | 141 sold 30D                                         |
 | ... up to 8 rows                                      | ...                                                  |
 | All 11 Phantasmal Flames products                     |                                                      |
@@ -107,7 +108,7 @@ Signed in, the island appears between "By product type" and "Recently released" 
 +--------------------------------------------------------------------------------------------------------------+
 ```
 
-Phone, 390 x 844 (16 px gutters). Pixel budget to the first mover: header 64, padding 24, H1 32, provenance 3 lines 54, gap 16, search 44, gap 24, index card about 312, gap 24, movers header 60, "Gainers 7D" 26, first row 56: about 736 px, under 844.
+Phone, 390 x 844 (16 px gutters). Pixel budget to the first mover: header 64, padding 24, H1 32, provenance 3 lines 54, gap 16, search 44, gap 24, index card about 312, gap 24, movers header 60, screened caption 24, "Gainers 7D" 26, first row 56: about 760 px, under 844 with 84 px to spare. `measure-home.mjs` (step 17) proves it on the built page.
 
 ```
 +--------------------------------------+
@@ -136,6 +137,7 @@ Phone, 390 x 844 (16 px gutters). Pixel budget to the first mover: header 64, pa
 | +----------------------------------+ |
 | Movers                  [#7D#| 30D ] |  44 px segments on touch
 | Through Oct 13, 2026 (UTC)           |
+| Ranked among 182 products that ...   |
 | Gainers 7D                           |
 | Booster Box  Surging Sparks   /\_/‾  |  56 px row: first mover, inside 844
 | 212 sold 30D  C$612.40 ▲ 12.4% 7D    |
@@ -159,7 +161,7 @@ Phone, 390 x 844 (16 px gutters). Pixel budget to the first mover: header 64, pa
 | Phantasmal Flames                    |
 | ME02 · Released Nov 14, 2025         |
 | Booster Box                          |
-| 64 sold 30D  C$412.10 ▲ 8.1% since N…|
+| 64 s… C$412.10 ▲ 8.1% since Nov 14, 2025|
 +--------------------------------------+
 | [promo]                              |
 +--------------------------------------+
@@ -186,6 +188,7 @@ From 768 to 1023 px the page is one column in DOM order (the chart sits right un
 | Movers, Recently released | statistics day stale (2+ days) | warn `Badge` "Not updated since {date}" next to "Through {date} (UTC)" |
 | Recently released | withheld price | Price `--`, `Delta` `--` "No current price" |
 | Recently released | no first tracked price | `Delta` `--` "No first tracked price" |
+| Recently released | no statistics day (`day` null) | "Recently released is not available right now. The daily statistics could not be read." (never the "no set" text: the catalog has sets, the stats read failed) |
 | Recently released | no group | "No set in the catalog has been released yet." |
 | Your Pokéfin | session unknown or anonymous | renders nothing |
 | Your Pokéfin | loading | `role="status"` sr-only "Loading your portfolio", two flat `Skeleton` bars in a 96 px box |
@@ -197,7 +200,7 @@ No `app/loading.tsx` (WP13's rule; the route is static).
 
 ### D5. Copy (every new user-facing string)
 
-"Sealed Pokémon TCG market", "{n} sealed products." + `PROVENANCE_SENTENCE` + "Prices as of {Mon D}.", "Methodology", "Search products, sets or set codes", "Pokéfin Sealed Index", "Index level", "as of the close of {date} (UTC)", "7D", "30D", "1Y", "Advancers 7D", "Decliners 7D", "Up over 30D", "New 52-week highs / lows", "of {n}", "Sealed Index, last 12 months", "Open the index", "Movers", "Through {date} (UTC)", ", day in progress", "Movers period" (sr-only group name), "7 days", "30 days" (segment names), "Showing 7-day movers" / "Showing 30-day movers" (live region), "Gainers 7D", "Losers 7D", "Gainers 30D", "Losers 30D", "{n} sold 30D", "Screened for liquidity: a Market Price of at least ${15} USD, at least {3} different daily prices in the past year and at least {3} units sold in 30 days.", "Open the Screener", "By product type", "30D change, as of the close of {date} (UTC)", "Not published", "Recently released", "{CODE} · Released {date}", "since {Mon D}", "All {n} {set} products", "No sales data", "Your Pokéfin", "Open portfolio", "Portfolio value", "{±amount} over 1 day", "{n} holdings", "{n} units", "{n} without a current price", "Go to your portfolio", every state string in D4, WP24's decision note. No "live", "real-time", "all-time", "undervalued", "buy", "TCGPlayer" or em dash.
+"Sealed Pokémon TCG market", "{n} sealed products." + `PROVENANCE_SENTENCE` + "Prices as of {Mon D}.", "Methodology", "Search products, sets or set codes", "Pokéfin Sealed Index", "Index level", "as of the close of {date} (UTC)", "7D", "30D", "1Y", "Advancers 7D", "Decliners 7D", "Up over 30D", "New 52-week highs / lows", "of {n}", "Sealed Index, last 12 months", "Open the index", "Movers", "Through {date} (UTC)", ", day in progress", "Movers period" (sr-only group name), "7 days", "30 days" (segment names), "Showing 7-day movers" / "Showing 30-day movers" (live region), "Gainers 7D", "Losers 7D", "Gainers 30D", "Losers 30D", "{n} sold 30D", "Screened for liquidity: a Market Price of at least ${15} USD, at least {3} different daily prices in the past year and at least {3} units sold in 30 days.", "Open the Screener", "By product type", "30D change, as of the close of {date} (UTC)", "Not published", "Recently released", "{CODE} · Released {date}", "since {Mon D}" / "since {Mon D, YYYY}", "Ranked among {n} products that passed the screen with a {7|30}-day change.", "Recently released is not available right now. The daily statistics could not be read.", "All {n} {set} products", "No sales data", "Your Pokéfin", "Open portfolio", "Portfolio value", "{±amount} over 1 day", "{n} holdings", "{n} units", "{n} without a current price", "Go to your portfolio", every state string in D4, WP24's decision note. No "live", "real-time", "all-time", "undervalued", "buy", "TCGPlayer" or em dash.
 
 ### D6. Interactions
 
@@ -221,7 +224,7 @@ WP23: `Stat` (hero size for the index level), `Delta`, `DataList`/`DataListRow`,
 
 ### D9. Performance
 
-- Server reads on `/` (all `unstable_cache`, tag `market-products`, daily backstop): summaries, index summary, index series, one day of `product_daily_stats` (about 306 rows, primary-key range), `index_constituents` for one month (about 250 rows, primary key), first tracked rows for at most 16 products (`in` on the primary key), two sparkline payloads, the pipeline status (React-cached, shared with the layout). The page renders once per scrape revalidation.
+- Server reads on `/` (all `unstable_cache`, tag `market-products`): summaries, index summary, index series, one day of `product_daily_stats` (about 306 rows, primary-key range), `index_constituents` for one month (about 250 rows, primary key), first tracked rows for at most 16 products (`in` on the primary key), two sparkline payloads, the pipeline status (React-cached, shared with the layout). The index reads (WP29) and the day-stats read (step 3c) revalidate hourly (`INDEX_REFRESH_SECONDS`, 3600); the others use the daily backstop. During prerender `unstable_cache` lowers the page's ISR interval to the smallest `revalidate` it sees (`next/dist/server/web/spec-extension/unstable-cache.js`, the `workUnitStore.revalidate` branch), so `/` regenerates at most hourly in the background plus on each scrape's `revalidateTag`. That is what keeps "Through {date}", "day in progress" and the "Not updated since" badge true within an hour: pg_cron finalises D-1 at 00:30 UTC and publishes the index at 00:45 UTC without calling `revalidateTag`, so a daily-only page could show D-2 (or partial D-1 rows) for up to 24 hours. Cost: one 306-row read and one cached render per hour.
 - Client JavaScript of its own: `MoversPeriodSwitch` (with `SegmentedControl`), `SearchTrigger` (tiny, WP27), `YourPokefin`, `Price`, `MiniSparkline`. `RecentlyReleased` (ProductCard, `useProductData`, the full-chart toggle and its lazy Recharts) leaves the route. Expected `/` JS: at or below the 150 kB gz target (WP22 measured 152.8 before WP26 and WP30); the byte gate records the new value.
 - HTML: both movers panels (20 rows), the chart path (about 365 points), up to 16 release rows: the `/` document target stays 60 kB br.
 - `forbiddenChunks`: supabase-js (WP26) and recharts (added here) must not be reachable from `/`.
@@ -308,7 +311,7 @@ pkill -f scripts/perf-serve.mjs
 
 ## Implementation steps
 
-Paths are relative to `frontend/` unless they start with the repo root. Steps 1 to 6 add modules nothing uses yet (tsc stays green after each); step 7 onward builds the page.
+Paths are relative to `frontend/` unless they start with the repo root. Steps 1 to 6 add modules nothing uses yet (tsc stays green after each); step 7 onward builds the page. **Execution order: 1 to 7, then 13 and 14, then 8 to 12, then 15 to 20.** Step 8's components use the metric keys `advancers7d`, `decliners7d`, `pctUp30d`, `newHighsLows52w` (`MetricLabel metric` is typed `MetricKey`) and `DecisionNote anchor="movers"` (typed `MethodologyTarget`), which exist only after steps 13 and 14; in that order `pnpm exec tsc --noEmit` stays at exit 0 after every step. The numbering is kept so the commit list and cross-references stay stable.
 
 ### Step 1. `app/lib/moverPeriods.ts` (new): the period list the client switch needs
 
@@ -699,8 +702,11 @@ async function fetchFirstTrackedPrices(
 3c. At the end of the cached exports block (after WP29's `getCachedIndexSeries`), add:
 
 ```ts
+// Hourly, like WP29's index reads: the D-1 rows are rewritten by the nightly
+// finalisation (00:30 UTC), which calls no revalidateTag. A daily backstop
+// would keep partial or empty D-1 rows for up to 24 hours.
 const getCachedMarketDayRows = unstable_cache(fetchMarketDayRows, ["market-day-stats-v1"], {
-  revalidate: DAILY_BACKSTOP_SECONDS,
+  revalidate: INDEX_REFRESH_SECONDS,
   tags: [CACHE_TAGS.marketProducts],
 });
 
@@ -755,7 +761,7 @@ export async function getCachedFirstTrackedPrices(
 }
 ```
 
-Never call these from inside another `unstable_cache` callback (WP11's nested-cache rule). If `tsc` rejects the row types of `fetchAllRows` (for example `usd_price` typed `number` where `MarketDayRowRaw` expects `number | string | null`), annotate the variable (`const rows: MarketDayRowRaw[] = await fetchAllRows(...)`) as WP25 does; never cast the client to `any`. If `unstable_cache` rejects the readonly tuple parameter type, change the parameter to `Array<[number, string]>` in both `fetchFirstTrackedPrices` and the wrapper.
+`INDEX_REFRESH_SECONDS` is WP29's module constant (3600), declared just above `getCachedIndexSummaryList`; reuse it, do not declare a second one. Never call these from inside another `unstable_cache` callback (WP11's nested-cache rule). If `tsc` rejects the row types of `fetchAllRows` (for example `usd_price` typed `number` where `MarketDayRowRaw` expects `number | string | null`), annotate the variable (`const rows: MarketDayRowRaw[] = await fetchAllRows(...)`) as WP25 does; never cast the client to `any`. If `unstable_cache` rejects the readonly tuple parameter type, change the parameter to `Array<[number, string]>` in both `fetchFirstTrackedPrices` and the wrapper.
 
 ### Step 4. Perf fixture: `scripts/fixtures/perf.mjs`
 
@@ -1080,7 +1086,7 @@ export default function WarnNote({ children, className = "" }: { children: React
 ```ts
 /** The inline text link used across the home sections (WP23 action colour). */
 export const HOME_LINK =
-  "rounded-control font-medium text-action underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-action pointer-coarse:inline-flex pointer-coarse:min-h-11 pointer-coarse:items-center";
+  "rounded-control font-medium text-action underline-offset-2 hover:underline focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-action pointer-coarse:inline-flex pointer-coarse:min-h-11 pointer-coarse:items-center";
 
 /** The card shell of every home section. */
 export const HOME_CARD = "rounded-card border border-line bg-surface p-4 md:p-5";
@@ -1123,7 +1129,7 @@ export default function HomeIntro({
           )}
         </ProvenanceLine>
       </div>
-      <SearchTrigger className="flex h-11 w-full shrink-0 items-center gap-2 rounded-control border border-line bg-surface px-3 text-left text-body text-ink-soft transition-colors duration-150 hover:border-action focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-action motion-reduce:transition-none md:w-80">
+      <SearchTrigger className="flex h-11 w-full shrink-0 items-center gap-2 rounded-control border border-line bg-surface px-3 text-left text-body text-ink-soft hover:border-action focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-action md:w-80">
         <SearchIcon className="size-4 shrink-0" />
         <span className="min-w-0 flex-1 truncate">Search products, sets or set codes</span>
         <kbd
@@ -1307,7 +1313,7 @@ export default function IndexHeader({
         <Link
           href={INDEX_PAGE_PATH}
           prefetch={false}
-          className="rounded-control hover:text-action focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-action"
+          className="rounded-control hover:text-action focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-action"
         >
           {HEADLINE_INDEX_NAME}
         </Link>
@@ -1545,23 +1551,28 @@ export default function MoversSection({
   const panels = Object.fromEntries(
     MOVER_PERIODS.map((p) => [
       p.key,
-      <div key={p.key} className="mt-3 grid gap-4 md:grid-cols-2">
-        <MoverColumn
-          title={`Gainers ${p.label}`}
-          movers={movers[p.key].gainers}
-          emptyText={`No product passed the screen with a gain over ${p.days} days.`}
-          period={p.label}
-          productsById={productsById}
-          sparklines={sparklines[p.key]}
-        />
-        <MoverColumn
-          title={`Losers ${p.label}`}
-          movers={movers[p.key].losers}
-          emptyText={`No product passed the screen with a fall over ${p.days} days.`}
-          period={p.label}
-          productsById={productsById}
-          sparklines={sparklines[p.key]}
-        />
+      <div key={p.key} className="mt-3">
+        <p data-home="screened" className="text-caption text-ink-soft">
+          Ranked among {formatInteger(movers[p.key].screened)} products that passed the screen with a {p.days}-day change.
+        </p>
+        <div className="mt-2 grid gap-4 md:grid-cols-2">
+          <MoverColumn
+            title={`Gainers ${p.label}`}
+            movers={movers[p.key].gainers}
+            emptyText={`No product passed the screen with a gain over ${p.days} days.`}
+            period={p.label}
+            productsById={productsById}
+            sparklines={sparklines[p.key]}
+          />
+          <MoverColumn
+            title={`Losers ${p.label}`}
+            movers={movers[p.key].losers}
+            emptyText={`No product passed the screen with a fall over ${p.days} days.`}
+            period={p.label}
+            productsById={productsById}
+            sparklines={sparklines[p.key]}
+          />
+        </div>
       </div>,
     ])
   ) as Record<MoverPeriod, ReactNode>;
@@ -1615,7 +1626,7 @@ export default function SubIndexStrip({ headline, subIndices }: { headline: Inde
               <Link
                 href={INDEX_PAGE_PATH}
                 prefetch={false}
-                className="flex min-h-11 flex-col gap-1 rounded-card border border-line bg-surface p-3 transition-colors duration-150 hover:bg-surface-alt focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-action motion-reduce:transition-none"
+                className="flex min-h-11 flex-col gap-1 rounded-card border border-line bg-surface p-3 hover:bg-surface-alt focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-action"
               >
                 <span className="truncate text-small font-medium text-ink">{t.label}</span>
                 <span className="flex flex-wrap items-baseline justify-between gap-x-2">
@@ -1655,6 +1666,11 @@ import {
   type RecentGroup,
 } from "../../lib/marketHome";
 
+/** A valid, stable id for a group heading (the fallback key holds ":" and spaces). */
+function headingId(key: string): string {
+  return `recent-${key.replace(/[^A-Za-z0-9_-]/g, "-")}`;
+}
+
 function sinceLabel(firstDay: string, day: string): string {
   return `since ${firstDay.slice(0, 4) === day.slice(0, 4) ? formatMonthDay(firstDay) : formatDateOnly(firstDay)}`;
 }
@@ -1682,14 +1698,18 @@ export default function RecentReleases({
         </h2>
         {day && <ThroughDay day={day} today={today} />}
       </div>
-      {groups.length === 0 || day === null ? (
+      {day === null ? (
+        <p className="mt-3 text-small text-ink-soft">
+          Recently released is not available right now. The daily statistics could not be read.
+        </p>
+      ) : groups.length === 0 ? (
         <p className="mt-3 text-small text-ink-soft">No set in the catalog has been released yet.</p>
       ) : (
         <div className="mt-3 grid gap-6 lg:grid-cols-2">
           {groups.map((group) => (
-            <section key={group.key} aria-labelledby={`recent-${group.key}`} className="min-w-0">
+            <section key={group.key} aria-labelledby={headingId(group.key)} className="min-w-0">
               <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
-                <h3 id={`recent-${group.key}`} className="text-h3 font-semibold text-ink">
+                <h3 id={headingId(group.key)} className="text-h3 font-semibold text-ink">
                   {group.setName}
                 </h3>
                 <p className="text-caption text-ink-soft">
@@ -1737,7 +1757,7 @@ export default function RecentReleases({
 }
 ```
 
-`group.key` can contain `:` (fallback key); use `` `recent-${group.key.replace(/[^A-Za-z0-9_-]/g, "-")}` `` for both `id` and `aria-labelledby` if the set has no `id`.
+`headingId` sanitises every key, so a set without an `id` (fallback key `code:name`) still yields a valid `id`/`aria-labelledby` pair. The two sets are different keys, so the ids are unique on the page.
 
 8j. `YourPokefin.tsx` (`"use client"`):
 
@@ -1939,7 +1959,10 @@ export default async function Home() {
 
   const { headline, subIndices } = summaries ? currentSummaries(summaries) : { headline: null, subIndices: [] };
   const productsById = new Map(products.map((p) => [p.id, p]));
-  const rowsById = new Map(dayRows.map((r) => [r.product_id, r]));
+  // product_daily_stats keeps rows of products deactivated after that day;
+  // rank only catalog products, or a column could silently render 4 rows.
+  const catalogRows = dayRows.filter((r) => productsById.has(r.product_id));
+  const rowsById = new Map(catalogRows.map((r) => [r.product_id, r]));
   const recentGroups = statsDay ? recentReleaseGroups(products, statsDay) : [];
   const recentIds = recentGroups.flatMap((g) => g.products.map((p) => p.id));
 
@@ -1953,7 +1976,7 @@ export default async function Home() {
   const movers =
     statsDay === null
       ? null
-      : (Object.fromEntries(MOVER_PERIODS.map((p) => [p.key, selectMovers(dayRows, p.key)])) as Record<
+      : (Object.fromEntries(MOVER_PERIODS.map((p) => [p.key, selectMovers(catalogRows, p.key)])) as Record<
           MoverPeriod,
           MoversResult
         >);
@@ -2069,7 +2092,7 @@ Every `short` is under 120 characters and free of WP24's banned words (the test 
   },
 ```
 
-- In `METHODOLOGY_SUBSECTIONS`, insert directly after the `{ anchor: "price-per-day", ... parent: "returns" }` entry (the last child of `returns`, so the list stays in page order):
+- In `METHODOLOGY_SUBSECTIONS`, insert directly after the last entry whose `parent` is `"returns"` (WP24 ends that run with `price-per-day`; WP25 or a later package may have appended another `returns` child, so check with `grep -n 'parent: "returns"' app/content/methodology.ts`). This keeps the list in page order, matching the `<Sub>` placed last in `<Section id="returns">` below:
 
 ```ts
   { anchor: "movers", title: "Movers and new releases", parent: "returns" },
@@ -2121,7 +2144,7 @@ Every `short` is under 120 characters and free of WP24's banned words (the test 
 
 ### Step 15. Performance: budgets, forbidden chunks, Lighthouse
 
-15a. `perf-budgets.json`, `routes["/"]`: set `jsGzKb.limit` and `documentBrKb.limit` to `null` (keep the targets 150 and 60). Step 20 fills them with `pnpm perf:budget --write-limits`. This is a tightening when the measurement is lower; if either measurement is above its old limit, stop and fix the page (never add a raise line for this package).
+15a. `perf-budgets.json`, `routes["/"]`: write down the current `jsGzKb.limit` and `documentBrKb.limit` (call them `L_JS` and `L_DOC`), then set both to `null` (keep the targets 150 and 60). Step 20 fills them with `pnpm perf:budget --write-limits`, which sets `limit = min(target, ceil(measured x headroomRatio))` when the measurement is under target, else `ceil(measured x headroomRatio)`. After writing: if a new limit is above `L_JS` or `L_DOC`, put the old value back (the gate must never loosen in this package); if the measurement itself is above the old limit, stop and fix the page. Never add a `Perf budget raise:` line for this package.
 
 15b. `perf-budgets.json`, `forbiddenChunks`: if a `"recharts"` rule exists (WP29 step 21c), add `"/"` to its `routes`. If not, add:
 
@@ -2287,7 +2310,8 @@ git diff app/__tests__/uiConventions.baseline.json   # only removals or lower co
 `/` is a static ISR page: its data comes from cached reads tagged
 `market-products` (index summary and series, one day of
 `product_daily_stats`, index constituents, first tracked prices, two
-sparkline payloads). It must never read cookies, headers or search params.
+sparkline payloads). The index and day-stats reads revalidate hourly, so
+the page regenerates at most hourly plus on each scrape's revalidation. It must never read cookies, headers or search params.
 Signed-in data comes only from the `YourPokefin` island through
 `GET /api/portfolio/summary`. CI proves the shell stays cached with a
 session cookie (`node scripts/check-home-cache.mjs`); the movers screen
@@ -2307,6 +2331,8 @@ Run the perf build and gates (Verification, block 3), then `pnpm perf:budget --w
 - **Do not import a charting library.** No `recharts`, `ChartBundle`, `PriceChart`, `next/dynamic` chart. The index chart is WP29's server SVG; sparklines are WP26's encoded series.
 - **Do not rank movers from `get_market_product_summaries` returns.** Those anchors are unbounded (WP25 note); use `product_daily_stats` `ret_7d` and `ret_30d`.
 - **Do not apply the $15 floor in CAD,** and do not add a product-type exclusion: the screen is exactly the four rules, mirrored from the weekly report and tested.
+- **Do not give the day-stats read the daily backstop.** It uses `INDEX_REFRESH_SECONDS` (hourly) like the index reads; the nightly D-1 finalisation does not revalidate the tag.
+- **Do not rank rows of products that are not in the catalog summaries.** `product_daily_stats` keeps rows of products deactivated later; filter to `productsById` first (step 9), or a column can silently show 4 rows.
 - **Do not use today's partial statistics for movers when yesterday has rows.** The header says "Through {D-1}"; mixing days breaks that stamp.
 - **Do not call `getOrCreatePortfolio` or `GET /api/portfolio` from the home page.** A home visit must not create a portfolio or download every holding.
 - **Do not import `app/lib/portfolio.ts` or `portfolioApi.ts` into the island.** The first reaches supabase-js (forbidden on `/`); the second returns the full payload. Use `portfolioGlance.ts`.
@@ -2620,10 +2646,10 @@ Mock `../../serverMarketData` (`getCachedMarketProductSummaries` resolving `[{ i
 ### 6. Component tests (new, jsdom), `app/components/home/__tests__/`
 
 - `MoversPeriodSwitch.test.tsx`: render with `panels={{ "7D": <p>seven</p>, "30D": <p>thirty</p> }}` and a heading; the 7D panel is visible and the 30D panel's container has the `hidden` attribute; `jest.spyOn(global, "fetch")`; click the radio named "30 days": 30D visible, 7D hidden, the live region reads "Showing 30-day movers", `fetch` was never called; ArrowLeft moves back to 7D; axe clean.
-- `MoversSection.test.tsx`: render with two products, `movers` built by `selectMovers` from rows, `sparklines` `{ "7D": payload with series for one product, "30D": null }`, `day` "2026-10-13", `today` "2026-10-14". Asserts: h2 "Movers" and "Through Oct 13, 2026 (UTC)"; gainer row link `href="/product/1"` with "Booster Box", "Surging Sparks", "212 sold 30D" and a `Delta` with `data-direction="up"`; the 7D rows have a sparkline slot (`[data-slot="sparkline"]`), the 30D rows none; an empty column shows "No product passed the screen with a gain over 7 days."; the screen sentence contains "$15 USD", "3 different daily prices" and "3 units sold"; a link to `/methodology#movers` ("How we calculate this") and one to the Screener href; `day: null` shows "Movers are not available right now." and no radio group; `today` "2026-10-16" shows the warn badge "Not updated since Oct 13, 2026"; axe clean.
-- `IndexHeader.test.tsx`: `summaries: null` shows the load error text and the heading link to `/indices/sealed`; `[]` shows "not published yet" with a link to `/methodology#index`; a published headline shows "142.87", `data-direction` on the 1D delta, 7D/30D/1Y deltas, "as of the close of Oct 13, 2026 (UTC)"; `chg365d: null` renders `--` with sr-only "Less than a year of levels"; `provisional: true` renders a `role="note"` with "Provisional: 136 of 212"; `today` two days after the headline renders "Not updated since"; breadth shows "▲", "94", "44%", "58%", "of 204", "11 / 0"; `breadth: null` shows `--` with "Not available"; all four breadth labels link to `/methodology#index-breadth`; axe clean.
+- `MoversSection.test.tsx`: render with two products, `movers` built by `selectMovers` from rows, `sparklines` `{ "7D": payload with series for one product, "30D": null }`, `day` "2026-10-13", `today` "2026-10-14". Asserts: h2 "Movers" and "Through Oct 13, 2026 (UTC)"; the 7D panel's `[data-home="screened"]` reads "Ranked among {n} products that passed the screen with a 7-day change." with `n` equal to `selectMovers(...).screened`; gainer row link `href="/product/1"` with "Booster Box", "Surging Sparks", "212 sold 30D" and a `Delta` with `data-direction="up"`; the 7D rows have a sparkline slot (`[data-slot="sparkline"]`), the 30D rows none; an empty column shows "No product passed the screen with a gain over 7 days."; the screen sentence contains "$15 USD", "3 different daily prices" and "3 units sold"; a link to `/methodology#movers` ("How we calculate this") and one to the Screener href; `day: null` shows "Movers are not available right now." and no radio group; `today` "2026-10-16" shows the warn badge "Not updated since Oct 13, 2026"; axe clean.
+- `IndexHeader.test.tsx`: `summaries: null` shows the load error text and the heading link to `/indices/sealed`; `[]` shows "not published yet" with a link to `/methodology#index`; a published headline (`level: 142.87`, `adv7d: 94`, `dec7d: 76`, `flat7d: 44`, `nContributing: 136`, `nConstituents: 212`, `coveragePct: 64.2`, `newHigh52w: 11`, `newLow52w: 0`) shows "142.87", `data-direction` on the 1D delta, 7D/30D/1Y deltas, "as of the close of Oct 13, 2026 (UTC)"; `chg365d: null` renders `--` with sr-only "Less than a year of levels"; `provisional: true` renders a `role="note"` with "Provisional: 136 of 212"; `today` two days after the headline renders "Not updated since"; breadth shows "▲", "94", "44%", "58%", "of 204", "11 / 0"; `breadth: null` shows `--` with "Not available"; all four breadth labels link to `/methodology#index-breadth`; axe clean.
 - `SubIndexStrip.test.tsx`: four tiles in `INDEX_TYPE_FAMILY` order, each linking to `/indices/sealed`; a missing sub-index shows `--` and sr-only "Not published"; axe clean.
-- `RecentReleases.test.tsx`: a group heading, "ME02 · Released Nov 14, 2025", rows with "64 sold 30D", "▲" and "since Nov 14"; a withheld row shows `--` and "No current price"; `firstPrices: null` makes every change `--` with "No first tracked price"; `total > products.length` shows "All 11 Phantasmal Flames products" linking to `setSearchHref("Phantasmal Flames")`; no groups shows the empty text; axe clean.
+- `RecentReleases.test.tsx`: a group heading, "ME02 · Released Nov 14, 2025", rows with "64 sold 30D", "▲" and "since Mar 2" (row `first_tracked_day: "2026-03-02"`, `day` "2026-10-13"); a row first tracked "2025-11-14" shows "since Nov 14, 2025"; a withheld row shows `--` and "No current price"; `firstPrices: null` makes every change `--` with "No first tracked price"; `total > products.length` shows "All 11 Phantasmal Flames products" linking to `setSearchHref("Phantasmal Flames")`; no groups shows "No set in the catalog has been released yet."; `day: null` shows "Recently released is not available right now." and never the "no set" text; a set without `id` renders an `h3` whose `id` matches `/^recent-[A-Za-z0-9_-]+$/` and equals the section's `aria-labelledby`; axe clean.
 - `YourPokefin.test.tsx`: mock `../../../context/AuthContext` (`useAuth: () => mockAuth`) and `global.fetch`. Cases: `sessionStatus` "unknown" or "anonymous": the container is empty and `fetch` was not called; "authenticated": `fetch` called once with `"/api/portfolio/summary"` and header `x-pokefin-request: 1`, the loading status shows first, then "Portfolio value", "C$" (default CAD provider fallback), "▲" and "over 1 day", "14 holdings, 22 units"; `priced < holdings` adds "without a current price"; `holdings: 0` shows "Your portfolio is empty." and a link to `/portfolio`; a 500 answer shows "Your portfolio could not be loaded."; an invalid body shows the same; `children` renders in the second column; unmounting aborts the request (the signal passed to `fetch` is aborted); axe clean.
 
 ### 7. `app/__tests__/homeShell.test.ts` (new, node): the shell guards
@@ -2667,10 +2693,13 @@ describe("home shell (WP32)", () => {
     }
   });
 
-  it("uses design tokens only", () => {
+  it("uses design tokens only, no colour transitions and no outline-none", () => {
     for (const file of ["page.tsx", ...HOME_FILES, "components/Price.tsx"]) {
       const text = read(file);
       expect(`${file}: ${RAW_PALETTE.test(text) || HEX.test(text)}`).toBe(`${file}: false`);
+      // 01-PRODUCT-DIRECTION.md §3.5 (colour changes are instant) and WP23's
+      // focus rule (Tailwind 4 outline-none hides focus in forced-colours mode).
+      expect(`${file}: ${/\btransition-(?:colors|all)\b|\boutline-none\b/.test(text)}`).toBe(`${file}: false`);
     }
   });
 
@@ -2770,17 +2799,17 @@ pnpm run test:scripts                                          # "# fail 0"
 
 # 2. Default stub build (WP00): the route stays static
 pnpm build:stub > /tmp/wp32-build.log 2>&1; echo "exit=$?"     # exit=0
-grep -E "^[│├└ ]*[○●ƒ] /\s" /tmp/wp32-build.log                  # the "/" line starts with ○ (static), never ƒ
+grep -E "^[│├└ ]*[○●ƒ] /\s" /tmp/wp32-build.log                  # the "/" line starts with ○ (static), never ƒ, and its Revalidate column reads 1h
 
 # 3. Perf build, budgets, cache check
 rm -rf .perf
 SUPABASE_STUB_FIXTURE=perf pnpm build:stub > /tmp/wp32-perf.log 2>&1; echo "exit=$?"    # exit=0
-grep -c "no fixture route" /tmp/wp32-perf.log                                            # 0
+grep -cE "no fixture route|fixture error" /tmp/wp32-perf.log                              # 0
 node scripts/perf-serve.mjs > /tmp/wp32-serve.log 2>&1 &
 for i in $(seq 120); do [ -f .perf/ready ] && break; node -e "setTimeout(()=>{},1000)"; done; cat .perf/ready
 curl -s http://127.0.0.1:3100/ | grep -c 'data-period="30D"'                               # 1 (both panels in the HTML)
 curl -s http://127.0.0.1:3100/ | grep -c 'aria-labelledby="yours-h"'                       # 0 (island not in the HTML)
-curl -s http://127.0.0.1:3100/ | grep -c '<img'                                            # 0
+curl -s http://127.0.0.1:3100/ | sed -n '/<main/,/<\/main>/p' | grep -c '<img'              # 0 (no image inside <main>)
 pnpm perf:budget --write-limits && git diff perf-budgets.json                              # only "/" limits and recorded values, not higher than before
 pnpm perf:budget; echo "exit=$?"                                                            # exit=0; "/ JS (gz)" <= 150; "/ document (br)" <= 60; forbidden chunks ok
 node scripts/check-home-cache.mjs                                                           # "[check-home-cache] ok on http://127.0.0.1:3100"
@@ -2814,7 +2843,7 @@ VERCEL_AUTOMATION_BYPASS_SECRET=... node scripts/check-home-cache.mjs https://<p
 
 ## Owner actions
 
-1. After the preview deploys, sign in on the preview, copy the `cookie` request header of a request to `/` from DevTools, and run the second preview command above with it (`HOME_CACHE_COOKIE` env var, not the command line history if possible). Paste only the "ok" line into the PR. Five minutes.
+1. Optional (CI already proves the shell with a dummy session cookie, and the anonymous preview command needs no cookie): after the preview deploys, sign in on the preview, copy the `cookie` request header of a request to `/` from DevTools, and run the second preview command above with it (`HOME_CACHE_COOKIE` env var, not the command line history if possible). Paste only the "ok" line into the PR. Five minutes.
 2. Look at the preview at 390 px and 1440 px, signed out and signed in, and approve the layout in the PR. Ten minutes.
 3. Informational: movers and new releases use the previous UTC day's statistics, which WP25's pg_cron job finalises at 00:30 UTC (owner decision D8). Without pg_cron the page still works from the rows the scraper wrote that day. No action if D8 is done.
 
@@ -2826,15 +2855,16 @@ No database action: this package adds no migration.
 - [ ] The hero, both hero buttons, the hero form, `MoverCard`, the Quick Stats row (including "Avg 1M return") and `RecentlyReleased.tsx` are gone.
 - [ ] The market header shows the Sealed Index level, 1D/7D/30D/1Y deltas, a 1Y server-SVG chart, advancers and decliners 7D, Up over 30D, new 52-week highs and lows, the provenance line with `AsOf` and a Methodology link, and a search trigger that opens GlobalSearch.
 - [ ] The sub-index strip shows Booster Box, Elite Trainer Box, Booster Bundle and Collections with their 30D change, each linking to `/indices/sealed`.
-- [ ] Movers show 5 gainers and 5 losers per period (fewer only when the screen leaves fewer), as `DataListRow`s with WP26 sparklines, under "Through {date} (UTC)", with the screen sentence, a `/methodology#movers` link and the decision note.
+- [ ] Movers show 5 gainers and 5 losers per period (fewer only when the screen leaves fewer), ranked only among active catalog products, as `DataListRow`s with WP26 sparklines, under "Through {date} (UTC)", with the screened count per period, the screen sentence, a `/methodology#movers` link and the decision note.
 - [ ] `marketHome.test.ts` proves a one-listing product (2 distinct prices, 0 sold, a 300% step) is excluded; the constants test ties the screen to `generate_weekly_report.py` and `INDEX_RULES`.
 - [ ] Both periods are in the server HTML; the toggle makes no network request (component test with a `fetch` spy).
 - [ ] Recently released shows compact rows grouped by set with type, price, change since first tracked and units sold 30D.
 - [ ] `YourPokefin` renders only when `sessionStatus` is "authenticated", reads `GET /api/portfolio/summary` once, shows value in the selected currency and the 1D change, and renders `children` in a second column (WP34's slot).
 - [ ] `GET /api/portfolio/summary` returns 403 without the app header, passes 401/503 through, never creates a portfolio, and answers with `Cache-Control: no-store`.
-- [ ] `homeShell.test.ts` passes: no request data, no client directive, no personal data and no charting library in the server render of `/`.
+- [ ] `homeShell.test.ts` passes: no request data, no client directive, no personal data, no charting library, no raw palette, no `transition-colors` and no `outline-none` in the server render of `/`.
+- [ ] The build output lists `/` with a `1h` revalidate (WP29's hourly index reads and step 3c's day-stats read set the ISR interval), not `1d` and not dynamic.
 - [ ] CI step "Home ISR shell with a session cookie (blocking)" passes; on the preview, `check-home-cache.mjs --require-vercel-hit` with a session cookie reports `x-vercel-cache` HIT.
-- [ ] `pnpm perf:budget`: `/ JS (gz)` at or below 150 kB; `/ document (br)` at or below 60 kB; no raise line in the PR; recharts and supabase-js unreachable from `/`.
+- [ ] `pnpm perf:budget` exits 0: `/ JS (gz)` and `/ document (br)` at or below their pre-PR limits (`L_JS`, `L_DOC`) and below their pre-PR measurements, with the expected result at or below the 150 kB and 60 kB targets (if `/ JS (gz)` stays above 150, the PR names the shared chunk responsible from the `perf:budget` chunk list); no limit above its old value, no raise line; recharts and supabase-js unreachable from `/`.
 - [ ] Lighthouse on `/`: LCP assertion at 1800 ms (warn), CLS at or below 0.05, 0 responsive-image items.
 - [ ] `/methodology` is at the next minor version with a change-log row, `#movers` prints the screen from `MOVERS_SCREEN`, and `#index-breadth` explains Up over 30D; every new label resolves through `metricDefinitions.ts`.
 - [ ] `pnpm exec tsc --noEmit`, `pnpm lint`, `pnpm test --ci`, `pnpm run test:scripts` and `pnpm build:stub` all pass; the build lists `/` as static.
