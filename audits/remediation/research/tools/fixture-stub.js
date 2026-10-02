@@ -43,6 +43,8 @@ const sets = [
 // A pinned date must not shrink the catalog: the capture scripts open fixed product ids (105, 110).
 const NEWEST_RELEASE = sets.reduce((m, s) => (s.release_date > m ? s.release_date : m), "");
 if (iso(TODAY) < NEWEST_RELEASE) throw new Error(`FIXTURE_TODAY must be ${NEWEST_RELEASE} or later (the newest set's release)`);
+// nor run ahead of the real clock: production holds no rows dated after current_date
+if (iso(TODAY) > iso(realToday())) throw new Error(`FIXTURE_TODAY must not be after today (${iso(realToday())})`);
 const types = {
   booster_box: { id: 1, name: "booster_box", label: "Booster Box", msrp: 161, special: false },
   elite_trainer_box: { id: 2, name: "elite_trainer_box", label: "Elite Trainer Box", msrp: 50 },
