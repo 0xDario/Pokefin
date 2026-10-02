@@ -1,7 +1,7 @@
 const { chromium } = require("playwright-core");
 const BASE = "http://localhost:3099";
 const OUT = __dirname + "/shots/";
-const pages = (process.env.PAGES || "home:/,prices:/prices,market:/market,product:/product/110,stats:/stats,analytics:/analytics,compare:/compare,boxcalc:/box-calculator,login:/auth/login,signup:/auth/signup,privacy:/privacy,notfound:/product/999999,portfolio:/portfolio").split(",").map(s => s.split(/:(.*)/s));
+const pages = (process.env.PAGES || "home:/,prices:/prices,market:/market,product:/product/110,stats:/stats,analytics:/analytics,compare:/compare,boxcalc:/box-calculator,login:/auth/login,signup:/auth/signup,forgotpw:/auth/forgot-password,resetpw:/auth/reset-password,privacy:/privacy,notfound:/product/999999,portfolio:/portfolio").split(",").map(s => s.split(/:(.*)/s));
 const vps = (process.env.VPS || "mobile,desktop").split(",");
 (async () => {
   const browser = await chromium.launch(process.env.CHROME_PATH ? { executablePath: process.env.CHROME_PATH } : {});

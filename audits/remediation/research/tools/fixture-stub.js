@@ -13,6 +13,9 @@ if (isNaN(_n)) throw new Error("FIXTURE_TODAY must be YYYY-MM-DD");
 const TODAY = new Date(Date.UTC(_n.getUTCFullYear(), _n.getUTCMonth(), _n.getUTCDate()));
 const DAY = 86400000;
 const iso = (d) => d.toISOString().slice(0, 10);
+// Freshness gates run against the real clock, as the database's current_date does, not against TODAY.
+const realToday = () => { const n = new Date(); return new Date(Date.UTC(n.getUTCFullYear(), n.getUTCMonth(), n.getUTCDate())); };
+const freshSince = (days) => iso(new Date(realToday() - days * DAY));
 
 const generations = [
   { id: 1, name: "Sun & Moon" },
@@ -87,8 +90,13 @@ for (const p of products) {
   }
   pts.reverse();
   history[p.id] = pts;
-  if (p.stale) p.current = pts[pts.length - 1].usd_price;
+  if (p.stale && pts.length) p.current = pts[pts.length - 1].usd_price;
 }
+// a pinned FIXTURE_TODAY can predate a release; a product with no history yet is left out
+for (let i = products.length - 1; i >= 0; i--) if (!history[products[i].id].length) products.splice(i, 1);
+
+// 0023: a price (and its returns) shows only when the newest price row is within 14 days
+const isPriceFresh = (p) => history[p.id].at(-1).recorded_at.slice(0, 10) >= freshSince(14);
 
 function priceAt(h, daysAgo) {
   const target = iso(new Date(TODAY - daysAgo * DAY));
@@ -101,7 +109,7 @@ function ret(h, n) { const cur = h[h.length - 1]?.usd_price; const past = priceA
 function summaryRow(p) {
   const h = history[p.id];
   const last = h[h.length - 1];
-  const fresh = !p.stale;
+  const fresh = isPriceFresh(p);
   return {
     id: p.id, usd_price: fresh ? last.usd_price : null, url: "https://www.tcgplayer.com/product/" + p.id,
     price_recorded_at: last.recorded_at, last_updated: last.recorded_at.replace("+00:00", ".412391"),
@@ -148,12 +156,17 @@ function volumeRow(p) {
   const s = sales[p.id].filter(r => r.granularity === "day");
   const sum = (arr) => arr.reduce((a, r) => a + r.quantity_sold, 0);
   const l = listings[p.id];
-  return { product_id: p.id, units_sold_7d: sum(s.slice(-7)), units_sold_30d: sum(s), units_sold_prior_30d: Math.round(sum(s) * priorFactor[p.id]), transaction_count_30d: s.reduce((a, r) => a + r.transaction_count, 0), active_listings: l.active_listings, total_quantity_available: l.total_quantity_available, lowest_listing_price: l.lowest_listing_price, listings_snapshot_date: l.snapshot_date };
+  // 0021/0022: windows and listing depth need data within 3 days; the snapshot date always shows
+  const salesFresh = s.length > 0 && s.at(-1).bucket_date >= freshSince(3);
+  const listFresh = l.snapshot_date >= freshSince(3);
+  return { product_id: p.id, units_sold_7d: salesFresh ? sum(s.slice(-7)) : null, units_sold_30d: salesFresh ? sum(s) : null, units_sold_prior_30d: Math.round(sum(s) * priorFactor[p.id]), transaction_count_30d: salesFresh ? s.reduce((a, r) => a + r.transaction_count, 0) : null, active_listings: listFresh ? l.active_listings : null, total_quantity_available: listFresh ? l.total_quantity_available : null, lowest_listing_price: listFresh ? l.lowest_listing_price : null, listings_snapshot_date: l.snapshot_date };
 }
 
 function setAnalytics() {
-  const rows = sets.map(s => {
-    const ps = products.filter(p => p.set.id === s.id && !p.stale);
+  // 0023 keeps stale products in the population: only returns and price_per_day need a fresh price
+  const rows = sets.filter(s => products.some(p => p.set.id === s.id)).map(s => {
+    const ps = products.filter(p => p.set.id === s.id);
+    const fresh = ps.filter(isPriceFresh);
     const rs = ps.map(p => summaryRow(p));
     const avg = (k) => { const v = rs.map(r => r[k]).filter(x => x != null); return v.length ? v.reduce((a, b) => a + b, 0) / v.length : null; };
     const med = (k) => { const v = rs.map(r => r[k]).filter(x => x != null).sort((a, b) => a - b); return v.length ? v[Math.floor(v.length / 2)] : null; };
@@ -166,11 +179,13 @@ function setAnalytics() {
       avg30: a30, avg90: a90, avg365: a365, median30: med("return_30d"), median90: med("return_90d"), median365: med("return_365d"),
       consistency90: cons("return_90d"), consistency365: cons("return_365d"), volatility90: vol.reduce((a,b)=>a+b,0)/vol.length, max_drawdown365: dd.reduce((a,b)=>a+b,0)/dd.length,
       trend90: a90 != null ? a90 / 90 * 1.1 : null, trend365: a365 != null ? a365 / 365 : null,
-      price_per_day: ps.reduce((a, p) => a + p.current / Math.max(days, 1), 0) / ps.length,
-      momentum_score: (a90 || 0) * 0.5 + (a30 || 0) * 0.3 + (a365 || 0) * 0.2, invest_score: 0, rank: 0 };
+      price_per_day: fresh.length ? fresh.reduce((a, p) => a + p.current / Math.max(days, 1), 0) / fresh.length : null,
+      momentum_score: a30 == null && a90 == null && a365 == null ? null : (a90 || 0) * 0.5 + (a30 || 0) * 0.3 + (a365 || 0) * 0.2, invest_score: null, rank: null };
   });
-  rows.forEach(r => { r.invest_score = (r.momentum_score / 20) - r.volatility90 * 0.3 + (r.consistency90 || 0) / 100; });
-  rows.sort((a, b) => b.invest_score - a.invest_score).forEach((r, i) => r.rank = i + 1);
+  // 0023: a set with no fresh returns is neither scored nor ranked, and sorts last
+  rows.forEach(r => { if (r.momentum_score != null) r.invest_score = (r.momentum_score / 20) - r.volatility90 * 0.3 + (r.consistency90 || 0) / 100; });
+  const score = (r) => r.invest_score ?? -Infinity;
+  rows.sort((a, b) => score(b) - score(a) || a.name.localeCompare(b.name)).forEach((r, i) => { if (r.invest_score != null) r.rank = i + 1; });
   return rows;
 }
 
