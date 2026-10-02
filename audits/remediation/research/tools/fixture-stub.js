@@ -38,6 +38,9 @@ const sets = [
   { id: 12, name: "Phantasmal Flames", code: "PFL", release_date: "2025-11-14", generation_id: 4, expansion_type: "Main Series", base: 0.95 },
   { id: 13, name: "Ascended Heroes", code: "ASC", release_date: "2026-08-22", generation_id: 4, expansion_type: "Special Expansion", base: 1.05 },
 ];
+// A pinned date must not shrink the catalog: the capture scripts open fixed product ids (105, 110).
+const NEWEST_RELEASE = sets.reduce((m, s) => (s.release_date > m ? s.release_date : m), "");
+if (iso(TODAY) < NEWEST_RELEASE) throw new Error(`FIXTURE_TODAY must be ${NEWEST_RELEASE} or later (the newest set's release)`);
 const types = {
   booster_box: { id: 1, name: "booster_box", label: "Booster Box", msrp: 161, special: false },
   elite_trainer_box: { id: 2, name: "elite_trainer_box", label: "Elite Trainer Box", msrp: 50 },
@@ -90,10 +93,8 @@ for (const p of products) {
   }
   pts.reverse();
   history[p.id] = pts;
-  if (p.stale && pts.length) p.current = pts[pts.length - 1].usd_price;
+  if (p.stale) p.current = pts[pts.length - 1].usd_price;
 }
-// a pinned FIXTURE_TODAY can predate a release; a product with no history yet is left out
-for (let i = products.length - 1; i >= 0; i--) if (!history[products[i].id].length) products.splice(i, 1);
 
 // 0023: a price (and its returns) shows only when the newest price row is within 14 days
 const isPriceFresh = (p) => history[p.id].at(-1).recorded_at.slice(0, 10) >= freshSince(14);
@@ -172,7 +173,7 @@ function setAnalytics() {
     const med = (k) => { const v = rs.map(r => r[k]).filter(x => x != null).sort((a, b) => a - b); return v.length ? v[Math.floor(v.length / 2)] : null; };
     const cons = (k) => { const v = rs.map(r => r[k]).filter(x => x != null); return v.length ? (v.filter(x => x > 0).length / v.length) * 100 : null; };
     const vol = ps.map(p => { const h = history[p.id].slice(-90); const ch = []; for (let i = 1; i < h.length; i++) ch.push((h[i].usd_price - h[i-1].usd_price) / h[i-1].usd_price * 100); const m = ch.reduce((a,b)=>a+b,0)/ch.length; return Math.sqrt(ch.reduce((a,b)=>a+(b-m)**2,0)/ch.length); });
-    const dd = ps.map(p => { let peak = 0, mdd = 0; for (const r of history[p.id]) { peak = Math.max(peak, r.usd_price); mdd = Math.min(mdd, (r.usd_price - peak) / peak * 100); } return mdd; });
+    const dd = ps.map(p => { let peak = 0, mdd = 0; for (const r of history[p.id]) { peak = Math.max(peak, r.usd_price); mdd = Math.min(mdd, (r.usd_price - peak) / peak * 100); } return Math.abs(mdd); }); // a magnitude, as abs(min(...)) in production
     const days = Math.max(0, Math.round((TODAY - new Date(s.release_date)) / DAY));
     const a30 = avg("return_30d"), a90 = avg("return_90d"), a365 = avg("return_365d");
     return { key: s.code + ":" + s.name, name: s.name, code: s.code, generation: generations.find(g => g.id === s.generation_id).name, release_date: s.release_date, days_since_release: days, product_count: ps.length,
