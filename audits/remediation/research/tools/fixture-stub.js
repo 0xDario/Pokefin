@@ -6,7 +6,11 @@ let seed = 42;
 function rand() { seed = (seed * 1664525 + 1013904223) % 4294967296; return seed / 4294967296; }
 function gauss() { let u = 0, v = 0; while (!u) u = rand(); while (!v) v = rand(); return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v); }
 
-const _n = new Date(); const TODAY = new Date(Date.UTC(_n.getUTCFullYear(), _n.getUTCMonth(), _n.getUTCDate()));
+// FIXTURE_TODAY=YYYY-MM-DD pins the clock, so every run on any day serves identical data.
+// The default is today (UTC) because the app judges price freshness against the real clock.
+const _n = process.env.FIXTURE_TODAY ? new Date(process.env.FIXTURE_TODAY + "T00:00:00Z") : new Date();
+if (isNaN(_n)) throw new Error("FIXTURE_TODAY must be YYYY-MM-DD");
+const TODAY = new Date(Date.UTC(_n.getUTCFullYear(), _n.getUTCMonth(), _n.getUTCDate()));
 const DAY = 86400000;
 const iso = (d) => d.toISOString().slice(0, 10);
 
@@ -136,12 +140,15 @@ for (const p of products) {
   const ql = Math.round(baseDemand * (5 + rand() * 40));
   listings[p.id] = { active_listings: Math.round(ql / (2 + rand() * 3)) + 1, total_quantity_available: ql, lowest_listing_price: +(p.current * (0.96 + rand() * 0.06)).toFixed(2), snapshot_date: iso(new Date(TODAY - DAY)) };
 }
+// drawn once at startup so repeated volume RPCs return identical rows
+const priorFactor = {};
+for (const p of products) priorFactor[p.id] = 0.7 + rand() * 0.6;
 
 function volumeRow(p) {
   const s = sales[p.id].filter(r => r.granularity === "day");
   const sum = (arr) => arr.reduce((a, r) => a + r.quantity_sold, 0);
   const l = listings[p.id];
-  return { product_id: p.id, units_sold_7d: sum(s.slice(-7)), units_sold_30d: sum(s), units_sold_prior_30d: Math.round(sum(s) * (0.7 + rand() * 0.6)), transaction_count_30d: s.reduce((a, r) => a + r.transaction_count, 0), active_listings: l.active_listings, total_quantity_available: l.total_quantity_available, lowest_listing_price: l.lowest_listing_price, listings_snapshot_date: l.snapshot_date };
+  return { product_id: p.id, units_sold_7d: sum(s.slice(-7)), units_sold_30d: sum(s), units_sold_prior_30d: Math.round(sum(s) * priorFactor[p.id]), transaction_count_30d: s.reduce((a, r) => a + r.transaction_count, 0), active_listings: l.active_listings, total_quantity_available: l.total_quantity_available, lowest_listing_price: l.lowest_listing_price, listings_snapshot_date: l.snapshot_date };
 }
 
 function setAnalytics() {
