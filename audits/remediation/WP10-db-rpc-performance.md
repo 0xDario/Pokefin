@@ -1,0 +1,2010 @@
+# WP10: Database: bounded market RPCs and portfolio history RPC
+
+- **Findings covered**
+  - F142 (full, severity high; cluster members F142, F080): `get_market_product_metrics()` materialises every `product_price_history` row ever written into an unindexed CTE and runs six correlated "latest row on or before day N" subqueries per active product against it. It runs once per server cache entry per hour (once under `get_market_product_summaries`, once under `get_set_analytics`: two `unstable_cache` entries, `serverMarketData.ts:896` and `:914`), plus on every uncached browser call from `/compare`, `/box-calculator` and `/portfolio` (`clientMarketData.ts:225`), and anon can call it directly with the public key. Production: mean 734-903 ms per summaries call, about ten 3 s statement timeouts (HTTP 500s) per day. A full-effort re-verification on 306 products and 150,858 history rows measured 37-39 s for the old body and 0.32-0.47 s for this package's rewrite. This package implements the verifier correction: bound `daily_history` to 366 days and turn the anchors into LATERAL index reads, both in the same migration (bounding `daily_history` while the anchors still read it would null `return_365d` for products with a gap around day 365). The verifier's alternative "max(...) FILTER (... day = max_day_1d)" variant is not used.
+  - F080 (severity medium, clustered into F142): unauthenticated amplification. The 0028 rewrite caps each anonymous call at a bounded, index-driven read instead of a whole-history scan. The durable fixes (a metrics table written by `main.py` as `service_role`, then revoking anon EXECUTE on `get_market_product_metrics`) are not in any package of this plan; step 10c records them as an open follow-up in `audits/HARDENING_FOLLOWUPS.md`, including the order they must ship in. The "hundreds of server calls per hour" part is F143 (WP11).
+  - F148 (full, severity low): `get_market_product_volume_metrics()` computes `day_freshness` over the whole `product_sales_history` table with no date bound and no index matching its predicates, and `latest_listings` is a `DISTINCT ON` that visits every listings index entry. Both become one `LIMIT 1` probe per product on the existing `(product_id, date DESC)` indexes (verifier correction: no partial index, no `DISTINCT ON`).
+  - F145 (full, severity low): `getPortfolioHistory` pages every daily price row for every held product to the browser (up to 300 serial 1000-row pages) to compute one value per day. Unreachable in production until WP05 (F001) lands, because the anonymous client cannot read `portfolios`; after WP05 a 1Y chart for 23 holdings costs 9 serial round trips (about 1-2.5 s on a phone, about 60 KB gzipped).
+  - Track 2 product rule (`01-PRODUCT-DIRECTION.md` section 9 item 5, `research/trust-seo-brand.md` section 4.2 item 7): return anchors get a maximum age. The lookback price must be recorded within 7 days before the target date for the 7D and 1M windows and within 14 days for 3M, 6M and 1Y; otherwise the return is NULL. Today a product with a 3-month hole can report a "30D" return measured over 120 days. This is the one deliberate output change in this package; the owner may defer it to WP25 (see "Before you start", "Owner decision").
+- **Priority rationale**: the metrics RPC (F142, high) is behind every catalog page and already times out in production; this is the cheapest change that removes the timeouts before WP11 changes caching. F148 and F145 are low on their own and ride along because they touch the same migration window and WP05's new portfolio files. The anchor-age rule ships here because 0028 already rewrites the anchors and WP25, `/methodology#returns` and WP18 must use the same rule.
+- **Effort**: M (6 to 8 hours: 3 migrations and a check script, one route, repo/client additions, 4 new and 2 updated Jest files plus one pytest file, docs).
+- **Depends on**: WP01 (migrations 0024/0025, including `portfolio_holdings_portfolio_id_idx`), WP05 (`/api/portfolio` routes, `lib/server/portfolioRepo.ts`, `lib/portfolioApi.ts`, `lib/portfolioInput.ts`, the rewritten `usePortfolioData.ts`). WP06 is not a dependency, but it claims migration number 0026 (see "Before you start" for numbering).
+- **Unblocks**: WP11 (caching and revalidation build on the bounded RPCs), WP25 (its Before you start greps 0028 for the anchor-age literals to choose its `/methodology#returns` paragraph), WP20 (its generated `Database` types must contain `get_portfolio_history` and the new `get_market_product_metrics`, so 0027-0029 must be applied before WP20 starts), WP21 (database hardening and least-privilege role).
+- **Parallel execution**: this package does not depend on WP06 to WP09 and shares no source file with them except `app/lib/portfolioInput.ts` (WP07 edits `PRICE_MESSAGE`, this package adds the `days` parser; different lines) and the docs (`README.md`, `audits/HARDENING_FOLLOWUPS.md`). It may run in parallel with WP06 to WP09 once WP05 has merged; it must merge, with 0027-0029 applied, before WP11 starts. Keep the reserved numbers 0027-0029 whichever order the PRs merge in.
+- **Suggested branch name**: `remediation/wp10-db-rpc-performance`
+- **Risk level**: medium. It replaces the SQL behind every catalog page; the risk is contained by an old-versus-new equivalence proof (script provided) that allows exactly one kind of difference, a return blanked by the anchor-age rule, and by leaving the return shape, ACL and the 0023 freshness gates untouched.
+
+## Why
+
+Every catalog page (`/`, `/prices`, `/market`, `/stats`) and the `/compare`, `/box-calculator` and `/portfolio` tools depend on `get_market_product_metrics()`. Today it rebuilds a per-day history for every product from the whole price-history table and then scans that unindexed result about 1,800 times, so each call costs close to a second in production and sometimes exceeds the 3 s anonymous timeout, which users see as empty or failed market data. It runs once per server cache entry per hour (summaries and set analytics), on every uncached browser call from `/compare` and `/box-calculator`, and anyone with the public key can trigger it. After this PR the six lookback prices are single index probes and the history scan is bounded to one year: on a 306-product, 66k-row replica the metrics went from 17 s to about 130 ms, and on a 151k-row replica from 37 s to under 0.5 s. Every value is identical to the old function's except one deliberate change: a 7D or 1M return whose lookback price is more than 7 days older than its target date, or a 3M, 6M or 1Y return whose lookback price is more than 14 days older, is now NULL (shown as `--`) instead of a return silently measured over a much longer span. Separately, the portfolio chart stops downloading thousands of price rows to the browser: one authenticated request returns the `days + 1` points, computed in the database under RLS. The volume RPC's two whole-history reads become one index probe per product, so it stays cheap as history grows (420 ms to 22 ms on five years of data).
+
+## Before you start
+
+Read these first, fully:
+
+- `migrations/20260506_market_performance_functions.sql` (the current `get_market_product_metrics`, lines 14-197; `daily_history` at :38-46, the six correlated anchors at :47-99)
+- `migrations/0023_price_freshness_guard.sql` (why returns are gated at :39-48; the price-history index at :125-134; `get_market_product_summaries` gate at :199-243 and its call of the metrics at :248; `get_set_analytics` call at :354 and gate at :305-316, :332-334). You will NOT edit these functions; you must understand that they consume the metrics unchanged.
+- `migrations/0022_listings_freshness_guard.sql` (the current `get_market_product_volume_metrics`; `day_freshness` at :57-64, `latest_listings` at :141-151, the "listings_snapshot_date is left populated" contract at :179-190)
+- `migrations/0015_product_sales_and_listings_history.sql:32-95` (sales table, its only indexes) and `:139-140` (the listings `(product_id, snapshot_date DESC)` index)
+- `audits/remediation/research/trust-seo-brand.md` section 4.2 item 7 and `audits/remediation/01-PRODUCT-DIRECTION.md` section 9 item 5 (the return-anchor age rule), and in `audits/remediation/WP25-market-analytics-foundation.md` the `RETURN_ANCHOR_WINDOWS` constant and the "WP10 landed and stayed behaviour-neutral on anchors" check in its Before you start (WP25 must find the same literals this package writes)
+- `migrations/0009_db_resource_guards.sql:22-39` (anon 3 s / authenticated 8 s timeouts, search_path pins)
+- `migrations/0014_rls_perf_and_dedupe.sql:60-74` (`holdings_self` RLS policy that keeps the new portfolio RPC safe)
+- `verify_migration.py:1-240` (module docstring: what it compares and what it refuses) and `README.md:278-460` (migration rules, apply order)
+- Post-WP05 code: `frontend/app/lib/portfolio.ts` (the `fetchPortfolioPriceHistory` / `getPortfolioHistory` pair; pre-WP05 they are at :436-497 and :584-738), `frontend/app/lib/server/portfolioRepo.ts`, `frontend/app/lib/portfolioApi.ts`, `frontend/app/lib/portfolioInput.ts`, `frontend/app/api/portfolio/route.ts`, `frontend/app/components/Portfolio/hooks/usePortfolioData.ts`, `frontend/app/lib/csrf.ts`
+- `frontend/app/lib/__tests__/portfolio.freshness.test.ts` (the history tests you will retarget)
+- `audits/remediation/WP05-portfolio-api.md` steps 6-10 and 12 (the shapes this package extends)
+
+Confirm the starting state (repo root):
+
+```bash
+# 1. The bugs still exist
+grep -n "recorded_at >=" migrations/20260506_market_performance_functions.sql      # expect no output: daily_history is unbounded
+grep -c "FROM daily_history dh" migrations/20260506_market_performance_functions.sql  # expect 10 (6 anchors + 4 window CTEs)
+grep -rn "CREATE OR REPLACE FUNCTION public.get_market_product_metrics" migrations/  # expect only 20260506
+grep -rln "get_market_product_volume_metrics()" migrations/ | sort                  # 0022 must be the highest-numbered file that defines it
+grep -rn "get_portfolio_history" migrations/ frontend/app                          # expect no output
+grep -n "PRICE_HISTORY_MAX_PAGES" frontend/app/lib/portfolio.ts                     # expect the paging constant
+
+# 2. WP05 has landed (names this spec builds on)
+ls frontend/app/api/portfolio                                  # route.ts holdings import (and __tests__)
+grep -n "export async function findPortfolioId" frontend/app/lib/server/portfolioRepo.ts
+grep -n "export class PortfolioApiError\|async function readErrorMessage" frontend/app/lib/portfolioApi.ts
+grep -n "export type Parsed" frontend/app/lib/portfolioInput.ts
+grep -n "getPortfolioHistory(portfolioId, TIMEFRAME_DAYS\[timeframe\], holdings, controller.signal)" \
+  frontend/app/components/Portfolio/hooks/usePortfolioData.ts
+grep -n "rejectIfNotAppRequest\|export function reject" frontend/app/lib/csrf.ts
+grep -n "export async function requireRouteUser\|export function jsonNoStore" frontend/app/lib/routeAuth.ts   # expect 2 lines
+grep -n "requireRouteUser\|jsonNoStore" frontend/app/api/portfolio/route.ts                                    # the pattern step 7 copies
+
+# 3. Free migration numbers
+ls migrations | sort
+```
+
+Assumptions to check, and what to do if one fails:
+
+- **Migration numbers.** `0027`, `0028` and `0029` are reserved for this package in the plan-wide numbering (WP01 `0024`/`0025`, WP06 `0026`, WP10 `0027`-`0029`, WP16 `0030`, WP21 `0031`/`0032` plus `0000_baseline.sql`). Use them even if `0026` (WP06) or `0030` (WP16) is not in `migrations/` yet, or is already there: those packages can merge before or after this one. Do NOT derive the numbers from the highest file present. Only if a file named `0027_*`, `0028_*` or `0029_*` already exists and is not one of this package's files, stop and ask the owner which numbers to use; then substitute them everywhere this spec says 0027/0028/0029, including the comments inside the SQL files, the check script header, the README and HARDENING_FOLLOWUPS text, and tell WP16 and WP21 in the PR body.
+- **WP05 missing.** If `findPortfolioId`, `PortfolioApiError`, `Parsed`, `requireRouteUser`/`jsonNoStore` (`app/lib/routeAuth.ts`) or the WP05 hook call are absent, stop: this package extends WP05's files and must not recreate them. The migrations (steps 1-4) and the Python test (step 11) do not depend on WP05 and may be done first.
+- **The GET gate helper.** WP05 step 6 adds `rejectIfNotAppRequest` to `csrf.ts` unless WP04 already added an equivalent. Use whatever name `frontend/app/api/portfolio/route.ts` imports for its GET gate.
+- **The price-history index.** The new anchors depend on an index on `product_price_history (product_id, recorded_at DESC)`. `0023:133-134` creates `idx_price_history_product_recorded`; production also carries an equivalent under another name. The owner confirms it in Owner actions step 2.
+- **verify_migration.py needs no change.** The plan asked to "update verify_migration.py for changed functions". It is fully generic: it derives every expectation from the file passed on the command line and hard-codes no function name (`grep -n "market\|portfolio" verify_migration.py` finds only docstring mentions). Running it on the new files is the update. Do not edit `verify_migration.py`.
+- **Owner decision: the return-anchor age rule.** By default this package adds the anchor-age bound to 0028 (step 2, item (c); change 2 in the 0028 header). Only if the owner has told you in writing, before you start, that WP10 must stay strictly behaviour-neutral, build the neutral variant instead: (a) in 0028, delete the five lines `      AND h.recorded_at >= current_date - 14` / `- 37` / `- 104` / `- 194` / `- 379`, the "Return anchor tolerances" paragraph and change 2 of the header (say "Two changes" and renumber change 3 to 2), and restore the anchors' comment to "Not bounded in time, so an old last recording still anchors the long returns, as it always has."; (b) in the equivalence script generator (step 3), replace the body line of `pg_temp.anchor_tolerance` with `  SELECT NULL::integer`; (c) in step 11 delete `test_metrics_return_anchors_have_a_maximum_age` (8 tests instead of 9); (d) expect the 0028 metrics body hash `8e8f39b53d71592dae0bd60dde9bebbf` instead of `f3102b0f63c0fd2e95b891370b9ffc75`, and `returns_nulled_by_anchor_age = 0` everywhere; (e) in the first step 10c bullet replace the text from "and adds the return-anchor age rule" through "use the same rule)." with "The return-anchor age rule was deferred to WP25 at the owner's request.", and drop the "Open (WP18): the return-anchor age rule in the browser and fallback paths" bullet. WP25 then applies the rule with `CREATE OR REPLACE` and records it in the methodology change log. Either way, the PR body states which variant shipped (Commit and PR).
+- **Local Postgres.** `psql` and PostgreSQL 16 binaries exist on the dev container (`/usr/lib/postgresql/16/bin`). They are optional; the Verification section has a local equivalence proof if you want it.
+
+## Implementation steps
+
+Steps 1-4 (SQL) and step 11 (Python test) are independent of the TypeScript steps 5-10. Do step 3 after step 2 (the script is generated from 0028).
+
+### Step 1. `migrations/0027_bounded_volume_metrics.sql` (new, F148)
+
+Why: `day_freshness` takes `max(bucket_date)` over every daily and weekly sales bucket ever written (a sequential scan plus hash aggregate), and `latest_listings` is a `DISTINCT ON (product_id)` that visits every listings index entry. Both grow linearly with history: about 45 ms today (90 days of data), 420 ms at five years, and the server calls this RPC with the anon key, so years from now it would hit the 3 s anon timeout and blank the volume and listings columns for an hour. The fix is one `ORDER BY date DESC LIMIT 1` probe per active product on the indexes 0015 already created (`product_sales_history_product_id_bucket_date_idx`, `product_listings_history_product_id_snapshot_date_idx`). Measured by the F148 re-verification at five years of data: 22 ms instead of about 420 ms, output identical; replayed again on this spec's seed (stale products, NULL quantities, gaps): 0 of 306 rows differ, and 38 long-stale products still report `listings_snapshot_date`. No new index: a partial index on `(product_id, bucket_date DESC) WHERE granularity = 'day' AND quantity_sold IS NOT NULL` was measured and only cut 410 ms to 240 ms, because `DISTINCT ON` still walks every index entry (verifier correction on F148). Without that index the file also verifies cleanly with `verify_migration.py`.
+
+Every line of the function other than the two CTEs is `0022:32-198` verbatim. Exact content:
+
+```sql
+-- Migration: Index-driven reads in the volume metrics RPC (review finding
+-- F148).
+--
+-- get_market_product_volume_metrics (last defined in 0022) read two CTEs over
+-- the whole history with no date bound:
+--   * day_freshness: max(bucket_date) over every product_sales_history row
+--     with granularity = 'day' and a non-NULL quantity_sold, a sequential
+--     scan plus hash aggregate over every daily and weekly bucket ever
+--     written;
+--   * latest_listings: DISTINCT ON (product_id) over every
+--     product_listings_history row, which visits every index entry.
+-- Cost grows linearly with history (measured on 306 products: about 45 ms at
+-- 90 days of data, 420 ms at 5 years). The server calls it through the anon
+-- key, so a slow call would eventually hit the 3 s anon statement_timeout
+-- (0009) and blank the volume and listings columns for an hour.
+--
+-- Both CTEs become one "ORDER BY date DESC LIMIT 1" probe per active product
+-- on the existing (product_id, date DESC) indexes from 0015. No new index
+-- (a partial index was considered and measured: it does not make DISTINCT ON
+-- index-ordered per product). Measured at 5 years of data: 22 ms instead of
+-- about 420 ms, identical output.
+--
+--  * day_freshness also keeps a 63-day bound (the window sales_agg already
+--    reads). Its only use is "newest_day_bucket >= current_date - 3", so a
+--    product whose newest usable daily bucket is older than 63 days was
+--    already treated as stale, and a NULL fails that test the same way. The
+--    bound caps the probe for products whose daily data stopped.
+--  * latest_listings is NOT bounded in time: listings_snapshot_date is
+--    returned for stale products too ("so a caller can still say when data
+--    was last seen", 0022), and a date bound would turn it NULL for
+--    long-stale products. The inner LATERAL join keeps 0022's behaviour: a
+--    product with no snapshot has no latest_listings row, so the final LEFT
+--    JOIN reports NULLs, as before.
+--
+-- Every other line of the function is 0022 verbatim. Same RETURNS TABLE, so
+-- CREATE OR REPLACE keeps the ACL; the search_path pin is re-applied below.
+--
+-- Idempotent.
+--
+-- Verification:
+--   python verify_migration.py migrations/0027_bounded_volume_metrics.sql
+--   (run the printed SQL; expect one row, OK)
+--
+--   -- Both indexes the probes use exist (expect 2 rows):
+--   SELECT indexname FROM pg_indexes
+--    WHERE schemaname = 'public'
+--      AND indexname IN ('product_sales_history_product_id_bucket_date_idx',
+--                        'product_listings_history_product_id_snapshot_date_idx');
+
+CREATE OR REPLACE FUNCTION public.get_market_product_volume_metrics()
+RETURNS TABLE (
+  product_id bigint,
+  units_sold_7d bigint,
+  units_sold_30d bigint,
+  units_sold_prior_30d bigint,
+  transaction_count_30d bigint,
+  active_listings integer,
+  total_quantity_available integer,
+  lowest_listing_price double precision,
+  listings_snapshot_date date
+)
+LANGUAGE sql
+STABLE
+AS $$
+WITH active_products AS (
+  SELECT p.id
+  FROM public.products p
+  WHERE p.active = true
+),
+-- Freshness must come from buckets that carry a real quantity. A row whose
+-- quantity failed to parse means the day was visited but its value is
+-- unknown; letting its date advance newest_day_bucket would make a run of
+-- unusable trailing buckets look like fresh collection and let a stale
+-- partial sum publish as complete.
+--
+-- One backward probe per product of (product_id, bucket_date DESC)
+-- (product_sales_history_product_id_bucket_date_idx, 0015), bounded to the 63
+-- days sales_agg already reads (see the header). The only consumer is
+-- "newest_day_bucket >= current_date - 3", so a bucket older than that can
+-- never change the output, and NULL fails that test the same way.
+day_freshness AS (
+  SELECT
+    ap.id AS product_id,
+    (SELECT sh.bucket_date
+       FROM public.product_sales_history sh
+      WHERE sh.product_id = ap.id
+        AND sh.granularity = 'day'
+        AND sh.quantity_sold IS NOT NULL
+        AND sh.bucket_date >= current_date - 63
+      ORDER BY sh.bucket_date DESC
+      LIMIT 1) AS newest_day_bucket
+  FROM active_products ap
+),
+sales_agg AS (
+  SELECT
+    sh.product_id,
+
+    SUM(sh.quantity_sold) FILTER (
+      WHERE sh.granularity = 'day' AND sh.bucket_date >= current_date - 6
+    ) AS units_sold_7d,
+    COUNT(*) FILTER (
+      WHERE sh.granularity = 'day' AND sh.quantity_sold IS NOT NULL
+        AND sh.bucket_date >= current_date - 6
+    ) AS days_7d,
+    (MAX(sh.bucket_date) FILTER (
+       WHERE sh.granularity = 'day' AND sh.quantity_sold IS NOT NULL
+         AND sh.bucket_date >= current_date - 6
+     ) - MIN(sh.bucket_date) FILTER (
+       WHERE sh.granularity = 'day' AND sh.quantity_sold IS NOT NULL
+         AND sh.bucket_date >= current_date - 6
+     ) + 1) AS span_7d,
+
+    SUM(sh.quantity_sold) FILTER (
+      WHERE sh.granularity = 'day' AND sh.bucket_date >= current_date - 29
+    ) AS units_sold_30d,
+    COUNT(*) FILTER (
+      WHERE sh.granularity = 'day' AND sh.quantity_sold IS NOT NULL
+        AND sh.bucket_date >= current_date - 29
+    ) AS days_30d,
+    (MAX(sh.bucket_date) FILTER (
+       WHERE sh.granularity = 'day' AND sh.quantity_sold IS NOT NULL
+         AND sh.bucket_date >= current_date - 29
+     ) - MIN(sh.bucket_date) FILTER (
+       WHERE sh.granularity = 'day' AND sh.quantity_sold IS NOT NULL
+         AND sh.bucket_date >= current_date - 29
+     ) + 1) AS span_30d,
+
+    SUM(sh.quantity_sold) FILTER (
+      WHERE sh.granularity = 'day'
+        AND sh.bucket_date BETWEEN current_date - 59 AND current_date - 30
+    ) AS prior_30d_day,
+    COUNT(*) FILTER (
+      WHERE sh.granularity = 'day'
+        AND sh.quantity_sold IS NOT NULL
+        AND sh.bucket_date BETWEEN current_date - 59 AND current_date - 30
+    ) AS prior_day_coverage,
+    -- Span of the prior window's collected days, so a hole in the middle is
+    -- caught the same way it is for the 7d/30d windows.
+    (MAX(sh.bucket_date) FILTER (
+       WHERE sh.granularity = 'day' AND sh.quantity_sold IS NOT NULL
+         AND sh.bucket_date BETWEEN current_date - 59 AND current_date - 30
+     ) - MIN(sh.bucket_date) FILTER (
+       WHERE sh.granularity = 'day' AND sh.quantity_sold IS NOT NULL
+         AND sh.bucket_date BETWEEN current_date - 59 AND current_date - 30
+     ) + 1) AS prior_span,
+    ROUND(SUM(sh.quantity_sold) FILTER (
+      WHERE sh.granularity = 'week'
+        AND sh.quantity_sold IS NOT NULL
+        AND sh.bucket_date BETWEEN current_date - 63 AND current_date - 36
+    ) * 30.0 / 28)::bigint AS prior_30d_week,
+    -- The 28-day fallback range spans exactly four Monday buckets, and the
+    -- sum above is scaled 30/28 on that basis. With one missing -- an
+    -- interrupted annual backfill, a failed upsert, a null quantity --
+    -- scaling anyway understates the trend denominator and inflates the
+    -- trend, so the fallback is only usable when all four are present.
+    COUNT(*) FILTER (
+      WHERE sh.granularity = 'week'
+        AND sh.quantity_sold IS NOT NULL
+        AND sh.bucket_date BETWEEN current_date - 63 AND current_date - 36
+    ) AS prior_week_buckets,
+
+    SUM(sh.transaction_count) FILTER (
+      WHERE sh.granularity = 'day' AND sh.bucket_date >= current_date - 29
+    ) AS transaction_count_30d
+  FROM public.product_sales_history sh
+  JOIN active_products ap ON ap.id = sh.product_id
+  WHERE sh.bucket_date >= current_date - 63
+  GROUP BY sh.product_id
+)
+-- Newest snapshot per product: one backward probe of (product_id,
+-- snapshot_date DESC) (product_listings_history_product_id_snapshot_date_idx,
+-- 0015; UNIQUE (product_id, snapshot_date) makes it deterministic). Not
+-- bounded in time on purpose: listings_snapshot_date is returned for stale
+-- products too (see the header).
+, latest_listings AS (
+  SELECT
+    ap.id AS product_id,
+    l.active_listings,
+    l.total_quantity_available,
+    l.lowest_listing_price,
+    l.snapshot_date
+  FROM active_products ap
+  JOIN LATERAL (
+    SELECT lh.active_listings, lh.total_quantity_available,
+           lh.lowest_listing_price, lh.snapshot_date
+    FROM public.product_listings_history lh
+    WHERE lh.product_id = ap.id
+    ORDER BY lh.snapshot_date DESC
+    LIMIT 1
+  ) l ON true
+)
+SELECT
+  ap.id AS product_id,
+  -- 3 = DAILY_DATA_STALENESS_TOLERANCE_DAYS in frontend/app/lib/marketPulse.ts.
+  -- A window reports only when it is fresh AND its collected days are unbroken.
+  CASE WHEN df.newest_day_bucket >= current_date - 3
+        AND sa.days_7d > 0 AND sa.days_7d = sa.span_7d
+       THEN sa.units_sold_7d END AS units_sold_7d,
+  CASE WHEN df.newest_day_bucket >= current_date - 3
+        AND sa.days_30d > 0 AND sa.days_30d = sa.span_30d
+       THEN sa.units_sold_30d END AS units_sold_30d,
+  -- Exact beats larger, but only when the daily record is both complete
+  -- enough and unbroken; otherwise the scaled weekly estimate is the better
+  -- denominator. Mirrors getPriorUnitsSold30d() in marketPulse.ts, which gets
+  -- its daily figure from getUnitsSoldWindow() and so already returns null on
+  -- an interior hole.
+  CASE
+    WHEN sa.prior_day_coverage >= 28
+     AND sa.prior_day_coverage = sa.prior_span
+     AND sa.prior_30d_day IS NOT NULL
+      THEN sa.prior_30d_day
+    WHEN sa.prior_week_buckets = 4 THEN sa.prior_30d_week
+    ELSE sa.prior_30d_day
+  END AS units_sold_prior_30d,
+  -- Transaction count shares the 30d window, so it shares the 30d guard.
+  CASE WHEN df.newest_day_bucket >= current_date - 3
+        AND sa.days_30d > 0 AND sa.days_30d = sa.span_30d
+       THEN sa.transaction_count_30d END AS transaction_count_30d,
+  -- 3 = LISTINGS_STALENESS_TOLERANCE_DAYS in frontend/app/lib/marketPulse.ts.
+  -- Listings are snapshotted once per product per day; past that tolerance
+  -- the depth describes a market that no longer exists, so report nothing
+  -- rather than presenting it as current. listings_snapshot_date is left
+  -- populated either way so a caller can still say when data was last seen.
+  CASE WHEN ll.snapshot_date >= current_date - 3
+       THEN ll.active_listings END AS active_listings,
+  CASE WHEN ll.snapshot_date >= current_date - 3
+       THEN ll.total_quantity_available END AS total_quantity_available,
+  CASE WHEN ll.snapshot_date >= current_date - 3
+       THEN ll.lowest_listing_price END AS lowest_listing_price,
+  ll.snapshot_date AS listings_snapshot_date
+FROM active_products ap
+LEFT JOIN sales_agg sa ON sa.product_id = ap.id
+LEFT JOIN day_freshness df ON df.product_id = ap.id
+LEFT JOIN latest_listings ll ON ll.product_id = ap.id;
+$$;
+
+ALTER FUNCTION public.get_market_product_volume_metrics()
+  SET search_path = public;
+```
+
+### Step 2. `migrations/0028_bounded_market_metrics.sql` (new, F142 and the anchor-age rule)
+
+What changes versus the live definition of `get_market_product_metrics` (`20260506:14-197`), and nothing else:
+
+- (a) `daily_history` gains `WHERE h.recorded_at >= current_date - 366`.
+- (b) The six correlated `(SELECT dh.usd_price FROM daily_history dh WHERE dh.product_id = ap.id AND dh.day <= current_date - N ORDER BY dh.day DESC LIMIT 1)` subqueries (`20260506:51-98`) become six `LEFT JOIN LATERAL` probes on `product_price_history` with `recorded_at < current_date - (N - 1)`.
+- (c) Anchor-age rule (Track 2, a deliberate output change): the 7d, 30d, 90d, 180d and 365d probes also require `recorded_at >= current_date - (N + tolerance)`, tolerance 7 for 7d and 30d and 14 for 90d, 180d and 365d: `- 14`, `- 37`, `- 104`, `- 194`, `- 379`. The 1d probe gets no lower bound.
+- Everything from `changes_90` to the final `SELECT` is `20260506:101-196` verbatim. Same `RETURNS TABLE`, so `CREATE OR REPLACE` keeps the ACL; it resets `proconfig`, so `ALTER FUNCTION ... SET search_path = public` follows (checked on PG16: `proconfig` is empty after a bare replace).
+- 0028 does not touch `get_market_product_volume_metrics` (that is 0027).
+
+The tolerances are declared by name in the migration header: `RETURN_ANCHOR_TOLERANCE_SHORT_DAYS = 7` (7D, 1M) and `RETURN_ANCHOR_TOLERANCE_LONG_DAYS = 14` (3M, 6M, 1Y). A `LANGUAGE sql` function cannot hold constants, so each bound is written as the literal `N + tolerance`. WP25 uses the same rule (`RETURN_ANCHOR_WINDOWS` in `marketStats.ts`, the `VALUES` list in `refresh_product_daily_stats`, `/methodology#returns`), and its Before you start greps 0028 for `recorded_at >= current_date - (14|37|104|379)` to learn that this package shipped the rule. Write the bounds exactly as shown, one per line, so that grep and the step 11 test find them.
+
+Why the output equals the old output except for the intended NULLs (proved on PG16 with 306 products, 66k price rows including midnight and 23:59:59.999 boundary rows, NULL `recorded_at`, gaps, stale and never-priced products, using the step 3 script: 0 of 298 metric rows differ from "old output with the anchor-age rule applied"; the rule blanked 70 returns on 49 products of that seed; 0 of 306 summary rows differ in any column other than the five bounded returns, and no return changed to a different non-NULL value; 0 of 30 set-analytics rows differ):
+
+- `product_price_history_product_day_uidx` (`0003:48-49`) allows one row per product per `recorded_at::date`, and `daily_history` keeps the newest row per date anyway. So "newest daily row with `day <= current_date - N`" is "newest raw row with `recorded_at::date <= current_date - N`", which for `timestamp without time zone` is `recorded_at < current_date - N + 1`.
+- Anchor-age rule: if any row of the product falls between `current_date - N - tolerance` and the target date, the newest row below the upper bound lies in that range, so it is the old anchor and the return is unchanged. If none does, the probe finds nothing and the return is NULL. No other value can change. On the seed every blanked product was already stale, so 0023 had withheld those returns in the summaries anyway; in production the owner's equivalence run (Owner actions step 3) reports how many fresh returns the rule blanks.
+- Every other consumer of `daily_history` (`changes_90`, `drawdown_365_source`, `trend_90_source`, `trend_365_source`) filters `day >= current_date - 90` or `- 365` in its own `WHERE`, which runs before its window functions, so rows older than 366 days never reached them.
+
+What does not get the rule in this PR: the browser and server fallbacks that compute returns from price history with `getReturnPercent` (`MarketView.tsx:296-300`, which recomputes any NULL return of a priced product from its history; `fetchProductsWithFallbackReturns` and `fetchSetAnalyticsFallback` in `serverMarketData.ts`). After 0028, a return the RPC blanks can therefore still appear on `/market` once that product's history is loaded, measured over the long span. Do not edit those files here: WP17 moves the MarketView row code and WP18 replaces every `getReturnPercent` with one shared function in `app/lib/marketMath.ts`. Step 10c records the follow-up for WP18.
+
+Measured on the 66k-row replica: `get_market_product_metrics` 17.0 s to 0.13 s; `get_market_product_summaries` and `get_set_analytics` 17 s to about 0.14 s each. The F142 re-verification measured 37-39 s to 0.32-0.47 s on 151k rows.
+
+Exact content (the in-body comments are optional, but keep every SQL token identical: acceptance checks the body hash):
+
+```sql
+-- Migration: Bound the market metrics RPC and the age of its return anchors
+-- (review finding F142; return-anchor rule from
+-- audits/remediation/01-PRODUCT-DIRECTION.md section 9 item 5).
+--
+-- Return anchor tolerances: how many days before its target date
+-- (current_date - N) a return's lookback price may be recorded. Older than
+-- that, the return is NULL. WP25's product_daily_stats, its
+-- RETURN_ANCHOR_WINDOWS constant and /methodology#returns use the same rule:
+-- change all of them together.
+--   RETURN_ANCHOR_TOLERANCE_SHORT_DAYS = 7    return_7d, return_30d
+--   RETURN_ANCHOR_TOLERANCE_LONG_DAYS  = 14   return_90d, return_180d,
+--                                             return_365d
+-- return_1d has no tolerance here (unchanged).
+--
+-- get_market_product_metrics (last defined in
+-- 20260506_market_performance_functions.sql) materialised every
+-- product_price_history row ever written into the daily_history CTE, then ran
+-- six correlated "latest row on or before day N" subqueries per active product
+-- against that unindexed CTE. Cost grew with products x history rows. In
+-- production get_market_product_summaries averaged 734-903 ms per call and hit
+-- the 3 s anon statement_timeout (0009) about ten times a day. It runs once
+-- per server cache entry per hour (get_market_product_summaries and
+-- get_set_analytics both call it), on every uncached browser call from
+-- /compare, /box-calculator and /portfolio, and whenever anyone with the
+-- public key calls those RPCs directly.
+--
+-- Three changes:
+--
+--  1. The six anchors read product_price_history directly with LATERAL
+--     "ORDER BY recorded_at DESC LIMIT 1" probes on the
+--     (product_id, recorded_at DESC) index (idx_price_history_product_recorded,
+--     0023). daily_history keeps one row per product per UTC date, so "the
+--     newest daily row with day <= current_date - N" is exactly "the newest
+--     raw row with recorded_at < current_date - N + 1": 1d uses
+--     < current_date, 7d < current_date - 6, 30d < current_date - 29,
+--     90d < current_date - 89, 180d < current_date - 179 and
+--     365d < current_date - 364.
+--
+--  2. Anchor age (a deliberate behaviour change). Each anchor except 1d must
+--     also be recorded on or after target date - tolerance:
+--     7d  >= current_date - 14   (7 + 7)
+--     30d >= current_date - 37   (30 + 7)
+--     90d >= current_date - 104  (90 + 14)
+--     180d >= current_date - 194 (180 + 14)
+--     365d >= current_date - 379 (365 + 14)
+--     Before this, a product with a 3-month hole in its history could report
+--     a 30D return measured over 120 days. When a row falls inside the range
+--     it is the same row the old function used, so that return is unchanged;
+--     when none does, the return is now NULL (shown as "--").
+--
+--  3. daily_history now only feeds the 90/365-day window CTEs (volatility,
+--     drawdown, trend), each of which already filters day >= current_date - 90
+--     or - 365 BEFORE its window functions run. Bounding daily_history to
+--     recorded_at >= current_date - 366 therefore removes only rows those CTEs
+--     discarded anyway.
+--
+-- The RETURNS TABLE shape is identical, so CREATE OR REPLACE keeps the ACL
+-- (Supabase bootstrap: PUBLIC, anon, authenticated, service_role). It does
+-- reset proconfig, so the search_path pin from 0007/0009 is re-applied below.
+-- The 0023 freshness gates live in get_market_product_summaries and
+-- get_set_analytics, which are NOT touched: they keep gating these returns on
+-- the newest recorded price exactly as before.
+--
+-- Idempotent.
+--
+-- Verification:
+--   python verify_migration.py migrations/0028_bounded_market_metrics.sql
+--   (run the printed SQL; expect one row, OK)
+--
+--   -- Old vs new output on the same snapshot, with the anchor-age rule
+--   -- applied to the old output (expect old_vs_new_missing = 0 and
+--   -- old_vs_new_differing = 0):
+--   -- audits/remediation/sql/WP10-market-metrics-equivalence.sql
+--
+--   -- Cost (expect Execution Time well under 300 ms; the old body took
+--   -- seconds on a year of history):
+--   EXPLAIN (ANALYZE, BUFFERS) SELECT * FROM public.get_market_product_metrics();
+
+CREATE OR REPLACE FUNCTION public.get_market_product_metrics()
+RETURNS TABLE (
+  product_id bigint,
+  current_price double precision,
+  return_1d double precision,
+  return_7d double precision,
+  return_30d double precision,
+  return_90d double precision,
+  return_180d double precision,
+  return_365d double precision,
+  volatility_90d double precision,
+  max_drawdown_365d double precision,
+  trend_90d double precision,
+  trend_365d double precision
+)
+LANGUAGE sql
+STABLE
+AS $$
+WITH active_products AS (
+  SELECT p.id, p.usd_price
+  FROM public.products p
+  WHERE p.active = true
+    AND p.usd_price IS NOT NULL
+),
+-- One row per product per UTC date (the newest of that date), last 366 days
+-- only. Feeds the 90/365-day window CTEs below, which filter to
+-- day >= current_date - 90 / - 365 before their window functions run.
+daily_history AS (
+  SELECT DISTINCT ON (h.product_id, (h.recorded_at::date))
+    h.product_id,
+    h.recorded_at::date AS day,
+    h.usd_price
+  FROM public.product_price_history h
+  JOIN active_products ap ON ap.id = h.product_id
+  WHERE h.recorded_at >= current_date - 366
+  ORDER BY h.product_id, (h.recorded_at::date), h.recorded_at DESC
+),
+-- Price N days ago = newest row recorded on or before UTC date
+-- current_date - N, i.e. recorded_at < current_date - N + 1, and recorded no
+-- earlier than current_date - N - tolerance (7 days for 7d and 30d, 14 days
+-- for 90d, 180d and 365d; see the header). No row in that range = NULL
+-- return. Each LATERAL is one backward probe of (product_id, recorded_at DESC).
+-- The 1d anchor has no lower bound.
+anchors AS (
+  SELECT
+    ap.id AS product_id,
+    ap.usd_price AS current_price,
+    a1.usd_price AS price_1d,
+    a7.usd_price AS price_7d,
+    a30.usd_price AS price_30d,
+    a90.usd_price AS price_90d,
+    a180.usd_price AS price_180d,
+    a365.usd_price AS price_365d
+  FROM active_products ap
+  LEFT JOIN LATERAL (
+    SELECT h.usd_price FROM public.product_price_history h
+    WHERE h.product_id = ap.id AND h.recorded_at < current_date
+    ORDER BY h.recorded_at DESC LIMIT 1
+  ) a1 ON true
+  LEFT JOIN LATERAL (
+    SELECT h.usd_price FROM public.product_price_history h
+    WHERE h.product_id = ap.id AND h.recorded_at < current_date - 6
+      AND h.recorded_at >= current_date - 14
+    ORDER BY h.recorded_at DESC LIMIT 1
+  ) a7 ON true
+  LEFT JOIN LATERAL (
+    SELECT h.usd_price FROM public.product_price_history h
+    WHERE h.product_id = ap.id AND h.recorded_at < current_date - 29
+      AND h.recorded_at >= current_date - 37
+    ORDER BY h.recorded_at DESC LIMIT 1
+  ) a30 ON true
+  LEFT JOIN LATERAL (
+    SELECT h.usd_price FROM public.product_price_history h
+    WHERE h.product_id = ap.id AND h.recorded_at < current_date - 89
+      AND h.recorded_at >= current_date - 104
+    ORDER BY h.recorded_at DESC LIMIT 1
+  ) a90 ON true
+  LEFT JOIN LATERAL (
+    SELECT h.usd_price FROM public.product_price_history h
+    WHERE h.product_id = ap.id AND h.recorded_at < current_date - 179
+      AND h.recorded_at >= current_date - 194
+    ORDER BY h.recorded_at DESC LIMIT 1
+  ) a180 ON true
+  LEFT JOIN LATERAL (
+    SELECT h.usd_price FROM public.product_price_history h
+    WHERE h.product_id = ap.id AND h.recorded_at < current_date - 364
+      AND h.recorded_at >= current_date - 379
+    ORDER BY h.recorded_at DESC LIMIT 1
+  ) a365 ON true
+),
+changes_90 AS (
+  SELECT
+    dh.product_id,
+    CASE
+      WHEN lag(dh.usd_price) OVER w > 0 THEN
+        ((dh.usd_price - lag(dh.usd_price) OVER w) / lag(dh.usd_price) OVER w) * 100
+      ELSE NULL
+    END AS pct_change
+  FROM daily_history dh
+  WHERE dh.day >= current_date - 90
+  WINDOW w AS (PARTITION BY dh.product_id ORDER BY dh.day)
+),
+volatility_90 AS (
+  SELECT product_id, stddev_pop(pct_change) AS volatility_90d
+  FROM changes_90
+  WHERE pct_change IS NOT NULL
+  GROUP BY product_id
+),
+drawdown_365_source AS (
+  SELECT
+    dh.product_id,
+    dh.usd_price,
+    max(dh.usd_price) OVER (
+      PARTITION BY dh.product_id
+      ORDER BY dh.day
+      ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+    ) AS running_peak
+  FROM daily_history dh
+  WHERE dh.day >= current_date - 365
+),
+drawdown_365 AS (
+  SELECT
+    product_id,
+    abs(min(
+      CASE
+        WHEN running_peak > 0 THEN ((usd_price - running_peak) / running_peak) * 100
+        ELSE NULL
+      END
+    )) AS max_drawdown_365d
+  FROM drawdown_365_source
+  GROUP BY product_id
+),
+trend_90_source AS (
+  SELECT
+    dh.product_id,
+    row_number() OVER (PARTITION BY dh.product_id ORDER BY dh.day) - 1 AS x,
+    dh.usd_price AS y
+  FROM daily_history dh
+  WHERE dh.day >= current_date - 90
+),
+trend_90 AS (
+  SELECT
+    product_id,
+    CASE
+      WHEN avg(y) = 0 THEN NULL
+      ELSE (regr_slope(y, x) / avg(y)) * 100
+    END AS trend_90d
+  FROM trend_90_source
+  GROUP BY product_id
+),
+trend_365_source AS (
+  SELECT
+    dh.product_id,
+    row_number() OVER (PARTITION BY dh.product_id ORDER BY dh.day) - 1 AS x,
+    dh.usd_price AS y
+  FROM daily_history dh
+  WHERE dh.day >= current_date - 365
+),
+trend_365 AS (
+  SELECT
+    product_id,
+    CASE
+      WHEN avg(y) = 0 THEN NULL
+      ELSE (regr_slope(y, x) / avg(y)) * 100
+    END AS trend_365d
+  FROM trend_365_source
+  GROUP BY product_id
+)
+SELECT
+  anchors.product_id,
+  anchors.current_price,
+  CASE WHEN anchors.price_1d > 0 THEN ((anchors.current_price - anchors.price_1d) / anchors.price_1d) * 100 END AS return_1d,
+  CASE WHEN anchors.price_7d > 0 THEN ((anchors.current_price - anchors.price_7d) / anchors.price_7d) * 100 END AS return_7d,
+  CASE WHEN anchors.price_30d > 0 THEN ((anchors.current_price - anchors.price_30d) / anchors.price_30d) * 100 END AS return_30d,
+  CASE WHEN anchors.price_90d > 0 THEN ((anchors.current_price - anchors.price_90d) / anchors.price_90d) * 100 END AS return_90d,
+  CASE WHEN anchors.price_180d > 0 THEN ((anchors.current_price - anchors.price_180d) / anchors.price_180d) * 100 END AS return_180d,
+  CASE WHEN anchors.price_365d > 0 THEN ((anchors.current_price - anchors.price_365d) / anchors.price_365d) * 100 END AS return_365d,
+  volatility_90.volatility_90d,
+  drawdown_365.max_drawdown_365d,
+  trend_90.trend_90d,
+  trend_365.trend_365d
+FROM anchors
+LEFT JOIN volatility_90 ON volatility_90.product_id = anchors.product_id
+LEFT JOIN drawdown_365 ON drawdown_365.product_id = anchors.product_id
+LEFT JOIN trend_90 ON trend_90.product_id = anchors.product_id
+LEFT JOIN trend_365 ON trend_365.product_id = anchors.product_id;
+$$;
+
+ALTER FUNCTION public.get_market_product_metrics()
+  SET search_path = public;
+```
+
+### Step 3. `audits/remediation/sql/WP10-market-metrics-equivalence.sql` (new, owner check for F142 and the anchor-age rule)
+
+A script the owner runs in the Supabase SQL editor. It changes nothing in the `public` schema: it defines session-local copies of the OLD body (`20260506:32-196`) and the NEW body (from 0028) in `pg_temp` (they disappear when the connection closes) and compares old, new and the live `public.get_market_product_metrics()` on one snapshot, with a 1e-9 relative float tolerance. "New" must equal "old with the anchor-age rule applied": `pg_temp.bounded` keeps an old return only when the product has a price row between `current_date - N - tolerance` and the target date, and `pg_temp.anchor_tolerance` holds the tolerances (7 for 7d and 30d, 14 for 90d, 180d and 365d, none for 1d). The rule is written there independently of 0028 (an `EXISTS` test, not a copy of the probes), so a wrong literal in 0028 shows up as differing rows. It deliberately has no `BEGIN ... ROLLBACK` wrapper: the Supabase SQL editor shows only the LAST statement's result, so a trailing `ROLLBACK` would hide the result row (WP01 records the same rule). It uses `CREATE OR REPLACE FUNCTION pg_temp....` so a second run on a pooled connection that still holds the temp functions does not fail with "already exists". Generate it (do not hand-copy the bodies) from the repo root:
+
+```bash
+mkdir -p audits/remediation/sql
+OUT=audits/remediation/sql/WP10-market-metrics-equivalence.sql
+RT='RETURNS TABLE (
+  product_id bigint,
+  current_price double precision,
+  return_1d double precision,
+  return_7d double precision,
+  return_30d double precision,
+  return_90d double precision,
+  return_180d double precision,
+  return_365d double precision,
+  volatility_90d double precision,
+  max_drawdown_365d double precision,
+  trend_90d double precision,
+  trend_365d double precision
+)'
+{
+cat <<'EOF'
+-- WP10 equivalence check for get_market_product_metrics (review finding F142).
+--
+-- Changes nothing in public. Creates five session-local functions in
+-- pg_temp (dropped automatically when the connection closes) and compares,
+-- on one snapshot:
+--   old  = the body from migrations/20260506_market_performance_functions.sql
+--   new  = the body from migrations/0028_bounded_market_metrics.sql
+--   live = public.get_market_product_metrics() as deployed right now
+-- "new" must equal "old with the anchor-age rule applied": every column
+-- identical, except that return_7d .. return_365d become NULL when no price
+-- row was recorded between (target date - tolerance) and the target date
+-- (current_date - N). pg_temp.anchor_tolerance holds the tolerances.
+-- Floats are compared with a relative tolerance of 1e-9, so a different
+-- summation order in a parallel aggregate cannot report a false difference.
+--
+-- Run the WHOLE file in the Supabase SQL editor (select nothing first; the
+-- editor runs only the selection when there is one) or with psql -f. The
+-- editor shows only the last statement's result, which is why the final
+-- SELECT is the last statement and there is no BEGIN/ROLLBACK. Do not run it
+-- through a read-only connection (for example Supabase MCP in read-only
+-- mode): CREATE FUNCTION pg_temp... fails there.
+-- Expected result, one row:
+--   old_vs_new_missing = 0 and old_vs_new_differing = 0, always;
+--   returns_nulled_by_anchor_age and products_with_nulled_return: how many
+--   returns (and products) the anchor-age rule blanks today; record them;
+--   live_vs_new_differing = products_with_nulled_return before 0028 is
+--   applied (live is still the old body) and 0 after it.
+-- Every anchor is relative to current_date, so old, new and live are all
+-- computed inside this one statement on the same day.
+
+CREATE OR REPLACE FUNCTION pg_temp.near(a double precision, b double precision)
+RETURNS boolean LANGUAGE sql IMMUTABLE AS $n$
+  SELECT (a IS NULL AND b IS NULL)
+      OR (a IS NOT NULL AND b IS NOT NULL
+          AND abs(a - b) <= 1e-9 * greatest(1, abs(a), abs(b)))
+$n$;
+
+-- Days a return's anchor may be recorded before its target date. Must match
+-- RETURN_ANCHOR_TOLERANCE_SHORT_DAYS (7) and RETURN_ANCHOR_TOLERANCE_LONG_DAYS
+-- (14) in the header of migrations/0028_bounded_market_metrics.sql. NULL
+-- means "no bound" (return_1d).
+CREATE OR REPLACE FUNCTION pg_temp.anchor_tolerance(n integer)
+RETURNS integer LANGUAGE sql IMMUTABLE AS $t$
+  SELECT CASE WHEN n IN (7, 30) THEN 7 WHEN n IN (90, 180, 365) THEN 14 END
+$t$;
+
+-- The old return with the anchor-age rule applied: kept when some price row
+-- of the product was recorded on a UTC date from (current_date - n - tolerance)
+-- through current_date - n, NULL otherwise. Inside that range the newest row
+-- is the old anchor itself, so a kept value cannot change.
+CREATE OR REPLACE FUNCTION pg_temp.bounded(ret double precision, pid bigint, n integer)
+RETURNS double precision LANGUAGE sql STABLE AS $b$
+  SELECT CASE
+    WHEN pg_temp.anchor_tolerance(n) IS NULL THEN ret
+    WHEN EXISTS (
+      SELECT 1 FROM public.product_price_history h
+       WHERE h.product_id = pid
+         AND h.recorded_at < current_date - n + 1
+         AND h.recorded_at >= current_date - n - pg_temp.anchor_tolerance(n))
+      THEN ret
+  END
+$b$;
+
+CREATE OR REPLACE FUNCTION pg_temp.metrics_old()
+EOF
+echo "$RT"
+echo 'LANGUAGE sql STABLE AS $old$'
+sed -n 32,196p migrations/20260506_market_performance_functions.sql
+echo '$old$;'
+echo
+echo 'CREATE OR REPLACE FUNCTION pg_temp.metrics_new()'
+echo "$RT"
+echo 'LANGUAGE sql STABLE AS $new$'
+awk '/^CREATE OR REPLACE FUNCTION public.get_market_product_metrics/{f=1}
+     f&&/^WITH active_products/{b=1} b{print} b&&/^\$\$;/{exit}' \
+  migrations/0028_bounded_market_metrics.sql | sed '$d'
+echo '$new$;'
+cat <<'EOF'
+
+WITH o AS (SELECT * FROM pg_temp.metrics_old()),
+     e AS (
+       -- expected = old with the anchor-age rule applied
+       SELECT o.product_id, o.current_price, o.return_1d,
+              pg_temp.bounded(o.return_7d, o.product_id, 7) AS return_7d,
+              pg_temp.bounded(o.return_30d, o.product_id, 30) AS return_30d,
+              pg_temp.bounded(o.return_90d, o.product_id, 90) AS return_90d,
+              pg_temp.bounded(o.return_180d, o.product_id, 180) AS return_180d,
+              pg_temp.bounded(o.return_365d, o.product_id, 365) AS return_365d,
+              o.volatility_90d, o.max_drawdown_365d, o.trend_90d, o.trend_365d,
+              num_nonnulls(o.return_7d, o.return_30d, o.return_90d,
+                           o.return_180d, o.return_365d) AS old_returns
+       FROM o
+     ),
+     n AS (SELECT * FROM pg_temp.metrics_new()),
+     l AS (SELECT * FROM public.get_market_product_metrics()),
+     diff AS (
+       SELECT
+         e.product_id AS e_id, n.product_id AS n_id, l.product_id AS l_id,
+         e.old_returns - num_nonnulls(e.return_7d, e.return_30d, e.return_90d,
+                                      e.return_180d, e.return_365d) AS nulled,
+         NOT (pg_temp.near(e.current_price, n.current_price)
+          AND pg_temp.near(e.return_1d, n.return_1d)
+          AND pg_temp.near(e.return_7d, n.return_7d)
+          AND pg_temp.near(e.return_30d, n.return_30d)
+          AND pg_temp.near(e.return_90d, n.return_90d)
+          AND pg_temp.near(e.return_180d, n.return_180d)
+          AND pg_temp.near(e.return_365d, n.return_365d)
+          AND pg_temp.near(e.volatility_90d, n.volatility_90d)
+          AND pg_temp.near(e.max_drawdown_365d, n.max_drawdown_365d)
+          AND pg_temp.near(e.trend_90d, n.trend_90d)
+          AND pg_temp.near(e.trend_365d, n.trend_365d)) AS old_new_differs,
+         NOT (pg_temp.near(l.current_price, n.current_price)
+          AND pg_temp.near(l.return_1d, n.return_1d)
+          AND pg_temp.near(l.return_7d, n.return_7d)
+          AND pg_temp.near(l.return_30d, n.return_30d)
+          AND pg_temp.near(l.return_90d, n.return_90d)
+          AND pg_temp.near(l.return_180d, n.return_180d)
+          AND pg_temp.near(l.return_365d, n.return_365d)
+          AND pg_temp.near(l.volatility_90d, n.volatility_90d)
+          AND pg_temp.near(l.max_drawdown_365d, n.max_drawdown_365d)
+          AND pg_temp.near(l.trend_90d, n.trend_90d)
+          AND pg_temp.near(l.trend_365d, n.trend_365d)) AS live_new_differs
+       FROM e
+       FULL JOIN n ON n.product_id = e.product_id
+       FULL JOIN l ON l.product_id = coalesce(e.product_id, n.product_id)
+     )
+SELECT
+  count(*) AS products,
+  count(*) FILTER (WHERE e_id IS NULL OR n_id IS NULL) AS old_vs_new_missing,
+  count(*) FILTER (WHERE e_id IS NOT NULL AND n_id IS NOT NULL
+                     AND old_new_differs) AS old_vs_new_differing,
+  coalesce(sum(nulled), 0) AS returns_nulled_by_anchor_age,
+  count(*) FILTER (WHERE nulled > 0) AS products_with_nulled_return,
+  count(*) FILTER (WHERE l_id IS NULL OR n_id IS NULL
+                     OR live_new_differs) AS live_vs_new_differing,
+  current_date AS compared_on
+FROM diff;
+EOF
+} > "$OUT"
+```
+
+Sanity checks after generating: `sed -n 32p migrations/20260506_market_performance_functions.sql` prints `WITH active_products AS (` and `sed -n 196p` prints `LEFT JOIN trend_365 ON trend_365.product_id = anchors.product_id;` (that file is frozen, so these line numbers are stable). `grep -c "LEFT JOIN LATERAL" "$OUT"` prints 6. `grep -cE "AND h.recorded_at >= current_date - [0-9]+$" "$OUT"` prints 5 (0 in the neutral variant). `grep -c '^\$old\$;$\|^\$new\$;$' "$OUT"` prints 2. `grep -c "^CREATE OR REPLACE FUNCTION pg_temp\." "$OUT"` prints 5. `grep -c "BEGIN;\|ROLLBACK;" "$OUT"` prints 0. `tail -1 "$OUT"` prints `FROM diff;`.
+
+On the local replica (Verification, optional) the script returns, before 0028 is applied: `products 298 | old_vs_new_missing 0 | old_vs_new_differing 0 | returns_nulled_by_anchor_age 70 | products_with_nulled_return 49 | live_vs_new_differing 49`, and after it the same with `live_vs_new_differing 0`. It does detect differences: deleting the five anchor-age lines from the new body (without changing `pg_temp.anchor_tolerance`) makes `old_vs_new_differing` 49. The neutral variant (no anchor-age lines, `anchor_tolerance` returning NULL) returns `298 | 0 | 0 | 0 | 0 | 0`.
+
+### Step 4. `migrations/0029_portfolio_history_rpc.sql` (new, F145)
+
+Why this shape:
+
+- One row per UTC day, `current_date - p_days` through `current_date` (`p_days + 1` rows), the same series WP05's client loop produces (`startMs = utcMidnightMs() - days * DAY_MS` through `endMs`). An integer `generate_series(0, n)` is used rather than a date/interval series, whose argument types resolve to `timestamptz` and would depend on the session time zone.
+- The rules are the browser fold's rules exactly (`portfolio.ts:643-735` pre-WP05): quantity is the cumulative sum of `portfolio_holdings.quantity` with `purchase_date <= day` (lots are not read; the app never writes `portfolio_lots`, WP05 "Before you start" command 3); the price is the newest history row with `recorded_at::date <= day`; it counts only if `recorded_at::date >= day - 14` (`isPriceFresh` with `PRICE_STALENESS_TOLERANCE_DAYS = 14`, `marketPulse.ts:122-139, :284`; the fold calls it with a noon-UTC reference for each day, `portfolio.ts:708`, and `isPriceFresh` compares UTC calendar dates, so the SQL `recorded_at >= day - 14` on a `timestamp without time zone` is the same test; the day basis is UTC throughout, as WP05 fixed for F111); `value` is NULL when nothing held is priced. Validated on PG16 against a reference implementation of the browser fold: 0 differing points for 0, 7, 30 and 365 days on a 23-product portfolio with multiple lots, stale and never-priced products and same-day purchases, and on a 300-product portfolio.
+- SECURITY INVOKER: `holdings_self` (`0014:65-74`) limits the holdings CTE to the caller's rows, so another user's portfolio id yields zero rows (verified). EXECUTE is revoked from PUBLIC and anon (a new function in `public` gets PUBLIC EXECUTE plus Supabase's default grants to anon, authenticated and service_role).
+- Cost: 28 ms for 23 products x 366 days, 277 ms for 300 products x 366 days, against the 8 s authenticated timeout (`0009:23`). `p_days` is clamped to 0..3650.
+
+Exact content:
+
+```sql
+-- Migration: Portfolio value history computed in the database (review
+-- finding F145).
+--
+-- The portfolio chart used to download every daily price row for every held
+-- product to the browser (up to 300 serial 1000-row pages ordered by
+-- (recorded_at, id), which the (product_id, recorded_at DESC) index cannot
+-- serve) and fold them into one number per day in
+-- frontend/app/lib/portfolio.ts. A 1Y chart for 23 holdings moved about 8,200
+-- rows in 9 round trips to draw 366 points.
+--
+-- get_portfolio_history returns those points directly, one row per UTC day
+-- from current_date - p_days through current_date (p_days + 1 rows), with the
+-- same rules the browser fold applied:
+--   * held quantity on day d = sum(quantity) of the portfolio's holdings with
+--     purchase_date <= d; a product is "held" when that sum is > 0.
+--     portfolio_lots is not read: the app never writes it and the browser fold
+--     never used it.
+--   * price on day d = the newest product_price_history row recorded on or
+--     before UTC date d (recorded_at < d + 1), one backward probe of
+--     (product_id, recorded_at DESC).
+--   * that price counts only if it was recorded on or after d - 14.
+--     14 = PRICE_STALENESS_TOLERANCE_DAYS in frontend/app/lib/marketPulse.ts,
+--     the same tolerance 0023 applies to the catalog price. Keep them in sync.
+--   * value = sum(quantity * price) over the priced products, NULL when no held
+--     product is priced that day (zero would read as a worthless portfolio).
+--   * priced_products / held_products = how much of the portfolio the value
+--     covers.
+-- A portfolio with no holdings, or one the caller cannot see, returns no rows.
+--
+-- SECURITY INVOKER on purpose: the holdings_self RLS policy (0014) limits
+-- portfolio_holdings to the caller's own rows, so passing someone else's
+-- portfolio id yields zero rows. Do not make this SECURITY DEFINER.
+-- anon has no business calling it (0013 revoked anon's table grants on
+-- portfolio_holdings anyway), so EXECUTE is revoked from PUBLIC and anon.
+-- p_days is clamped to 0..3650 so a caller cannot ask for an unbounded series.
+--
+-- Idempotent.
+--
+-- Verification:
+--   python verify_migration.py migrations/0029_portfolio_history_rpc.sql
+--   (run the printed SQL; expect every row OK)
+--
+--   -- As a signed-in user through the app: GET /api/portfolio/history?days=30
+--   -- returns 31 points. In the SQL editor (runs as postgres, bypasses RLS):
+--   SELECT * FROM public.get_portfolio_history(<portfolio id>, 30);
+--   -- expect 31 rows, point_date ascending, ending on current_date.
+
+CREATE OR REPLACE FUNCTION public.get_portfolio_history(
+  p_portfolio_id bigint,
+  p_days integer
+)
+RETURNS TABLE (
+  point_date date,
+  value double precision,
+  priced_products integer,
+  held_products integer
+)
+LANGUAGE sql
+STABLE
+SECURITY INVOKER
+AS $$
+WITH held AS (
+  -- RLS (holdings_self) filters this to the caller's own rows.
+  SELECT h.product_id, h.purchase_date, h.quantity
+  FROM public.portfolio_holdings h
+  WHERE h.portfolio_id = p_portfolio_id
+),
+days AS (
+  SELECT current_date - s.i AS day
+  FROM generate_series(0, LEAST(GREATEST(coalesce(p_days, 0), 0), 3650)) AS s(i)
+  WHERE EXISTS (SELECT 1 FROM held)
+),
+positions AS (
+  -- Cumulative quantity per product per day, by purchase_date.
+  SELECT d.day, held.product_id, sum(held.quantity) AS quantity
+  FROM days d
+  JOIN held ON held.purchase_date <= d.day
+  GROUP BY d.day, held.product_id
+),
+valued AS (
+  SELECT
+    pos.day,
+    pos.quantity,
+    CASE WHEN lp.recorded_at >= pos.day - 14 THEN lp.usd_price END AS usd_price
+  FROM positions pos
+  LEFT JOIN LATERAL (
+    SELECT h.usd_price, h.recorded_at
+    FROM public.product_price_history h
+    WHERE h.product_id = pos.product_id
+      AND h.recorded_at < pos.day + 1
+    ORDER BY h.recorded_at DESC
+    LIMIT 1
+  ) lp ON true
+  WHERE pos.quantity > 0
+)
+SELECT
+  d.day AS point_date,
+  sum(v.quantity * v.usd_price) AS value,
+  count(v.usd_price)::integer AS priced_products,
+  count(v.quantity)::integer AS held_products
+FROM days d
+LEFT JOIN valued v ON v.day = d.day
+GROUP BY d.day
+ORDER BY d.day;
+$$;
+
+ALTER FUNCTION public.get_portfolio_history(bigint, integer)
+  SET search_path = public;
+
+REVOKE EXECUTE ON FUNCTION public.get_portfolio_history(bigint, integer)
+  FROM PUBLIC, anon;
+
+GRANT EXECUTE ON FUNCTION public.get_portfolio_history(bigint, integer)
+  TO authenticated, service_role;
+```
+
+### Step 5. `frontend/app/lib/portfolioInput.ts`: parse the `days` query parameter
+
+Append at the end of the file (WP05 defines `Parsed<T>` in this file):
+
+```ts
+/**
+ * Longest chart window GET /api/portfolio/history serves. The UI asks for at
+ * most 365 (TIMEFRAME_DAYS in usePortfolioData.ts); one spare day. The RPC
+ * clamps independently (0..3650, migration 0029).
+ */
+export const HISTORY_DAYS_MAX = 366;
+
+/** The `days` query parameter: a whole number 1..HISTORY_DAYS_MAX, digits only. */
+export function parseHistoryDays(raw: string | null): Parsed<number> {
+  if (raw === null || !/^\d{1,4}$/.test(raw)) {
+    return { ok: false, error: "Invalid days" };
+  }
+  const days = Number(raw);
+  if (days < 1 || days > HISTORY_DAYS_MAX) {
+    return { ok: false, error: "Invalid days" };
+  }
+  return { ok: true, value: days };
+}
+```
+
+Why here and not in the route file: Next.js rejects unknown named exports from `route.ts` at build time, and this module is where WP05 keeps request parsing.
+
+### Step 6. `frontend/app/lib/server/portfolioRepo.ts`: `loadPortfolioHistory`
+
+6a. Add `PortfolioHistoryPoint` to the existing `import type { ... } from "../../components/Portfolio/types";` list (keep it alphabetical with the others).
+
+6b. Append at the end of the file:
+
+```ts
+/** One row of public.get_portfolio_history (migration 0029). */
+type PortfolioHistoryRow = {
+  point_date: string;
+  value: number | null;
+  priced_products: number;
+  held_products: number;
+};
+
+export type PortfolioHistoryResult =
+  | { status: "ok"; points: PortfolioHistoryPoint[] }
+  | { status: "rpc_missing" }
+  | { status: "error" };
+
+/**
+ * PostgREST answers PGRST202 when the function is not in its schema cache
+ * (migration 0029 not applied yet); Postgres itself says 42883. Either way
+ * the browser falls back to computing the chart itself.
+ */
+const RPC_MISSING_CODES = new Set(["PGRST202", "42883"]);
+
+/**
+ * The caller's portfolio value history, one point per UTC day from
+ * today - days through today (days + 1 points), computed in the database by
+ * get_portfolio_history (F145). SECURITY INVOKER: the cookie-backed client
+ * carries the user's JWT, so RLS on portfolio_holdings still applies, and the
+ * portfolio id is looked up here rather than taken from the request.
+ * Throws only when the portfolio lookup itself fails.
+ */
+export async function loadPortfolioHistory(
+  supabase: RouteSupabase,
+  userId: string,
+  days: number
+): Promise<PortfolioHistoryResult> {
+  const portfolioId = await findPortfolioId(supabase, userId);
+  if (portfolioId === null) return { status: "ok", points: [] };
+
+  const { data, error } = await supabase.rpc("get_portfolio_history", {
+    p_portfolio_id: portfolioId,
+    p_days: days,
+  });
+  if (error) {
+    if (error.code && RPC_MISSING_CODES.has(error.code)) {
+      logSupabaseError("portfolio_history_rpc_missing", error);
+      return { status: "rpc_missing" };
+    }
+    logSupabaseError("portfolio_history_rpc_failed", error);
+    return { status: "error" };
+  }
+
+  const rows = (Array.isArray(data) ? data : []) as PortfolioHistoryRow[];
+  return {
+    status: "ok",
+    points: rows.map((row) => ({
+      date: row.point_date,
+      value: row.value === null ? null : Number(row.value),
+      priced_products: row.priced_products,
+      held_products: row.held_products,
+    })),
+  };
+}
+```
+
+The portfolio id comes from `findPortfolioId` (WP05), never from the request. `supabase.rpc` on the untyped client returns `any` data; the cast to `PortfolioHistoryRow[]` is the contract of migration 0029.
+
+### Step 7. `frontend/app/api/portfolio/history/route.ts` (new)
+
+It follows WP05 step 8a (`app/api/portfolio/route.ts`) exactly: header gate, then `createRouteSupabaseClient()`, then WP05's `requireRouteUser` (401 only when the session is authoritatively absent, 503 when the auth service could not answer; a bare `getUser()` null check would answer 401 during an auth outage and show "Your session has expired", the F063 behaviour WP04 removed), then the repo. Every response the handler builds goes through `jsonNoStore`. Do not define a local `NO_STORE` or call `supabase.auth.getUser()` directly.
+
+```ts
+import { NextRequest } from "next/server";
+import { createRouteSupabaseClient } from "../../../lib/routeSupabase";
+import { rejectIfNotAppRequest } from "../../../lib/csrf";
+import { jsonNoStore, requireRouteUser } from "../../../lib/routeAuth";
+import { parseHistoryDays } from "../../../lib/portfolioInput";
+import { loadPortfolioHistory } from "../../../lib/server/portfolioRepo";
+import { logCaughtError } from "../../../lib/logger";
+
+const LOAD_FAILED = "Failed to load portfolio history";
+
+/**
+ * GET /api/portfolio/history?days=N: the caller's portfolio value history,
+ * N + 1 daily points ending today (UTC), as { points: PortfolioHistoryPoint[] }.
+ * Computed by the get_portfolio_history RPC (migration 0029, finding F145)
+ * instead of paging every price row to the browser.
+ *
+ * 501 means the RPC is not deployed yet; lib/portfolio.ts then computes the
+ * chart in the browser as before. Remove that branch once 0029 is confirmed
+ * applied in production.
+ */
+export async function GET(req: NextRequest) {
+  const forbidden = rejectIfNotAppRequest(req);
+  if (forbidden) return forbidden;
+
+  const days = parseHistoryDays(req.nextUrl.searchParams.get("days"));
+  if (!days.ok) return jsonNoStore({ error: days.error }, 400);
+
+  try {
+    const supabase = await createRouteSupabaseClient();
+    const auth = await requireRouteUser(supabase);
+    if (auth.response) return auth.response;
+
+    const result = await loadPortfolioHistory(supabase, auth.user.id, days.value);
+    if (result.status === "rpc_missing") {
+      return jsonNoStore({ error: "Portfolio history is not available yet" }, 501);
+    }
+    if (result.status === "error") return jsonNoStore({ error: LOAD_FAILED }, 500);
+    return jsonNoStore({ points: result.points });
+  } catch (error) {
+    logCaughtError("portfolio_history_get_failed", error);
+    return jsonNoStore({ error: LOAD_FAILED }, 500);
+  }
+}
+```
+
+Status codes: 403 without `x-pokefin-request: 1` (no Origin check: browsers omit Origin on same-origin GET, WP05 step 6a), 400 for a bad `days`, 401 when the session is authoritatively absent, 503 when the auth service could not answer, 501 when the RPC is not deployed, 500 on any other failure, 200 `{ points }`. Every response except the 403 (built inside `csrf.ts`) carries `Cache-Control: no-store`. If your `csrf.ts` GET helper or WP05's `routeAuth.ts` exports have different names (see Before you start), import what `app/api/portfolio/route.ts` imports instead. Export nothing from this file except `GET`. The route is covered by the proxy's existing `/api/:path*` rate limit (`frontend/proxy.ts:94-101`); nothing to add.
+
+### Step 8. `frontend/app/lib/portfolioApi.ts`: `fetchPortfolioHistory`
+
+8a. Add `PortfolioHistoryPoint` to the existing `import type { ... } from "../components/Portfolio/types";` list.
+
+8b. Append after `fetchPortfolio`:
+
+```ts
+/**
+ * The caller's portfolio value history from GET /api/portfolio/history.
+ * Throws PortfolioApiError on any non-2xx (501 = RPC not deployed; the caller
+ * in lib/portfolio.ts falls back on that one), and the fetch error on network
+ * failure or abort.
+ */
+export async function fetchPortfolioHistory(
+  days: number,
+  signal?: AbortSignal
+): Promise<PortfolioHistoryPoint[]> {
+  const res = await fetch(`/api/portfolio/history?days=${encodeURIComponent(String(days))}`, {
+    method: "GET",
+    headers: { "x-pokefin-request": "1" },
+    credentials: "same-origin",
+    cache: "no-store",
+    signal,
+  });
+  if (!res.ok) {
+    throw new PortfolioApiError(
+      await readErrorMessage(res, "Failed to load portfolio history"),
+      res.status
+    );
+  }
+  const body = (await res.json()) as { points?: PortfolioHistoryPoint[] };
+  return Array.isArray(body.points) ? body.points : [];
+}
+```
+
+`readErrorMessage` and `PortfolioApiError` are WP05's, already in this file.
+
+### Step 9. `frontend/app/lib/portfolio.ts`: route first, browser fold only as fallback
+
+9a. Rename the existing exported `getPortfolioHistory` (WP05 step 10d signature `(portfolioId, days, holdings, signal?)`) to `getPortfolioHistoryInBrowser`. Do not change its body. Replace its three-line doc comment (`/**`, ` * Get portfolio value history for charting`, ` */`) with:
+
+```ts
+/**
+ * Fallback only: the portfolio value history computed in the browser from
+ * every daily price row of every held product (paged through
+ * fetchPortfolioPriceHistory on the anonymous client). getPortfolioHistory
+ * uses it only when GET /api/portfolio/history answers 501, i.e. when
+ * migration 0029 (get_portfolio_history) is not deployed. Delete it, and
+ * fetchPortfolioPriceHistory with PRICE_HISTORY_PAGE_SIZE /
+ * PRICE_HISTORY_MAX_PAGES, once 0029 is confirmed applied in production
+ * (tracked in audits/HARDENING_FOLLOWUPS.md section 7).
+ */
+```
+
+9b. Add to the imports at the top of the file:
+
+```ts
+import { fetchPortfolioHistory, PortfolioApiError } from "./portfolioApi";
+```
+
+9c. Insert directly after `getPortfolioHistoryInBrowser`:
+
+```ts
+/**
+ * Portfolio value history for the chart: one point per UTC day from
+ * today - days through today.
+ *
+ * Computed in the database by get_portfolio_history (migration 0029, F145)
+ * and fetched through GET /api/portfolio/history, which uses the session
+ * cookie so RLS on portfolio_holdings applies. One request of ~days+1 rows
+ * replaces paging every daily price row of every held product.
+ *
+ * `holdings` is only used to skip the request for an empty portfolio (the
+ * server reads the holdings itself), and to feed the fallback. `portfolioId`
+ * is kept for the same reason; the route looks the portfolio up from the
+ * session. Rejects on a route or network error; the hook logs it and shows an
+ * empty chart.
+ */
+export async function getPortfolioHistory(
+  portfolioId: number,
+  days: number,
+  holdings: HoldingWithProduct[],
+  signal?: AbortSignal
+): Promise<PortfolioHistoryPoint[]> {
+  if (holdings.length === 0) return [];
+  try {
+    return await fetchPortfolioHistory(days, signal);
+  } catch (error) {
+    // 501: migration 0029 is not applied yet. Compute in the browser as before.
+    if (error instanceof PortfolioApiError && error.status === 501) {
+      return getPortfolioHistoryInBrowser(portfolioId, days, holdings, signal);
+    }
+    throw error;
+  }
+}
+```
+
+9d. In the module doc comment WP05 wrote at the top of the file ("Reference-data reads for the portfolio UI: product search, the catalog the Collectr import matcher uses, and the portfolio value history."), change "and the portfolio value history" to "and the in-browser fallback for the portfolio value history (the primary path is GET /api/portfolio/history)".
+
+9e. Do not touch `usePortfolioData.ts` (not even WP05's comment "Until WP10, getPortfolioHistory reports a failed read as []": the in-browser fallback still does, so not caching an empty series stays correct): its call `getPortfolioHistory(portfolioId, TIMEFRAME_DAYS[timeframe], holdings, controller.signal)` keeps working, including abort (the fetch rejects with an AbortError, which the hook ignores because `controller.signal.aborted` is true) and error (the hook logs `portfolio_history_fetch_failed` and shows an empty chart, as it did when the old function returned `[]`).
+
+### Step 10. Documentation
+
+10a. `README.md`, in the list "The ordering constraints that matter when applying a *new* migration" (around line 451), extend the bullet that begins "`20260506_market_performance_functions.sql` must also precede `0022` and `0023`" by appending this sentence to it: "It must also precede `0028`, which re-defines `get_market_product_metrics` with bounded reads; replaying `20260506` after `0028` silently restores the unbounded body."
+
+10b. `README.md`, at the end of the paragraph that ends "both correct." (around line 438, after any sentence WP01 appended there), append:
+
+```markdown
+After `0027`, `0022` also reports a body `MISMATCH` for
+`get_market_product_volume_metrics`, and after `0028`, `20260506` one for
+`get_market_product_metrics`, both correct.
+```
+
+10c. `audits/HARDENING_FOLLOWUPS.md` section 7 ("## 7. Round-2 follow-ups"): insert these three bullets, in this order, as the first bullets of section 7 that describe migrations (above the WP06 or WP01 "pending apply" bullet if present, otherwise above "**Migration 0022 applied**"):
+
+```markdown
+- **Migrations 0027, 0028 and 0029: pending apply** (WP10, review findings
+  F148, F142, F145). 0027 re-defines `get_market_product_volume_metrics`
+  (`day_freshness` and `latest_listings` become one index probe per product;
+  output proved identical). 0028 re-defines `get_market_product_metrics` (six
+  LATERAL index probes instead of correlated CTE scans, history bounded to 366
+  days) and adds the return-anchor age rule: a 7D or 1M return is NULL when
+  its lookback price is more than 7 days older than the target date, a 3M, 6M
+  or 1Y return when it is more than 14 days older (tolerances named in the
+  0028 header; WP25 and /methodology#returns use the same rule). Every other
+  value is proved identical with
+  `audits/remediation/sql/WP10-market-metrics-equivalence.sql`. 0029 adds
+  `get_portfolio_history(bigint, integer)`, SECURITY INVOKER, not executable
+  by anon. Owner: replace "pending apply" with "applied (YYYY-MM-DD, via
+  Supabase MCP)" and paste the equivalence script's result row. Once 0029 is
+  confirmed applied and the chart works, delete `getPortfolioHistoryInBrowser`,
+  `fetchPortfolioPriceHistory`, the paging constants and the 501 fallback
+  branch in `frontend/app/lib/portfolio.ts`.
+- **Open (review F080, clustered into F142): market RPCs still compute on
+  read and stay executable by anon.** 0028 bounds each call's cost, which
+  removes the amplification that grew with history, but nothing limits how
+  often anyone with the public key calls them. Not scheduled in the
+  remediation plan. The durable fix, in this order: (1) `main.py` (as
+  service_role) writes a per-product metrics table at the end of each run;
+  (2) `get_market_product_summaries` and `get_set_analytics` read that table,
+  or become SECURITY DEFINER with a pinned search_path; (3) only then REVOKE
+  EXECUTE on `get_market_product_metrics` FROM PUBLIC, anon, authenticated.
+  Revoking it earlier makes every anon call to `get_market_product_summaries`
+  fail with a permission error (the server and the browser both call it as
+  anon). Never revoke `get_market_product_summaries` or `get_set_analytics`
+  from anon while the site calls them with the publishable key. Revisit if
+  the Postgres logs show statement timeouts on these functions after 0028.
+- **Open (WP18): the return-anchor age rule in the browser and fallback
+  paths.** 0028 blanks a return whose lookback price is too old, but
+  `MarketView.tsx` recomputes any NULL return of a priced product from its
+  price history with `getReturnPercent`, and `fetchProductsWithFallbackReturns`
+  and `fetchSetAnalyticsFallback` (`serverMarketData.ts`) compute returns the
+  same way when the RPCs fail. None of them has the tolerance, so `/market` can
+  still show the long-span return. WP18's shared `getReturnPercent`
+  (`app/lib/marketMath.ts`) must return null unless the anchor's UTC date is on
+  or after (target date - tolerance): 7 days for 7D and 1M, 14 days for 3M, 6M
+  and 1Y, none for 1D, the same values as the 0028 header.
+```
+
+10d. `audits/HARDENING_FOLLOWUPS.md`: in the section 7 bullet WP05 extended ("Signed-in data ran as anon ... parts 1 and 2 fixed ... history still reads product_price_history on the anonymous client until WP10."), replace that last sentence with: "Portfolio history now comes from GET /api/portfolio/history (RPC get_portfolio_history, migration 0029, WP10); the anonymous-client computation remains only as the fallback for a database without 0029." If the sentence is not there, skip 10d.
+
+Do not write "applied" anywhere: you have no production access.
+
+### Step 11. `tests/test_wp10_market_rpc_bounds.py` (new, static guard)
+
+No database needed. It reads the effective (last-in-apply-order) definition of each function and fails if a later edit reintroduces the unbounded scan, the correlated anchors, drops or changes an anchor-age bound, reintroduces the whole-history volume reads or bounds `latest_listings`, makes the history RPC SECURITY DEFINER, grants anon EXECUTE, or loses a search_path pin. It honours `POKEFIN_MIGRATIONS_DIR` like WP01's `tests/test_migration_volatility.py`.
+
+```python
+"""
+Static guards for the WP10 database changes (review findings F142, F145, F148)
+and the return-anchor age rule (01-PRODUCT-DIRECTION.md section 9 item 5).
+
+Each check reads the EFFECTIVE definition of a function: the last CREATE
+[OR REPLACE] FUNCTION for that name in apply order (the two out-of-band files
+first, then the numbered files; README.md "The ordering constraints that
+matter"). No database is needed.
+
+Run with: python -m pytest tests/test_wp10_market_rpc_bounds.py -v
+"""
+import os
+import re
+from pathlib import Path
+
+import pytest
+
+MIGRATIONS = Path(os.environ.get("POKEFIN_MIGRATIONS_DIR",
+                                 Path(__file__).resolve().parent.parent / "migrations"))
+EARLY_FILES = ("create_box_recipes.sql", "20260506_market_performance_functions.sql")
+LINE_COMMENT = re.compile(r"--[^\n]*")
+
+
+def apply_order():
+    files = sorted(p.name for p in MIGRATIONS.glob("*.sql"))
+    early = [f for f in EARLY_FILES if f in files]
+    return early + [f for f in files if f not in early]
+
+
+def effective(fn):
+    """(file, statement text without comments) of the last definition of fn."""
+    head = re.compile(
+        r"CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+public\." + fn + r"\s*\(", re.I)
+    found = None
+    for name in apply_order():
+        sql = LINE_COMMENT.sub("", (MIGRATIONS / name).read_text())
+        for m in head.finditer(sql):
+            tag = re.compile(r"\bAS\s+(\$[A-Za-z_]*\$)", re.I).search(sql, m.end())
+            assert tag, f"{name}: no dollar-quoted body for {fn}"
+            end = sql.find(tag.group(1), tag.end())
+            assert end != -1, f"{name}: unterminated body for {fn}"
+            found = (name, sql[m.start():end + len(tag.group(1))])
+    assert found, f"no definition of public.{fn} in {MIGRATIONS}"
+    return found
+
+
+def squash(text):
+    return re.sub(r"\s+", " ", text).lower()
+
+
+def test_metrics_history_cte_is_bounded():
+    name, body = effective("get_market_product_metrics")
+    assert "recorded_at >= current_date - 366" in squash(body), (
+        f"{name}: daily_history must be bounded to the last 366 days (F142)")
+
+
+def test_metrics_anchors_are_index_probes_not_cte_scans():
+    name, body = effective("get_market_product_metrics")
+    s = squash(body)
+    assert s.count("left join lateral") == 6, f"{name}: expected six LATERAL anchors"
+    assert "from daily_history dh where dh.product_id = ap.id" not in s, (
+        f"{name}: correlated daily_history subqueries are back (F142)")
+    for bound in ("< current_date ", "< current_date - 6 ", "< current_date - 29 ",
+                  "< current_date - 89 ", "< current_date - 179 ",
+                  "< current_date - 364 "):
+        assert "h.recorded_at " + bound in s, f"{name}: anchor bound {bound!r} missing"
+
+
+def test_metrics_return_anchors_have_a_maximum_age():
+    # Return anchor tolerances (0028 header): 7 days for 7d and 30d, 14 days
+    # for 90d, 180d and 365d, so the lower bound is current_date - (N + tol).
+    # WP25 greps 0028 for these literals.
+    name, body = effective("get_market_product_metrics")
+    s = squash(body)
+    for upper, lower in (("6", "14"), ("29", "37"), ("89", "104"),
+                         ("179", "194"), ("364", "379")):
+        probe = (f"h.recorded_at < current_date - {upper} "
+                 f"and h.recorded_at >= current_date - {lower} ")
+        assert probe in s, f"{name}: anchor-age bound {probe!r} missing"
+    assert "h.recorded_at < current_date order by" in s, (
+        f"{name}: the 1d anchor has no lower bound")
+
+
+def test_volume_reads_are_index_probes_and_listings_is_unbounded():
+    name, body = effective("get_market_product_volume_metrics")
+    s = squash(body)
+    day_freshness = s[s.index("day_freshness as ("):s.index("sales_agg as (")]
+    assert "sh.bucket_date >= current_date - 63" in day_freshness, (
+        f"{name}: day_freshness must be bounded to 63 days (F148)")
+    assert "order by sh.bucket_date desc limit 1" in day_freshness, (
+        f"{name}: day_freshness must be a per-product LIMIT 1 probe (F148)")
+    # From the CTE to the first CASE of the final SELECT. (The final SELECT's
+    # "ll.snapshot_date >= current_date - 3" gates must stay outside the slice.)
+    start = s.index("latest_listings as (")
+    latest_listings = s[start:s.index("case when df.newest_day_bucket", start)]
+    assert "order by lh.snapshot_date desc limit 1" in latest_listings, (
+        f"{name}: latest_listings must be a per-product LIMIT 1 probe (F148)")
+    assert "distinct on" not in latest_listings, (
+        f"{name}: DISTINCT ON walks every index entry; use the LATERAL probe (F148)")
+    assert "current_date" not in latest_listings and "snapshot_date >" not in latest_listings, (
+        f"{name}: latest_listings must stay unbounded; listings_snapshot_date is "
+        "returned for stale products on purpose (0022, F148 verifier correction)")
+
+
+def test_portfolio_history_is_security_invoker():
+    name, stmt = effective("get_portfolio_history")
+    s = squash(stmt)
+    assert "security definer" not in s, (
+        f"{name}: get_portfolio_history must be SECURITY INVOKER so RLS applies (F145)")
+    assert "security invoker" in s
+
+
+def test_portfolio_history_is_not_executable_by_anon():
+    text = squash(LINE_COMMENT.sub("", "\n".join(
+        (MIGRATIONS / n).read_text() for n in apply_order())))
+    assert re.search(
+        r"revoke execute on function public\.get_portfolio_history\(bigint, integer\) "
+        r"from public, anon", text), "EXECUTE must be revoked from PUBLIC and anon"
+
+
+@pytest.mark.parametrize("fn", ["get_market_product_metrics",
+                                "get_market_product_volume_metrics",
+                                "get_portfolio_history"])
+def test_search_path_is_pinned_after_the_last_definition(fn):
+    name, _ = effective(fn)
+    sql = squash(LINE_COMMENT.sub("", (MIGRATIONS / name).read_text()))
+    last_create = max(m.start() for m in re.finditer(
+        r"create (?:or replace )?function public\." + fn + r"\(", sql))
+    assert re.search(r"alter function public\." + fn + r"\([^)]*\) set search_path = public",
+                     sql[last_create:]), (
+        f"{name}: CREATE OR REPLACE resets proconfig; re-pin search_path after it")
+```
+
+## Pitfalls: do not do this
+
+- **Bound the anchors only with the five anchor-age lines, exactly as written.** Do not compute the anchors from the bounded `daily_history` and do not add `recorded_at >= current_date - 366` (or any other bound) inside the LATERALs: the 366-day bound on `daily_history` is correct only because the anchors no longer read it, and a different bound would blank returns the product rule keeps. Do not add a lower bound to the 1d probe (the rule covers 7D to 1Y only). Do not change a tolerance here without changing WP25's `RETURN_ANCHOR_WINDOWS`, its `refresh_product_daily_stats` `VALUES` list and `/methodology#returns` in the same release; WP25 also greps for these exact literals.
+- **Do not add `usd_price IS NOT NULL` or `> 0` to the LATERALs.** The old anchor took the newest row whatever its value and the `CASE WHEN anchors.price_Nd > 0` in the final SELECT handles it. Filtering would pick an older row instead.
+- **Do not remove `DISTINCT ON` from `daily_history`.** The unique index `(product_id, recorded_at::date)` makes it redundant in production, but a database rebuilt without that index would otherwise feed duplicate days into the window functions.
+- **Do not DROP and re-create `get_market_product_metrics` or change its `RETURNS TABLE`.** A DROP discards the bootstrap ACL (`0023:50-60`) and the search_path pin; `CREATE OR REPLACE` with the identical shape keeps the ACL. Always re-apply `ALTER FUNCTION ... SET search_path = public` after a replace: it is reset (verified).
+- **Do not touch `get_market_product_summaries` or `get_set_analytics`.** The 0023 freshness gates (returns withheld when the newest recorded price is stale or disagrees with `products.usd_price`) live there and consume this function's output; the only change they see is a NULL return where the anchor is too old, which they already handle (`avg` and `percentile_cont` skip a NULL return in the set averages, medians and consistency).
+- **Do not bound `latest_listings`** in `get_market_product_volume_metrics` (verifier correction on F148). `listings_snapshot_date` is deliberately returned for stale products (`0022:179-190`, "so a caller can still say when data was last seen"); a 30-day bound would turn it NULL for long-stale products. The LATERAL `LIMIT 1` probe is what makes it cheap.
+- **Do not add a partial index or use `DISTINCT ON` for the volume CTEs** (verifier correction on F148). `DISTINCT ON` walks every index entry even with a matching partial index (measured: 410 ms to 240 ms at five years, against 22 ms for the probes). Keep the inner `JOIN LATERAL ... ON true` in `latest_listings`: a product with no snapshot must have no row there, as with 0022's `DISTINCT ON`, so the final `LEFT JOIN` reports NULLs.
+- **Do not bound `day_freshness` below 3 days or use a different column.** Its only consumer is `newest_day_bucket >= current_date - 3`; 63 matches `sales_agg`'s existing bound (`0022:138`).
+- **Do not edit `verify_migration.py`, `schema.sql` or any existing migration.** Existing migrations are already applied in production, so a change to one would never reach the database; a change always goes in a new numbered file. The verifier is generic and needs no change (see Before you start).
+- **Do not revoke anon's EXECUTE on the market RPCs.** The server fetches them with the anon key (`serverMarketData.ts:42-49`), the browser calls `get_market_product_summaries` as anon (`clientMarketData.ts:225`), and `get_market_product_summaries` / `get_set_analytics` are SECURITY INVOKER, so they need anon EXECUTE on `get_market_product_metrics` too: revoking it makes every summaries call fail with a permission error and every catalog page fall back. Do not add a `market_product_metrics_cache` table, a PostgREST rate limit or a dedicated server role here either. F080 (clustered into F142) is handled in this package by bounding the per-call cost, which removes the amplification (cost no longer grows with history; about 100x cheaper on the replica). The remaining F080 ideas (compute-on-write cache table, a server-only role, revoking anon) are NOT scheduled by any work package in this plan: WP11 covers only the server's own call volume (F143) and WP21 covers F133/F081/F135, and neither spec touches the market RPC ACL. Step 10c records them as an open follow-up; do not describe them as covered by WP11 or WP21.
+- **Do not make `get_portfolio_history` SECURITY DEFINER**, and do not take the portfolio id from the request. RLS is the authorisation; the route looks the id up from the session.
+- **Do not call `get_portfolio_history` from the browser Supabase client.** That client is anonymous (the session cookie is HttpOnly); with EXECUTE revoked from anon it fails with `permission denied`, and even with EXECUTE RLS would return zero rows, a silently empty chart. Always go through `/api/portfolio/history`.
+- **Do not read `portfolio_lots` in the RPC.** The browser fold never did, and nothing writes it; adding it would double-count if lots are ever mirrored from holdings.
+- **Do not use `generate_series(date, date, interval)`** for the day series: it resolves to `timestamptz` and depends on the session time zone. Use the integer series as written.
+- **Do not remove the in-browser fallback in this PR.** Vercel deploys on merge; if the owner merges before applying 0029, the fallback keeps charts working. Its removal is a tracked follow-up (step 10c).
+- **Do not export `parseHistoryDays` or `HISTORY_DAYS_MAX` from `route.ts`.** Next.js fails the build on unknown route exports.
+- **Do not change `usePortfolioData.ts`** (WP05 owns it; the call signature is kept on purpose). WP05 already loads the chart in its own effect, so a timeframe change does not refetch the portfolio and holdings (F144).
+- **Do not edit `getReturnPercent`, `MarketView.tsx`, `MarketView/returns.ts` or the fallbacks in `serverMarketData.ts`** to apply the anchor-age rule. WP17 and WP18 rewrite those files; the browser-side rule is WP18's follow-up (step 10c).
+- **Do not apply any migration to production.** List them under Owner actions in the PR.
+- **Never re-run the whole `20260506_market_performance_functions.sql`** (for example as a "rollback"): it would also replace `get_set_analytics` with the pre-0023 unguarded body and fail on `get_market_product_summaries` (`README.md:451-460`).
+
+## Tests
+
+Route and repo tests need `/** @jest-environment node */` (`next/server` throws under jsdom) and `jest.mock("server-only", () => ({}))` where the module under test imports it. The skeletons below were run green by the spec writer against steps 5-9; review then changed the route (step 7) to WP05's `requireRouteUser` and added the 503 case to test 1, so run them and fix any mismatch against the code, not by weakening an assertion.
+
+### 1. `frontend/app/api/portfolio/__tests__/history.route.test.ts` (new)
+
+Cases: 403 without the header (and `getUser` not called); 400 for `""`, `?days=`, `0`, `367`, `abc`, `7.5`, `-1`, `1e2`, `99999` (repo not called, `no-store` set); 401 without a user (repo not called); 503 when the auth service could not answer (repo not called); 200 `{ points }` with `no-store`, no `origin` header needed, repo called as `(supabase, "user-1", 30)`; 200 for 365 and 366; 501 on `rpc_missing`; 500 on `error`; 500 when the repo throws. As in WP05's `routes.test.ts`, do not mock `lib/routeAuth` or `lib/authSession`: the real ones run, so the 401 versus 503 split is covered.
+
+```ts
+/** @jest-environment node */
+import { NextRequest } from "next/server";
+import { AuthRetryableFetchError } from "@supabase/supabase-js";
+
+const getUser = jest.fn();
+jest.mock("../../../lib/routeSupabase", () => ({
+  createRouteSupabaseClient: async () => ({ auth: { getUser } }),
+}));
+jest.mock("../../../lib/server/portfolioRepo", () => ({
+  loadPortfolioHistory: jest.fn(),
+}));
+jest.mock("../../../lib/logger", () => ({ logCaughtError: jest.fn(), logSupabaseError: jest.fn() }));
+
+import { loadPortfolioHistory } from "../../../lib/server/portfolioRepo";
+import { GET } from "../history/route";
+
+const loadMock = loadPortfolioHistory as jest.Mock;
+const POINTS = [
+  { date: "2026-09-27", value: 120.5, priced_products: 2, held_products: 3 },
+  { date: "2026-09-28", value: null, priced_products: 0, held_products: 3 },
+];
+
+function req(query: string, headers: Record<string, string> = { "x-pokefin-request": "1" }) {
+  return new NextRequest(`https://pokefin.ca/api/portfolio/history${query}`, { method: "GET", headers });
+}
+
+beforeEach(() => {
+  jest.clearAllMocks();
+  getUser.mockResolvedValue({ data: { user: { id: "user-1" } }, error: null });
+  loadMock.mockResolvedValue({ status: "ok", points: POINTS });
+});
+
+it("403 without the app header, before any auth work", async () => {
+  const res = await GET(req("?days=30", {}));
+  expect(res.status).toBe(403);
+  expect(getUser).not.toHaveBeenCalled();
+});
+
+it.each(["", "?days=", "?days=0", "?days=367", "?days=abc", "?days=7.5", "?days=-1", "?days=1e2", "?days=99999"])(
+  "400 for %p without calling the repo",
+  async (query) => {
+    const res = await GET(req(query));
+    expect(res.status).toBe(400);
+    expect(res.headers.get("cache-control")).toBe("no-store");
+    expect(loadMock).not.toHaveBeenCalled();
+  }
+);
+
+it("401 without a user; the repo is not called", async () => {
+  getUser.mockResolvedValue({ data: { user: null }, error: null });
+  const res = await GET(req("?days=30"));
+  expect(res.status).toBe(401);
+  expect(res.headers.get("cache-control")).toBe("no-store");
+  expect(loadMock).not.toHaveBeenCalled();
+});
+
+it("503, not 401, when the auth service could not answer", async () => {
+  getUser.mockResolvedValue({
+    data: { user: null },
+    error: new AuthRetryableFetchError("fetch failed", 0),
+  });
+  const res = await GET(req("?days=30"));
+  expect(res.status).toBe(503);
+  expect(loadMock).not.toHaveBeenCalled();
+});
+
+it("200 with the points, no origin header needed, and no-store", async () => {
+  const res = await GET(req("?days=30"));
+  expect(res.status).toBe(200);
+  expect(res.headers.get("cache-control")).toBe("no-store");
+  expect(await res.json()).toEqual({ points: POINTS });
+  expect(loadMock).toHaveBeenCalledWith(expect.anything(), "user-1", 30);
+});
+
+it("accepts the largest UI window (365) and the cap (366)", async () => {
+  expect((await GET(req("?days=365"))).status).toBe(200);
+  expect((await GET(req("?days=366"))).status).toBe(200);
+});
+
+it("501 when the RPC is not deployed", async () => {
+  loadMock.mockResolvedValue({ status: "rpc_missing" });
+  const res = await GET(req("?days=30"));
+  expect(res.status).toBe(501);
+  expect(res.headers.get("cache-control")).toBe("no-store");
+});
+
+it("500 when the RPC fails", async () => {
+  loadMock.mockResolvedValue({ status: "error" });
+  const res = await GET(req("?days=30"));
+  expect(res.status).toBe(500);
+  expect(await res.json()).toEqual({ error: "Failed to load portfolio history" });
+});
+
+it("500 when the repo throws", async () => {
+  loadMock.mockRejectedValue(new Error("portfolio_lookup_failed"));
+  const res = await GET(req("?days=30"));
+  expect(res.status).toBe(500);
+});
+```
+
+### 2. `frontend/app/lib/server/__tests__/portfolioRepo.history.test.ts` (new)
+
+Cases: RPC called with `{ p_portfolio_id: 7, p_days: 30 }` and rows mapped (`point_date` to `date`, NULL value kept); no portfolio returns `{ status: "ok", points: [] }` without calling the RPC; `PGRST202` and `42883` return `rpc_missing` and log `portfolio_history_rpc_missing`; `57014` returns `error`; a portfolio lookup error throws `portfolio_lookup_failed` and skips the RPC.
+
+```ts
+/** @jest-environment node */
+jest.mock("server-only", () => ({}));
+// Same mock as WP05's portfolioRepo.test.ts: keeps the module-level Supabase
+// client and next/cache out of this test.
+jest.mock("../../serverMarketData", () => ({
+  getCachedMarketProductSummaries: jest.fn(),
+  fetchNewestPricedAtForProducts: jest.fn(),
+}));
+jest.mock("../../logger", () => ({ logCaughtError: jest.fn(), logSupabaseError: jest.fn() }));
+
+import { logSupabaseError } from "../../logger";
+import { loadPortfolioHistory } from "../portfolioRepo";
+
+type Result = { data?: unknown; error?: { code?: string; message?: string } | null };
+
+/** Every method returns the builder; awaiting it resolves to `result`. */
+function q(result: Result) {
+  const builder: Record<string | symbol, unknown> = new Proxy(
+    {},
+    {
+      get(_target, prop) {
+        if (prop === "then") {
+          const settled = Promise.resolve({ data: null, error: null, ...result });
+          return settled.then.bind(settled);
+        }
+        return () => builder;
+      },
+    }
+  );
+  return builder;
+}
+
+const fromMock = jest.fn();
+const rpcMock = jest.fn();
+const supabase = { from: fromMock, rpc: rpcMock } as never;
+
+beforeEach(() => {
+  jest.clearAllMocks();
+  fromMock.mockReturnValue(q({ data: { id: 7 } }));
+});
+
+it("calls the RPC with the caller's portfolio id and maps the rows", async () => {
+  rpcMock.mockResolvedValue({
+    data: [
+      { point_date: "2026-09-27", value: 10.5, priced_products: 1, held_products: 2 },
+      { point_date: "2026-09-28", value: null, priced_products: 0, held_products: 2 },
+    ],
+    error: null,
+  });
+  const result = await loadPortfolioHistory(supabase, "user-1", 30);
+  expect(rpcMock).toHaveBeenCalledWith("get_portfolio_history", { p_portfolio_id: 7, p_days: 30 });
+  expect(result).toEqual({
+    status: "ok",
+    points: [
+      { date: "2026-09-27", value: 10.5, priced_products: 1, held_products: 2 },
+      { date: "2026-09-28", value: null, priced_products: 0, held_products: 2 },
+    ],
+  });
+});
+
+it("returns no points and skips the RPC when the user has no portfolio", async () => {
+  fromMock.mockReturnValue(q({ data: null }));
+  expect(await loadPortfolioHistory(supabase, "user-1", 30)).toEqual({ status: "ok", points: [] });
+  expect(rpcMock).not.toHaveBeenCalled();
+});
+
+it.each(["PGRST202", "42883"])("reports rpc_missing for %s", async (code) => {
+  rpcMock.mockResolvedValue({ data: null, error: { code, message: "missing" } });
+  expect(await loadPortfolioHistory(supabase, "user-1", 30)).toEqual({ status: "rpc_missing" });
+  expect(logSupabaseError).toHaveBeenCalledWith("portfolio_history_rpc_missing", expect.anything());
+});
+
+it("reports error for any other RPC failure", async () => {
+  rpcMock.mockResolvedValue({ data: null, error: { code: "57014", message: "statement timeout" } });
+  expect(await loadPortfolioHistory(supabase, "user-1", 30)).toEqual({ status: "error" });
+});
+
+it("throws when the portfolio lookup fails", async () => {
+  fromMock.mockReturnValue(q({ error: { code: "XX000", message: "boom" } }));
+  await expect(loadPortfolioHistory(supabase, "user-1", 30)).rejects.toThrow("portfolio_lookup_failed");
+  expect(rpcMock).not.toHaveBeenCalled();
+});
+```
+
+### 3. `frontend/app/lib/__tests__/portfolio.history.test.ts` (new)
+
+Cases: empty holdings returns `[]` without a request; points from the route are returned and `(days, signal)` passed through; a 501 falls back to the in-browser fold (proved by the fold's `supabase.from("product_price_history")` call being reached); 401 and 500 are rethrown without falling back.
+
+```ts
+jest.mock("../supabase", () => ({ supabase: { from: jest.fn() } }));
+jest.mock("../clientMarketData", () => ({
+  fetchMarketProductsClient: jest.fn(),
+  fetchNewestPricedAtClient: jest.fn(),
+}));
+jest.mock("../logger", () => ({ logCaughtError: jest.fn(), logSupabaseError: jest.fn() }));
+jest.mock("../portfolioApi", () => {
+  const actual = jest.requireActual("../portfolioApi");
+  return { ...actual, fetchPortfolioHistory: jest.fn() };
+});
+
+import { supabase } from "../supabase";
+import { fetchPortfolioHistory, PortfolioApiError } from "../portfolioApi";
+import { getPortfolioHistory } from "../portfolio";
+import type { HoldingWithProduct } from "../../components/Portfolio/types";
+
+const fetchHistoryMock = fetchPortfolioHistory as jest.Mock;
+const fromMock = supabase.from as jest.Mock;
+const HOLDING = { id: 1, portfolio_id: 1, product_id: 1, quantity: 2, purchase_date: "2020-01-01" } as HoldingWithProduct;
+const POINTS = [{ date: "2026-09-28", value: 20, priced_products: 1, held_products: 1 }];
+
+beforeEach(() => jest.clearAllMocks());
+
+it("returns [] for an empty portfolio without a request", async () => {
+  expect(await getPortfolioHistory(1, 30, [])).toEqual([]);
+  expect(fetchHistoryMock).not.toHaveBeenCalled();
+});
+
+it("returns the route's points and passes days and the signal through", async () => {
+  fetchHistoryMock.mockResolvedValue(POINTS);
+  const controller = new AbortController();
+  expect(await getPortfolioHistory(1, 30, [HOLDING], controller.signal)).toEqual(POINTS);
+  expect(fetchHistoryMock).toHaveBeenCalledWith(30, controller.signal);
+  expect(fromMock).not.toHaveBeenCalled();
+});
+
+it("falls back to the in-browser computation on 501 (RPC not deployed)", async () => {
+  fetchHistoryMock.mockRejectedValue(new PortfolioApiError("not yet", 501));
+  fromMock.mockImplementation(() => {
+    throw new Error("fallback reached product_price_history");
+  });
+  await expect(getPortfolioHistory(1, 3, [HOLDING])).rejects.toThrow(
+    "fallback reached product_price_history"
+  );
+});
+
+it.each([401, 500])("rethrows a %i without falling back", async (status) => {
+  fetchHistoryMock.mockRejectedValue(new PortfolioApiError("x", status));
+  await expect(getPortfolioHistory(1, 30, [HOLDING])).rejects.toBeInstanceOf(PortfolioApiError);
+  expect(fromMock).not.toHaveBeenCalled();
+});
+```
+
+### 4. `frontend/app/lib/__tests__/portfolioApi.history.test.ts` (new)
+
+Cases: URL `/api/portfolio/history?days=30`, `method: "GET"`, header `x-pokefin-request: 1`, `credentials: "same-origin"`, `cache: "no-store"`, the signal passed; non-2xx throws `PortfolioApiError` with the status (501 case); 401 carries the session message; a body without `points` yields `[]`.
+
+```ts
+import { fetchPortfolioHistory, PortfolioApiError } from "../portfolioApi";
+
+const fetchMock = jest.fn();
+const originalFetch = global.fetch;
+beforeEach(() => {
+  fetchMock.mockReset();
+  global.fetch = fetchMock as unknown as typeof fetch;
+});
+afterAll(() => {
+  global.fetch = originalFetch;
+});
+
+describe("fetchPortfolioHistory", () => {
+  it("GETs /api/portfolio/history with the app header and returns points", async () => {
+    const points = [{ date: "2026-09-28", value: 5, priced_products: 1, held_products: 1 }];
+    fetchMock.mockResolvedValue({ ok: true, status: 200, json: async () => ({ points }) });
+    const controller = new AbortController();
+    await expect(fetchPortfolioHistory(30, controller.signal)).resolves.toEqual(points);
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe("/api/portfolio/history?days=30");
+    expect(init).toMatchObject({
+      method: "GET",
+      headers: { "x-pokefin-request": "1" },
+      credentials: "same-origin",
+      cache: "no-store",
+      signal: controller.signal,
+    });
+  });
+
+  it("throws PortfolioApiError carrying the status (501 drives the fallback)", async () => {
+    fetchMock.mockResolvedValue({ ok: false, status: 501, json: async () => ({ error: "x" }) });
+    await expect(fetchPortfolioHistory(30)).rejects.toMatchObject({ name: "PortfolioApiError", status: 501 });
+  });
+
+  it("throws the session message on 401", async () => {
+    fetchMock.mockResolvedValue({ ok: false, status: 401, json: async () => ({}) });
+    const err = await fetchPortfolioHistory(30).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(PortfolioApiError);
+    expect((err as PortfolioApiError).message).toBe("Your session has expired. Please sign in again.");
+  });
+
+  it("returns [] when the body has no points array", async () => {
+    fetchMock.mockResolvedValue({ ok: true, status: 200, json: async () => ({}) });
+    await expect(fetchPortfolioHistory(7)).resolves.toEqual([]);
+  });
+});
+```
+
+### 5. `frontend/app/lib/__tests__/portfolio.freshness.test.ts` (update)
+
+Change the import of `getPortfolioHistory` to `getPortfolioHistoryInBrowser`, replace every call `getPortfolioHistory(` in this file with `getPortfolioHistoryInBrowser(` (the three "coverage" cases and WP05's F111 cases, including the aborted-signal case), and rename the describe titles `"getPortfolioHistory coverage"` to `"getPortfolioHistoryInBrowser coverage"` (and WP05's F111 describe likewise). Assertions stay unchanged. Reason: the renamed function is the old fold; `getPortfolioHistory` now calls `fetch`, which jsdom does not provide.
+
+### 6. `frontend/app/lib/__tests__/portfolioInput.test.ts` (update)
+
+Add a `describe("parseHistoryDays")`: `"1"`, `"30"`, `"365"`, `"366"` are ok with the numeric value; `null`, `""`, `"0"`, `"367"`, `"-1"`, `"7.5"`, `"1e2"`, `" 30"`, `"99999"` fail with `"Invalid days"`.
+
+### 7. `tests/test_wp10_market_rpc_bounds.py` (new, step 11)
+
+9 tests (8 in the neutral variant, see "Owner decision"). They must pass with the new migrations present and fail when `0027`-`0029` are removed from a copy of `migrations/` (checked during review: 9 passed with them; 8 failed and 1 passed without them, the passing one being the volume function's search_path case, which `0022` already satisfies). Removing only the `ALTER FUNCTION public.get_portfolio_history ... SET search_path` fails exactly the search_path case; appending `AND lh.snapshot_date >= current_date - 30` to the `WHERE lh.product_id = ap.id` line of `latest_listings` in a copy of 0027 fails exactly `test_volume_reads_are_index_probes_and_listings_is_unbounded`; deleting the five anchor-age lines from a copy of 0028 fails exactly `test_metrics_return_anchors_have_a_maximum_age`. Prove the regression signal yourself:
+
+```bash
+rm -rf /tmp/wp10_guard && mkdir /tmp/wp10_guard && cp migrations/*.sql /tmp/wp10_guard/ \
+  && rm /tmp/wp10_guard/0027_*.sql /tmp/wp10_guard/0028_*.sql /tmp/wp10_guard/0029_*.sql
+POKEFIN_MIGRATIONS_DIR=/tmp/wp10_guard python3 -m pytest tests/test_wp10_market_rpc_bounds.py -q; echo "exit=$?"
+# expect "8 failed, 1 passed" and exit=1 (neutral variant: "7 failed, 1 passed")
+```
+
+## Verification
+
+From `frontend/`:
+
+```bash
+pnpm install --frozen-lockfile
+pnpm exec tsc --noEmit                                   # expect exit 0
+pnpm exec eslint app/api/portfolio app/lib/portfolio.ts app/lib/portfolioApi.ts \
+  app/lib/portfolioInput.ts app/lib/server               # expect 0 errors in the files this PR touched
+pnpm exec jest app/api/portfolio app/lib/server \
+  app/lib/__tests__/portfolio.history.test.ts app/lib/__tests__/portfolioApi.history.test.ts \
+  app/lib/__tests__/portfolio.freshness.test.ts app/lib/__tests__/portfolioInput.test.ts \
+  app/lib/__tests__/portfolioApi.test.ts                 # expect all green
+TZ=America/Toronto pnpm exec jest app/lib/__tests__/portfolio.freshness.test.ts   # WP05's DST case, still green
+pnpm test --ci                                           # expect all green
+pnpm build:stub                                          # WP00; expect success and "/api/portfolio/history" listed with the ƒ (Dynamic) marker
+grep -nE "from \"(\./|\.\./)+supabase\"" app/lib/portfolioApi.ts app/lib/server/portfolioRepo.ts \
+  app/api/portfolio/history/route.ts                     # expect no output (no anonymous browser client here)
+```
+
+From the repo root. `verify_migration.py` prints the SQL to stdout and its summary lines (`-- function ...`, `-- privilege ...`, `! REFUSED ...`) to stderr, so capture them separately:
+
+```bash
+python3 verify_migration.py migrations/0027_bounded_volume_metrics.sql > /tmp/wp10_0027.sql 2> /tmp/wp10_0027.txt; echo "exit=$?"
+cat /tmp/wp10_0027.txt
+# expect exit=0 and exactly this line (plus "-- run the statement below; every row must say OK"):
+# -- function get_market_product_volume_metrics(): body 1bb85a0f1d3e619536c1702654af8cbf, non-strict, parallel u, security invoker, sql, volatility s, config search_path=public
+
+python3 verify_migration.py migrations/0028_bounded_market_metrics.sql > /tmp/wp10_0028.sql 2> /tmp/wp10_0028.txt; echo "exit=$?"
+cat /tmp/wp10_0028.txt
+# expect exit=0 and exactly this line (plus "-- run the statement below; every row must say OK"):
+# -- function get_market_product_metrics(): body f3102b0f63c0fd2e95b891370b9ffc75, non-strict, parallel u, security invoker, sql, volatility s, config search_path=public
+# (neutral variant: body 8e8f39b53d71592dae0bd60dde9bebbf)
+
+python3 verify_migration.py migrations/0029_portfolio_history_rpc.sql > /tmp/wp10_0029.sql 2> /tmp/wp10_0029.txt; echo "exit=$?"
+cat /tmp/wp10_0029.txt
+# expect exit=0 and:
+# -- function get_portfolio_history(p_portfolio_id bigint, p_days integer): body 2f9e67a2ae57801575c18009e257ddcf, non-strict, parallel u, security invoker, sql, volatility s, config search_path=public
+# -- privilege EXECUTE on public.get_portfolio_history(bigint, integer) for public: revoked
+# -- privilege EXECUTE on public.get_portfolio_history(bigint, integer) for anon: revoked
+# -- privilege EXECUTE on public.get_portfolio_history(bigint, integer) for authenticated: granted
+# -- privilege EXECUTE on public.get_portfolio_history(bigint, integer) for service_role: granted
+
+python3 -m pytest tests/test_wp10_market_rpc_bounds.py -v      # expect 9 passed (neutral variant: 8)
+# plus the regression-signal check in Tests, item 7 (expect 8 failed, 1 passed without 0027-0029)
+grep -nE "recorded_at >= current_date - (14|37|104|379)$" migrations/0028_bounded_market_metrics.sql
+# expect 4 lines (WP25 runs this grep; neutral variant: no output)
+python3 -m pytest tests/ -q                                     # expect no new failures (WP01's volatility guard included)
+grep -rn $'\xe2\x80\x94' migrations/0027_*.sql migrations/0028_*.sql migrations/0029_*.sql \
+  audits/remediation/sql/WP10-market-metrics-equivalence.sql    # expect no output (no em dashes)
+```
+
+If a body hash differs, diff your file against the SQL in this spec: comments and whitespace do not affect the hash, SQL tokens do.
+
+**Optional local database proof (recommended if you touched any SQL beyond copying it).** PostgreSQL 16 refuses to run as root, so run the cluster as the `postgres` user in its home directory:
+
+```bash
+su postgres -s /bin/bash -c 'mkdir -p ~/wp10 && /usr/lib/postgresql/16/bin/initdb -D ~/wp10/data -A trust -U postgres >/dev/null \
+  && /usr/lib/postgresql/16/bin/pg_ctl -D ~/wp10/data -o "-p 54329 -k /var/lib/postgresql/wp10" -l ~/wp10/log start'
+P="psql -h /var/lib/postgresql/wp10 -p 54329 -U postgres -v ON_ERROR_STOP=1 -q"
+$P -c "CREATE DATABASE wp10"
+$P -d wp10 -f <scaffold.sql>      # the scaffold below
+$P -d wp10 -f migrations/20260506_market_performance_functions.sql
+$P -d wp10 -c "ALTER FUNCTION public.get_market_product_metrics() SET search_path = public; ALTER FUNCTION public.get_set_analytics() SET search_path = public"
+$P -d wp10 -f migrations/0022_listings_freshness_guard.sql
+$P -d wp10 -f migrations/0023_price_freshness_guard.sql
+$P -d wp10 -f <seed.sql>          # the seed below
+$P -d wp10 -f audits/remediation/sql/WP10-market-metrics-equivalence.sql   # expect: 298 | 0 | 0 | 70 | 49 | 49 (see note)
+$P -d wp10 -f migrations/0027_bounded_volume_metrics.sql -f migrations/0028_bounded_market_metrics.sql -f migrations/0029_portfolio_history_rpc.sql
+$P -d wp10 -f audits/remediation/sql/WP10-market-metrics-equivalence.sql   # expect: 298 | 0 | 0 | 70 | 49 | 0
+# stop afterwards:
+su postgres -s /bin/bash -c '/usr/lib/postgresql/16/bin/pg_ctl -D ~/wp10/data stop'
+```
+
+The columns are `products | old_vs_new_missing | old_vs_new_differing | returns_nulled_by_anchor_age | products_with_nulled_return | live_vs_new_differing`. Note on the first equivalence run (before 0028): `live` is the old body, so `live_vs_new_differing` equals `products_with_nulled_return`. Both runs must print `old_vs_new_missing = 0` and `old_vs_new_differing = 0`. (Measured on this seed; if your seed run differs only in the two "nulled" counts, the comparison columns are what matter.) Also compare downstream functions: before applying 0027 and 0028 run `CREATE SCHEMA wp10_check; CREATE TABLE wp10_check.summ AS SELECT * FROM public.get_market_product_summaries(); CREATE TABLE wp10_check.sets AS SELECT * FROM public.get_set_analytics(); CREATE TABLE wp10_check.vol AS SELECT * FROM public.get_market_product_volume_metrics();`. After applying them run:
+
+```sql
+SELECT count(*) FILTER (WHERE row(o.*) IS DISTINCT FROM row(n.*)) AS vol_differing,
+       count(*) FILTER (WHERE o.product_id IS NULL OR n.product_id IS NULL) AS vol_missing
+  FROM wp10_check.vol o FULL JOIN public.get_market_product_volume_metrics() n ON n.product_id = o.product_id;
+-- expect 0 | 0
+
+SELECT count(*) FILTER (WHERE o.id IS NULL OR n.id IS NULL) AS missing,
+       count(*) FILTER (WHERE (to_jsonb(o) - ARRAY['return_7d','return_30d','return_90d','return_180d','return_365d'])
+                   IS DISTINCT FROM (to_jsonb(n) - ARRAY['return_7d','return_30d','return_90d','return_180d','return_365d'])) AS other_columns_differ,
+       count(*) FILTER (WHERE (n.return_7d IS NOT NULL AND n.return_7d IS DISTINCT FROM o.return_7d)
+                           OR (n.return_30d IS NOT NULL AND n.return_30d IS DISTINCT FROM o.return_30d)
+                           OR (n.return_90d IS NOT NULL AND n.return_90d IS DISTINCT FROM o.return_90d)
+                           OR (n.return_180d IS NOT NULL AND n.return_180d IS DISTINCT FROM o.return_180d)
+                           OR (n.return_365d IS NOT NULL AND n.return_365d IS DISTINCT FROM o.return_365d)) AS returns_changed_not_blanked
+  FROM wp10_check.summ o FULL JOIN public.get_market_product_summaries() n ON n.id = o.id;
+-- expect 0 | 0 | 0
+
+SELECT count(*) FILTER (WHERE row(o.*) IS DISTINCT FROM row(n.*)) AS sets_differing
+  FROM wp10_check.sets o FULL JOIN public.get_set_analytics() n ON n.key = o.key;
+-- 0 on this seed (every product the rule blanks here is already stale, so 0023 had withheld its
+-- returns); on other data a non-zero count is expected and only return-derived columns may differ
+```
+
+The 0027 check proves F148 changed nothing (the seed has 38 products whose newest listings snapshot is older than 30 days, and they keep `listings_snapshot_date`). The summaries check proves the anchor-age rule only blanks returns. Portfolio RPC: insert a portfolio for user `11111111-1111-1111-1111-111111111111` with a few holdings, then `SET ROLE authenticated; SELECT set_config('request.jwt.claim.sub', '11111111-1111-1111-1111-111111111111', false); SELECT count(*) FROM get_portfolio_history(1, 30);` returns 31; with another user's sub it returns 0; `SET ROLE anon` then the same call fails with `permission denied for function get_portfolio_history`.
+
+Scaffold (Supabase-shaped roles, the tables these functions read, RLS as in 0001/0013/0014). Roles are cluster-wide: on a cluster where they already exist, drop the first line.
+
+```sql
+CREATE ROLE anon NOLOGIN; CREATE ROLE authenticated NOLOGIN; CREATE ROLE service_role NOLOGIN BYPASSRLS;
+CREATE SCHEMA auth;
+CREATE FUNCTION auth.uid() RETURNS uuid LANGUAGE sql STABLE AS $$ SELECT nullif(current_setting('request.jwt.claim.sub', true), '')::uuid $$;
+GRANT USAGE ON SCHEMA auth TO anon, authenticated, service_role;
+GRANT USAGE ON SCHEMA public TO anon, authenticated, service_role;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO anon, authenticated, service_role;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON FUNCTIONS TO anon, authenticated, service_role;
+CREATE TABLE public.exchange_rates (id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY, recorded_at timestamp);
+CREATE TABLE public.generations (id bigint PRIMARY KEY, name text);
+CREATE TABLE public.sets (id bigint PRIMARY KEY, name text, code text, release_date date, expansion_type varchar, generation_id bigint);
+CREATE TABLE public.product_types (id bigint PRIMARY KEY, name text, label text);
+CREATE TABLE public.products (id bigint PRIMARY KEY, set_id bigint, product_type_id bigint, usd_price double precision, url text, last_updated timestamp DEFAULT now(), image_url text, variant text, sku text, active boolean NOT NULL DEFAULT true);
+CREATE TABLE public.product_price_history (id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY, product_id bigint, usd_price double precision NOT NULL, recorded_at timestamp DEFAULT now());
+CREATE UNIQUE INDEX product_price_history_product_day_uidx ON public.product_price_history (product_id, (recorded_at::date));
+CREATE TABLE public.product_sales_history (id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY, product_id bigint NOT NULL, bucket_date date NOT NULL, granularity text NOT NULL DEFAULT 'day', quantity_sold integer, transaction_count integer, low_sale_price double precision, high_sale_price double precision, market_price double precision, recorded_at timestamp DEFAULT now(), CONSTRAINT product_sales_history_product_bucket_uidx UNIQUE (product_id, bucket_date, granularity));
+CREATE INDEX product_sales_history_product_id_bucket_date_idx ON public.product_sales_history (product_id, bucket_date DESC);
+CREATE TABLE public.product_listings_history (id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY, product_id bigint NOT NULL, snapshot_date date NOT NULL DEFAULT CURRENT_DATE, active_listings integer, total_quantity_available integer, lowest_listing_price double precision, recorded_at timestamp DEFAULT now(), CONSTRAINT product_listings_history_product_snapshot_uidx UNIQUE (product_id, snapshot_date));
+CREATE INDEX product_listings_history_product_id_snapshot_date_idx ON public.product_listings_history (product_id, snapshot_date DESC);
+CREATE TABLE public.portfolios (id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY, user_id uuid NOT NULL, name text NOT NULL DEFAULT 'My Portfolio', created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now());
+CREATE UNIQUE INDEX portfolios_user_id_uidx ON public.portfolios (user_id);
+CREATE TABLE public.portfolio_holdings (id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY, portfolio_id bigint NOT NULL REFERENCES public.portfolios(id), product_id bigint NOT NULL REFERENCES public.products(id), quantity integer NOT NULL CHECK (quantity > 0), purchase_price_usd double precision NOT NULL, purchase_date date NOT NULL, notes text, created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now(), client_idempotency_key uuid);
+CREATE INDEX portfolio_holdings_portfolio_id_idx ON public.portfolio_holdings (portfolio_id);
+ALTER TABLE public.products ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.product_price_history ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.portfolios ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.portfolio_holdings ENABLE ROW LEVEL SECURITY;
+CREATE POLICY products_read ON public.products FOR SELECT TO anon, authenticated USING (true);
+CREATE POLICY product_price_history_read ON public.product_price_history FOR SELECT TO anon, authenticated USING (true);
+CREATE POLICY portfolios_self ON public.portfolios FOR ALL TO authenticated USING ((SELECT auth.uid()) = user_id) WITH CHECK ((SELECT auth.uid()) = user_id);
+CREATE POLICY holdings_self ON public.portfolio_holdings FOR ALL TO authenticated USING (EXISTS (SELECT 1 FROM public.portfolios p WHERE p.id = portfolio_id AND p.user_id = (SELECT auth.uid()))) WITH CHECK (EXISTS (SELECT 1 FROM public.portfolios p WHERE p.id = portfolio_id AND p.user_id = (SELECT auth.uid())));
+GRANT ALL ON ALL TABLES IN SCHEMA public TO anon, authenticated, service_role;
+REVOKE SELECT, INSERT, UPDATE, DELETE ON public.portfolios FROM anon;
+REVOKE SELECT, INSERT, UPDATE, DELETE ON public.portfolio_holdings FROM anon;
+```
+
+Seed (306 active and 24 inactive products, gaps, stale and never-priced products, NULL prices, sales and listings history):
+
+```sql
+SELECT setseed(0.42);
+INSERT INTO generations VALUES (1,'Gen A'),(2,'Gen B');
+INSERT INTO sets SELECT g, 'Set '||g, 'S'||g, current_date - (g*40), 'Expansion', 1 + g%2 FROM generate_series(1,30) g;
+INSERT INTO product_types VALUES (1,'booster_box','Booster Box'),(2,'etb','ETB');
+INSERT INTO products (id,set_id,product_type_id,usd_price,url,last_updated,active)
+SELECT i, 1 + i%30, 1 + i%2, CASE WHEN i%37=0 THEN NULL ELSE 50 + (i%97)*3.5 END, 'u'||i, now() - (i%11)*interval '1 hour', i <= 306 FROM generate_series(1,330) i;
+-- history: start between 5 and 450 days back, end between 0 and 120 days back for ~10% (stale), gaps ~8%
+INSERT INTO product_price_history (product_id, usd_price, recorded_at)
+SELECT p.i, round((40 + random()*200)::numeric,2)::float8, (current_date - d) + interval '4 hours' + (random()*300)::int * interval '1 minute'
+FROM (SELECT i, 5 + (i*37 % 446) AS start_back, CASE WHEN i%10=3 THEN (i*7)%120 WHEN i%10=7 THEN 16 ELSE 0 END AS end_back FROM generate_series(1,330) i WHERE i%53 <> 0) p
+CROSS JOIN LATERAL generate_series(p.end_back, p.start_back) d
+WHERE random() > 0.08;
+-- make products.usd_price agree with latest history for most products
+UPDATE products p SET usd_price = l.usd_price FROM (SELECT DISTINCT ON (product_id) product_id, usd_price FROM product_price_history ORDER BY product_id, recorded_at DESC) l WHERE l.product_id = p.id AND p.id % 37 <> 0 AND p.id % 19 <> 0;
+-- sales history daily for 400 days, some null quantity, some stale products
+INSERT INTO product_sales_history (product_id, bucket_date, granularity, quantity_sold, transaction_count)
+SELECT i, current_date - d, 'day', CASE WHEN random() < 0.05 THEN NULL ELSE (random()*20)::int END, (random()*10)::int
+FROM generate_series(1,330) i CROSS JOIN generate_series(CASE WHEN i%9=0 THEN 70 WHEN i%9=1 THEN 5 ELSE 0 END, 400) d WHERE random() > 0.03;
+INSERT INTO product_sales_history (product_id, bucket_date, granularity, quantity_sold, transaction_count)
+SELECT i, date_trunc('week', current_date - w*7)::date, 'week', (random()*100)::int, (random()*40)::int
+FROM generate_series(1,330) i CROSS JOIN generate_series(1,52) w ON CONFLICT DO NOTHING;
+INSERT INTO product_listings_history (product_id, snapshot_date, active_listings, total_quantity_available, lowest_listing_price)
+SELECT i, current_date - d, (random()*50)::int, (random()*200)::int, 10 + random()*300
+FROM generate_series(1,330) i CROSS JOIN generate_series(CASE WHEN i%8=0 THEN 40 ELSE 0 END, 400) d WHERE random() > 0.05;
+-- boundary rows: exactly midnight and 23:59:59.999 on anchor dates, and NULL recorded_at
+UPDATE product_price_history SET recorded_at = recorded_at::date
+ WHERE recorded_at::date IN (current_date, current_date-1, current_date-6, current_date-7, current_date-29, current_date-30,
+   current_date-89, current_date-90, current_date-179, current_date-180, current_date-364, current_date-365, current_date-366)
+   AND product_id % 3 = 0;
+UPDATE product_price_history SET recorded_at = recorded_at::date + interval '23:59:59.999'
+ WHERE recorded_at::date IN (current_date-1, current_date-7, current_date-30, current_date-90, current_date-180, current_date-365)
+   AND product_id % 3 = 1;
+INSERT INTO product_price_history (product_id, usd_price, recorded_at) VALUES (5, 99, NULL), (6, 98, NULL);
+ANALYZE;
+```
+
+Manual checks the executor can do: none against real data (no production access, and the WP00 stub answers `[]` to everything). The end-to-end checks are Owner actions 6 and 7.
+
+## Owner actions
+
+Apply in this order, and apply 0027-0029 **before merging** this PR (Vercel deploys on merge; the code has a fallback, but the fast path needs 0029). All SQL runs in the Supabase SQL editor for the production project with nothing selected, or through Supabase MCP.
+
+1. **Baseline (optional, 2 minutes).** Record today's cost so the improvement is measurable:
+
+   ```sql
+   SELECT left(query, 60) AS q, calls, round(mean_exec_time) AS mean_ms, round(max_exec_time) AS max_ms
+     FROM pg_stat_statements
+    WHERE query ILIKE '%get_market_product_summaries%' OR query ILIKE '%get_set_analytics%'
+       OR query ILIKE '%get_market_product_volume_metrics%'
+    ORDER BY calls DESC LIMIT 6;
+   EXPLAIN (ANALYZE) SELECT * FROM public.get_market_product_metrics();   -- note "Execution Time"
+   ```
+
+2. **Prerequisites.** (a) WP01's 0024/0025 and WP05 are merged and applied. (b) The price-history index exists: `SELECT indexname, indexdef FROM pg_indexes WHERE schemaname = 'public' AND tablename = 'product_price_history';` must show a btree on `(product_id, recorded_at DESC)` (name `idx_price_history_product_recorded` or the older production name). If none exists, stop and apply `0023`'s `CREATE INDEX IF NOT EXISTS idx_price_history_product_recorded ...` statement first. (c) The two indexes 0027's probes use exist: run the second query in 0027's header and expect 2 rows (`product_sales_history_product_id_bucket_date_idx`, `product_listings_history_product_id_snapshot_date_idx`, both from 0015). If one is missing, stop and apply the matching `CREATE INDEX IF NOT EXISTS` statement from `0015` first. (d) `SELECT current_setting('TimeZone');` returns `UTC` (the RPCs use `current_date`; so do the existing ones).
+
+3. **Pre-apply equivalence (5 minutes).** Paste the whole of `audits/remediation/sql/WP10-market-metrics-equivalence.sql` and Run. Expect one row with `old_vs_new_missing = 0` and `old_vs_new_differing = 0`, and `live_vs_new_differing` equal to `products_with_nulled_return` (live is still the old body). `returns_nulled_by_anchor_age` and `products_with_nulled_return` are how many returns (and products) the anchor-age rule will blank today: record both for the PR and HARDENING_FOLLOWUPS. If either old_vs_new column is non-zero, stop and report the row: do not apply 0028. The script only creates five `pg_temp` functions, which vanish when the editor's connection closes; it changes nothing in `public`. If the editor shows "Success. No rows returned" instead of a result row, you ran a selection or an old copy of the script: select nothing and paste the file from the repo again.
+
+4. **Apply 0027, then 0028.** Preferred: Supabase MCP `apply_migration` with names `0027_bounded_volume_metrics` and `0028_bounded_market_metrics` and the full file contents. Alternative: SQL editor, paste the whole file, nothing selected, Run. Then:
+   - 0027: run `python3 verify_migration.py migrations/0027_bounded_volume_metrics.sql` locally, paste the printed SQL, Run. Expect 1 row, `OK`.
+   - 0028: run `python3 verify_migration.py migrations/0028_bounded_market_metrics.sql` locally, paste the printed SQL, Run. Expect 1 row, `OK`.
+   - Re-run the equivalence script. Expect `old_vs_new_missing = 0`, `old_vs_new_differing = 0` and now `live_vs_new_differing = 0` (live is the new body).
+   - `EXPLAIN (ANALYZE) SELECT * FROM public.get_market_product_metrics();` Execution Time should be a small fraction of step 1's (expect well under 300 ms).
+
+5. **Apply 0029** (MCP name `0029_portfolio_history_rpc`). Verify: `python3 verify_migration.py migrations/0029_portfolio_history_rpc.sql`, paste, Run: expect 5 rows, all `OK` (1 function, 4 privileges). Then prove RLS as a real user. Replace `YOUR_ACCOUNT_EMAIL`, select nothing, and run the whole snippet as one Run. It has no `BEGIN`/`ROLLBACK` on purpose: the editor shows only the last statement's result, and it sends the snippet as one batch, which Postgres runs as one implicit transaction, so the `true` (local) settings and `SET LOCAL ROLE` end with the batch. The two portfolio ids are read while still running as `postgres`, before the role switch; read after it, RLS would hide the other user's portfolio, the id would be NULL, and the "other user" check would pass without testing anything.
+
+   ```sql
+   SELECT set_config('wp10.me',
+            (SELECT id::text FROM auth.users WHERE email = 'YOUR_ACCOUNT_EMAIL'), true),
+          set_config('wp10.mine',
+            (SELECT p.id::text FROM public.portfolios p JOIN auth.users u ON u.id = p.user_id
+              WHERE u.email = 'YOUR_ACCOUNT_EMAIL' LIMIT 1), true),
+          set_config('wp10.other',
+            (SELECT h.portfolio_id::text FROM public.portfolio_holdings h
+               JOIN public.portfolios p ON p.id = h.portfolio_id
+               JOIN auth.users u ON u.id = p.user_id
+              WHERE u.email <> 'YOUR_ACCOUNT_EMAIL' LIMIT 1), true);
+   SELECT set_config('request.jwt.claims',
+            json_build_object('sub', current_setting('wp10.me'), 'role', 'authenticated')::text,
+            true);
+   SET LOCAL ROLE authenticated;
+   SELECT
+     (SELECT count(*) FROM public.get_portfolio_history(
+        nullif(current_setting('wp10.mine'), '')::bigint, 30)) AS points,
+     (SELECT max(point_date) FROM public.get_portfolio_history(
+        nullif(current_setting('wp10.mine'), '')::bigint, 30)) AS last_point,
+     nullif(current_setting('wp10.other'), '') IS NOT NULL AS other_portfolio_found,
+     (SELECT count(*) FROM public.get_portfolio_history(
+        nullif(current_setting('wp10.other'), '')::bigint, 30)) AS other_users_points,
+     current_user AS ran_as;
+   ```
+
+   Expect `ran_as = authenticated`, `points = 31` and `last_point` = today's UTC date when your portfolio has holdings (0 and NULL when it has none), `other_portfolio_found = true` and `other_users_points = 0`. If `other_portfolio_found` is false, no other user has holdings yet and the cross-user check proved nothing; say so in HARDENING_FOLLOWUPS. An error `invalid input syntax for type uuid: ""` means the email matched no row in `auth.users`; fix the email and run again. (This snippet was replayed on the local scaffold with a Supabase-style `auth.uid()`: 31 points, other user 0, `current_user` back to `postgres` afterwards.) Then run, as separate Runs: `SELECT current_user;` (must return `postgres`, proving the role switch ended with the batch) and `SELECT has_function_privilege('anon', 'public.get_portfolio_history(bigint, integer)', 'EXECUTE');` (must return `false`).
+
+6. **Merge and check the site.** After the deploy: sign in, open `/portfolio`. In DevTools > Network: one `GET /api/portfolio/history?days=30` answering 200 with 31 points, and no requests to `/rest/v1/product_price_history`. Click 1Y: one request with `days=365` and 366 points; the chart matches what it showed before for the same range. A 501 in that request means PostgREST does not see `get_portfolio_history` (the chart still renders through the fallback). If step 5 was done, PostgREST's schema cache has not reloaded: run `NOTIFY pgrst, 'reload schema';` in the SQL editor, wait 10 seconds and reload the page. If step 5 was not done, do it.
+
+7. **After 24 hours.** Re-run the step 1 `pg_stat_statements` query (optionally `SELECT pg_stat_statements_reset();` right after step 4 so the means cover only the new body). Expect `get_market_product_summaries` and `get_set_analytics` mean well under 300 ms and max under 1 s. In Dashboard > Logs > Postgres, search "canceling statement due to statement timeout": expect none for these functions.
+
+8. **Record it.** In `audits/HARDENING_FOLLOWUPS.md` section 7, change "**Migrations 0027, 0028 and 0029: pending apply**" to "**Migrations 0027, 0028 and 0029 applied** (YYYY-MM-DD, via Supabase MCP)" and paste the equivalence result row (including the two "nulled" counts) and the before/after Execution Time. Commit that doc change directly to master as `docs: record migrations 0027-0029 as applied` (same convention as WP01's owner step 7), so later packages that anchor on these bullets (WP16, WP21) find the final text.
+
+## Acceptance criteria
+
+- [ ] `migrations/0027_bounded_volume_metrics.sql`, `0028_bounded_market_metrics.sql`, `0029_portfolio_history_rpc.sql` exist (fixed numbers from the registry in `audits/remediation/00-PLAN.md`; never renumber them); no existing migration, `verify_migration.py` or `schema.sql` changed (`git diff --stat master -- migrations/20260506_market_performance_functions.sql migrations/0022_listings_freshness_guard.sql migrations/0023_price_freshness_guard.sql verify_migration.py schema.sql` is empty).
+- [ ] `verify_migration.py` on 0027 exits 0 with volume body hash `1bb85a0f1d3e619536c1702654af8cbf`, and on 0028 exits 0 with metrics body hash `f3102b0f63c0fd2e95b891370b9ffc75` (neutral variant: `8e8f39b53d71592dae0bd60dde9bebbf`); both `security invoker`, `volatility s`, `config search_path=public`.
+- [ ] `verify_migration.py` on 0029 exits 0 with body hash `2f9e67a2ae57801575c18009e257ddcf`, `security invoker`, PUBLIC and anon revoked, authenticated and service_role granted.
+- [ ] `get_market_product_metrics` has 6 `LEFT JOIN LATERAL` anchors, no `FROM daily_history dh WHERE dh.product_id = ap.id`, and `daily_history` bounded with `recorded_at >= current_date - 366`.
+- [ ] Anchor-age rule (unless the owner chose the neutral variant): the 0028 header names `RETURN_ANCHOR_TOLERANCE_SHORT_DAYS = 7` and `RETURN_ANCHOR_TOLERANCE_LONG_DAYS = 14`; the 7d, 30d, 90d, 180d and 365d probes carry `AND h.recorded_at >= current_date - 14` / `- 37` / `- 104` / `- 194` / `- 379`; the 1d probe has no lower bound; `grep -nE "recorded_at >= current_date - (14|37|104|379)$" migrations/0028_bounded_market_metrics.sql` prints 4 lines.
+- [ ] The volume function's `day_freshness` and `latest_listings` are per-product `ORDER BY ... DESC LIMIT 1` probes; `latest_listings` has no date bound and no `DISTINCT ON`; no new index is created.
+- [ ] `audits/remediation/sql/WP10-market-metrics-equivalence.sql` exists, has exactly 6 `LEFT JOIN LATERAL` and 5 `CREATE OR REPLACE FUNCTION pg_temp.` lines, contains no `BEGIN;` or `ROLLBACK;`, and its last line is `FROM diff;` (the Supabase editor shows only the last statement's result).
+- [ ] `tests/test_wp10_market_rpc_bounds.py` passes (9 tests; 8 in the neutral variant).
+- [ ] `GET /api/portfolio/history` exists with the status codes in step 7 (403, 400, 401, 503, 501, 500, 200), uses WP05's `requireRouteUser` and `jsonNoStore` (`grep -c "requireRouteUser\|jsonNoStore" app/api/portfolio/history/route.ts` from `frontend/` prints at least 2, and `grep -c "auth.getUser" app/api/portfolio/history/route.ts` prints 0); its tests pass.
+- [ ] `getPortfolioHistory` makes one `fetch` to `/api/portfolio/history` and no `product_price_history` query unless the route answered 501 (tests 3 and 4).
+- [ ] `pnpm exec tsc --noEmit`, `pnpm test --ci` and `pnpm build:stub` pass; no new lint errors in touched files.
+- [ ] `README.md` and `audits/HARDENING_FOLLOWUPS.md` carry the step 10 edits with 0027-0029 marked "pending apply", and section 7 has the "Open (review F080 ...)" bullet directly below the WP10 bullet, followed by the "Open (WP18) ..." bullet (neutral variant: without it).
+- [ ] The PR body states which anchor-age variant shipped (default: in 0028; neutral: deferred to WP25).
+- [ ] (Owner) Equivalence script returns `old_vs_new_missing = 0` and `old_vs_new_differing = 0` before and after applying 0028, and `live_vs_new_differing = 0` after it.
+- [ ] (Owner) `verify_migration.py` queries return all `OK` for 0027 (1 row), 0028 (1 row) and 0029 (5 rows).
+- [ ] (Owner) The portfolio chart loads with one `/api/portfolio/history` request per timeframe and no `product_price_history` requests.
+- [ ] (Owner) After 24 hours, zero statement-timeout cancellations for the market RPCs.
+
+## Rollback
+
+- **Code**: revert the PR commit. The hook then uses the pre-WP10 browser computation again (WP05's `getPortfolioHistory`); leaving 0029 in the database is harmless.
+- **0029**: `DROP FUNCTION IF EXISTS public.get_portfolio_history(bigint, integer);` as a new numbered migration. While this PR's code is deployed, the route then answers 501 and the chart falls back to the browser fold.
+- **0028**: do not re-run `20260506_market_performance_functions.sql` whole (see Pitfalls). Write a new numbered migration containing `20260506_market_performance_functions.sql` lines 14-197 (the old `get_market_product_metrics` only) followed by `ALTER FUNCTION public.get_market_product_metrics() SET search_path = public;`. Same return shape, so the ACL is kept. Verify with `verify_migration.py` on that new file. This also removes the anchor-age rule; to undo only the rule, copy 0028 into the new file without the five anchor-age lines instead (that is the neutral body, hash `8e8f39b53d71592dae0bd60dde9bebbf`), and tell the WP25 owner.
+- **0027**: a new numbered migration containing the whole of `0022_listings_freshness_guard.sql` (it only defines the volume function and re-pins it). Same return shape, so the ACL is kept.
+- Never edit 0027-0029 after they are applied; add a new file instead.
+
+## Commit and PR
+
+Commit message:
+
+```text
+perf(db): bound market metrics RPCs; compute portfolio history in SQL
+
+- 0027: get_market_product_volume_metrics day_freshness and latest_listings
+  become per-product LIMIT 1 index probes; output unchanged (F148)
+- 0028: get_market_product_metrics anchors become LATERAL index probes and
+  daily_history is bounded to 366 days (F142). Return anchors get a maximum
+  age: 7 days past the target date for 7D/1M, 14 days for 3M/6M/1Y, else
+  NULL. Every other value unchanged (equivalence script in
+  audits/remediation/sql)
+- 0029: get_portfolio_history(bigint, integer), SECURITY INVOKER, no anon
+  EXECUTE; one row per UTC day with the 14-day freshness gate (F145)
+- GET /api/portfolio/history + portfolioRepo.loadPortfolioHistory +
+  portfolioApi.fetchPortfolioHistory; getPortfolioHistory uses the route and
+  falls back to the browser fold only on 501
+- Static pytest guard for the bounds; route/repo/client tests
+```
+
+PR title: `WP10: bounded market metrics RPCs, return-anchor age rule and a portfolio history RPC (F142, F148, F145)`
+
+PR body summary: what was slow (unbounded history scan plus about 1,800 correlated CTE scans per call, once per server cache entry per hour plus every uncached browser call; production mean 734-903 ms and daily 3 s timeouts; portfolio chart paging thousands of rows to the browser), what changed (three migrations, the route, the fallback), a line "Return-anchor age rule: shipped in 0028" (or, in the neutral variant, "Return-anchor age rule: deferred to WP25 at the owner's request; 0028 is behaviour-neutral"), the equivalence evidence (replica: 0 differing rows across metrics, summaries, set analytics and volume once the anchor-age rule is applied to the old output; 70 returns on 49 seed products blanked by the rule, all already withheld by 0023; 17 s to 0.13 s), the known gap that `/market` can still recompute a blanked return in the browser until WP18 applies the same tolerances, why `latest_listings` stays unbounded and why the volume CTEs use LATERAL probes instead of a partial index, why `verify_migration.py` needed no change, the Verification output, the Owner actions checklist (apply 0027-0029 before merge, run the equivalence script before and after 0028, record the two "nulled" counts), and out-of-scope notes: server revalidation frequency and the hundreds of summaries calls per hour (F143, WP11); anon EXECUTE on the market RPCs, direct PostgREST rate limiting and the compute-on-write metrics table (F080 residual, not scheduled in the plan, recorded as an open item in HARDENING_FOLLOWUPS); removal of the browser fallback after 0029 is confirmed (follow-up in HARDENING_FOLLOWUPS).
