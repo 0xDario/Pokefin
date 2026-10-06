@@ -292,6 +292,12 @@ from-scratch bootstrap and cannot rebuild the database on its own:
   `0006` revokes privileges on `handle_new_profile_portfolio()` and `0007`
   alters `get_price_history_deduplicated(bigint[], text)`. Both exist only in
   the live database.
+- Production is believed to carry a legacy `portfolio_holdings (portfolio_id)`
+  index created outside these files (`0014` dropped the repo's
+  `portfolio_holdings_portfolio_id_idx` as its duplicate). `0025` therefore
+  creates `portfolio_holdings_portfolio_id_idx` and
+  `portfolio_lots_holding_id_idx` only where no equivalent btree index
+  exists, so on production it may create one, both, or neither.
 - Not every file is re-runnable: `0003_integrity_constraints.sql` uses bare
   `ALTER TABLE ... ADD CONSTRAINT` and errors on a second run. The rest,
   including `create_box_recipes.sql`, is idempotent.
@@ -436,6 +442,9 @@ redefines an object, verify against that later file. `0002` reports a body
 `MISMATCH` for `delete_my_account` because `0010` redefines it, and
 `20260506`'s two dropped indexes report `MISSING` because `0014` drops them —
 both correct.
+Likewise `0011` reports a volatility `MISMATCH` for `export_my_data` once
+`0024` is applied, and `0025` prints no query at all because its indexes are
+created inside a `DO` block; check it with the query in that file's header.
 
 The editor's own trap is worth knowing: it runs **the selected text** when
 there is a selection, so a stray click before Run silently applies a fragment.
