@@ -125,6 +125,9 @@ that needs no code change.
   `POST /api/account/export`, which invokes the `export_my_data()`
   RPC (migration `0011`) and downloads a JSON of profile +
   portfolios + holdings + lots + box recipes (Art. 15/20).
+- Correction (2026-09-25 review, F020): the export RPC failed on every call
+  until migration `0024`, because `0011` declared it `STABLE` while it
+  inserts the `data_exported` audit row. No export succeeded before `0024`.
 - `auth_events` table populated by a trigger on `auth.users` (created
   / deleted / password_changed / email_confirmed) plus explicit
   `account_deletion_requested` and `data_exported` rows from the
@@ -142,6 +145,15 @@ All probes should return the expected 401/403/429/redirect results.
   Advisor re-run confirms all critical issues resolved; remaining
   warnings are intentional (reference-table anon SELECT, definer
   functions with internal scoping, Pro+ leaked-password toggle).
+- **Migrations 0024 and 0025: pending apply** (WP01, review findings F020
+  and F134). 0024 re-creates `export_my_data()` without `STABLE` (the
+  `data_exported` audit INSERT made every call fail) and revokes EXECUTE
+  from PUBLIC and anon. 0025 creates `portfolio_holdings_portfolio_id_idx`
+  and `portfolio_lots_holding_id_idx` only where no equivalent btree index
+  exists. Owner: after applying, replace "pending apply" with
+  "applied (YYYY-MM-DD, via Supabase MCP)" or "(..., via SQL editor)", and
+  note which index names 0025 created or skipped (compare pg_indexes
+  before and after the apply).
 - **Migration 0022 applied** (2026-08-10, via Supabase MCP). Extends the
   staleness guard to the supply metrics: active_listings,
   total_quantity_available and lowest_listing_price go NULL when the newest
