@@ -5,18 +5,33 @@ on:
   push:
     branches: [master]
 
+# Least privilege for every job's GITHUB_TOKEN. No job pushes, comments or
+# writes checks; they only read the repository. Declared here so the scope
+# no longer depends on the repository's Actions settings.
+permissions:
+  contents: read
+
 jobs:
   frontend:
+    # Keep this name unchanged: branch protection on master requires the
+    # check by its exact name.
     name: Frontend (lint + typecheck + tests)
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     defaults:
       run:
         working-directory: frontend
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      # No `version:` input: the action reads "packageManager" from
+      # frontend/package.json (pnpm@11.20.0), so CI and local installs
+      # resolve the lockfile with the same pnpm. Setting `version:` as well
+      # makes the action fail with "Multiple versions of pnpm specified".
       - uses: pnpm/action-setup@v6
         with:
-          version: 10
+          package_json_file: frontend/package.json
       - uses: actions/setup-node@v7
         with:
           node-version: "22"
@@ -34,6 +49,13 @@ jobs:
       # pnpm forwards a literal `--` to the script, which jest treats as a
       # path pattern; pass --ci directly instead of via `pnpm test -- --ci`.
       - run: pnpm test --ci
+      - name: Build-harness tests (node --test)
+        run: pnpm run test:scripts
+      # Full `next build` against a local Supabase stub (no secrets, no
+      # Supabase project). Catches Turbopack, Sentry plugin, next.config and
+      # prerender failures that tsc and jest cannot see.
+      - name: Production build (Supabase stub)
+        run: pnpm build:stub
 
   audit:
     name: pnpm audit (high+ severity)
@@ -43,9 +65,11 @@ jobs:
         working-directory: frontend
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       - uses: pnpm/action-setup@v6
         with:
-          version: 10
+          package_json_file: frontend/package.json
       - uses: actions/setup-node@v7
         with:
           node-version: "22"
@@ -56,6 +80,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
@@ -86,8 +112,18 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - uses: trufflesecurity/trufflehog@main
+          # trufflehog bind-mounts the workspace (including .git/config) into
+          # its container and only reads local history; it needs no token.
+          persist-credentials: false
+      # Pinned to a commit SHA; Dependabot (github-actions ecosystem) bumps
+      # SHA pins that carry a version comment.
+      - uses: trufflesecurity/trufflehog@4dd8831c5f12599465d4d45c3c447b4018a34c85 # v3.97.9
         with:
+          # The action runs `docker run ghcr.io/trufflesecurity/trufflehog:<version>`
+          # and defaults to `latest`. Pin the scanner image too. Dependabot does
+          # NOT bump this input: keep it equal to the version comment above
+          # (no leading "v") whenever the SHA pin changes.
+          version: "3.97.9"
           path: ./
           # On pull_request, diff the PR branch against the base. On push,
           # leave base/head unset so the action auto-detects from the push
