@@ -8,4 +8,4 @@ supabase==2.31.0
 # Thumbnail derivatives for product images. The Supabase free plan has no
 # image transformation endpoint, so the scraper resizes at upload time —
 # list thumbnails were otherwise serving 743x1000 JPEGs into 24px boxes.
-Pillow==12.3.0
+Pillow==13.0.0
