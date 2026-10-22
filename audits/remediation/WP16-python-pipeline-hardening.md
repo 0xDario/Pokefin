@@ -316,7 +316,7 @@ The 8 MiB download cap and the magic-byte check bound the bytes fetched, not the
 THUMBNAIL_MAX_SOURCE_PIXELS = 20_000_000
 ```
 
-2A-b. In `build_thumbnail`, directly below the line `        with PILImage.open(io.BytesIO(image_bytes)) as img:` and above its first comment line, insert (12-space indent, inside the `with`):
+2A-b. In `build_thumbnail`, directly below the line `        with PILImage.open(io.BytesIO(image_bytes), formats=THUMBNAIL_SOURCE_FORMATS) as img:` and above its first comment line, insert (12-space indent, inside the `with`):
 
 ```python
             # PILImage.open reads only the header, so the size is known

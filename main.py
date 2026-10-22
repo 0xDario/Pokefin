@@ -97,6 +97,12 @@ IMAGE_CACHE_CONTROL_SECONDS = "604800"  # 7 days
 THUMBNAIL_MAX_EDGE = 256
 THUMBNAIL_QUALITY = 78
 
+# Pillow decoders build_thumbnail may use. Image.open otherwise sniffs every
+# format Pillow knows (TIFF, GIF, EPS via Ghostscript, MSP, XBM, ...), and
+# backfill_thumbnails.py passes raw downloaded bytes with no magic-byte check.
+# Keep in sync with IMAGE_ALLOWED_MIMES.
+THUMBNAIL_SOURCE_FORMATS = ("JPEG", "PNG", "WEBP")
+
 
 def thumbnail_object_path(product_id) -> str:
     """Storage path of a product's thumbnail derivative.
@@ -122,7 +128,7 @@ def build_thumbnail(image_bytes: bytes):
         return None
 
     try:
-        with PILImage.open(io.BytesIO(image_bytes)) as img:
+        with PILImage.open(io.BytesIO(image_bytes), formats=THUMBNAIL_SOURCE_FORMATS) as img:
             # PNG and WebP are accepted sources and may carry alpha. Going
             # straight to RGB drops the alpha channel and leaves fully
             # transparent pixels black, which would paint black boxes and
