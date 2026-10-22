@@ -5,6 +5,7 @@ import platform
 import random
 import shutil
 import socket
+import sys
 import tempfile
 import time
 import uuid
@@ -21,6 +22,15 @@ from supabase import create_client
 from urllib.parse import urlparse, parse_qs
 from urllib3.exceptions import NotOpenSSLWarning
 from webdriver_manager.chrome import ChromeDriverManager
+
+# Pillow 13 (the first release with the 2026-10-21 security fixes) requires
+# Python 3.11+. Fail loudly instead of running from an old venv that may still
+# hold a vulnerable Pillow. Keep in sync with README "Prerequisites".
+if sys.version_info < (3, 11):
+    raise SystemExit(
+        f"Pokefin needs Python 3.11+, found {sys.version.split()[0]}. "
+        "Recreate the venv with a newer Python and run: pip install -r requirements.txt"
+    )
 
 from secrets_loader import load_supabase_credentials
 
