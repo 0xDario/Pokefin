@@ -60,7 +60,7 @@ A live price and market-activity dashboard for sealed Pokémon TCG products (Boo
 
 ### Prerequisites
 - Node.js 22+
-- Python 3.10+ (the scraper uses PEP 604 `X | None` annotations)
+- Python 3.11+ (Pillow 13, which carries the 2026-10-21 security fixes, dropped 3.10; `main.py` refuses to start on older versions)
 - pnpm (see `packageManager` in `frontend/package.json`)
 - Supabase account
 
