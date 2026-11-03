@@ -80,3 +80,16 @@ body {
 table {
   font-variant-numeric: tabular-nums;
 }
+
+/* Header cells of StickyHeaderTable are translated down while scrolling;
+   give them an opaque background and paint them above body cells. */
+@layer components {
+  .pf-sticky-table thead th {
+    position: relative;
+    z-index: 15;
+    background-color: var(--color-slate-50);
+  }
+  .pf-sticky-table thead[data-stuck] th {
+    box-shadow: inset 0 -1px 0 var(--color-slate-200), 0 2px 4px -2px rgba(15, 23, 42, 0.12);
+  }
+}
