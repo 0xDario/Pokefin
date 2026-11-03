@@ -60,7 +60,7 @@ A live price and market-activity dashboard for sealed Pokémon TCG products (Boo
 
 ### Prerequisites
 - Node.js 22+
-- Python 3.11+ (Pillow 13, which carries the 2026-10-21 security fixes, dropped 3.10; `main.py` refuses to start on older versions)
+- Python 3.15 (pinned in `.python-version`; CI installs and tests on it). 3.11 is the hard floor: Pillow 13, which carries the 2026-10-21 security fixes, dropped 3.10, and `main.py` refuses to start on older versions
 - pnpm (see `packageManager` in `frontend/package.json`)
 - Supabase account
 
@@ -99,7 +99,7 @@ configured with a production secret will reject the test token.
 
 ```bash
 # Scraper (separate terminal, from the repo root)
-python -m venv venv && source venv/bin/activate
+python3.15 -m venv venv && source venv/bin/activate
 pip install -r requirements.txt
 ```
 
