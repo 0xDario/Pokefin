@@ -76,7 +76,7 @@ export default function Header() {
     pathname === href || (href !== "/" && pathname?.startsWith(href));
 
   return (
-    <header className="sticky top-0 z-50 bg-white border-b border-slate-200 shadow-[0_1px_0_rgba(15,23,42,0.04)]">
+    <header data-site-header className="sticky top-0 z-50 bg-white border-b border-slate-200 shadow-[0_1px_0_rgba(15,23,42,0.04)]">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex justify-between items-center h-16">
           {/* Logo */}
