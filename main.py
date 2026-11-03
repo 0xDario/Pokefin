@@ -1126,7 +1126,6 @@ def update_prices():
     user_data_dir = None
     api_session = requests.Session()
     updated_count = 0
-    price_history_batch = []  # Collect price history entries for batch insert
     sales_history_batch = []  # Collect daily sales-volume rows for batch upsert
     listings_history_batch = []  # Collect listings-depth snapshots for batch upsert
     sales_rows_written = 0
@@ -1175,15 +1174,26 @@ def update_prices():
                     needs_price_update = last_updated_dt < price_interval_ago
 
             if price is not None and needs_price_update:
-                update_data["usd_price"] = price
-                update_data["last_updated"] = datetime.now(timezone.utc).isoformat()
-
-                # Add to price history batch instead of individual insert
-                price_history_batch.append({
+                # Write the history row now, before products is updated, and
+                # only move products.usd_price if that row landed.
+                # get_market_product_summaries withholds any price that
+                # disagrees with its latest history row. Batching history to
+                # the end of the run left every repriced product in that state
+                # for the whole run (minutes), and the client caches the
+                # summaries for an hour, so the box calculator and price lists
+                # showed "No price" for packs scraped moments earlier.
+                history_ok, _ = _flush_price_history_batch([{
                     "product_id": product_id,
                     "usd_price": price
-                })
-                logger.info(f"   Updated price: ${price:.2f}")
+                }])
+                if history_ok:
+                    update_data["usd_price"] = price
+                    update_data["last_updated"] = datetime.now(timezone.utc).isoformat()
+                    logger.info(f"   Updated price: ${price:.2f}")
+                else:
+                    logger.error(
+                        f"   Price history insert failed; leaving usd_price unchanged for product {product_id}"
+                    )
 
             # === Sales volume + listings capture ===
             # Not gated on needs_price_update: capture whenever API data is
@@ -1274,11 +1284,6 @@ def update_prices():
             else:
                 logger.info(f"   No updates needed for product {product_id}{variant_info}")
 
-            # Batch insert price history every 100 entries
-            if len(price_history_batch) >= 100:
-                _flush_price_history_batch(price_history_batch)
-                price_history_batch = []
-
             # Batch upsert sales/listings history every 100 entries
             if len(sales_history_batch) >= 100:
                 flushed_ok, flushed_failed = _flush_sales_history_batch(sales_history_batch)
@@ -1293,10 +1298,6 @@ def update_prices():
                 listings_history_batch = []
 
             time.sleep(1)  # polite delay between requests
-
-        # Flush remaining price history entries
-        if price_history_batch:
-            _flush_price_history_batch(price_history_batch)
 
         # Flush remaining sales/listings history entries
         if sales_history_batch:
