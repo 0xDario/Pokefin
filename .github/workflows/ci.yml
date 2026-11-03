@@ -82,9 +82,11 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
+      # Reads .python-version so CI, local venvs and the scraper host all
+      # target the same interpreter. Bump it there, not here.
       - uses: actions/setup-python@v7
         with:
-          python-version: "3.12"
+          python-version-file: .python-version
       - run: pip install pip-audit
       # pip-audit hits PyPI's JSON API once per dependency and has no
       # built-in retry. A single TLS hiccup between the runner and PyPI
@@ -104,6 +106,13 @@ jobs:
             fi
           done
           exit 1
+      # Install the pinned deps on the target interpreter and run the suite.
+      # --only-binary fails fast if a pin has no wheel for this Python yet,
+      # which is the usual blocker when bumping .python-version.
+      - name: Install requirements (wheels only)
+        run: pip install --only-binary :all: -r requirements.txt pytest
+      - name: Tests (pytest)
+        run: python -m pytest -q tests
 
   secret-scan:
     name: Secret scan (trufflehog)
