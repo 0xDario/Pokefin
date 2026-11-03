@@ -110,7 +110,7 @@ jobs:
       # --only-binary fails fast if a pin has no wheel for this Python yet,
       # which is the usual blocker when bumping .python-version.
       - name: Install requirements (wheels only)
-        run: pip install --only-binary :all: -r requirements.txt pytest
+        run: pip install --only-binary ":all:" -r requirements.txt pytest
       - name: Tests (pytest)
         run: python -m pytest -q tests
 
