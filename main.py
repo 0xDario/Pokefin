@@ -1182,11 +1182,7 @@ def update_prices():
                 # for the whole run (minutes), and the client caches the
                 # summaries for an hour, so the box calculator and price lists
                 # showed "No price" for packs scraped moments earlier.
-                history_ok, _ = _flush_price_history_batch([{
-                    "product_id": product_id,
-                    "usd_price": price
-                }])
-                if history_ok:
+                if _record_price_history(product_id, price):
                     update_data["usd_price"] = price
                     update_data["last_updated"] = datetime.now(timezone.utc).isoformat()
                     logger.info(f"   Updated price: ${price:.2f}")
@@ -1322,6 +1318,52 @@ def update_prices():
         f"Sales history rows written: {sales_rows_written} (failed: {sales_rows_failed}); "
         f"listings snapshots written: {listings_rows_written} (failed: {listings_rows_failed})"
     )
+
+
+def _record_price_history(product_id, price):
+    """
+    Make today's product_price_history row for product_id carry `price`.
+
+    Inserts a row, or, when today's row already exists (the one-row-per-day
+    index from migration 0003 rejects the insert), moves that row to `price`.
+    The second case is a same-day retry after an earlier run wrote history but
+    failed to update products; without it, the retry could never bring the
+    two back into agreement until the next day.
+
+    Returns True when today's row holds `price`, False otherwise.
+    """
+    entry = {"product_id": product_id, "usd_price": price}
+    try:
+        supabase.table("product_price_history").insert(entry).execute()
+        return True
+    except Exception as e:
+        insert_error = e
+
+    try:
+        today_start = datetime.now(timezone.utc).replace(
+            hour=0, minute=0, second=0, microsecond=0, tzinfo=None
+        ).isoformat()
+        existing = (
+            supabase.table("product_price_history")
+            .select("id")
+            .eq("product_id", product_id)
+            .gte("recorded_at", today_start)
+            .order("recorded_at", desc=True)
+            .limit(1)
+            .execute()
+        )
+        if existing.data:
+            supabase.table("product_price_history").update(
+                {"usd_price": price}
+            ).eq("id", existing.data[0]["id"]).execute()
+            logger.info(f"   Reconciled today's price history row for product {product_id}")
+            return True
+    except Exception as e:
+        logger.error(f"Price history reconcile failed for product {product_id}: {e}")
+        return False
+
+    logger.error(f"Price history insert failed for product {product_id}: {insert_error}")
+    return False
 
 
 def _flush_price_history_batch(batch):
