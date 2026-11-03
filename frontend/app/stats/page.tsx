@@ -1,4 +1,5 @@
 import CardRinkPromo from "../components/CardRinkPromo";
+import StickyHeaderTable from "../components/StickyHeaderTable";
 import { getCachedSetAnalytics } from "../lib/serverMarketData";
 
 const STAT_TOOLTIPS = {
@@ -141,7 +142,7 @@ export default async function StatsPage() {
                 Top 10
               </span>
             </div>
-            <div className="overflow-x-auto">
+            <StickyHeaderTable>
               <table className="min-w-[960px] w-full text-sm">
                 <thead className="bg-slate-50 text-[11px] uppercase tracking-wider text-slate-500">
                   <tr>
@@ -195,7 +196,7 @@ export default async function StatsPage() {
                   ))}
                 </tbody>
               </table>
-            </div>
+            </StickyHeaderTable>
           </section>
 
           <section className="rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
@@ -205,7 +206,7 @@ export default async function StatsPage() {
                 Returns and trends use USD price history. Composite score is z-score weighted with drawdown and volatility penalties.
               </p>
             </div>
-            <div className="overflow-x-auto">
+            <StickyHeaderTable>
               <table className="min-w-[1680px] w-full text-sm">
                 <thead className="bg-slate-50 text-[11px] uppercase tracking-wider text-slate-500">
                   <tr>
@@ -263,7 +264,7 @@ export default async function StatsPage() {
                   ))}
                 </tbody>
               </table>
-            </div>
+            </StickyHeaderTable>
           </section>
         </div>
       )}
