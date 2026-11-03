@@ -39,6 +39,7 @@ const PriceChart = dynamic(
   }
 );
 import CardRinkPromo from "../CardRinkPromo";
+import StickyHeaderTable from "../StickyHeaderTable";
 import MiniSparkline from "./MiniSparkline";
 import {
   getCagrPercent,
@@ -690,7 +691,7 @@ export default function MarketView({
 
         {!loading && (
           <div className="rounded-xl border border-slate-200 bg-white shadow-sm">
-            <div className="overflow-x-auto">
+            <StickyHeaderTable>
               <table className={`${showAllColumns ? "min-w-[1440px]" : "min-w-[900px]"} w-full text-sm`}>
                 <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
                   <tr>
@@ -853,7 +854,7 @@ export default function MarketView({
                 </thead>
                 {tableBody}
               </table>
-            </div>
+            </StickyHeaderTable>
           </div>
         )}
       </div>
