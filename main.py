@@ -1126,7 +1126,6 @@ def update_prices():
     user_data_dir = None
     api_session = requests.Session()
     updated_count = 0
-    price_history_batch = []  # Collect price history entries for batch insert
     sales_history_batch = []  # Collect daily sales-volume rows for batch upsert
     listings_history_batch = []  # Collect listings-depth snapshots for batch upsert
     sales_rows_written = 0
@@ -1175,15 +1174,22 @@ def update_prices():
                     needs_price_update = last_updated_dt < price_interval_ago
 
             if price is not None and needs_price_update:
-                update_data["usd_price"] = price
-                update_data["last_updated"] = datetime.now(timezone.utc).isoformat()
-
-                # Add to price history batch instead of individual insert
-                price_history_batch.append({
-                    "product_id": product_id,
-                    "usd_price": price
-                })
-                logger.info(f"   Updated price: ${price:.2f}")
+                # Write the history row now, before products is updated, and
+                # only move products.usd_price if that row landed.
+                # get_market_product_summaries withholds any price that
+                # disagrees with its latest history row. Batching history to
+                # the end of the run left every repriced product in that state
+                # for the whole run (minutes), and the client caches the
+                # summaries for an hour, so the box calculator and price lists
+                # showed "No price" for packs scraped moments earlier.
+                if _record_price_history(product_id, price):
+                    update_data["usd_price"] = price
+                    update_data["last_updated"] = datetime.now(timezone.utc).isoformat()
+                    logger.info(f"   Updated price: ${price:.2f}")
+                else:
+                    logger.error(
+                        f"   Price history insert failed; leaving usd_price unchanged for product {product_id}"
+                    )
 
             # === Sales volume + listings capture ===
             # Not gated on needs_price_update: capture whenever API data is
@@ -1274,11 +1280,6 @@ def update_prices():
             else:
                 logger.info(f"   No updates needed for product {product_id}{variant_info}")
 
-            # Batch insert price history every 100 entries
-            if len(price_history_batch) >= 100:
-                _flush_price_history_batch(price_history_batch)
-                price_history_batch = []
-
             # Batch upsert sales/listings history every 100 entries
             if len(sales_history_batch) >= 100:
                 flushed_ok, flushed_failed = _flush_sales_history_batch(sales_history_batch)
@@ -1293,10 +1294,6 @@ def update_prices():
                 listings_history_batch = []
 
             time.sleep(1)  # polite delay between requests
-
-        # Flush remaining price history entries
-        if price_history_batch:
-            _flush_price_history_batch(price_history_batch)
 
         # Flush remaining sales/listings history entries
         if sales_history_batch:
@@ -1321,6 +1318,52 @@ def update_prices():
         f"Sales history rows written: {sales_rows_written} (failed: {sales_rows_failed}); "
         f"listings snapshots written: {listings_rows_written} (failed: {listings_rows_failed})"
     )
+
+
+def _record_price_history(product_id, price):
+    """
+    Make today's product_price_history row for product_id carry `price`.
+
+    Inserts a row, or, when today's row already exists (the one-row-per-day
+    index from migration 0003 rejects the insert), moves that row to `price`.
+    The second case is a same-day retry after an earlier run wrote history but
+    failed to update products; without it, the retry could never bring the
+    two back into agreement until the next day.
+
+    Returns True when today's row holds `price`, False otherwise.
+    """
+    entry = {"product_id": product_id, "usd_price": price}
+    try:
+        supabase.table("product_price_history").insert(entry).execute()
+        return True
+    except Exception as e:
+        insert_error = e
+
+    try:
+        today_start = datetime.now(timezone.utc).replace(
+            hour=0, minute=0, second=0, microsecond=0, tzinfo=None
+        ).isoformat()
+        existing = (
+            supabase.table("product_price_history")
+            .select("id")
+            .eq("product_id", product_id)
+            .gte("recorded_at", today_start)
+            .order("recorded_at", desc=True)
+            .limit(1)
+            .execute()
+        )
+        if existing.data:
+            supabase.table("product_price_history").update(
+                {"usd_price": price}
+            ).eq("id", existing.data[0]["id"]).execute()
+            logger.info(f"   Reconciled today's price history row for product {product_id}")
+            return True
+    except Exception as e:
+        logger.error(f"Price history reconcile failed for product {product_id}: {e}")
+        return False
+
+    logger.error(f"Price history insert failed for product {product_id}: {insert_error}")
+    return False
 
 
 def _flush_price_history_batch(batch):

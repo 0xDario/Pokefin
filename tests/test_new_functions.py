@@ -581,3 +581,84 @@ class TestBatchInsertReturnValues:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+class TestUpdatePricesHistoryOrdering:
+    """A repriced product's history row must land before products.usd_price.
+
+    get_market_product_summaries withholds a price that disagrees with its
+    latest history row, so writing products first (or batching history to the
+    end of the run) shows "No price" for freshly scraped products.
+    """
+
+    def _run(self, mock_supabase, history_fails=False, todays_row=None):
+        import main
+
+        calls = []
+
+        def table(name):
+            t = MagicMock()
+
+            def insert(payload):
+                calls.append(("insert", name, payload))
+                ex = MagicMock()
+                if history_fails and name == "product_price_history":
+                    ex.execute.side_effect = Exception("duplicate key")
+                return ex
+
+            def update(payload):
+                calls.append(("update", name, payload))
+                q = MagicMock()
+                q.eq.side_effect = lambda col, val: (calls.append(("where", name, (col, val))) or MagicMock())
+                return q
+
+            select_chain = MagicMock()
+            for m in ("eq", "gte", "order", "limit"):
+                getattr(select_chain, m).return_value = select_chain
+            select_chain.execute.return_value = MagicMock(data=[todays_row] if todays_row else [])
+            t.select.return_value = select_chain
+
+            t.insert.side_effect = insert
+            t.update.side_effect = update
+            return t
+
+        mock_supabase.table.side_effect = table
+        product = {
+            "id": 7, "url": "https://example.test/p", "usd_price": 5.0,
+            "last_updated": None, "image_url": "x", "last_image_update": None,
+            "variant": None, "set_id": 1, "product_type_id": 2,
+        }
+        with patch.object(main, "fetch_products_needing_update", return_value=[product]), \
+             patch.object(main, "create_driver", return_value=(MagicMock(), None)), \
+             patch.object(main, "cleanup_driver"), \
+             patch.object(main, "get_price_and_image_from_url", return_value={"price": 6.5, "image_url": None}), \
+             patch.object(main.time, "sleep"):
+            main.update_prices()
+        return calls
+
+    @patch('main.supabase')
+    def test_history_written_before_products_update(self, mock_supabase):
+        calls = self._run(mock_supabase)
+        names = [(kind, name) for kind, name, _ in calls]
+        assert names.index(("insert", "product_price_history")) < names.index(("update", "products"))
+        update = next(p for k, n, p in calls if k == "update" and n == "products")
+        assert update["usd_price"] == 6.5
+
+    @patch('main.supabase')
+    def test_price_not_moved_when_history_cannot_be_written(self, mock_supabase):
+        calls = self._run(mock_supabase, history_fails=True)
+        updates = [p for k, n, p in calls if k == "update" and n == "products"]
+        assert all("usd_price" not in p for p in updates)
+
+    @patch('main.supabase')
+    def test_same_day_retry_reconciles_existing_history_row(self, mock_supabase):
+        # An earlier run today wrote history but its products update failed;
+        # the retry's insert hits the one-row-per-day index. It must move
+        # today's row to the new price and then update products.
+        calls = self._run(mock_supabase, history_fails=True, todays_row={"id": 99})
+        assert ("update", "product_price_history", {"usd_price": 6.5}) in calls
+        assert ("where", "product_price_history", ("id", 99)) in calls
+        names = [(k, n) for k, n, _ in calls]
+        assert names.index(("update", "product_price_history")) < names.index(("update", "products"))
+        update = next(p for k, n, p in calls if k == "update" and n == "products")
+        assert update["usd_price"] == 6.5
