@@ -442,7 +442,8 @@ def extract_sales_history_api(product_id, db_product_id, referer=None,
             timeout=RATE_LIMIT_CONFIG['timeout'],
         )
 
-        if not data:
+        if data is None:
+            # Transport error, non-200 or bad JSON: a real failure, retry.
             logger.debug(f"API data missing for {range_config['label']}")
             all_ranges_ok = False
             continue
@@ -453,8 +454,12 @@ def extract_sales_history_api(product_id, db_product_id, referer=None,
             preferred_language=preferred_language,
         )
         if not result:
-            logger.debug(f"No matching API result for {range_config['label']}")
-            all_ranges_ok = False
+            # A 200 with an empty `result` is TCGPlayer's answer for a
+            # product with no sales in the window (range=month for a slow
+            # vintage ETB, both ranges for a product that never sold). That
+            # is a complete answer with zero rows, not a failure; treating
+            # it as one made every such product fail 3 retries forever.
+            logger.debug(f"No sales reported for {range_config['label']} (empty API result)")
             continue
 
         buckets = result.get("buckets") or []
@@ -557,7 +562,8 @@ def batch_upsert_sales_history(entries, batch_size=100):
     return upserted_count, failed_count
 
 
-def backfill_sales_volume(start_idx=None, end_idx=None, reverse=False, checkpoint_file=None):
+def backfill_sales_volume(start_idx=None, end_idx=None, reverse=False, checkpoint_file=None,
+                          product_ids=None):
     """
     Main function to backfill sales-volume history for all products with
     robust error handling.
@@ -567,6 +573,8 @@ def backfill_sales_volume(start_idx=None, end_idx=None, reverse=False, checkpoin
         end_idx: Ending product index (exclusive)
         reverse: If True, process products in reverse order
         checkpoint_file: Path to checkpoint file for resume capability
+        product_ids: Optional iterable of DB product ids; when given, only
+            those products are processed (index range is ignored)
     """
     logger.info("Starting sales-volume backfill (weekly rows from range=annual, daily rows from range=month)")
     logger.info(f"Browser profile: {ACTIVE_PROFILE['User-Agent'][:60]}...")
@@ -581,8 +589,15 @@ def backfill_sales_volume(start_idx=None, end_idx=None, reverse=False, checkpoin
     # Get all products from database using pagination
     all_products = fetch_products_paginated()
 
-    # Apply index range if specified
-    if start_idx is not None or end_idx is not None:
+    # Apply explicit product ids or index range if specified
+    if product_ids:
+        wanted = set(product_ids)
+        products = [p for p in all_products if p["id"] in wanted]
+        missing = sorted(wanted - {p["id"] for p in products})
+        if missing:
+            logger.warning(f"Product ids not found in products table: {missing}")
+        range_info = f" (ids {sorted(wanted)})"
+    elif start_idx is not None or end_idx is not None:
         start = start_idx or 0
         end = end_idx or len(all_products)
         products = all_products[start:end]
@@ -798,6 +813,9 @@ Examples:
   Terminal 1: python backfill_sales_volume.py --forward
   Terminal 2: python backfill_sales_volume.py --reverse
 
+  # Re-run specific products (e.g. ids that failed in a previous run):
+  python backfill_sales_volume.py --products 42,50,212
+
   # Resume from checkpoint:
   python backfill_sales_volume.py --resume backfill_sales_checkpoint_<timestamp>.json
 
@@ -815,6 +833,8 @@ be applied to the database before running this script.
                         help="Process second half of products in reverse order")
     parser.add_argument("--resume", type=str, default=None,
                         help="Resume from checkpoint file")
+    parser.add_argument("--products", type=str, default=None,
+                        help="Comma-separated DB product ids to process (overrides --forward/--reverse)")
     parser.add_argument("--debug", action="store_true",
                         help="Enable debug logging")
 
@@ -824,8 +844,20 @@ be applied to the database before running this script.
     if args.debug:
         logger.setLevel(logging.DEBUG)
 
+    product_ids = None
+    if args.products:
+        try:
+            product_ids = [int(x) for x in args.products.split(",") if x.strip()]
+        except ValueError:
+            parser.error("--products must be comma-separated integer ids")
+
     # Determine range based on flags
-    if args.forward or args.reverse:
+    if product_ids:
+        start_idx = None
+        end_idx = None
+        reverse = False
+        logger.info(f"PRODUCTS MODE: Processing {len(product_ids)} product id(s)")
+    elif args.forward or args.reverse:
         # Get total product count first to calculate midpoint
         response = supabase.table("products").select("id", count="exact").execute()
         total_count = response.count or len(response.data)
@@ -854,5 +886,6 @@ be applied to the database before running this script.
         start_idx=start_idx,
         end_idx=end_idx,
         reverse=reverse,
-        checkpoint_file=args.resume
+        checkpoint_file=args.resume,
+        product_ids=product_ids,
     )
