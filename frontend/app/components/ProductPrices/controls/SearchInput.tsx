@@ -7,7 +7,7 @@ interface SearchInputProps {
 export default function SearchInput({
   value,
   onChange,
-  placeholder = "Search by name or variant...",
+  placeholder = "Search by name, code (DRI, SV3.5) or variant...",
 }: SearchInputProps) {
   return (
     <div className="relative w-full md:w-auto md:min-w-[260px]">

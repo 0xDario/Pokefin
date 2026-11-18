@@ -104,6 +104,10 @@ CREATE TABLE public.sets (
   name text NOT NULL,
   release_date date,
   expansion_type character varying CHECK (expansion_type::text = ANY (ARRAY['Main Series'::character varying::text, 'Special Expansion'::character varying::text, 'Subset'::character varying::text, 'Starter Set'::character varying::text])),
+  -- Era set number (SV1, SV3.5, SWSH12.5, ME2.5). Added by
+  -- migrations/0026_sets_era_number.sql. Not unique: White Flare and
+  -- Black Bolt share SV10.5.
+  era_number text CONSTRAINT sets_era_number_format CHECK (era_number IS NULL OR era_number ~ '^[A-Z]{2,4}(0|[1-9][0-9]?)(\.5)?$'),
   CONSTRAINT sets_pkey PRIMARY KEY (id),
   CONSTRAINT sets_generation_id_fkey FOREIGN KEY (generation_id) REFERENCES public.generations(id)
 );
