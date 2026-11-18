@@ -183,6 +183,7 @@ function renderSetCell(product: Product) {
       <div className="text-sm font-medium text-slate-800">{setName}</div>
       <div className="text-xs text-slate-500">
         {generation} / {setCode}
+        {product.sets?.era_number ? ` / ${product.sets.era_number}` : ""}
       </div>
     </div>
   );

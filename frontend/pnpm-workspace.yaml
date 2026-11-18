@@ -26,3 +26,12 @@ overrides:
   # engines node ^22 || ^24 || >=26, which would silently narrow the Node
   # range below what Next supports (>=20.9.0) for no security benefit.
   nanoid: '>=3.3.17 <4'
+
+auditConfig:
+  ignoreGhsas:
+    # picomatch <=4.0.7 ReDoS via single-branch repeated extglobs. The patched
+    # 4.0.8 is not on npm yet (latest is 4.0.7), so no override can fix it.
+    # Only reached via build tooling (@sentry/nextjs -> @rollup/plugin-commonjs
+    # and similar), matching our own glob patterns, never user input.
+    # Remove this entry and bump `picomatch@4` above to ^4.0.8 once it ships.
+    - GHSA-fc5q-39xc-vjpf

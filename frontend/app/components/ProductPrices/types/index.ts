@@ -3,7 +3,7 @@
 export type Currency = "USD" | "CAD";
 export type ChartTimeframe = "7D" | "1M" | "3M" | "6M" | "1Y";
 export type ViewMode = "flat" | "grouped" | "type_grouped";
-export type SortBy = "release_date" | "price";
+export type SortBy = "release_date" | "price" | "volume";
 export type SortDirection = "asc" | "desc";
 
 export interface PriceHistoryEntry {
@@ -62,6 +62,9 @@ export interface Product {
     id?: number;
     name: string;
     code: string;
+    // Era set number such as "SV3.5" (sets.era_number, migration 0026).
+    // Absent when the database predates 0026 or the set has none.
+    era_number?: string | null;
     release_date: string;
     expansion_type?: string;
     generation_id?: number;
