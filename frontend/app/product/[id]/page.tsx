@@ -4,6 +4,7 @@ import { notFound } from "next/navigation";
 import CardRinkPromo from "../../components/CardRinkPromo";
 import ProductImage from "../../components/ProductPrices/shared/ProductImage";
 import ExpansionTypeBadge from "../../components/ProductPrices/shared/ExpansionTypeBadge";
+import EraNumberBadge from "../../components/ProductPrices/shared/EraNumberBadge";
 import VariantBadge from "../../components/ProductPrices/shared/VariantBadge";
 import {
   getCagrPercent,
@@ -252,6 +253,7 @@ export default async function ProductPage({
           <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1.5">
             <span className="text-sm font-medium text-slate-700">{setName}</span>
             <span className="text-xs font-mono text-slate-400">{setCode}</span>
+            <EraNumberBadge eraNumber={product.sets?.era_number} />
             <ExpansionTypeBadge type={product.sets?.expansion_type} />
             {product.variant && <VariantBadge variant={product.variant} />}
           </div>

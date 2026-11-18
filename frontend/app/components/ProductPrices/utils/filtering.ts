@@ -1,4 +1,5 @@
 import { Product } from "../types";
+import { eraNumberMatches } from "../../../lib/eraNumber";
 
 function getProductTypeLabel(product: Product): string {
   return product.product_types?.label || product.product_types?.name || "Unknown Type";
@@ -38,6 +39,7 @@ export function filterProducts(
       !searchTerm ||
       product.sets?.name?.toLowerCase().includes(searchLower) ||
       product.sets?.code?.toLowerCase().includes(searchLower) ||
+      eraNumberMatches(product.sets?.era_number, searchTerm) ||
       productTypeLabel.toLowerCase().includes(searchLower) ||
       product.product_types?.name?.toLowerCase().includes(searchLower) ||
       product.variant?.toLowerCase().includes(searchLower);

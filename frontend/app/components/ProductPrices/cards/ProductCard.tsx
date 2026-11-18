@@ -4,6 +4,7 @@ import { memo, useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import ProductImage from "../shared/ProductImage";
 import ExpansionTypeBadge from "../shared/ExpansionTypeBadge";
+import EraNumberBadge from "../shared/EraNumberBadge";
 import VariantBadge from "../shared/VariantBadge";
 import ReturnMetrics from "../shared/ReturnMetrics";
 import LazyPriceChart from "../shared/LazyPriceChart";
@@ -72,6 +73,7 @@ const ProductCard = memo(function ProductCard({
   const productType = product.product_types?.label || product.product_types?.name || "Unknown Type";
   const generation = product.sets?.generations?.name || "Unknown Generation";
   const setCode = product.sets?.code || "N/A";
+  const eraNumber = product.sets?.era_number ?? null;
   const releaseDate = product.sets?.release_date
     ? new Date(product.sets.release_date + "T00:00:00Z").toLocaleDateString()
     : "Unknown";
@@ -145,7 +147,10 @@ const ProductCard = memo(function ProductCard({
             >
               <h2>{setName}</h2>
             </Link>
-            <ExpansionTypeBadge type={product.sets?.expansion_type} />
+            <div className="flex flex-wrap items-center gap-1.5">
+              <EraNumberBadge eraNumber={eraNumber} />
+              <ExpansionTypeBadge type={product.sets?.expansion_type} />
+            </div>
 
             <h3 className="text-sm md:text-base font-medium text-slate-700 mt-1.5 leading-tight">
               {productType}
@@ -252,6 +257,7 @@ const ProductCard = memo(function ProductCard({
                   >
                     <h3>{setName}</h3>
                   </Link>
+                  <EraNumberBadge eraNumber={eraNumber} className="ml-1.5 align-middle" />
                   <p className="text-xs md:text-sm text-slate-700 mt-1">
                     {productType}
                   </p>

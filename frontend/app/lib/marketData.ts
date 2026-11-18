@@ -35,6 +35,9 @@ export type MarketSummaryRow = {
   return_90d: number | null;
   return_180d: number | null;
   return_365d: number | null;
+  // Optional because a deployment can reach a database that has not run
+  // migration 0026 yet; the UI then just omits the era number.
+  set_era_number?: string | null;
 };
 
 export type ExchangeRateSnapshot = {
@@ -322,6 +325,7 @@ export function mapMarketSummaryRowToProduct(row: MarketSummaryRow): Product {
           id: row.set_id,
           name: row.set_name ?? "Unknown Set",
           code: row.set_code ?? "N/A",
+          era_number: row.set_era_number ?? null,
           release_date: row.set_release_date ?? "",
           expansion_type: row.set_expansion_type ?? undefined,
           generation_id: row.generation_id ?? 0,

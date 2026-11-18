@@ -40,6 +40,7 @@ export default function RecentlyReleased({
           <GroupHeader
             setName={setName}
             setCode={setProducts[0]?.sets?.code || "N/A"}
+            eraNumber={setProducts[0]?.sets?.era_number}
             generation={setProducts[0]?.sets?.generations?.name || "Unknown"}
             expansionType={setProducts[0]?.sets?.expansion_type}
             releaseDate={setProducts[0]?.sets?.release_date || ""}

@@ -1,8 +1,10 @@
 import ExpansionTypeBadge from "../shared/ExpansionTypeBadge";
+import EraNumberBadge from "../shared/EraNumberBadge";
 
 interface GroupHeaderProps {
   setName: string;
   setCode: string;
+  eraNumber?: string | null;
   generation: string;
   expansionType?: string;
   releaseDate: string;
@@ -11,6 +13,7 @@ interface GroupHeaderProps {
 export default function GroupHeader({
   setName,
   setCode,
+  eraNumber,
   generation,
   expansionType,
   releaseDate,
@@ -27,6 +30,7 @@ export default function GroupHeader({
           <h2 className="text-lg md:text-xl font-bold text-slate-900 tracking-tight">
             {setName}
           </h2>
+          <EraNumberBadge eraNumber={eraNumber} className="self-center" />
         </div>
         <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">
           {generation}
