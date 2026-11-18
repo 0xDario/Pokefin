@@ -3,7 +3,7 @@
 export type Currency = "USD" | "CAD";
 export type ChartTimeframe = "7D" | "1M" | "3M" | "6M" | "1Y";
 export type ViewMode = "flat" | "grouped" | "type_grouped";
-export type SortBy = "release_date" | "price";
+export type SortBy = "release_date" | "price" | "volume";
 export type SortDirection = "asc" | "desc";
 
 export interface PriceHistoryEntry {

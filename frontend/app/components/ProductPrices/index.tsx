@@ -54,7 +54,7 @@ const DEFAULTS = {
 };
 
 const VIEW_MODES: ViewMode[] = ["flat", "grouped", "type_grouped"];
-const SORT_KEYS: SortBy[] = ["release_date", "price"];
+const SORT_KEYS: SortBy[] = ["release_date", "price", "volume"];
 const SORT_DIRS: SortDirection[] = ["asc", "desc"];
 const CHART_TIMEFRAMES: ChartTimeframe[] = ["7D", "1M", "3M", "6M", "1Y"];
 const CURRENCIES: Currency[] = ["USD", "CAD"];
@@ -178,8 +178,16 @@ export default function ProductPrices({
       selectedProductType,
       searchTerm,
     });
-    return sortProducts(filtered, sortKey, sortDirection);
-  }, [products, selectedGeneration, selectedProductType, searchTerm, sortKey, sortDirection]);
+    return sortProducts(filtered, sortKey, sortDirection, volumeMetrics);
+  }, [
+    products,
+    selectedGeneration,
+    selectedProductType,
+    searchTerm,
+    sortKey,
+    sortDirection,
+    volumeMetrics,
+  ]);
 
   const groupedProducts = useMemo(() => {
     return groupProductsBySet(filteredAndSortedProducts);

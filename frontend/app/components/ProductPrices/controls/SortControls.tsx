@@ -11,6 +11,7 @@ interface SortControlsProps {
 const SORT_KEYS: Array<{ key: SortBy; label: string }> = [
   { key: "release_date", label: "Release Date" },
   { key: "price", label: "Price" },
+  { key: "volume", label: "Volume" },
 ];
 
 const VIEW_MODES: Array<{ key: ViewMode; label: string }> = [

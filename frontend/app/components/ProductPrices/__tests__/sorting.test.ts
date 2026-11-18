@@ -1,5 +1,5 @@
 import { getProductSortOrder, sortProducts } from "../utils/sorting";
-import { Product } from "../types";
+import { Product, ProductVolumeMetrics } from "../types";
 
 function makeProduct(overrides: Partial<Product> = {}): Product {
   return {
@@ -84,5 +84,58 @@ describe("sortProducts", () => {
 
     const sorted = sortProducts(products, "release_date", "desc");
     expect(sorted.map((p) => p.id)).toEqual([3, 2, 1]);
+  });
+});
+
+describe("sortProducts by volume", () => {
+  const metrics = (units: number | null): ProductVolumeMetrics => ({
+    product_id: 0,
+    units_sold_7d: null,
+    units_sold_30d: units,
+    units_sold_prior_30d: null,
+    transaction_count_30d: null,
+    active_listings: null,
+    total_quantity_available: null,
+    lowest_listing_price: null,
+    listings_snapshot_date: null,
+  });
+
+  const products = [
+    makeProduct({ id: 1 }),
+    makeProduct({ id: 2 }),
+    makeProduct({ id: 3 }),
+    makeProduct({ id: 4 }),
+  ];
+  const volume: Record<number, ProductVolumeMetrics> = {
+    1: metrics(40),
+    2: metrics(250),
+    3: metrics(null),
+    // 4 has no metrics row at all
+  };
+
+  it("sorts by 30-day units sold descending", () => {
+    const sorted = sortProducts(products, "volume", "desc", volume);
+    expect(sorted.map((p) => p.id)).toEqual([2, 1, 3, 4]);
+  });
+
+  it("sorts ascending and keeps unknown volume last", () => {
+    const sorted = sortProducts(products, "volume", "asc", volume);
+    expect(sorted.map((p) => p.id)).toEqual([1, 2, 3, 4]);
+  });
+
+  it("breaks volume ties with product-type priority", () => {
+    const pack = makeProduct({
+      id: 10,
+      product_types: { id: 8, name: "booster_pack", label: "Booster Pack" },
+    });
+    const box = makeProduct({
+      id: 11,
+      product_types: { id: 1, name: "booster_box", label: "Booster Box" },
+    });
+    const sorted = sortProducts([pack, box], "volume", "desc", {
+      10: metrics(5),
+      11: metrics(5),
+    });
+    expect(sorted.map((p) => p.id)).toEqual([11, 10]);
   });
 });

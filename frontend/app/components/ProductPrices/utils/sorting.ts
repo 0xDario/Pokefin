@@ -1,4 +1,4 @@
-import { Product, SortBy, SortDirection } from "../types";
+import { Product, ProductVolumeMetrics, SortBy, SortDirection } from "../types";
 import { hasCurrentPrice } from "../../../lib/priceGuard";
 
 function normalize(value?: string | null): string {
@@ -87,14 +87,17 @@ export function getProductSortOrder(product: Product): number {
  * Sort products based on sort key and direction
  *
  * @param products - Array of products to sort
- * @param sortKey - Sort by release_date or price
+ * @param sortKey - Sort by release_date, price or volume
  * @param sortDirection - Sort direction (asc or desc)
+ * @param volumeMetrics - Sales-volume metrics keyed by product_id; required
+ *   for a meaningful "volume" sort (units sold over the trailing 30 days)
  * @returns Sorted array of products
  */
 export function sortProducts(
   products: Product[],
   sortKey: SortBy,
-  sortDirection: SortDirection
+  sortDirection: SortDirection,
+  volumeMetrics: Record<number, ProductVolumeMetrics> = {}
 ): Product[] {
   return [...products].sort((a, b) => {
     // Primary sort by the selected sort key
@@ -123,6 +126,21 @@ export function sortProducts(
       const priceA = a.usd_price as number;
       const priceB = b.usd_price as number;
       return sortDirection === "asc" ? priceA - priceB : priceB - priceA;
+    } else if (sortKey === "volume") {
+      // Trailing 30-day units sold. Unknown volume (metrics not loaded, or
+      // withheld by the staleness guards) sorts last in either direction, same
+      // reasoning as price: null is "we don't know", not "zero sales".
+      const volA = volumeMetrics[a.id]?.units_sold_30d ?? null;
+      const volB = volumeMetrics[b.id]?.units_sold_30d ?? null;
+      if (volA === null && volB === null) {
+        return getProductSortOrder(a) - getProductSortOrder(b);
+      }
+      if (volA === null) return 1;
+      if (volB === null) return -1;
+      if (volA !== volB) {
+        return sortDirection === "asc" ? volA - volB : volB - volA;
+      }
+      return getProductSortOrder(a) - getProductSortOrder(b);
     }
 
     return 0;
