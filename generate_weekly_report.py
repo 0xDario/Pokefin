@@ -503,7 +503,7 @@ def build_html(anchor, per_product, cats, sets_rows, tops, meta):
         top_set = sets_rows[0]["set_name"] if sets_rows else None
         for s in sets_rows:
             out.append(
-                "<tr><td>{name}</td><td>{rd}</td>{c3}{c6}{cy}</tr>".format(
+                '<tr><td>{name}</td><td class="txt">{rd}</td>{c3}{c6}{cy}</tr>'.format(
                     name=html.escape(s["set_name"]), rd=fmt_release(s["release_date"]),
                     c3=pct(s["avg_3m"]),
                     c6=pct(s["avg_6m"], bold=(s["set_name"] == top_set)),
@@ -589,6 +589,8 @@ def build_html(anchor, per_product, cats, sets_rows, tops, meta):
         stat_set=best_set_stat[0], stat_set_name=html.escape(best_set_stat[1]),
         fastest=html.escape(fastest), slowest=html.escape(slowest),
         cat_rows=cat_rows_html(), set_rows=set_rows_html(),
+        n_digits=max((len(str(c["n_" + w[0]])) for c in cats for w in WINDOWS),
+                     default=1),
         top1y=top_rows_html("1y"), top6m=top_rows_html("6m"),
         excluded_note=excluded_note, price_floor=PRICE_FLOOR,
         standings_note=standings_note, deck_note=deck_note,
@@ -782,14 +784,20 @@ TEMPLATE = r"""<!DOCTYPE html>
   table {{ width:100%; border-collapse:collapse; font-size:8.8px; margin:2px 0 8px; }}
   caption {{ caption-side:top; text-align:left; font-weight:bold; font-size:9px; text-transform:uppercase; letter-spacing:.5px; padding-bottom:3px; }}
   th {{ background:#111; color:#fff; text-align:right; padding:3px 4px; font-size:8px; text-transform:uppercase; letter-spacing:.3px; }}
-  th:first-child, td:first-child {{ text-align:left; }}
-  td {{ padding:2.5px 4px; border-bottom:1px solid #ddd; }}
+  /* Cells take the alignment of the header above them. td used to fall back
+     to the default (left) under right-aligned headers, so every figure sat at
+     the opposite edge of its column from its label. */
+  td {{ padding:2.5px 4px; border-bottom:1px solid #ddd; text-align:right; font-variant-numeric:tabular-nums lining-nums; }}
+  th:first-child, td:first-child, th.txt, td.txt {{ text-align:left; }}
   tbody tr:nth-child(even) {{ background:#f3f1ec; }}
   .pos {{ color:#0a6b2e; font-weight:bold; }}
   .neg {{ color:#b00; font-weight:bold; }}
   .big {{ font-weight:bold; }}
   .flat {{ color:#555; font-weight:bold; }}
-  .n {{ color:#777; font-weight:normal; font-size:0.82em; }}
+  /* A slot as wide as the table's widest count, so "(5)" and "(61)" leave the
+     percentages before them in one line and still end flush under the header.
+     1.3ch is the pair of parentheses. */
+  .n {{ color:#777; font-weight:normal; font-size:0.82em; display:inline-block; min-width:calc(var(--n-digits, 2) * 1ch + 1.3ch); text-align:right; }}
   .box {{ border:1px solid #000; padding:8px 9px; margin:0 0 9px; background:#f7f5ef; break-inside:avoid; }}
   .verdict {{ border:3px double #000; padding:10px 12px; background:#fbfbf7; break-inside:avoid; }}
   .verdict h2 {{ border:0; margin-top:0; }}
@@ -834,7 +842,7 @@ TEMPLATE = r"""<!DOCTYPE html>
 </div>
 
 <h2 class="sec">Returns by Product Category &mdash; The Master Table</h2>
-<table>
+<table style="--n-digits:{n_digits};">
   <caption>Median price change by category (per-column sample size in parentheses) &mdash; ranked by 6-month return</caption>
   <thead><tr><th>Category</th><th>1 Month</th><th>3 Month</th><th>6 Month</th><th>1 Year</th></tr></thead>
   <tbody>
@@ -863,7 +871,7 @@ TEMPLATE = r"""<!DOCTYPE html>
 
 <table>
   <caption>Top sets by average return across all tracked products (&ge;3 products per set)</caption>
-  <thead><tr><th>Set</th><th>Released</th><th>3 Month</th><th>6 Month</th><th>1 Year</th></tr></thead>
+  <thead><tr><th>Set</th><th class="txt">Released</th><th>3 Month</th><th>6 Month</th><th>1 Year</th></tr></thead>
   <tbody>
 {set_rows}
   </tbody>
