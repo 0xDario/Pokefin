@@ -11,4 +11,4 @@ selenium==4.52.0
 Pillow==13.0.0
 # CA bundle used by requests. Pinned at or above 2026.10.19, which distrusts the
 # compromised eMudhra intermediates (CVE-2026-115557).
-certifi==2026.10.23
+certifi==2026.11.20
