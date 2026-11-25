@@ -16,15 +16,15 @@
   },
   "dependencies": {
     "@marsidev/react-turnstile": "^1.6.3",
-    "@sentry/nextjs": "^11.12.0",
+    "@sentry/nextjs": "^11.16.0",
     "@supabase/ssr": "^0.12.7",
-    "@supabase/supabase-js": "^2.119.0",
+    "@supabase/supabase-js": "^2.119.2",
     "@vercel/analytics": "^2.0.1",
     "@vercel/speed-insights": "^2.1.0",
     "next": "^16.4.6",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
-    "recharts": "^3.10.1"
+    "recharts": "^3.11.0"
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3.3.7",
